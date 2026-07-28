@@ -1,0 +1,106 @@
+'use client'
+
+import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
+import { type FormEvent, useId, useState } from 'react'
+import { ApiError, login } from '@/lib/api'
+import type { ErrorKey } from '@/lib/locale'
+
+/** `null` = no error. `'failed'` = bad credentials, deliberately indistinguishable causes. */
+type LoginError = { kind: 'failed' } | { kind: 'api'; key: ErrorKey } | null
+
+/**
+ * Password sign-in for the admin panel (decision-20). Replaces the admin PIN entirely.
+ *
+ * The session is an httpOnly cookie set by the server, so this page never sees, stores or
+ * forwards a credential after the request completes.
+ */
+export default function LoginPage() {
+  const t = useTranslations('login')
+  const tError = useTranslations('error')
+  const router = useRouter()
+
+  const emailId = useId()
+  const passwordId = useId()
+  const errorId = useId()
+
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<LoginError>(null)
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const email = String(form.get('email') ?? '')
+    const password = String(form.get('password') ?? '')
+
+    setPending(true)
+    setError(null)
+    try {
+      await login(email, password)
+      router.push('/')
+    } catch (cause) {
+      // One message for every rejected credential — no "unknown user" vs "wrong password"
+      // oracle. Only transport/server faults, which say nothing about the account, differ.
+      if (cause instanceof ApiError && (cause.status === 0 || cause.status >= 500)) {
+        setError({ kind: 'api', key: cause.messageKey })
+      } else {
+        setError({ kind: 'failed' })
+      }
+      setPending(false)
+    }
+  }
+
+  const errorText = error === null ? '' : error.kind === 'failed' ? t('failed') : tError(error.key)
+
+  return (
+    <div className="auth-card">
+      <h1>{t('heading')}</h1>
+      <p className="lede">{t('intro')}</p>
+
+      <form className="auth-form" onSubmit={onSubmit}>
+        {/*
+          Always in the DOM rather than mounted on failure: an assistive technology announces
+          a text change inside an existing live region far more reliably than a node that
+          appears and disappears. Empty until there is something to say.
+        */}
+        <p className="form-error" id={errorId} role="alert">
+          {errorText}
+        </p>
+
+        <div className="field">
+          <label htmlFor={emailId}>{t('email')}</label>
+          <input
+            id={emailId}
+            name="email"
+            type="email"
+            autoComplete="email"
+            required
+            // biome-ignore lint/a11y/noAutofocus: single-purpose page, the form IS the page.
+            autoFocus
+            aria-describedby={errorId}
+            aria-invalid={error !== null}
+            disabled={pending}
+          />
+        </div>
+
+        <div className="field">
+          <label htmlFor={passwordId}>{t('password')}</label>
+          <input
+            id={passwordId}
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            required
+            aria-describedby={errorId}
+            aria-invalid={error !== null}
+            disabled={pending}
+          />
+        </div>
+
+        <button type="submit" className="button-primary" disabled={pending}>
+          {pending ? t('submitting') : t('submit')}
+        </button>
+      </form>
+    </div>
+  )
+}

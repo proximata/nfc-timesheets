@@ -1,0 +1,18 @@
+{
+  "name": "nfc-timesheets-server",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "description": "NFC TimeSheets API. node:http + Postgres, no framework (decision-16).",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "check": "node check-api.js"
+  },
+  "dependencies": {
+    "pg": "8.21.0"
+  },
+  "packageManager": "pnpm@10.15.1"
+}

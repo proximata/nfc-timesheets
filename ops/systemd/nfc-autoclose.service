@@ -1,0 +1,37 @@
+# 8h shift auto-close (TASK-11, decision-10, decision-16).
+#
+# WHY A SYSTEMD TIMER AND NOT pg_cron:
+#   pg_cron on self-hosted Postgres needs the extension package installed, an edit to
+#   shared_preload_libraries, and a DATABASE RESTART to load it. That is a scheduled outage
+#   plus a permanent extension dependency, bought for a single UPDATE statement. systemd is
+#   already on the box and already supervises the API (runbook §5).
+#
+# WHY NOT setInterval INSIDE THE API PROCESS:
+#   It dies with the API process — exactly when the safety net matters most. If the API
+#   crashes at 18:00 on Friday, every open shift silently runs the whole weekend and payroll
+#   is wrong on Monday. Decoupling the safety net from the thing it protects is the point.
+#
+# Runs as the postgres role over the local unix socket (peer auth), so no credentials are
+# duplicated out of /etc/nfc/env and nothing about this job is reachable from the network.
+#
+# Install: /etc/systemd/system/nfc-autoclose.service
+
+[Unit]
+Description=NFC TimeSheets — auto-close shifts open longer than 8h
+Documentation=file:///srv/nfc/ops/sql/autoclose.sql
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+# ON_ERROR_STOP: a failed run must be a red unit, not a green one that did nothing.
+# No -q: the `UPDATE <n>` command tag is the audit record in journald.
+ExecStart=/usr/bin/psql --set=ON_ERROR_STOP=1 --dbname=nfc --file=/srv/nfc/ops/sql/autoclose.sql
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true

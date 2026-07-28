@@ -1,0 +1,21 @@
+.firecrawl/
+
+# psst local vault (plaintext secrets)
+.psst/envs/
+
+node_modules/
+
+# legacy VM snapshots (timesheets.env holds the OLD plaintext APP_KEY and ADMIN_PIN)
+.vm-legacy-backup/
+legacy-backup/
+.env
+.env.local
+.env.*.local
+.psst/
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# gstack browse scratch — network logs capture live API keys from visited pages
+.gstack/

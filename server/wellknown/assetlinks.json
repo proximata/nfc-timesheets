@@ -1,0 +1,11 @@
+[
+  {
+    "_comment": "sha256_cert_fingerprints stays EMPTY until an Android signing key exists. Fill it with the SHA-256 of the upload/release certificate (keytool -list -v -keystore <ks> | grep SHA256) and redeploy. Android App Links stay unverified while the array is empty; the file itself is already at the right URL so no retrofit is needed.",
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "io.github.qwadratic.NFCTimeSheets",
+      "sha256_cert_fingerprints": []
+    }
+  }
+]

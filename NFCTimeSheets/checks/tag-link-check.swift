@@ -1,0 +1,119 @@
+// Runnable check: tag-link parsing, retry classification, and the exact JSON bytes this
+// app puts on the wire. No test framework, no Xcode.
+//
+//   cd NFCTimeSheets
+//   cat NFCTimeSheets/TagLink.swift NFCTimeSheets/API.swift checks/tag-link-check.swift \
+//     > /tmp/tag-link-check.swift && swift /tmp/tag-link-check.swift
+//
+// (concatenated because the swift interpreter only runs one file; TagLink.swift and
+// API.swift are pure Foundation precisely so this stays possible.)
+
+func check(_ ok: Bool, _ what: String) {
+    if !ok {
+        FileHandle.standardError.write(Data("FAIL: \(what)\n".utf8))
+        exit(1)
+    }
+}
+
+let good = "https://timesheets.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+
+// Accepted shapes.
+check(TagLink.locationId(from: URL(string: good)!) == "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "canonical link")
+check(TagLink.locationId(from: URL(string: "https://timesheets.exe.xyz/t/?l=3F2504E0-4F89-11D3-9A0C-0305E82C3301")!)
+        == "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "trailing slash + uppercase uuid -> lowercased")
+check(TagLink.locationId(from: URL(string: "https://TIMESHEETS.EXE.XYZ/t?x=1&l=3f2504e0-4f89-11d3-9a0c-0305e82c3301")!)
+        != nil, "host case-insensitive, extra query params ignored")
+
+// Rejected shapes. Everything here would otherwise reach the server off an unlocked tag.
+let bad = [
+    "https://timesheets.exe.xyz/t?l=westbahnhof",              // a SLUG, not a uuid (decision-21)
+    "https://timesheets.exe.xyz/t?l=",                         // empty
+    "https://timesheets.exe.xyz/t",                            // no l at all
+    "https://timesheets.exe.xyz/t?l=3f2504e04f8911d39a0c0305e82c3301", // unhyphenated
+    "https://timesheets.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301'--", // sql-ish
+    "https://evil.example.com/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",      // wrong host
+    "http://timesheets.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",     // not https
+    "https://timesheets.exe.xyz/admin?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301", // wrong path
+]
+for s in bad {
+    check(TagLink.locationId(from: URL(string: s)!) == nil, "must reject \(s)")
+}
+
+// --- retry classification ---------------------------------------------------------
+// Retrying a 400 for ever is pointless; giving up on a 503 loses the shift.
+check(APIFailure(status: 0, code: "network").isRetryable, "transport failure retryable")
+check(APIFailure(status: 503, code: "http_503").isRetryable, "5xx retryable")
+check(APIFailure(status: 429, code: "too_many_attempts").isRetryable, "429 retryable")
+check(APIFailure(status: 409, code: "shift_already_open").isRetryable, "409 already-open retryable")
+check(!APIFailure(status: 400, code: "invalid_uuid").isRetryable, "400 terminal")
+check(!APIFailure(status: 422, code: "unknown_worker").isRetryable, "422 terminal")
+check(!APIFailure(status: 404, code: "unknown_shift").isRetryable, "404 terminal")
+check(!APIFailure(status: 401, code: "unauthorized").isRetryable, "401 terminal")
+check(!APIFailure(status: 403, code: "not_eligible").isRetryable, "403 not_eligible terminal")
+// The relay address the ineligible screen reads out has to survive the error path.
+check(APIFailure(status: 403, code: "not_eligible", email: "x@privaterelay.appleid.com").email
+        == "x@privaterelay.appleid.com", "not_eligible carries the email Apple gave")
+
+// --- the wire bytes ---------------------------------------------------------------
+// Diff these against server/routes/app.js by eye. The previous build sent
+// {id, worker, tagUID, start, end, manualFinish} and got 400 on every single POST.
+func json<T: Encodable>(_ value: T) -> String {
+    let e = Wire.encoder
+    e.outputFormatting = [.sortedKeys]
+    return String(data: try! e.encode(value), encoding: .utf8)!
+}
+
+let start = Date(timeIntervalSince1970: 1_784_000_591.412)
+let key = "6b3a2c1d-0e4f-4a8b-9c7d-1e2f3a4b5c6d"
+
+// NO worker_id, and this check exists to keep it that way (decision-22): who is clocking
+// in is decided by the session cookie on the server. If someone "helpfully" adds the
+// field back to make a server error go away, this line fails first.
+let openBody = json(OpenShiftRequest(clientUuid: key,
+                                     locationUuid: "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+                                     startTime: start))
+check(openBody
+        == #"{"client_uuid":"6b3a2c1d-0e4f-4a8b-9c7d-1e2f3a4b5c6d","location_uuid":"3f2504e0-4f89-11d3-9a0c-0305e82c3301","start_time":"2026-07-14T03:43:11.412Z"}"#,
+      "POST /shifts/open body: \(openBody)")
+check(!openBody.contains("worker"), "no worker identity may ride in a shift body")
+
+check(json(CloseShiftRequest(clientUuid: key, endTime: start, autoClosed: false))
+        == #"{"auto_closed":false,"client_uuid":"6b3a2c1d-0e4f-4a8b-9c7d-1e2f3a4b5c6d","end_time":"2026-07-14T03:43:11.412Z"}"#,
+      "POST /shifts/close body")
+
+check(json(AppleSignInRequest(identityToken: "eyJ.a.b", nonce: "deadbeef", name: "Ada L"))
+        == #"{"identity_token":"eyJ.a.b","name":"Ada L","nonce":"deadbeef"}"#,
+      "POST /auth/apple body")
+
+// --- the nonce ---------------------------------------------------------------------
+// The HASH goes to Apple, the RAW value goes to our server, which re-hashes and compares.
+// Both halves must agree on this exact spelling - lowercase hex SHA-256 over UTF-8 - or
+// every sign-in 401s. Pinned to the standard "abc" vector so a refactor cannot drift.
+check(AppleNonce.hashed("abc")
+        == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "nonce hash is lowercase hex sha-256: \(AppleNonce.hashed("abc"))")
+check(AppleNonce.raw().count == 64, "raw nonce is 32 bytes of hex")
+check(AppleNonce.raw() != AppleNonce.raw(), "a nonce that repeats is not a nonce")
+
+check(json(ResolveShiftRequest(endTime: start)) == #"{"end_time":"2026-07-14T03:43:11.412Z"}"#,
+      "POST /shifts/:id/resolve body")
+
+// --- decoding what the server sends -------------------------------------------------
+let wire = #"""
+{"id":41,"worker_id":7,"location_id":"3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+ "start_time":"2026-07-14T03:43:11.412Z","end_time":"2026-07-14T11:43:11.000Z",
+ "auto_closed":true,"corrected_at":null,"client_uuid":"6b3a2c1d-0e4f-4a8b-9c7d-1e2f3a4b5c6d",
+ "location_slug":"westbahnhof","location_name":"Westbahnhof"}
+"""#
+let decoded = try! Wire.decoder.decode(WireShift.self, from: Data(wire.utf8))
+check(decoded.id == 41 && decoded.workerId == 7, "shift ids decode")
+check(decoded.startTime == start, "fractional-second timestamp decodes")
+check(decoded.needsResolution, "auto_closed + corrected_at nil => needs resolution")
+check(decoded.locationSlug == "westbahnhof", "slug rides along for display only")
+
+// Whole-second timestamps (Postgres drops .000) must decode too.
+let plain = #"{"id":1,"worker_id":1,"location_id":"3f2504e0-4f89-11d3-9a0c-0305e82c3301","start_time":"2026-07-14T03:43:11Z","end_time":null,"auto_closed":false,"corrected_at":null,"client_uuid":null}"#
+let open2 = try! Wire.decoder.decode(WireShift.self, from: Data(plain.utf8))
+check(open2.endTime == nil && !open2.needsResolution, "open shift decodes")
+
+print("tag-link-check: OK")

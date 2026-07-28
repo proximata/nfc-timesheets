@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- NDEF, not TAG: the location id is read from the tag's URI record, not from the
+	     hardware UID (decision-5, decision-21). -->
+	<key>com.apple.developer.nfc.readersession.formats</key>
+	<array>
+		<string>NDEF</string>
+	</array>
+	<!-- Background tap: iOS opens https://timesheets.exe.xyz/t?l=<uuid> straight into
+	     the app. Requires the AASA file served from the API host (decision-4). -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:timesheets.exe.xyz</string>
+	</array>
+	<!-- Worker identity (decision-22). Apple ONLY, no Google: AuthenticationServices is a
+	     native framework with no SDK and no client secret in the binary, every user is on
+	     an iPhone already, and App Store guideline 4.8 makes any third-party provider drag
+	     Sign in with Apple along with it anyway. Google is an Android-launch problem. -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
+</dict>
+</plist>

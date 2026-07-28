@@ -1,0 +1,16 @@
+# Install: /etc/systemd/system/nfc-autoclose.timer
+# Enable:  systemctl enable --now nfc-autoclose.timer   (enable the TIMER, not the service)
+
+[Unit]
+Description=Run NFC TimeSheets 8h auto-close every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+# Persistent: if the VM was down or rebooting across a window, run once immediately on boot
+# instead of skipping it. The SQL is idempotent, so a catch-up run is always safe.
+Persistent=true
+AccuracySec=1min
+Unit=nfc-autoclose.service
+
+[Install]
+WantedBy=timers.target

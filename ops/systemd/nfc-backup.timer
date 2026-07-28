@@ -1,0 +1,16 @@
+# Install: /etc/systemd/system/nfc-backup.timer
+# Enable:  systemctl enable --now nfc-backup.timer
+
+[Unit]
+Description=Run NFC TimeSheets Postgres dump daily
+
+[Timer]
+OnCalendar=daily
+# Persistent: if the VM was off at 00:00, dump on next boot instead of losing the day.
+Persistent=true
+# Spread the load off the exact midnight tick; irrelevant on one box, free to keep.
+RandomizedDelaySec=15min
+Unit=nfc-backup.service
+
+[Install]
+WantedBy=timers.target

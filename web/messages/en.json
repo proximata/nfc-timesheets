@@ -1,0 +1,77 @@
+{
+  "meta": {
+    "title": "NFC TimeSheets Admin",
+    "description": "Shift tracking and payroll administration for NFC TimeSheets."
+  },
+
+  "app": {
+    "brand": "NFC TimeSheets",
+    "brandSuffix": "Admin"
+  },
+
+  "a11y": {
+    "skipToContent": "Skip to main content"
+  },
+
+  "nav": {
+    "primaryLabel": "Primary",
+    "primaryHeading": "Administration",
+    "futureHeading": "Coming later",
+    "futureTooltip": "Coming in a future version",
+
+    "dashboard": "Dashboard",
+    "shifts": "Shifts",
+    "workers": "Workers",
+    "locations": "Locations",
+    "payroll": "Payroll",
+
+    "materialRequests": "Material Requests",
+    "plDashboard": "P&L Dashboard",
+    "contractManagement": "Contract Management",
+    "buildingAnalytics": "Building Analytics"
+  },
+
+  "locale": {
+    "label": "Language",
+    "en": "English",
+    "de": "Deutsch"
+  },
+
+  "home": {
+    "heading": "Dashboard",
+    "intro": "Shift tracking for cleaning crews. Workers tap an NFC tag at a building to clock in and out.",
+    "scaffoldHeading": "Scaffold",
+    "scaffoldBody": "The shell is in place. Individual admin screens are not built yet."
+  },
+
+  "login": {
+    "heading": "Sign in",
+    "intro": "Enter your administrator credentials to continue.",
+    "email": "Email address",
+    "password": "Password",
+    "submit": "Sign in",
+    "submitting": "Signing in…",
+    "failed": "Email address or password is incorrect.",
+    "logout": "Sign out"
+  },
+
+  "desktopOnly": {
+    "heading": "Built for desktop",
+    "body": "The NFC TimeSheets admin panel is designed for a desktop browser. Please open it on a computer.",
+    "requirement": "Minimum window width: {width} pixels."
+  },
+
+  "footer": {
+    "note": "NFC TimeSheets internal admin. Do not share access credentials."
+  },
+
+  "error": {
+    "network": "Could not reach the server. Check your connection and try again.",
+    "auth": "Not authorised. Please sign in again.",
+    "notFound": "That record no longer exists.",
+    "conflict": "That change conflicts with existing data.",
+    "request": "The request could not be processed.",
+    "server": "The server had a problem. Please try again later.",
+    "badResponse": "The server sent an unexpected response."
+  }
+}

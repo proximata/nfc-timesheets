@@ -1,0 +1,31 @@
+# gitleaks config — entropy/regex secret scanning (complements psst vault-value matching).
+[extend]
+useDefault = true
+
+# An [allowlist] with all-empty checks makes gitleaks refuse to load the whole config,
+# which silently disables scanning. Keep at least one non-empty check here.
+[allowlist]
+description = "Project false positives (public IDs, fixtures, generated output)."
+paths = [
+  '''web/out/.*''',
+  '''.*\.lock$''',
+  '''pnpm-lock\.yaml$''',
+]
+
+# The iOS APP_KEY (tsk_…) is deliberately allowlisted.
+# It ships inside the app binary, so `strings` on any installed IPA recovers it.
+# It is a coarse gate against unauthenticated internet noise, NOT a secret, and
+# hiding it from git buys nothing while it is readable on every worker's phone.
+# Real authentication is Sign in with Apple + worker_sessions (decision-22).
+# Allowlisted by prefix pattern rather than by value, so rotating the key does
+# not require editing this file — and so the value is not duplicated here.
+# Ceiling: if the API ever needs a genuinely secret client credential, this
+# entry must go and the credential must be fetched at runtime, never compiled in.
+regexes = [
+  '''tsk_[A-Za-z0-9]{16,}''',
+  # Bare UUIDs are identifiers, never credentials here: test fixtures, location ids
+  # in NFC tag URIs (decision-21), and client_uuid idempotency keys are all public.
+  # Session tokens are 32-byte hex, NOT UUID-shaped, so this does not blind the scanner
+  # to them. Narrow to canonical 8-4-4-4-12 form only.
+  '''[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}''',
+]

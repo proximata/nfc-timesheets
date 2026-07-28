@@ -1,0 +1,22 @@
+# Daily pg_dump. decision-16: the backup gap is ours to close, payroll data, not deferrable.
+# Install: /etc/systemd/system/nfc-backup.service
+
+[Unit]
+Description=NFC TimeSheets — daily Postgres dump
+Documentation=file:///srv/nfc/ops/backup/pg-backup.sh
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+ExecStart=/srv/nfc/ops/backup/pg-backup.sh
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+# The only path this job may write. /var/backups/nfc must be 0700 postgres:postgres.
+ReadWritePaths=/var/backups/nfc

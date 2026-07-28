@@ -1,0 +1,45 @@
+# NFC TimeSheets API — decision-1 (no Docker), decision-16 (everything on one VM).
+# systemd, not PM2: already installed, survives reboot without a `pm2 startup` dance,
+# journald rotates logs, adds zero runtime deps. See backlog/docs/runbook-vm-provisioning.md §5.
+#
+# Install: /etc/systemd/system/nfc-api.service
+
+[Unit]
+Description=NFC TimeSheets API (REST + AASA + /t + static admin)
+Documentation=file:///srv/nfc/ops/README.md
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+[Service]
+Type=simple
+User=app
+Group=app
+WorkingDirectory=/srv/nfc
+# 0640 root:app. Holds DATABASE_URL, APP_KEY, PORT — and nothing else. No ADMIN_PIN:
+# decision-20 moved admin auth to email + password in the `admins` table, so there is no
+# admin secret in the environment to leak into a unit file, a shell history or a log line.
+# Never logged, never echoed.
+EnvironmentFile=/etc/nfc/env
+ExecStart=/usr/bin/node /srv/nfc/server.js
+Restart=always
+RestartSec=5
+
+# PORT must be >=1024 (e.g. 8080) — User=app cannot bind privileged ports and the exe.dev
+# proxy terminates TLS and forwards anyway. If you ever truly need :80, uncomment:
+#AmbientCapabilities=CAP_NET_BIND_SERVICE
+#CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# hardening — cheap, no downside for a plain Node service
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# ProtectSystem=strict makes the whole tree read-only; name the one path that is not.
+ReadWritePaths=/srv/nfc
+
+[Install]
+WantedBy=multi-user.target

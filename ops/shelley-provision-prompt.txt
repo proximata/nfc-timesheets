@@ -1,0 +1,60 @@
+Provision this VM as the production host for the NFC TimeSheets backend. Do the infrastructure only. Do NOT write or deploy application code - that arrives later by rsync.
+
+CRITICAL FACT: the exe.dev HTTPS proxy for this VM forwards to port 8000. The API must bind 8000. Do not use 80.
+
+Run as the existing 'exedev' user where possible. Do not create a new service user - exedev is already non-root and is the platform default.
+
+TASKS
+
+1. Install Node.js 22.x from NodeSource. Verify with 'node -v'. Enable corepack and activate pnpm.
+
+2. Install PostgreSQL 16 (Ubuntu 24.04 default). Ensure it is running and enabled at boot.
+   Postgres MUST NOT listen on any public interface. Confirm with 'ss -tlnp | grep 5432' - expect 127.0.0.1 only, or a unix socket only. Fix the config if it is bound to 0.0.0.0.
+
+3. Create database 'nfc' owned by a new role 'nfc'. Generate a strong random password for that role. Write the connection string to /etc/nfc/env as DATABASE_URL using the 127.0.0.1 host.
+
+4. Create /etc/nfc/env owned root:exedev, mode 0640. Seed it with:
+     DATABASE_URL=postgres://nfc:<generated>@127.0.0.1:5432/nfc
+     PORT=8000
+   Leave APP_KEY OUT of the file for now - it is delivered separately from a secrets vault. Add a comment line noting it is required before the service will start.
+   Do NOT add an ADMIN_PIN. There is no admin secret in the environment (decision-20): the web admin authenticates against an email + password hash in the 'admins' table, seeded interactively with server/bin/create-admin.js after the first deploy.
+
+5. Create /srv/nfc owned exedev:exedev. This is where application code will be rsynced later.
+
+6. Write /etc/systemd/system/nfc-api.service:
+     runs 'node /srv/nfc/server.js' as user exedev
+     WorkingDirectory=/srv/nfc
+     EnvironmentFile=/etc/nfc/env
+     Restart=always, RestartSec=5
+     After/Wants network.target and postgresql.service
+     Hardening: NoNewPrivileges=true, PrivateTmp=true, ProtectSystem=strict, ProtectHome=true, ReadWritePaths=/srv/nfc
+   Run daemon-reload and 'systemctl enable nfc-api' but do NOT start it - there is no code yet. Starting it will fail and that is expected.
+
+7. Backups - this is payroll data, treat it as important:
+   Write /usr/local/bin/nfc-backup.sh:
+     - set -euo pipefail
+     - pg_dump the nfc database, gzip, timestamped filename, into /var/backups/nfc/
+     - verify the resulting file is non-empty AND passes 'gzip -t' BEFORE deleting anything older
+     - only then prune dumps older than 14 days
+     - fail loudly and non-zero on any error; never leave a 0-byte dump in place
+     - header comment stating that a dump on the same disk as the database is NOT a backup, and that an offsite copy is still required
+   Leave a clearly marked TODO block at the end for the offsite copy. Do NOT invent credentials or pick a provider.
+   Create /var/backups/nfc.
+   Add systemd units nfc-backup.service + nfc-backup.timer, OnCalendar=daily, Persistent=true, and enable the timer.
+
+8. Write /usr/local/bin/nfc-restore-test.sh that restores the newest dump into a scratch database and asserts the restored table count is greater than zero. An untested backup is a guess. Do not schedule it; it is run manually.
+
+9. Firewall: enable ufw. Allow OpenSSH. Allow 8000. Deny incoming by default. Be careful not to lock yourself out of the SSH session.
+
+10. Do NOT install Docker. Do NOT install PM2. systemd only. This is a hard project constraint.
+
+VERIFY AT THE END and print a short report showing:
+  node -v
+  psql --version
+  ss -tlnp | grep 5432          (must show 127.0.0.1 or socket only, never 0.0.0.0)
+  ls -l /etc/nfc/env             (must be 0640 root:exedev)
+  systemctl is-enabled nfc-api nfc-backup.timer
+  ufw status
+  ls -l /usr/local/bin/nfc-backup.sh /usr/local/bin/nfc-restore-test.sh
+
+State clearly which steps succeeded and which failed. Do not claim success for anything you did not actually verify.

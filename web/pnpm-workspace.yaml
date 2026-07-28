@@ -1,0 +1,14 @@
+# pnpm 11 reads settings from here, not from the "pnpm" field in package.json.
+packages:
+  - .
+
+# Every dependency that wants to run an install script must be listed explicitly.
+# `next` pulls in `sharp` for the image optimizer, which a static export never invokes
+# (next.config.mjs sets `images.unoptimized`), so it gets no native build step.
+# All false: next ships prebuilt platform binaries for @swc/core, @parcel/watcher is an
+# optional dev-server file-watching speedup with a JS fallback, and sharp is only used by
+# the image optimizer a static export never invokes (next.config.mjs sets images.unoptimized).
+allowBuilds:
+  '@parcel/watcher': false
+  '@swc/core': false
+  sharp: false

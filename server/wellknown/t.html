@@ -1,0 +1,70 @@
+<!doctype html>
+<!--
+  /t landing page.
+
+  Only ever reached when the app is NOT installed - with the app installed iOS
+  consumes the universal link (AASA paths ["/t*"]) and this HTML is never rendered.
+
+  d8: development language is English, German is the shipping default. ALL user
+  visible text lives in the single <main> block below, marked STRINGS. Translating
+  = replacing that block and the <title> + <html lang>. No other text in the file.
+  No JS, no external assets: this page must work on a locked-down phone browser.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>NFC TimeSheets</title>
+    <style>
+      /* Contrast checked: #1a1a1a on #ffffff = 16.1:1, #3d3d3d on #f2f2f2 = 9.5:1. */
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        padding: 2rem 1.25rem;
+        font: 1rem/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #1a1a1a;
+        background: #fff;
+      }
+      main { max-width: 34rem; margin: 0 auto; }
+      h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 1rem; }
+      h2 { font-size: 1.1rem; margin: 2rem 0 0.5rem; }
+      ol { padding-left: 1.25rem; }
+      li { margin-bottom: 0.5rem; }
+      .note {
+        margin-top: 2rem;
+        padding: 0.85rem 1rem;
+        background: #f2f2f2;
+        color: #3d3d3d;
+        border-left: 4px solid #3d3d3d;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { color: #f2f2f2; background: #131313; }
+        .note { background: #262626; color: #dcdcdc; border-left-color: #dcdcdc; }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- STRINGS: everything below is user-visible copy. Translate here, nowhere else. -->
+    <main>
+      <h1>NFC TimeSheets is not installed on this phone</h1>
+      <p>
+        You tapped a location tag, but the TimeSheets app could not be opened. Your
+        working time was <strong>not</strong> recorded.
+      </p>
+
+      <h2>What to do</h2>
+      <ol>
+        <li>Install the TimeSheets app from the TestFlight invitation you received.</li>
+        <li>Open the app once and sign in with your worker name.</li>
+        <li>Tap the tag at the entrance again to start your shift.</li>
+      </ol>
+
+      <p class="note">
+        No invitation yet, or the app still does not open? Contact your supervisor and
+        report the time you started work, so the shift can be entered by hand.
+      </p>
+    </main>
+    <!-- /STRINGS -->
+  </body>
+</html>
