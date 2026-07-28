@@ -140,7 +140,16 @@ async function handle(req, res) {
   // Association files first, before any auth: iOS accepts no redirect and no 401 here (decision-4).
   if (wellknown(req, res)) return;
 
-  const url = new URL(req.url ?? "/", "http://localhost");
+  // A request line like `//` parses as a protocol-relative URL with an empty host and
+  // THROWS, which reached the top-level handler as a 500. Scanners probe `//` constantly,
+  // so that was a steady drip of 500s hiding real ones in the log. Malformed input from the
+  // network is a client error, not a server fault.
+  let url;
+  try {
+    url = new URL(req.url ?? "/", "http://localhost");
+  } catch {
+    return sendJson(res, 400, { error: "bad_request" });
+  }
   const pathname = url.pathname;
   const hit = findRoute(req.method, pathname);
 

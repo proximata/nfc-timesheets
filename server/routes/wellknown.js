@@ -43,7 +43,15 @@ function serve(res, body, type) {
  * @returns {boolean} true when the request was handled and the caller must stop.
  */
 export function wellknown(req, res) {
-  const pathname = new URL(req.url, "http://x").pathname;
+  // This runs before anything else, so a URL it cannot parse (e.g. `//`, which is a
+  // protocol-relative URL with an empty host) threw straight past the dispatcher and
+  // surfaced as a 500. Hand malformed input back to the caller, which answers 400.
+  let pathname;
+  try {
+    pathname = new URL(req.url, "http://x").pathname;
+  } catch {
+    return false;
+  }
 
   const isAASA = pathname === "/.well-known/apple-app-site-association";
   const isAssetlinks = pathname === "/.well-known/assetlinks.json";
