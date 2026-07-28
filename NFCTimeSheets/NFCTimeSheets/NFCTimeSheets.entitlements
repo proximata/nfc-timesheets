@@ -2,12 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- NDEF, not TAG: the location id is read from the tag's URI record, not from the
-	     hardware UID (decision-5, decision-21). -->
-	<key>com.apple.developer.nfc.readersession.formats</key>
-	<array>
-		<string>NDEF</string>
-	</array>
+	<!-- No com.apple.developer.nfc.readersession.formats key on purpose.
+	     That entitlement gates IN-APP reader sessions only. Clocking in uses BACKGROUND
+	     tag reading: iOS reads the tag with the app closed and opens the universal link
+	     below, which needs associated-domains + AASA and no NFC entitlement at all.
+	     Building against the iOS 26 SDK, "NDEF" is rejected outright (App Store error
+	     90778) and only "TAG" is accepted, so re-adding this key means adopting
+	     NFCTagReaderSession - not the old NFCNDEFReaderSession. -->
 	<!-- Background tap: iOS opens https://timesheets.exe.xyz/t?l=<uuid> straight into
 	     the app. Requires the AASA file served from the API host (decision-4). -->
 	<key>com.apple.developer.associated-domains</key>

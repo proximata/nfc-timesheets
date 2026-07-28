@@ -183,7 +183,6 @@ struct LogView: View {
     let worker: WireWorker
     @Query(sort: \Shift.startTime, order: .reverse) private var shifts: [Shift]
     @Query private var sites: [Site]
-    @StateObject private var nfc = NFCReader()
     @State private var alertMsg: String?
     @State private var unresolved: [WireShift] = []
     @State private var showResolver = false
@@ -218,23 +217,35 @@ struct LogView: View {
             }
             .navigationTitle("TimeSheet")
             .refreshable { await refresh() }
+            // There is no in-app scan button. Clocking in happens by holding the phone to
+            // the tag while the app is closed: iOS reads the tag itself and opens the
+            // universal link, which lands in `inbox` via onOpenURL. That path needs no
+            // CoreNFC entitlement and no reader session.
+            //
+            // The button that used to live here drove NFCNDEFReaderSession. Building against
+            // the iOS 26 SDK, `NDEF` is no longer permitted in
+            // com.apple.developer.nfc.readersession.formats (App Store error 90778) - it now
+            // demands `TAG`, i.e. NFCTagReaderSession. Rather than port a scanner that was
+            // always meant to be deleted once background tap worked, it is gone.
+            // Ceiling: if background tap proves unreliable on real hardware, the fallback is
+            // NFCTagReaderSession + `TAG` in the entitlement, NOT the old NDEF session.
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 6) {
-                    Text(nfc.message).font(.footnote).foregroundStyle(.secondary)
-                    Button { nfc.beginScanning() } label: {
-                        Label(open.isEmpty ? "Tap to Start" : "Tap to Finish",
-                              systemImage: "wave.3.right").frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    Image(systemName: "wave.3.right")
+                        .font(.title2)
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                    Text(open.isEmpty
+                         ? "Hold your phone to the tag by the entrance to start."
+                         : "Hold your phone to the tag again to finish.")
+                        .font(.callout)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
                 }
-                .padding().background(.bar)
-            }
-            // Both tap paths converge on the inbox: the in-app scan below, and iOS
-            // opening the tag's universal link while the app was in the background.
-            .onChange(of: nfc.lastLocationId) { _, id in
-                guard let id else { return }
-                nfc.lastLocationId = nil
-                inbox.accept(id)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(.bar)
+                .accessibilityElement(children: .combine)
             }
             .onChange(of: inbox.pendingLocationId) { _, id in
                 guard id != nil, let tapped = inbox.take() else { return }
