@@ -24,7 +24,16 @@ export function parseEuroToCents(input: string): number | null {
   return euros * 100 + cents
 }
 
-/** Cents back into an editable field value. Plain dot form; `parseEuroToCents` re-reads it. */
-export function centsToEuroInput(cents: number): string {
-  return `${Math.trunc(cents / 100)}.${String(cents % 100).padStart(2, '0')}`
+/**
+ * Cents as a plain fixed-point decimal: `1450` -> `14.50`. String slicing, no float ever
+ * touches it.
+ *
+ * Two callers, one function on purpose — the worker form re-reads this with
+ * `parseEuroToCents`, and the payroll CSV hands it to an accountant. A second copy of this
+ * rounding rule is exactly how the two would eventually disagree by a cent.
+ */
+export function centsToPlainEuros(cents: number): string {
+  const sign = cents < 0 ? '-' : ''
+  const abs = Math.abs(cents)
+  return `${sign}${Math.trunc(abs / 100)}.${String(abs % 100).padStart(2, '0')}`
 }

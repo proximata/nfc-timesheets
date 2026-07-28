@@ -430,6 +430,125 @@ a {
   margin-left: var(--space-2);
 }
 
+/* --- Identifiers (slug, UUID, tag URI) ------------------------------------------------ */
+
+.code-inline,
+.code-block {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  /* An identifier read aloud on a support call must not be mistaken for prose. */
+  font-size: 0.85rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 var(--space-1);
+  /* A UUID has no spaces; allow it to wrap anywhere rather than overflow the cell. */
+  overflow-wrap: anywhere;
+}
+
+/* The tag URI is the string that gets written to the sticker: shown whole, on its own line,
+   never truncated with an ellipsis. A URI that has been shortened for layout is a URI
+   somebody will eventually copy by hand and get wrong. */
+.code-block {
+  display: block;
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-2);
+  user-select: all;
+}
+
+.tag-uuid {
+  margin: var(--space-2) 0 0;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+/* --- Shift log: filters, state, attention rows --------------------------------------- */
+
+.field select {
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+/* Wraps instead of scrolling: a German filter label is longer and must not clip. */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  margin-bottom: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+/* A standing caveat, not an error and not a transient status: the row cap the server
+   applied means this table may not be the whole truth. */
+.notice {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  font-size: 0.9rem;
+  max-width: 70ch;
+}
+
+/* The badge is bordered and labelled; the tint is the LAST of three signals, after the
+   word in the badge and the sentence under it. Greyscale loses nothing. */
+.shift-state {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.shift-state-open {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #14406f;
+}
+
+.shift-state-unresolved {
+  background: #fdf0d5;
+  border-color: #8a5a00;
+  color: #6b4400;
+}
+
+.shift-state-resolved {
+  background: #efe6fa;
+  border-color: #5b3a9b;
+  color: #45297a;
+}
+
+.shift-state-complete {
+  background: var(--bg);
+  color: var(--ink-muted);
+}
+
+.shift-state-note {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+/* Same trick as .row-inactive: a pattern, so the flag survives greyscale and print. */
+.row-attention {
+  background: repeating-linear-gradient(
+    135deg,
+    transparent,
+    transparent 6px,
+    rgba(138, 90, 0, 0.08) 6px,
+    rgba(138, 90, 0, 0.08) 12px
+  );
+}
+
 /* --- Sidebar ------------------------------------------------------------------------ */
 
 .sidebar {
@@ -534,4 +653,65 @@ a {
   .nav-tooltip {
     transition: none;
   }
+}
+
+/* --- Payroll + dashboard -------------------------------------------------------------- */
+
+/* Amounts and durations line up on the decimal so a column can be scanned and totalled by
+   eye. Header and cell share the class, otherwise the heading drifts off its column. */
+.col-numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table tfoot th,
+.data-table tfoot td {
+  font-weight: 700;
+  border-bottom: 0;
+}
+
+.page-summary {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-bottom: var(--space-4);
+}
+
+/* Caveats are a bordered block, not a coloured banner: what makes them readable is that
+   they are a list of sentences, and every one of them also says in words what it is. */
+.callout {
+  padding: var(--space-4) var(--space-6);
+  margin-bottom: var(--space-6);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 10px;
+}
+
+.callout h3 {
+  font-size: 1rem;
+  margin-bottom: var(--space-2);
+}
+
+.callout ul,
+.triage-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  max-width: 80ch;
+}
+
+.callout li,
+.triage-list li {
+  margin-bottom: var(--space-2);
+}
+
+.triage-list {
+  margin-bottom: var(--space-4);
+}
+
+/* Label above the control, hint below it — same stack as .field, just not inside a form, so
+   it is used AS `class="field toolbar-field"` and inherits `.field select` above rather than
+   restating it. Width only. */
+.toolbar-field {
+  max-width: 28rem;
+  margin-bottom: var(--space-6);
 }

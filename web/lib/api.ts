@@ -126,11 +126,69 @@ export type WorkerInput = {
 }
 
 /**
- * ponytail: `/admin/data` returns locations, shifts and hours too, but typing what this
- * screen does not read would be fiction. Widen the response type when a screen needs it.
+ * ponytail: `/admin/data` returns shifts and hours too, but typing what no screen reads
+ * would be fiction. Widen the response type when a screen needs it.
  */
 export function fetchWorkers(signal?: AbortSignal): Promise<Worker[]> {
   return apiFetch<{ workers: Worker[] }>('/admin/data', { signal }).then((data) => data.workers)
+}
+
+/**
+ * A row of `locations` as `/admin/data` returns it.
+ *
+ * `id` is a server-generated UUID and is the ONLY identity that exists: it is what the NFC
+ * tag carries in `?l=` (decision-21). `slug` is a human label for the admin UI and log
+ * lines — it is deliberately NOT on the tag, because a guessable handle on an unlocked tag
+ * would let anyone enumerate every building.
+ */
+export type Location = {
+  id: string
+  slug: string
+  name: string
+  address: string | null
+  /** Recorded if known; 3A shows the address instead and draws no map. */
+  lat: number | null
+  lng: number | null
+  active: boolean
+  created_at: string
+}
+
+/** Create (no `id`) or update (`id`, the UUID). Same route either way. */
+export type LocationInput = {
+  id?: string
+  slug: string
+  name: string
+  address: string
+  /**
+   * 3A has no input for coordinates, but the route's UPDATE writes every column, so an
+   * edit that omitted these would silently null out coordinates set elsewhere. Callers
+   * editing an existing row must pass the row's current values back.
+   */
+  lat?: number | null
+  lng?: number | null
+  active: boolean
+}
+
+export function fetchLocations(signal?: AbortSignal): Promise<Location[]> {
+  return apiFetch<{ locations: Location[] }>('/admin/data', { signal }).then(
+    (data) => data.locations,
+  )
+}
+
+/**
+ * Upsert. A 409 here can only be `slug_taken` — the route raises no other conflict — so
+ * callers may read `ApiError.status === 409` as "that slug belongs to another building".
+ *
+ * ponytail: deactivation goes through this route with `active: false` rather than
+ * `DELETE /admin/locations/:id`, because DELETE is one-way and the admin has to be able to
+ * put a building back. Both are soft; nothing here ever destroys a row that shifts point at.
+ */
+export function saveLocation(input: LocationInput, signal?: AbortSignal): Promise<Location> {
+  return apiFetch<{ location: Location }>('/admin/locations', {
+    method: 'POST',
+    body: input,
+    signal,
+  }).then((data) => data.location)
 }
 
 /**
@@ -143,4 +201,122 @@ export function saveWorker(input: WorkerInput, signal?: AbortSignal): Promise<Wo
     body: input,
     signal,
   }).then((data) => data.worker)
+}
+
+/** SHIFT_PAGE_MAX in server/routes/admin.js. A larger value is clamped, not rejected. */
+export const ADMIN_SHIFT_LIMIT = 2000
+
+/** A shift joined to its worker and location, exactly as the `adminData` query selects it. */
+export type Shift = {
+  id: number
+  worker_id: number
+  worker_name: string
+  location_id: string
+  location_slug: string
+  location_name: string
+  start_time: string
+  /** Null = still running. */
+  end_time: string | null
+  /** True = the 8h timer ended it, not a tap. A machine fact, and not patchable. */
+  auto_closed: boolean
+  /** Set only when a human supplied the real end time of an auto-closed shift. */
+  corrected_at: string | null
+  client_uuid: string | null
+  created_at: string
+}
+
+/**
+ * `/admin/data` in the shape the shift log needs: the shifts plus the two lists the
+ * filters and the correction form pick from.
+ *
+ * `shift_limit` is the LIMIT the server actually applied (500 by default, 2000 max). When
+ * the row count reaches it the list is TRUNCATED, and the screen has to say so — an
+ * incomplete shift table read as a complete one is how somebody gets underpaid.
+ */
+export type ShiftSnapshot = {
+  workers: Worker[]
+  locations: Location[]
+  shifts: Shift[]
+  shift_limit: number
+}
+
+export function fetchShiftSnapshot(signal?: AbortSignal): Promise<ShiftSnapshot> {
+  // Same page size as `fetchAdminSnapshot`. If the shift log asked for the server's 500
+  // default while payroll asked for 2000, payroll would count shifts the log cannot show —
+  // so "3 shifts need confirming" would link to a screen where they are not there.
+  return apiFetch<ShiftSnapshot>(`/admin/data?limit=${ADMIN_SHIFT_LIMIT}`, { signal })
+}
+
+/**
+ * The fields `PATCH /admin/shifts/:id` accepts. Anything omitted keeps its current value.
+ *
+ * `auto_closed` is deliberately absent: the route refuses to let an admin rewrite what the
+ * timer did. `corrected_at` is not settable either — the route stamps it itself, and only
+ * when the edit actually gives an auto-closed shift a real end time.
+ *
+ * `worker_id` / `location_id` must reference an ACTIVE row or the server answers 422, so
+ * send them only when they really changed.
+ */
+export type ShiftPatch = {
+  worker_id?: number
+  location_id?: string
+  /** ISO-8601. */
+  start_time?: string
+  /** ISO-8601, or null to reopen the shift. */
+  end_time?: string | null
+}
+
+/**
+ * What `PATCH /admin/shifts/:id` actually returns: the `shifts` row on its own. Its
+ * RETURNING clause does not join `workers` or `locations`, so `worker_name`,
+ * `location_slug` and `location_name` are NOT in the response — typing it as a full
+ * `Shift` would be a lie that renders as `undefined` in the first table cell that trusts it.
+ * Callers that need the joined names re-read `/admin/data`.
+ */
+export type ShiftRow = Omit<Shift, 'worker_name' | 'location_slug' | 'location_name'>
+
+/** 404 = the shift is gone. 422 = the merged row is not a sane shift (order, range, refs). */
+export function updateShift(
+  id: number,
+  patch: ShiftPatch,
+  signal?: AbortSignal,
+): Promise<ShiftRow> {
+  return apiFetch<{ shift: ShiftRow }>(`/admin/shifts/${id}`, {
+    method: 'PATCH',
+    body: patch,
+    signal,
+  }).then((data) => data.shift)
+}
+
+/**
+ * The server's own payroll aggregate. READ `adminData` in server/routes/admin.js before
+ * trusting it, because it does not mean what a payroll screen wants it to mean:
+ *
+ *   - it is ALL-TIME. There is no `from`/`to` parameter on `/admin/data`, so this number
+ *     cannot answer "October" and paying from it pays every hour ever worked.
+ *   - it is NOT capped by `limit`, unlike `shifts`. So it can legitimately be larger than
+ *     the returned rows add up to, and the difference is exactly the truncated tail.
+ *   - it already excludes open shifts and unresolved auto-closed ones (decision-10).
+ *
+ * Screens that need a period must aggregate the shift rows themselves. This row is useful
+ * only as a cross-check against that sum — which is what /payroll/ uses it for.
+ */
+export type HoursRow = {
+  worker_id: number
+  /** Payable hours, all time. Postgres `numeric`, parsed server-side to a JS number. */
+  hours: number
+  /** Payable cents, all time, at the worker's CURRENT rate. */
+  pay_cents: number
+}
+
+/** `ShiftSnapshot` plus the aggregate. Same route, same round trip. */
+export type AdminSnapshot = ShiftSnapshot & { hours: HoursRow[] }
+
+/**
+ * Everything the dashboard and payroll render, in one request, asking for the server's
+ * maximum page rather than its 500 default: both screens count and total shift rows, so a
+ * silently short list would be a wrong answer rather than a slow one.
+ */
+export function fetchAdminSnapshot(signal?: AbortSignal): Promise<AdminSnapshot> {
+  return apiFetch<AdminSnapshot>(`/admin/data?limit=${ADMIN_SHIFT_LIMIT}`, { signal })
 }
