@@ -326,6 +326,110 @@ a {
   font-size: 0.9rem;
 }
 
+/* --- Records: form + table ----------------------------------------------------------- */
+
+.worker-form {
+  display: grid;
+  gap: var(--space-4);
+  max-width: 40rem;
+  padding: var(--space-6);
+  margin-bottom: var(--space-8);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.field-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.field-check label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+/* Same reasoning as .form-error: kept in the DOM so the live region survives. */
+.field-hint,
+.field-error,
+.form-status {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.field-hint {
+  color: var(--ink-muted);
+  max-width: 60ch;
+}
+
+.field-error {
+  color: #a4262c;
+}
+
+.form-status {
+  color: #1c6b3c;
+}
+
+.form-actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.data-table th,
+.data-table td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  /* Long German compounds and long relay addresses break rather than overflow. */
+  overflow-wrap: anywhere;
+}
+
+.data-table thead th {
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+/* Colour is a second signal only: the status column says so in words as well. */
+.row-inactive {
+  background: repeating-linear-gradient(
+    135deg,
+    transparent,
+    transparent 6px,
+    rgba(0, 0, 0, 0.03) 6px,
+    rgba(0, 0, 0, 0.03) 12px
+  );
+  color: var(--ink-muted);
+}
+
+.cell-muted {
+  color: var(--ink-muted);
+  font-style: italic;
+}
+
+/* NOT display:flex — overriding `display` on a <td> drops its table-cell role in the
+   accessibility tree, so the buttons would lose their column and row association.
+   Inline buttons plus a margin do the same job without touching the cell's display. */
+.cell-actions {
+  white-space: nowrap;
+}
+
+.cell-actions > button + button {
+  margin-left: var(--space-2);
+}
+
 /* --- Sidebar ------------------------------------------------------------------------ */
 
 .sidebar {

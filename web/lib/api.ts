@@ -101,3 +101,46 @@ export function login(email: string, password: string, signal?: AbortSignal): Pr
 export function logout(): Promise<void> {
   return apiFetch<void>('/admin/logout', { method: 'POST' })
 }
+
+/**
+ * A row of `workers` as the API returns it (see WORKER_COLS in server/routes/admin.js).
+ * `apple_sub` is deliberately not part of the payload, so it is not part of this type.
+ */
+export type Worker = {
+  id: number
+  name: string
+  /** Null = no login on file. This address is the Sign in with Apple gate (decision-22). */
+  email: string | null
+  hourly_rate_cents: number
+  active: boolean
+  created_at: string
+}
+
+/** Create (no `id`) or update (`id`). Same route either way. */
+export type WorkerInput = {
+  id?: number
+  name: string
+  email: string
+  hourly_rate_cents: number
+  active: boolean
+}
+
+/**
+ * ponytail: `/admin/data` returns locations, shifts and hours too, but typing what this
+ * screen does not read would be fiction. Widen the response type when a screen needs it.
+ */
+export function fetchWorkers(signal?: AbortSignal): Promise<Worker[]> {
+  return apiFetch<{ workers: Worker[] }>('/admin/data', { signal }).then((data) => data.workers)
+}
+
+/**
+ * Upsert. A 409 here can only be the UNIQUE index on `workers.email` — the route has no
+ * other conflict — so callers may read `ApiError.status === 409` as "email already taken".
+ */
+export function saveWorker(input: WorkerInput, signal?: AbortSignal): Promise<Worker> {
+  return apiFetch<{ worker: Worker }>('/admin/workers', {
+    method: 'POST',
+    body: input,
+    signal,
+  }).then((data) => data.worker)
+}

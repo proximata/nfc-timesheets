@@ -55,6 +55,48 @@
     "logout": "Sign out"
   },
 
+  "workers": {
+    "heading": "Workers",
+    "intro": "Everyone who records hours. The email address is what lets a worker sign in to the app, so it has to be exactly right.",
+
+    "createHeading": "Add a worker",
+    "editHeading": "Edit worker",
+    "fieldName": "Name",
+    "fieldEmail": "Email address (app sign-in)",
+    "emailHint": "This must match the address Apple gives us. If the worker chose “Hide My Email”, their first sign-in is refused and the app shows them the private relay address — enter that address here.",
+    "fieldRate": "Hourly rate",
+    "rateHint": "Euros per hour, for example 14.50.",
+    "fieldActive": "Active — may sign in and record hours",
+    "submitCreate": "Add worker",
+    "submitSave": "Save changes",
+    "submitting": "Saving…",
+    "cancel": "Cancel",
+    "saved": "Worker saved.",
+
+    "errorNameRequired": "Enter a name.",
+    "errorEmailShape": "That is not a valid email address.",
+    "errorEmailTaken": "A worker with this email address already exists.",
+    "errorRateInvalid": "Enter an amount in euros, for example 14.50.",
+    "errorRejected": "The server rejected these details. Please check the fields and try again.",
+
+    "listHeading": "All workers",
+    "loading": "Loading workers…",
+    "emptyBody": "No workers yet. Use the form above to add the first one.",
+    "tableCaption": "Workers, active ones first, then by name.",
+    "colName": "Name",
+    "colEmail": "Email address",
+    "colRate": "Hourly rate",
+    "colStatus": "Status",
+    "colActions": "Actions",
+    "statusActive": "Active",
+    "statusInactive": "Inactive — cannot sign in",
+    "noEmail": "No email — cannot sign in",
+    "edit": "Edit",
+    "deactivate": "Deactivate",
+    "activate": "Reactivate",
+    "forWorker": " for {name}"
+  },
+
   "desktopOnly": {
     "heading": "Built for desktop",
     "body": "The NFC TimeSheets admin panel is designed for a desktop browser. Please open it on a computer.",

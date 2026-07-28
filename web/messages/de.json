@@ -55,6 +55,48 @@
     "logout": "Sign out"
   },
 
+  "workers": {
+    "heading": "Mitarbeiter",
+    "intro": "Alle Personen, die Stunden erfassen. Über die E-Mail-Adresse meldet sich ein Mitarbeiter in der App an – sie muss daher exakt stimmen.",
+
+    "createHeading": "Mitarbeiter anlegen",
+    "editHeading": "Mitarbeiter bearbeiten",
+    "fieldName": "Name",
+    "fieldEmail": "E-Mail-Adresse (App-Anmeldung)",
+    "emailHint": "Muss genau der Adresse entsprechen, die Apple übermittelt. Wählt der Mitarbeiter „E-Mail-Adresse verbergen“, wird die erste Anmeldung abgelehnt und die App zeigt ihm die Relay-Adresse an – diese Adresse hier eintragen.",
+    "fieldRate": "Stundensatz",
+    "rateHint": "Euro pro Stunde, zum Beispiel 14,50.",
+    "fieldActive": "Aktiv – darf sich anmelden und Stunden erfassen",
+    "submitCreate": "Mitarbeiter anlegen",
+    "submitSave": "Änderungen speichern",
+    "submitting": "Wird gespeichert…",
+    "cancel": "Abbrechen",
+    "saved": "Mitarbeiter gespeichert.",
+
+    "errorNameRequired": "Bitte einen Namen eingeben.",
+    "errorEmailShape": "Das ist keine gültige E-Mail-Adresse.",
+    "errorEmailTaken": "Ein Mitarbeiter mit dieser E-Mail-Adresse existiert bereits.",
+    "errorRateInvalid": "Bitte einen Betrag in Euro eingeben, zum Beispiel 14,50.",
+    "errorRejected": "Der Server hat diese Angaben abgelehnt. Bitte die Felder prüfen und erneut versuchen.",
+
+    "listHeading": "Alle Mitarbeiter",
+    "loading": "Mitarbeiter werden geladen…",
+    "emptyBody": "Noch keine Mitarbeiter. Mit dem Formular oben den ersten anlegen.",
+    "tableCaption": "Mitarbeiter, aktive zuerst, danach nach Name.",
+    "colName": "Name",
+    "colEmail": "E-Mail-Adresse",
+    "colRate": "Stundensatz",
+    "colStatus": "Status",
+    "colActions": "Aktionen",
+    "statusActive": "Aktiv",
+    "statusInactive": "Inaktiv – keine Anmeldung möglich",
+    "noEmail": "Keine E-Mail – keine Anmeldung möglich",
+    "edit": "Bearbeiten",
+    "deactivate": "Deaktivieren",
+    "activate": "Wieder aktivieren",
+    "forWorker": " von {name}"
+  },
+
   "desktopOnly": {
     "heading": "Built for desktop",
     "body": "The NFC TimeSheets admin panel is designed for a desktop browser. Please open it on a computer.",

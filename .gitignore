@@ -19,3 +19,7 @@ id_ed25519
 
 # gstack browse scratch — network logs capture live API keys from visited pages
 .gstack/
+
+# Xcode per-user UI state - changes on every click, never meaningful in a diff
+*.xcuserstate
+xcuserdata/

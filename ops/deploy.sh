@@ -36,7 +36,12 @@ echo "==> 2/6 install server runtime deps (pg only, pure JS — safe to ship fro
 echo "==> 3/6 rsync server -> $HOST:$DEST"
 # --delete prunes removed server files. public/ and ops/ are the OTHER halves of the artifact
 # and live under the same root, so they must be excluded or this wipes them.
+# Test material is excluded on purpose: check-api.js CREATEs and DROPs schemas and
+# seed.sql inserts demo workers. Neither belongs next to a payroll database where a
+# stray `node check-api.js` in the wrong directory is a very bad afternoon.
 rsync -az --delete --exclude 'public/' --exclude 'ops/' \
+  --exclude 'check-*.js' --exclude 'check-*.mjs' \
+  --exclude '*.test.js' --exclude 'db/seed.sql' \
   ./server/ "$HOST:$DEST/"
 
 echo "==> 4/6 rsync admin export -> $DEST/public  and ops -> $DEST/ops"
