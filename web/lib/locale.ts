@@ -20,10 +20,14 @@ export function isLocale(value: unknown): value is Locale {
 /**
  * The one place the active default locale is decided. Baked in at build time
  * (`NEXT_PUBLIC_DEFAULT_LOCALE`), overridable per browser session via `IntlProvider`.
- * MVP ships English (decision-17); flipping the eventual German default is this env var.
+ *
+ * The FALLBACK is German (decision-8): the only user of this panel is a Viennese cleaning
+ * director who works in German, and a build that forgot the env var must not land them on an
+ * English screen. English stays fully available through the locale switcher, and
+ * `NEXT_PUBLIC_DEFAULT_LOCALE=en` still produces an English-first build for development.
  */
 const configuredLocale = process.env.NEXT_PUBLIC_DEFAULT_LOCALE
-export const DEFAULT_LOCALE: Locale = isLocale(configuredLocale) ? configuredLocale : 'en'
+export const DEFAULT_LOCALE: Locale = isLocale(configuredLocale) ? configuredLocale : 'de'
 
 /**
  * Both dictionaries ship in the bundle. Two locales of flat-ish JSON is a few KB; lazy

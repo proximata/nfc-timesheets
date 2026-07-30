@@ -2,10 +2,10 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useFormatter, useTranslations } from 'next-intl'
-import { useCallback, useEffect, useId, useState } from 'react'
+import { useFormatter, useLocale, useTranslations } from 'next-intl'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { type AdminSnapshot, ApiError, fetchAdminSnapshot } from '@/lib/api'
-import type { ErrorKey } from '@/lib/locale'
+import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { centsToPlainEuros } from '@/lib/money'
 import { LOGIN_PATH } from '@/lib/nav'
 import {
@@ -55,6 +55,26 @@ export default function PayrollPage() {
   const t = useTranslations('payroll')
   const tError = useTranslations('error')
   const format = useFormatter()
+  const locale = useLocale()
+
+  /**
+   * Month names come from HERE and not from `format.dateTime`, for one Austrian reason:
+   * next-intl is given the message-file key ('de'), so its own formatter resolves Intl
+   * against plain German and prints "Januar" where this director says "Jänner". `htmlLang`
+   * maps 'de' to the BCP-47 tag 'de-AT', which has the Austrian month names. Same trick,
+   * same reason as app/reinigung/page.tsx. timeZone is pinned to match the provider's, so
+   * a shift just after midnight still lands on the day the admin worked it.
+   */
+  const monthDayFormat = useMemo(
+    () =>
+      new Intl.DateTimeFormat(htmlLang(isLocale(locale) ? locale : 'de'), {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'Europe/Vienna',
+      }),
+    [locale],
+  )
   const router = useRouter()
 
   const periodId = useId()
@@ -97,13 +117,9 @@ export default function PayrollPage() {
 
   const range = periodRange(period, now)
   const rangeLabel = t('rangeLabel', {
-    from: format.dateTime(range.start, { day: 'numeric', month: 'long', year: 'numeric' }),
+    from: monthDayFormat.format(range.start),
     // The range is half-open, so the last day the admin cares about is one millisecond back.
-    to: format.dateTime(new Date(range.end.getTime() - 1), {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    }),
+    to: monthDayFormat.format(new Date(range.end.getTime() - 1)),
   })
 
   const totals = snapshot === null ? null : payrollFor(snapshot.workers, snapshot.shifts, range)
@@ -265,11 +281,7 @@ export default function PayrollPage() {
                   <li>
                     {t('caveatTruncated', {
                       limit: snapshot.shift_limit,
-                      earliest: format.dateTime(new Date(coverage.earliestStart), {
-                        day: 'numeric',
-                        month: 'long',
-                        year: 'numeric',
-                      }),
+                      earliest: monthDayFormat.format(new Date(coverage.earliestStart)),
                     })}
                   </li>
                 ) : null}

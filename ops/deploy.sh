@@ -26,7 +26,12 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
 echo "==> 1/6 build the admin export (web/out)"
-(cd web && pnpm install --frozen-lockfile && pnpm verify)
+# NEXT_PUBLIC_DEFAULT_LOCALE is baked into the bundle at BUILD time, and this build runs on a
+# developer's machine. web/.env.local is gitignored, so whatever locale that untracked file
+# happens to hold would otherwise decide the language the director sees in production. A shell
+# variable beats .env.local in Next, so setting it here makes the shipped default German
+# (decision-8) regardless of who runs the deploy. English is still one click away in the UI.
+(cd web && pnpm install --frozen-lockfile && NEXT_PUBLIC_DEFAULT_LOCALE=de pnpm verify)
 
 echo "==> 2/6 install server runtime deps (pg only, pure JS — safe to ship from macOS)"
 (cd server && pnpm install --prod --frozen-lockfile)

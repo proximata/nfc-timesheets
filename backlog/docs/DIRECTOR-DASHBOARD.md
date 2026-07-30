@@ -5,9 +5,14 @@ Everything below was tested against a real database and a real running server.
 
 ---
 
-## Read this first — two things need your decision before the panel goes live
+## Read this first — both of these are now DONE
 
-### 1. The panel will open in ENGLISH unless someone flips a switch
+> **Resolved.** The two items below were the blockers when this document was written. Both are
+> fixed and verified on disk: the panel now starts in German, all 447 texts are translated, and
+> one German word is used per thing. See **[German](#german)** at the end for what was decided
+> and how to switch languages. The two sections below are kept as the record of the problem.
+
+### 1. ~~The panel will open in ENGLISH unless someone flips a switch~~ — FIXED
 
 All the new screens — buildings, clients, products & equipment, the missed-shift form — are
 fully in German. But the panel is currently **built to start in English**. There is a language
@@ -33,7 +38,7 @@ did not include it. It is about 48 short sentences and needs no programming.
 **Our recommendation:** have those 48 sentences translated, then flip the switch, and the whole
 panel is German in one go. Until then, click Deutsch once per computer.
 
-### 2. Two German words are used for the same thing
+### 2. ~~Two German words are used for the same thing~~ — FIXED
 
 The buildings screen calls a building an **Objekt**; the shifts screen and the client's page
 call the same thing a **Gebäude**. Likewise the menu says **Kunde** while the forms say
@@ -204,17 +209,14 @@ the way a password would be. Our own server never writes it down anywhere. Treat
 
 ## Still missing
 
-- **Translation of the sign-in screen, the five old menu entries and the error messages** — the
-  blocking item at the top. About 48 short sentences, no programming.
-- **One German word per thing** — Objekt vs Gebäude, Kunde vs Unternehmen. Same job as above.
 - **Nothing uses the inventory costs yet.** You can record products and equipment and their
   cost, which is what you asked for, but nothing yet spreads those costs across buildings or
   tells you what a building's materials cost. That is the next piece of work
   (decision-6: split pro-rata by hours worked).
 - **No profit figure per building.** You can see contract amount and hours worked side by side
   and do the subtraction yourself; the panel does not yet do it for you.
-- **The panel is desktop only, on purpose.** On a phone or a narrow window it shows "please
-  open this on a computer" (in English, see above). The client's page is the one exception —
+- **The panel is desktop only, on purpose.** On a phone or a narrow window it shows *„Für den
+  Computer gemacht"* and asks you to open it on a computer. The client's page is the one exception —
   that one is built for a phone, because that is where they will open it.
 - **The month filter on the shifts and payroll screens still uses your computer's clock**, not
   Vienna's. It only matters if you work from a laptop set to another country's time zone at
@@ -262,3 +264,83 @@ Two things were repaired during this review:
 - The Payroll screen could not tell a typed-in shift from a tag reading. It now counts them,
   links to them and includes them as a CSV column (`web/lib/payroll.ts`,
   `web/app/payroll/page.tsx`).
+
+---
+
+## German
+
+The panel is now German end to end, and German is what it opens in. Verified against the files
+and against a real build, not against a report.
+
+### Which words we chose, and why
+
+Where the panel used two words for one thing, one word won. Nothing about your data changed —
+only what is printed on screen.
+
+| Thing | Word used everywhere now | Word removed |
+|---|---|---|
+| A building you clean | **Objekt** (47 places) | ~~Gebäude~~ (0 left) |
+| The company you have the contract with | **Kunde** (33 places) | ~~Unternehmen~~, ~~Firma~~, ~~Standort~~ (0 left) |
+
+**Objekt**, because it is your trade's own word: *Objektbetreuung*, *Objektleiter*,
+*Objektreinigung* are what a Viennese cleaning contract says. *Gebäude* is the layman's word.
+
+**Kunde**, because *Unternehmen* on your own screen can be read as *your* company. *Kunde* can
+only mean the other party.
+
+Two smaller fixes in the same pass: durations now read **Std:Min** instead of `h:mm`, and
+example amounts are written **1200,50** with a comma, the way an Austrian keyboard types them.
+
+### Error messages
+
+Every error message now says what to do next, in plain German, with no technical cause and no
+word *Fehler*. For example, an expired session reads:
+
+> „Ihre Sitzung ist abgelaufen. Bitte melden Sie sich noch einmal an."
+
+### How to switch languages
+
+- **You, in the browser:** top right corner, the **Sprache** picker offers *Deutsch* and
+  *English*. Your choice is remembered on that computer and beats whatever the panel was built
+  with. Nothing else changes — same data, same screens.
+- **The client's page** is always German, and has no picker. Its reader never chose a language.
+- **Whoever uploads the panel:** German is now the default with no action required. `ops/deploy.sh`
+  builds with `NEXT_PUBLIC_DEFAULT_LOCALE=de`, and if that is ever forgotten the code itself
+  falls back to German. Building with `NEXT_PUBLIC_DEFAULT_LOCALE=en` still produces an
+  English-first panel for a developer.
+
+### One string for you to arbitrate
+
+Everything below is correct German. The only open question is taste, and you are the native
+speaker:
+
+- On the **client's own page** (`portal.note`) we call the building *Objekt*:
+  „Diese Seite zeigt ausschließlich die abgeschlossenen Reinigungen dieses Objekts: Datum,
+  Vorname der Reinigungskraft und Dauer." *Objekt* is your trade's word; a client's office
+  manager may or may not read it as naturally as you do. Say the word and it becomes
+  *dieses Gebäudes* on that one page only.
+
+### Verified
+
+- 447 texts, English and German, exactly the same set of keys. No text is missing and none is
+  left over.
+- Every `{name}`, `{count}`, `{amount}` and every singular/plural rule matches between the two
+  languages, on all 447 — a mismatch would crash the screen, so this was checked on every one
+  rather than a sample.
+- 15 texts are deliberately identical in both languages: the product name, *Name*, *Status*,
+  *Filter*, *UUID:* and the two language names themselves.
+- Every one of the 12 uploaded pages is marked `lang="de-AT"` (Austrian German) and contains no
+  English text: sign-in, the desktop message, the dashboard, all seven admin screens, the
+  client's page, and the "page not found" page.
+- Built three ways — German, English, and with the setting missing entirely. German and
+  "missing" both give German; English still gives a fully English panel.
+
+Two things were repaired while checking:
+
+- **A wrong URL showed an English message.** Typing an address that does not exist produced
+  Next.js's built-in *"404: This page could not be found."* — the one English sentence the panel
+  did not own. It now reads *„Diese Seite gibt es nicht"* with a link back to the Übersicht
+  (`web/app/not-found.tsx`).
+- **Payroll wrote „Januar", not „Jänner".** The date range on the Lohnabrechnung screen was
+  formatted as plain German rather than Austrian German. It now reads *„1. Jänner 2026 bis
+  31. Jänner 2026"* (`web/app/payroll/page.tsx`).

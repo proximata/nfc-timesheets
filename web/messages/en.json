@@ -480,6 +480,12 @@
     "requirement": "Minimum window width: {width} pixels."
   },
 
+  "notFound": {
+    "heading": "This page does not exist",
+    "body": "The address may have been mistyped, or the page has moved. Please pick a screen from the menu on the left.",
+    "back": "Back to the dashboard"
+  },
+
   "footer": {
     "note": "NFC TimeSheets internal admin. Do not share access credentials."
   },

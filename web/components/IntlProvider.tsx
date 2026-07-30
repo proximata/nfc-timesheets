@@ -55,7 +55,16 @@ export function IntlProvider({ children }: { children: ReactNode }) {
   return (
     <LocaleSettingContext.Provider value={{ locale, setLocale }}>
       {/* timeZone is fixed: this is a single-city payroll tool (Vienna), and pinning it keeps
-          any future date formatting identical between the prerender and the browser. */}
+          any future date formatting identical between the prerender and the browser.
+
+          KNOWN GAP: this is the message-file key ('de'), not a BCP-47 tag, so next-intl's own
+          `format.dateTime` resolves Intl against plain German and prints "Januar" where an
+          Austrian expects "Jänner". Both screens that render a month name work around it by
+          building their own `Intl.DateTimeFormat(htmlLang(locale))` — app/payroll/page.tsx
+          and app/reinigung/page.tsx. IF A THIRD SCREEN NEEDS A MONTH NAME, copy that, or fix
+          this properly: widen the `AppConfig.Locale` augmentation in global.d.ts from the two
+          message-file keys to BCP-47 tags. That is a typing change touching every locale
+          prop in the app, which is why it is not done inline here. */}
       <NextIntlClientProvider locale={active} messages={MESSAGES[active]} timeZone="Europe/Vienna">
         {children}
       </NextIntlClientProvider>
