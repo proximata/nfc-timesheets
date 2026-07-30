@@ -126,8 +126,27 @@ struct NFCTimeSheetsApp: App {
                 // Universal link off the tag: https://timesheets.exe.xyz/t?l=<uuid>.
                 // Anything that is not a well-formed tag link is dropped on the floor -
                 // the tag is unlocked and its contents are untrusted (decision-15).
+                //
+                // BOTH handlers are required, and wiring only the first is why the very
+                // first real tap did nothing. iOS delivers a link two different ways:
+                //   - onOpenURL              : tapping a link in Safari, Notes, Messages
+                //   - onContinueUserActivity : BACKGROUND NFC TAG READS. Core NFC reads the
+                //     tag with the app closed and hands the URL over as an NSUserActivity of
+                //     type NSUserActivityTypeBrowsingWeb, which is a different entry point.
+                // With only onOpenURL the app LAUNCHED from the tap - so it looked like it
+                // worked - and then never learned which location was tapped. The server log
+                // showed the launch refreshes (/auth/session, /roster, /shifts/open,
+                // /shifts/unresolved) and no POST at all.
+                //
+                // Delivering the same tap twice is safe and expected: TapInbox collapses
+                // identical taps inside a 3s window, which is exactly what it was built for.
                 .onOpenURL { url in
                     if let id = TagLink.locationId(from: url) { inbox.accept(id) }
+                }
+                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                    guard let url = activity.webpageURL,
+                          let id = TagLink.locationId(from: url) else { return }
+                    inbox.accept(id)
                 }
         }
         .modelContainer(container)
