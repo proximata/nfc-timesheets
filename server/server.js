@@ -11,6 +11,7 @@ import { HttpError, readJson, sendJson } from "./lib/http.js";
 import { adminRoutes } from "./routes/admin.js";
 import { appRoutes } from "./routes/app.js";
 import { authRoutes } from "./routes/auth.js";
+import { portalRoutes } from "./routes/portal.js";
 import { wellknown } from "./routes/wellknown.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -38,11 +39,16 @@ export function assertEnv(env = process.env) {
 //   "worker" - X-App-Key AND a ts_worker session (decision-22). Identity comes from
 //              the session; handlers must never read a worker id from the request.
 //   "admin"  - ts_session cookie (decision-20).
+//
+// portalRoutes is `auth: null` and is the only PUBLIC data route: the token in the URL is
+// the credential (see routes/portal.js). It rate-limits itself and answers 404 for anything
+// it does not recognise.
 const routes = [
   { method: "GET", path: "/health", auth: null, handler: health },
   ...authRoutes,
   ...appRoutes,
   ...adminRoutes,
+  ...portalRoutes,
 ];
 
 async function health() {
@@ -206,6 +212,11 @@ function clientIp(req) {
   return req.socket?.remoteAddress ?? "unknown";
 }
 
+/** Strip a client-portal token out of a path before it can be logged. */
+function redactUrl(url) {
+  return String(url ?? "").replace(/^(\/portal\/)[^/?#]+/, "$1<redacted>");
+}
+
 export function createServer() {
   return createHttpServer((req, res) => {
     handle(req, res).catch((err) => {
@@ -226,7 +237,10 @@ export function createServer() {
         return;
       }
       // Log server-side, never leak internals (or secrets) to the client.
-      console.error(`[500] ${req.method} ${req.url}:`, err?.message ?? err);
+      // This is the ONLY place a request path is written out, and a client-portal path
+      // carries a live credential in it (routes/portal.js). Redact it: a token in a log
+      // file, a journald ring buffer or a pasted stack trace is a token that has leaked.
+      console.error(`[500] ${req.method} ${redactUrl(req.url)}:`, err?.message ?? err);
       sendJson(res, 500, { error: "internal_error" });
     });
   });

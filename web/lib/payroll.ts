@@ -1,5 +1,5 @@
 import type { HoursRow, Shift, Worker } from '@/lib/api'
-import { blocksPayroll, shiftState } from '@/lib/shifts'
+import { blocksPayroll, isManualEntry, shiftState } from '@/lib/shifts'
 
 /**
  * Payroll arithmetic. No React, no fetching.
@@ -70,6 +70,16 @@ export type PayrollLine = {
   /** Excluded from the total above, and why (decision-10). Both link to /shifts/. */
   openShifts: number
   unresolvedShifts: number
+  /**
+   * How many of `payableShifts` were TYPED IN rather than tapped on a tag (`client_uuid IS
+   * NULL` — see `isManualEntry`). These ARE paid; the count is the audit trail.
+   *
+   * Payroll is where a shift is turned into money and where it is later disputed, so "which
+   * of these hours has no tag behind it" has to be answerable from this screen and from the
+   * CSV the accountant keeps. Counted, never deducted: a hand-entered shift is a real day
+   * worked by someone whose phone died, and refusing to pay it was never the point.
+   */
+  manualShifts: number
 }
 
 export type PayrollTotals = {
@@ -78,6 +88,8 @@ export type PayrollTotals = {
   payCents: number
   openShifts: number
   unresolvedShifts: number
+  /** Paid shifts in this period that a human typed in. Included in the total above. */
+  manualShifts: number
   /**
    * Shift rows whose `worker_id` matches no worker in the payload. Should be structurally
    * impossible — `adminData` inner-joins workers and filters neither list — so it exists
@@ -102,7 +114,15 @@ export function payrollFor(
   const lines = new Map<number, PayrollLine>(
     workers.map((worker) => [
       worker.id,
-      { worker, payableMs: 0, payableShifts: 0, payCents: 0, openShifts: 0, unresolvedShifts: 0 },
+      {
+        worker,
+        payableMs: 0,
+        payableShifts: 0,
+        payCents: 0,
+        openShifts: 0,
+        unresolvedShifts: 0,
+        manualShifts: 0,
+      },
     ]),
   )
   let orphanShifts = 0
@@ -122,6 +142,9 @@ export function payrollFor(
     if (blocksPayroll(state) || shift.end_time === null) continue
     line.payableMs += new Date(shift.end_time).getTime() - new Date(shift.start_time).getTime()
     line.payableShifts += 1
+    // Counted only for shifts that actually reach the total, so the number always answers
+    // "how much of what I am about to pay was typed in".
+    if (isManualEntry(shift)) line.manualShifts += 1
   }
 
   const totals: PayrollTotals = {
@@ -130,6 +153,7 @@ export function payrollFor(
     payCents: 0,
     openShifts: 0,
     unresolvedShifts: 0,
+    manualShifts: 0,
     orphanShifts,
   }
 
@@ -143,6 +167,7 @@ export function payrollFor(
     totals.payCents += line.payCents
     totals.openShifts += line.openShifts
     totals.unresolvedShifts += line.unresolvedShifts
+    totals.manualShifts += line.manualShifts
   }
 
   totals.lines.sort((a, b) => a.worker.name.localeCompare(b.worker.name))

@@ -111,6 +111,11 @@ export type Worker = {
   name: string
   /** Null = no login on file. This address is the Sign in with Apple gate (decision-22). */
   email: string | null
+  /**
+   * Null = no number on file. A contact detail and NOTHING else: it grants no access, is
+   * never matched at sign-in and is not unique. Do not conflate it with `email`.
+   */
+  phone: string | null
   hourly_rate_cents: number
   active: boolean
   created_at: string
@@ -121,6 +126,8 @@ export type WorkerInput = {
   id?: number
   name: string
   email: string
+  /** Empty string = clear it. The route rewrites every column, so an edit must send it. */
+  phone: string
   hourly_rate_cents: number
   active: boolean
 }
@@ -151,6 +158,20 @@ export type Location = {
   lng: number | null
   active: boolean
   created_at: string
+  /** The company under contract. Null = nobody has filled it in yet. */
+  client_id: number | null
+  /** The person at the client we report to. Null = none named. */
+  contact_id: number | null
+  /**
+   * Contract volume per month, integer cents. Null and 0 are DIFFERENT answers:
+   * null = "nobody has told us", 0 = "we clean this for free".
+   */
+  monthly_contract_cents: number | null
+  /** Agreed time per month, integer minutes. Null = no target agreed. */
+  target_minutes_per_month: number | null
+  /** Joined by `/admin/data` so no screen has to look the names up itself. */
+  client_name: string | null
+  contact_name: string | null
 }
 
 /** Create (no `id`) or update (`id`, the UUID). Same route either way. */
@@ -163,10 +184,17 @@ export type LocationInput = {
    * 3A has no input for coordinates, but the route's UPDATE writes every column, so an
    * edit that omitted these would silently null out coordinates set elsewhere. Callers
    * editing an existing row must pass the row's current values back.
+   *
+   * The same hazard applies to the four contract fields below: omitting one on an edit
+   * CLEARS it. Send the row's current value when the form did not change it.
    */
   lat?: number | null
   lng?: number | null
   active: boolean
+  client_id?: number | null
+  contact_id?: number | null
+  monthly_contract_cents?: number | null
+  target_minutes_per_month?: number | null
 }
 
 export function fetchLocations(signal?: AbortSignal): Promise<Location[]> {
@@ -203,6 +231,60 @@ export function saveWorker(input: WorkerInput, signal?: AbortSignal): Promise<Wo
   }).then((data) => data.worker)
 }
 
+/**
+ * A row of `inventory_items`. Products and equipment are ONE table and one screen: they
+ * differ by this `kind` label and by nothing else (server/db/migrations/003).
+ */
+export const INVENTORY_KINDS = ['product', 'equipment'] as const
+export type InventoryKind = (typeof INVENTORY_KINDS)[number]
+
+export function isInventoryKind(value: string): value is InventoryKind {
+  return (INVENTORY_KINDS as readonly string[]).includes(value)
+}
+
+export type InventoryItem = {
+  id: number
+  name: string
+  kind: InventoryKind
+  /** Integer cents. 0 is a real answer: "we have it, nobody has priced it yet". */
+  unit_cost_cents: number
+  active: boolean
+  created_at: string
+}
+
+/** Create (no `id`) or update (`id`). Same route either way. */
+export type InventoryInput = {
+  id?: number
+  name: string
+  kind: InventoryKind
+  unit_cost_cents: number
+  active: boolean
+}
+
+export function fetchInventory(signal?: AbortSignal): Promise<InventoryItem[]> {
+  return apiFetch<{ inventory: InventoryItem[] }>('/admin/data', { signal }).then(
+    (data) => data.inventory,
+  )
+}
+
+/**
+ * Upsert. 404 = the item is gone, 400 = a field the server refused. There is no 409 on
+ * this route: two buckets of the same cloth at different prices are two legitimate rows.
+ *
+ * Deactivation goes through here with `active: false` rather than `DELETE
+ * /admin/inventory/:id`, so the same button can put an item back.
+ */
+export function saveInventoryItem(
+  input: InventoryInput,
+  signal?: AbortSignal,
+): Promise<InventoryItem> {
+  return apiFetch<{ item: InventoryItem }>('/admin/inventory', {
+    method: 'POST',
+    body: input,
+    signal,
+  }).then((data) => data.item)
+}
+
 /** SHIFT_PAGE_MAX in server/routes/admin.js. A larger value is clamped, not rejected. */
 export const ADMIN_SHIFT_LIMIT = 2000
 
@@ -221,6 +303,10 @@ export type Shift = {
   auto_closed: boolean
   /** Set only when a human supplied the real end time of an auto-closed shift. */
   corrected_at: string | null
+  /**
+   * The phone's idempotency key. NULL means the shift was typed into this admin panel
+   * rather than tapped — there is no separate flag, see `isManualEntry` in lib/shifts.ts.
+   */
   client_uuid: string | null
   created_at: string
 }
@@ -275,6 +361,36 @@ export type ShiftPatch = {
  */
 export type ShiftRow = Omit<Shift, 'worker_name' | 'location_slug' | 'location_name'>
 
+/**
+ * A shift that was never tapped: the worker's phone died, or the tag was gone, and the day
+ * still has to be paid. `end_time` is REQUIRED — the route refuses to open a shift by hand,
+ * because an open one would compete with the phone for the one-open-shift-per-worker slot.
+ */
+export type NewShiftInput = {
+  worker_id: number
+  location_id: string
+  /** ISO-8601 instants. Both must be in the past and the worker must be free in between. */
+  start_time: string
+  end_time: string
+}
+
+/**
+ * `POST /admin/shifts`. The created row has `client_uuid: null`, which is exactly what
+ * marks it as hand-entered (`isManualEntry` in lib/shifts.ts).
+ *
+ * 409 = the worker already has a shift covering part of that window, including an open one.
+ * The response body names the clashing shift, but `ApiError` deliberately carries no server
+ * text, so callers identify it from the shift list they already hold (`overlappingShift`).
+ * 422 = unknown/inactive worker or building, end before start, or a time in the future.
+ */
+export function createShift(input: NewShiftInput, signal?: AbortSignal): Promise<ShiftRow> {
+  return apiFetch<{ shift: ShiftRow }>('/admin/shifts', {
+    method: 'POST',
+    body: input,
+    signal,
+  }).then((data) => data.shift)
+}
+
 /** 404 = the shift is gone. 422 = the merged row is not a sane shift (order, range, refs). */
 export function updateShift(
   id: number,
@@ -319,4 +435,181 @@ export type AdminSnapshot = ShiftSnapshot & { hours: HoursRow[] }
  */
 export function fetchAdminSnapshot(signal?: AbortSignal): Promise<AdminSnapshot> {
   return apiFetch<AdminSnapshot>(`/admin/data?limit=${ADMIN_SHIFT_LIMIT}`, { signal })
+}
+
+/* --- Clients, contacts and the client link ---------------------------------------------
+ *
+ * Business words on purpose: a `client` is the company that pays for a building, a
+ * `contact` is the person there we report to. Neither is a login — a contact has no
+ * password and no session, and the only access they ever get is a link (below).
+ */
+
+export type Client = {
+  id: number
+  name: string
+  active: boolean
+  created_at: string
+}
+
+export type Contact = {
+  id: number
+  /** A contact belongs to exactly ONE client, which is why picking a contact implies it. */
+  client_id: number
+  name: string
+  /** Recognition for the director, NOT a credential. See POST /admin/contacts. */
+  email: string | null
+  phone: string | null
+  active: boolean
+  created_at: string
+}
+
+/**
+ * A live client link. `/admin/data` lists live grants only — revoked ones are history the
+ * director cannot act on.
+ *
+ * `token_hash` is a SHA-256 and grants nothing; it is the handle the revoke call posts
+ * back. The raw token exists in exactly one HTTP response, ever (see `createClientLink`).
+ */
+export type PortalGrant = {
+  token_hash: string
+  contact_id: number
+  location_id: string
+  created_at: string
+  contact_name: string
+  location_name: string
+}
+
+/**
+ * One request behind the buildings screen. Buildings, the two lists its selects offer, the
+ * live links, and the shifts the "time this month" column is summed from.
+ *
+ * `shift_limit` is the cap the server applied. When `shifts.length` reaches it the list is
+ * TRUNCATED and the monthly totals can be too low, so the screen has to say so.
+ */
+export type BuildingsSnapshot = {
+  locations: Location[]
+  clients: Client[]
+  contacts: Contact[]
+  portal_grants: PortalGrant[]
+  shifts: Shift[]
+  shift_limit: number
+}
+
+export function fetchBuildingsSnapshot(signal?: AbortSignal): Promise<BuildingsSnapshot> {
+  return apiFetch<BuildingsSnapshot>(`/admin/data?limit=${ADMIN_SHIFT_LIMIT}`, { signal })
+}
+
+/** Buildings, clients and contacts for the clients screen. Same route, same round trip. */
+export type ClientsSnapshot = Pick<BuildingsSnapshot, 'clients' | 'contacts' | 'locations'>
+
+export function fetchClientsSnapshot(signal?: AbortSignal): Promise<ClientsSnapshot> {
+  return apiFetch<ClientsSnapshot>('/admin/data', { signal })
+}
+
+/** Create (no `id`) or update (`id`). Same route either way, as everywhere else here. */
+export type ClientInput = { id?: number; name: string; active?: boolean }
+
+export function saveClient(input: ClientInput, signal?: AbortSignal): Promise<Client> {
+  return apiFetch<{ client: Client }>('/admin/clients', {
+    method: 'POST',
+    body: input,
+    signal,
+  }).then((data) => data.client)
+}
+
+export type ContactInput = {
+  id?: number
+  client_id: number
+  name: string
+  email?: string
+  phone?: string
+  active?: boolean
+}
+
+/** 422 = the client is gone. 400 = the email or phone is not a plausible one. */
+export function saveContact(input: ContactInput, signal?: AbortSignal): Promise<Contact> {
+  return apiFetch<{ contact: Contact }>('/admin/contacts', {
+    method: 'POST',
+    body: input,
+    signal,
+  }).then((data) => data.contact)
+}
+
+/**
+ * Soft deactivate. DELETE and not `saveClient({active: false})` on purpose: for a contact
+ * the DELETE route ALSO revokes their live links, and someone who has left the client
+ * company must lose access at that moment rather than whenever an admin remembers.
+ * Buildings keep pointing at the row, so history stays readable; reactivating is a normal
+ * save with `active: true`.
+ */
+export function deactivateClient(id: number, signal?: AbortSignal): Promise<void> {
+  return apiFetch<void>(`/admin/clients/${id}`, { method: 'DELETE', signal })
+}
+
+export function deactivateContact(id: number, signal?: AbortSignal): Promise<void> {
+  return apiFetch<void>(`/admin/contacts/${id}`, { method: 'DELETE', signal })
+}
+
+/**
+ * Mints the read-only link a contact uses to see their own building's cleaning history,
+ * and returns the path to it — `/portal/<token>`.
+ *
+ * THE TOKEN IS IN THIS RESPONSE AND NOWHERE ELSE, EVER: the server stores only its hash.
+ * The caller must show the full URL immediately, because it cannot be re-read afterwards.
+ * That is survivable — calling this again for the same pair issues a fresh link and
+ * revokes the previous one, so the contact always holds exactly one working link.
+ *
+ * Requires an ACTIVE contact and an ACTIVE building; either being inactive is a 422.
+ */
+export function createClientLink(
+  contactId: number,
+  locationId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  return apiFetch<{ path: string }>('/admin/portal-grants', {
+    method: 'POST',
+    body: { contact_id: contactId, location_id: locationId },
+    signal,
+  }).then((data) => data.path)
+}
+
+/** Revoke, by the hash `/admin/data` lists. Idempotent, and takes effect immediately. */
+export function revokeClientLink(tokenHash: string, signal?: AbortSignal): Promise<void> {
+  return apiFetch<void>(`/admin/portal-grants/${tokenHash}`, { method: 'DELETE', signal })
+}
+
+/* --- The client's own view ---------------------------------------------------------------
+ *
+ * `GET /portal/:token`, the only unauthenticated data route. The reader is an OUTSIDER, and
+ * the payload is minimised on the server accordingly: a first name, a date and a duration.
+ *
+ * These types list what the portal screen renders and nothing more. If the route ever starts
+ * returning extra fields, they must not appear here and must not be rendered — widening this
+ * type is a GDPR decision about a third party's access, not a convenience.
+ */
+
+export type PortalCleaning = {
+  /** `YYYY-MM-DD`, already the Vienna calendar day the cleaning ENDED on. */
+  date: string
+  /** FIRST NAME ONLY. Never a surname, and never an id. */
+  first_name: string
+  /** Whole minutes worked. */
+  minutes: number
+}
+
+/** Exactly one building — the one the link was issued for. Its name, not its id. */
+export type PortalView = {
+  building: { name: string }
+  /** Completed cleanings, newest first, capped server-side. Empty is a normal answer. */
+  cleanings: PortalCleaning[]
+}
+
+/**
+ * No session, no cookie, no header: the token in the URL is the whole credential.
+ *
+ * 404 = unknown OR revoked, indistinguishably and on purpose. 429 = the route's own rate
+ * limit. Callers must not tell those two apart for the reader.
+ */
+export function fetchPortalView(token: string, signal?: AbortSignal): Promise<PortalView> {
+  return apiFetch<PortalView>(`/portal/${encodeURIComponent(token)}`, { signal })
 }

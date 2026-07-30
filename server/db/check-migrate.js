@@ -45,6 +45,12 @@ const DB_NAME = `timesheets_migcheck_${process.pid}`;
 const DATABASE_URL = `postgres:///${DB_NAME}`;
 const MIGRATE = path.join(__dirname, "migrate.js");
 
+// Second throwaway database: proves 003 applies to a box that is already at 002 AND HAS
+// LIVE DATA IN IT. 001 and 002 are applied in production, so "the whole file set builds a
+// fresh database" is not the property that matters any more.
+const LIVE_DB_NAME = `timesheets_livecheck_${process.pid}`;
+const LIVE_URL = `postgres:///${LIVE_DB_NAME}`;
+
 try {
   run("createdb", [DB_NAME]);
 } catch (e) {
@@ -156,11 +162,101 @@ try {
   assert.equal(afterSecondSeed, afterFirstSeed, "seed.sql must be idempotent");
   assert.equal(afterFirstSeed, "3/3", "seed.sql must create 3 workers and 3 locations");
 
-  console.log("OK check-migrate: migrations apply once, re-run is a no-op, seed is idempotent");
-} finally {
+  // --- 003 spot-checks: the director's vocabulary ----------------------------
+  for (const table of ["clients", "contacts", "inventory_items", "portal_grants"]) {
+    assert.equal(query(`SELECT to_regclass('public.${table}') IS NOT NULL;`), "t", `${table} table missing`);
+  }
+
+  // Money as INTEGER cents, time as INTEGER minutes. A float or a numeric here means a
+  // profitability report that disagrees with itself.
+  for (const [table, column] of [
+    ["locations", "monthly_contract_cents"],
+    ["locations", "target_minutes_per_month"],
+    ["inventory_items", "unit_cost_cents"],
+  ]) {
+    assert.equal(
+      query(
+        `SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.${table}'::regclass AND attname = '${column}';`,
+      ),
+      "integer",
+      `${table}.${column} must be INTEGER (cents/minutes, never a float)`,
+    );
+  }
+
+  // One live portal link per (contact, building), enforced by the database, so "Get link"
+  // can stay a single button that always means the same thing.
+  assert.equal(
+    query(
+      "SELECT indisunique AND indpred IS NOT NULL FROM pg_index WHERE indexrelid = 'public.portal_grants_one_live_idx'::regclass;",
+    ),
+    "t",
+    "portal_grants_one_live_idx must be a PARTIAL UNIQUE index",
+  );
+
+  // products and equipment share ONE table (one admin screen), separated by a label.
+  assert.equal(
+    query(
+      "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.inventory_items'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%kind%';",
+    ),
+    "1",
+    "inventory_items.kind must be CHECK-constrained to product/equipment",
+  );
+  assert.equal(
+    query("SELECT count(*) FROM pg_class WHERE relname IN ('products', 'equipment');"),
+    "0",
+    "products/equipment must NOT be separate tables — that would be two admin screens",
+  );
+
+  // --- 003 on top of an ALREADY MIGRATED database that holds real rows -------
   try {
-    run("dropdb", ["--if-exists", DB_NAME]);
+    run("createdb", [LIVE_DB_NAME]);
   } catch (e) {
-    console.error(`warning: could not drop throwaway database ${DB_NAME}`, String(e.stderr || e.message).trim());
+    skip(`could not create throwaway database ${LIVE_DB_NAME}: ${String(e.stderr || e.message).trim()}`);
+  }
+  const liveQuery = (sql) =>
+    run("psql", [LIVE_URL, "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A", "-c", sql]).trim();
+  const apply = (file) =>
+    run("psql", [LIVE_URL, "-v", "ON_ERROR_STOP=1", "-q", "-1", "-f", path.join(__dirname, "migrations", file)]);
+
+  apply("001_init.sql");
+  apply("002_worker_identity.sql");
+  // A worker, a building, one CLOSED shift and one OPEN one: the state the live box is in.
+  liveQuery(`INSERT INTO workers (name, hourly_rate_cents) VALUES ('Live Worker', 1500);
+    INSERT INTO locations (slug, name) VALUES ('livehaus', 'Livehaus');
+    INSERT INTO shifts (worker_id, location_id, start_time, end_time, client_uuid)
+      SELECT w.id, l.id, now() - interval '5 hours', now() - interval '3 hours', 'live-closed' FROM workers w, locations l;
+    INSERT INTO shifts (worker_id, location_id, start_time, client_uuid)
+      SELECT w.id, l.id, now() - interval '1 hour', 'live-open' FROM workers w, locations l;`);
+
+  // THE ASSERTION THAT MATTERS: a migration demanding values for rows that predate its
+  // columns cannot run. This must not throw.
+  apply("003_clients_contracts_inventory.sql");
+
+  assert.equal(liveQuery("SELECT count(*) FROM shifts;"), "2", "003 must not disturb existing shifts");
+  assert.equal(
+    liveQuery(
+      "SELECT count(*) FROM locations WHERE client_id IS NULL AND monthly_contract_cents IS NULL AND target_minutes_per_month IS NULL;",
+    ),
+    "1",
+    "a building that predates the contract columns must survive with them NULL",
+  );
+  assert.equal(
+    liveQuery("SELECT count(*) FROM workers WHERE phone IS NULL;"),
+    "1",
+    "workers.phone must be added NULLable",
+  );
+  assert.equal(liveQuery("SELECT count(*) FROM shifts WHERE end_time IS NULL;"), "1", "the open shift must survive");
+
+  console.log(
+    "OK check-migrate: migrations apply once, re-run is a no-op, seed is idempotent, " +
+      "003 applies on top of 001+002 with live data",
+  );
+} finally {
+  for (const db of [DB_NAME, LIVE_DB_NAME]) {
+    try {
+      run("dropdb", ["--if-exists", db]);
+    } catch (e) {
+      console.error(`warning: could not drop throwaway database ${db}`, String(e.stderr || e.message).trim());
+    }
   }
 }

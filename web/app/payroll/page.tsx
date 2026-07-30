@@ -129,13 +129,22 @@ export default function PayrollPage() {
   function downloadCsv() {
     if (totals === null) return
     const rows: string[][] = [
-      [t('csvWorker'), t('csvHours'), t('csvRateCents'), t('csvAmountCents'), t('csvAmountEuro')],
+      [
+        t('csvWorker'),
+        t('csvHours'),
+        t('csvRateCents'),
+        t('csvAmountCents'),
+        t('csvAmountEuro'),
+        // The accountant keeps this file; the audit trail has to be in it, not only on screen.
+        t('csvManualShifts'),
+      ],
       ...totals.lines.map((line) => [
         line.worker.name,
         msToHours(line.payableMs).toFixed(3),
         String(line.worker.hourly_rate_cents),
         String(line.payCents),
         centsToPlainEuros(line.payCents),
+        String(line.manualShifts),
       ]),
       [
         t('totalLabel'),
@@ -143,6 +152,7 @@ export default function PayrollPage() {
         '',
         String(totals.payCents),
         centsToPlainEuros(totals.payCents),
+        String(totals.manualShifts),
       ],
     ]
 
@@ -273,6 +283,15 @@ export default function PayrollPage() {
                 ) : (
                   <li>{t('caveatReconcileOk')}</li>
                 )}
+                {/* Paid, not excluded — but a payslip dispute has to be able to find the
+                    hours that no tag stands behind. Same fact the shift log shows in its
+                    "how it was recorded" column; no extra column here, one sentence. */}
+                {totals.manualShifts > 0 ? (
+                  <li>
+                    {t('caveatManual', { count: totals.manualShifts })}{' '}
+                    <Link href={SHIFTS_PATH}>{t('caveatManualLink')}</Link>
+                  </li>
+                ) : null}
                 {totals.orphanShifts > 0 ? <li>{t('caveatOrphan')}</li> : null}
 
                 <li>{t('caveatRateHistory')}</li>

@@ -1,8 +1,10 @@
 'use client'
 
+import { usePathname } from 'next/navigation'
 import { NextIntlClientProvider } from 'next-intl'
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from 'react'
 import { DEFAULT_LOCALE, htmlLang, isLocale, type Locale, MESSAGES } from '@/lib/locale'
+import { CLIENT_PORTAL_LOCALE, isClientPortalPath } from '@/lib/portal'
 
 const STORAGE_KEY = 'nfcts.locale'
 
@@ -27,6 +29,13 @@ const LocaleSettingContext = createContext<LocaleSetting>({
  */
 export function IntlProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(DEFAULT_LOCALE)
+  const pathname = usePathname()
+
+  // The client portal is pinned to German and ignores both the build-time default and the
+  // admin's stored preference: its reader is an Austrian client contact who never chose a
+  // language and has no switcher to correct one (decision-8). The admin's own preference is
+  // left untouched in storage, so switching screens does not reset it.
+  const active = isClientPortalPath(pathname) ? CLIENT_PORTAL_LOCALE : locale
 
   useEffect(() => {
     // Mount-only: read the persisted preference exactly once.
@@ -35,8 +44,8 @@ export function IntlProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    document.documentElement.lang = htmlLang(locale)
-  }, [locale])
+    document.documentElement.lang = htmlLang(active)
+  }, [active])
 
   const setLocale = useCallback((next: Locale) => {
     setLocaleState(next)
@@ -47,7 +56,7 @@ export function IntlProvider({ children }: { children: ReactNode }) {
     <LocaleSettingContext.Provider value={{ locale, setLocale }}>
       {/* timeZone is fixed: this is a single-city payroll tool (Vienna), and pinning it keeps
           any future date formatting identical between the prerender and the browser. */}
-      <NextIntlClientProvider locale={locale} messages={MESSAGES[locale]} timeZone="Europe/Vienna">
+      <NextIntlClientProvider locale={active} messages={MESSAGES[active]} timeZone="Europe/Vienna">
         {children}
       </NextIntlClientProvider>
     </LocaleSettingContext.Provider>

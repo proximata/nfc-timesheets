@@ -5,6 +5,7 @@ import { useFormatter, useTranslations } from 'next-intl'
 import { type FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   ApiError,
+  createShift,
   fetchShiftSnapshot,
   type Shift,
   type ShiftPatch,
@@ -14,17 +15,20 @@ import {
 import type { ErrorKey } from '@/lib/locale'
 import { LOGIN_PATH } from '@/lib/nav'
 import {
+  BUSINESS_TIME_ZONE,
   blocksPayroll,
   durationMinutes,
   formatDuration,
-  fromLocalInput,
+  fromBusinessInput,
+  isManualEntry,
   isPeriod,
+  overlappingShift,
   PERIODS,
   type Period,
   periodStart,
   type ShiftState,
   shiftState,
-  toLocalInput,
+  toBusinessInput,
 } from '@/lib/shifts'
 
 /**
@@ -37,9 +41,19 @@ import {
  * (2) Correction: `PATCH /admin/shifts/:id` is how a forgotten tap-out becomes a paid
  * shift and how a shift filed against the wrong building gets moved.
  *
+ * (3) Entry by hand: `POST /admin/shifts` files the day of a worker whose phone died or
+ * whose tag was destroyed. Without it that person is paid EUR 0 and the only recovery is
+ * SQL on the production box. Such a shift is labelled as hand-entered in the form AND in
+ * its own column in the log, because payroll gets audited and a typed shift must never be
+ * read as a tapped one.
+ *
  * Filtering and sorting happen in the browser over the single `/admin/data` payload: the
  * bundle is a static export (decision-16), the route takes no date range yet, and it
  * answers with at most `shift_limit` rows. That truncation is surfaced, never hidden.
+ *
+ * EVERY time on this screen — shown or typed — is Vienna wall-clock time, converted to and
+ * from UTC in lib/shifts.ts and labelled as such. See BUSINESS_TIME_ZONE for why it is not
+ * the browser's zone.
  */
 
 type Draft = {
@@ -65,6 +79,40 @@ type ErrorMessage =
 
 type FieldErrors = { start?: ErrorMessage; end?: ErrorMessage }
 
+/**
+ * The hand-entry form. Nothing is preselected: a wrong worker chosen by default is a wrong
+ * payslip, so both selects start empty and the director has to name the person.
+ */
+type NewDraft = {
+  workerId: string
+  locationId: string
+  /** `YYYY-MM-DDTHH:mm`, Vienna wall time. */
+  start: string
+  end: string
+}
+
+const EMPTY_NEW_DRAFT: NewDraft = { workerId: '', locationId: '', start: '', end: '' }
+
+/** Message keys for the hand-entry form. */
+type NewErrorMessage =
+  | 'errorWorkerRequired'
+  | 'errorLocationRequired'
+  | 'errorStartRequired'
+  | 'errorEndRequired'
+  | 'errorStartInvalid'
+  | 'errorEndInvalid'
+  | 'errorEndBeforeStart'
+  | 'errorFuture'
+  | 'errorOverlapUnknown'
+  | 'errorCreateRejected'
+
+type NewFieldErrors = {
+  worker?: NewErrorMessage
+  location?: NewErrorMessage
+  start?: NewErrorMessage
+  end?: NewErrorMessage
+}
+
 const WORKER_ALL = 'all'
 const LOCATION_ALL = 'all'
 
@@ -73,8 +121,8 @@ function draftOf(shift: Shift): Draft {
     id: shift.id,
     workerId: shift.worker_id,
     locationId: shift.location_id,
-    start: toLocalInput(shift.start_time),
-    end: shift.end_time === null ? '' : toLocalInput(shift.end_time),
+    start: toBusinessInput(shift.start_time),
+    end: shift.end_time === null ? '' : toBusinessInput(shift.end_time),
     original: shift,
   }
 }
@@ -98,6 +146,16 @@ export default function ShiftsPage() {
   const correctionHeadingId = useId()
   const correctionRef = useRef<HTMLHeadingElement>(null)
 
+  const newWorkerId = useId()
+  const newLocationId = useId()
+  const newStartId = useId()
+  const newEndId = useId()
+  const newTimeZoneHintId = useId()
+  const newErrorId = useId()
+  const newStatusId = useId()
+  const newHeadingId = useId()
+  const newHeadingRef = useRef<HTMLHeadingElement>(null)
+
   // null = still loading. An empty list is a legitimate first-run state, not an error.
   const [snapshot, setSnapshot] = useState<ShiftSnapshot | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
@@ -109,6 +167,14 @@ export default function ShiftsPage() {
   const [formError, setFormError] = useState<ErrorMessage | null>(null)
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
+
+  const [newDraft, setNewDraft] = useState<NewDraft>(EMPTY_NEW_DRAFT)
+  const [newFieldErrors, setNewFieldErrors] = useState<NewFieldErrors>({})
+  const [newFormError, setNewFormError] = useState<NewErrorMessage | null>(null)
+  // The shift the new one collides with, when we can name it. Beats an opaque refusal.
+  const [clash, setClash] = useState<Shift | null>(null)
+  const [created, setCreated] = useState(false)
+  const [creating, setCreating] = useState(false)
 
   /** A dead session must not render an empty table that reads as "no shifts". */
   const handleAuthLoss = useCallback(
@@ -201,8 +267,8 @@ export default function ShiftsPage() {
     event.preventDefault()
     if (busy || draft === null) return
 
-    const start = fromLocalInput(draft.start)
-    const end = fromLocalInput(draft.end)
+    const start = fromBusinessInput(draft.start)
+    const end = fromBusinessInput(draft.end)
 
     // Client-side validation is UX only — server/lib/validate.js decides for real.
     const errors: FieldErrors = {}
@@ -243,6 +309,89 @@ export default function ShiftsPage() {
     }
   }
 
+  /**
+   * Every timestamp on this screen, in Vienna time. Passed explicitly rather than left to
+   * the browser, so the table and the two forms cannot disagree by an hour.
+   */
+  function showDateTime(iso: string): string {
+    return format.dateTime(new Date(iso), {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone: BUSINESS_TIME_ZONE,
+    })
+  }
+
+  /** File a shift that was never tapped. Deliberately separate from the correction form. */
+  async function onCreate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (creating) return
+
+    const workerId = Number(newDraft.workerId)
+    const start = fromBusinessInput(newDraft.start)
+    const end = fromBusinessInput(newDraft.end)
+
+    // Client-side validation is UX only — server/lib/validate.js decides for real.
+    const errors: NewFieldErrors = {}
+    if (!Number.isInteger(workerId) || workerId <= 0) errors.worker = 'errorWorkerRequired'
+    if (newDraft.locationId === '') errors.location = 'errorLocationRequired'
+    if (newDraft.start.trim() === '') errors.start = 'errorStartRequired'
+    else if (start === null) errors.start = 'errorStartInvalid'
+    // Required, unlike a correction: POST /admin/shifts refuses to open a shift by hand.
+    if (newDraft.end.trim() === '') errors.end = 'errorEndRequired'
+    else if (end === null) errors.end = 'errorEndInvalid'
+    if (start !== null && end !== null && new Date(end) <= new Date(start)) {
+      errors.end = 'errorEndBeforeStart'
+    }
+    if (start !== null && new Date(start).getTime() > Date.now()) errors.start = 'errorFuture'
+    if (end !== null && new Date(end).getTime() > Date.now()) errors.end = 'errorFuture'
+
+    setNewFormError(null)
+    setClash(null)
+    setCreated(false)
+
+    // Named collision check before the round trip: the server answers 409 either way, but
+    // its body cannot reach here (ApiError carries no server text), and "Anna is already
+    // recorded at Neuhaus 09:00–13:00" is the only version the director can act on.
+    if (Object.keys(errors).length === 0 && start !== null && end !== null) {
+      const existing = overlappingShift(shifts, workerId, start, end)
+      if (existing !== null) {
+        setNewFieldErrors({})
+        setClash(existing)
+        return
+      }
+    }
+
+    setNewFieldErrors(errors)
+    if (Object.keys(errors).length > 0 || start === null || end === null) return
+
+    setCreating(true)
+    try {
+      await createShift({
+        worker_id: workerId,
+        location_id: newDraft.locationId,
+        start_time: start,
+        end_time: end,
+      })
+      setNewDraft(EMPTY_NEW_DRAFT)
+      setCreated(true)
+      await load()
+      // The submit button is disabled while saving, so focus would fall to <body>.
+      newHeadingRef.current?.focus()
+    } catch (cause) {
+      if (handleAuthLoss(cause)) return
+      if (cause instanceof ApiError && cause.status === 409) {
+        // The clashing shift is outside the page we hold, so it cannot be named.
+        setNewFormError('errorOverlapUnknown')
+      } else if (cause instanceof ApiError && cause.status >= 400 && cause.status < 500) {
+        setNewFormError('errorCreateRejected')
+      } else {
+        setLoadError(cause instanceof ApiError ? cause.messageKey : 'server')
+      }
+    } finally {
+      setCreating(false)
+    }
+  }
+
   const periodLabel: Record<Period, string> = {
     week: t('periodWeek'),
     month: t('periodMonth'),
@@ -259,6 +408,18 @@ export default function ShiftsPage() {
   }
 
   const formErrorText = formError === null ? '' : t(formError)
+
+  const clashText =
+    clash === null
+      ? ''
+      : t('errorOverlap', {
+          worker: clash.worker_name,
+          location: clash.location_name,
+          from: showDateTime(clash.start_time),
+          to: clash.end_time === null ? t('endMissing') : showDateTime(clash.end_time),
+        })
+  // One alert region for both, so whichever refusal applies is announced in the same place.
+  const newFormErrorText = `${clashText} ${newFormError === null ? '' : t(newFormError)}`.trim()
 
   return (
     <>
@@ -334,6 +495,122 @@ export default function ShiftsPage() {
         {truncated ? (
           <p className="notice">{t('truncated', { limit: snapshot.shift_limit })}</p>
         ) : null}
+
+        <p className="field-hint">{t('timeZoneHint')}</p>
+      </section>
+
+      <section aria-labelledby={newHeadingId}>
+        {/* Focus target after a shift is filed. */}
+        <h2 id={newHeadingId} ref={newHeadingRef} tabIndex={-1}>
+          {t('createHeading')}
+        </h2>
+        <p>{t('createIntro')}</p>
+
+        {/* Said before the form, not after it: what this button produces is a shift marked
+            as hand-entered forever, and that is not something to discover afterwards. */}
+        <p className="notice">{t('createManualNotice')}</p>
+
+        <form className="worker-form" onSubmit={onCreate} noValidate>
+          {/* Permanent live regions: a text change inside an existing region is announced
+              far more reliably than a node that appears and disappears. */}
+          <p className="form-error" id={newErrorId} role="alert">
+            {newFormErrorText}
+          </p>
+          <p className="form-status" id={newStatusId} role="status">
+            {created ? t('createSaved') : ''}
+          </p>
+
+          {/* ACTIVE rows only: the server refuses a shift pointed at a deactivated worker
+              or building, and there is no existing value to preserve on a new shift. */}
+          <div className="field">
+            <label htmlFor={newWorkerId}>{t('fieldWorker')}</label>
+            <select
+              id={newWorkerId}
+              value={newDraft.workerId}
+              onChange={(event) => setNewDraft({ ...newDraft, workerId: event.target.value })}
+              aria-describedby={`${newWorkerId}-error`}
+              aria-invalid={newFieldErrors.worker !== undefined}
+              disabled={creating}
+            >
+              <option value="">{t('choosePlaceholder')}</option>
+              {(snapshot?.workers ?? [])
+                .filter((worker) => worker.active)
+                .map((worker) => (
+                  <option key={worker.id} value={String(worker.id)}>
+                    {worker.name}
+                  </option>
+                ))}
+            </select>
+            <p className="field-error" id={`${newWorkerId}-error`} role="alert">
+              {newFieldErrors.worker === undefined ? '' : t(newFieldErrors.worker)}
+            </p>
+          </div>
+
+          <div className="field">
+            <label htmlFor={newLocationId}>{t('fieldLocation')}</label>
+            <select
+              id={newLocationId}
+              value={newDraft.locationId}
+              onChange={(event) => setNewDraft({ ...newDraft, locationId: event.target.value })}
+              aria-describedby={`${newLocationId}-error`}
+              aria-invalid={newFieldErrors.location !== undefined}
+              disabled={creating}
+            >
+              <option value="">{t('choosePlaceholder')}</option>
+              {(snapshot?.locations ?? [])
+                .filter((location) => location.active)
+                .map((location) => (
+                  <option key={location.id} value={location.id}>
+                    {location.name}
+                  </option>
+                ))}
+            </select>
+            <p className="field-error" id={`${newLocationId}-error`} role="alert">
+              {newFieldErrors.location === undefined ? '' : t(newFieldErrors.location)}
+            </p>
+          </div>
+
+          <div className="field">
+            <label htmlFor={newStartId}>{t('fieldStart')}</label>
+            <input
+              id={newStartId}
+              type="datetime-local"
+              value={newDraft.start}
+              onChange={(event) => setNewDraft({ ...newDraft, start: event.target.value })}
+              aria-describedby={`${newTimeZoneHintId} ${newStartId}-error`}
+              aria-invalid={newFieldErrors.start !== undefined}
+              disabled={creating}
+            />
+            <p className="field-hint" id={newTimeZoneHintId}>
+              {t('timeZoneHint')}
+            </p>
+            <p className="field-error" id={`${newStartId}-error`} role="alert">
+              {newFieldErrors.start === undefined ? '' : t(newFieldErrors.start)}
+            </p>
+          </div>
+
+          <div className="field">
+            <label htmlFor={newEndId}>{t('fieldEnd')}</label>
+            <input
+              id={newEndId}
+              type="datetime-local"
+              value={newDraft.end}
+              onChange={(event) => setNewDraft({ ...newDraft, end: event.target.value })}
+              aria-describedby={`${newTimeZoneHintId} ${newEndId}-error`}
+              aria-invalid={newFieldErrors.end !== undefined}
+              disabled={creating}
+            />
+            <p className="field-error" id={`${newEndId}-error`} role="alert">
+              {newFieldErrors.end === undefined ? '' : t(newFieldErrors.end)}
+            </p>
+          </div>
+
+          <div className="form-actions">
+            <button type="submit" className="button-primary" disabled={creating}>
+              {creating ? t('submitting') : t('submitCreate')}
+            </button>
+          </div>
+        </form>
       </section>
 
       <section aria-labelledby={correctionHeadingId}>
@@ -378,10 +655,13 @@ export default function ShiftsPage() {
                 type="datetime-local"
                 value={draft.start}
                 onChange={(event) => setDraft({ ...draft, start: event.target.value })}
-                aria-describedby={`${startId}-error`}
+                aria-describedby={`${startId}-hint ${startId}-error`}
                 aria-invalid={fieldErrors.start !== undefined}
                 disabled={busy}
               />
+              <p className="field-hint" id={`${startId}-hint`}>
+                {t('timeZoneHint')}
+              </p>
               <p className="field-error" id={`${startId}-error`} role="alert">
                 {fieldErrors.start === undefined ? '' : t(fieldErrors.start)}
               </p>
@@ -492,6 +772,7 @@ export default function ShiftsPage() {
                 <th scope="col">{t('colEnd')}</th>
                 <th scope="col">{t('colDuration')}</th>
                 <th scope="col">{t('colState')}</th>
+                <th scope="col">{t('colOrigin')}</th>
                 <th scope="col">{t('colActions')}</th>
               </tr>
             </thead>
@@ -503,20 +784,12 @@ export default function ShiftsPage() {
                   <tr key={shift.id} className={blocked ? 'row-attention' : undefined}>
                     <th scope="row">{shift.worker_name}</th>
                     <td>{shift.location_name}</td>
-                    <td>
-                      {format.dateTime(new Date(shift.start_time), {
-                        dateStyle: 'medium',
-                        timeStyle: 'short',
-                      })}
-                    </td>
+                    <td>{showDateTime(shift.start_time)}</td>
                     <td>
                       {shift.end_time === null ? (
                         <span className="cell-muted">{t('endMissing')}</span>
                       ) : (
-                        format.dateTime(new Date(shift.end_time), {
-                          dateStyle: 'medium',
-                          timeStyle: 'short',
-                        })
+                        showDateTime(shift.end_time)
                       )}
                     </td>
                     <td>
@@ -538,6 +811,16 @@ export default function ShiftsPage() {
                         {blocked ? t('notPayable') : t('payable')}
                       </span>
                     </td>
+                    {/* Its own column, in words: an auditor comparing this log against the
+                        tap history has to be able to see at a glance which rows a human
+                        typed. `client_uuid IS NULL` is the only record of that fact. */}
+                    <td>
+                      {isManualEntry(shift) ? (
+                        <span className="shift-origin-manual">{t('originManual')}</span>
+                      ) : (
+                        <span className="cell-muted">{t('originTap')}</span>
+                      )}
+                    </td>
                     <td className="cell-actions">
                       <button
                         type="button"
@@ -548,10 +831,7 @@ export default function ShiftsPage() {
                         <span className="visually-hidden">
                           {t('forShift', {
                             worker: shift.worker_name,
-                            date: format.dateTime(new Date(shift.start_time), {
-                              dateStyle: 'medium',
-                              timeStyle: 'short',
-                            }),
+                            date: showDateTime(shift.start_time),
                           })}
                         </span>
                       </button>

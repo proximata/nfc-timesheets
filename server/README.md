@@ -118,6 +118,49 @@ timer and by a human and could not tell them apart:
 
 There is no `needs_correction` column. "Unresolved" is derived, so it cannot drift.
 
+## Admin write routes (003)
+
+All of them need the `ts_session` cookie; the app key does **not** substitute for it. One
+upsert route per thing, matching `POST /admin/workers`: **no `id` in the body means create
+(201), an `id` means update (200)**. `DELETE` is always a *soft* deactivate — history has to
+keep naming the worker, the building, the client that was paying and the person we reported to.
+
+| route | body | notes |
+| ----- | ---- | ----- |
+| `POST /admin/clients` | `id?, name, active?` | `{client}` |
+| `DELETE /admin/clients/:id` | — | soft; buildings keep pointing at it on purpose |
+| `POST /admin/contacts` | `id?, client_id, name, email?, phone?, active?` | `{contact}`; email lower-cased, **not a credential** |
+| `DELETE /admin/contacts/:id` | — | soft **and revokes their portal links** |
+| `POST /admin/inventory` | `id?, name, kind, unit_cost_cents?, active?` | `{item}`; `kind` ∈ `product`\|`equipment`, one table |
+| `DELETE /admin/inventory/:id` | — | soft |
+| `POST /admin/locations` | + `client_id?, contact_id?, monthly_contract_cents?, target_minutes_per_month?` | contact alone implies the client; both must agree |
+| `DELETE /admin/locations/:id` | — | soft **and revokes that building's portal links** |
+| `POST /admin/shifts` | `worker_id, location_id, start_time, end_time` | 201; the phone-died recovery |
+| `POST /admin/portal-grants` | `contact_id, location_id` | 201 `{grant, token, path}` — **raw token returned once** |
+| `DELETE /admin/portal-grants/:token_hash` | — | revoke, idempotent |
+
+`POST /admin/shifts` enforces the same invariants as the tap path (active worker, active
+building, end after start, nothing in the future) plus `409 shift_overlap` against any existing
+shift of that worker, including an open one. `end_time` is required. It sets **no** flag: the
+shift is marked by `client_uuid IS NULL`, which already means "no phone ever keyed this".
+
+## Client portal (public trust boundary)
+
+`GET /portal/:token` → `{building:{name}, cleanings:[{date, first_name, minutes}]}` for the
+**one** granted building. No session, no cookie, no login: the token in the URL *is* the
+credential. 32 CSPRNG bytes, base64url; only `SHA-256(token)` is stored (same `hashToken` as
+the session tables). Rate limited by the login limiter in its own bucket. Revoked and unknown
+tokens both answer `404 {"error":"not_found"}`, identically. The token is redacted from the
+500 log line, which is the only place a path is written out.
+
+It discloses nothing else — no surname, email, phone, rate, `apple_sub`, other building,
+client, contract figure, inventory item or id of any kind. First name plus a duration is the
+GDPR minimum that answers the client's question; **do not enrich the payload.**
+
+Why a link and not accounts: the director cannot administer passwords for other companies'
+staff, and email delivery would mean running SMTP on the VM. Ceiling: anyone holding the link
+sees that building's cleaning history. Upgrade path: contact accounts + magic-link email.
+
 ## Config (env only, systemd EnvironmentFile)
 
 | var            | required | notes                                                |

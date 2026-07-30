@@ -77,10 +77,66 @@ export function id(value, field = "id") {
   return n;
 }
 
+/**
+ * A foreign key the director has not filled in yet. "" is included because an HTML
+ * <select> with no choice made posts an empty string, and "the building has no client
+ * on file" is a legitimate, permanent state for a building that predates 003.
+ */
+export function optionalId(value, field) {
+  if (value === undefined || value === null || value === "") return null;
+  return id(value, field);
+}
+
+/**
+ * Free-text phone number (workers.phone, contacts.phone). Deliberately loose: an
+ * Austrian mobile is written "+43 664 1234567", "0664/1234567" or "0664 123 45 67" and
+ * all three are the same phone. This rejects letters and control characters — i.e. a
+ * name pasted into the phone field — and nothing else. Never normalised, because
+ * normalising means silently changing what the director typed.
+ */
+export function optionalPhone(value, field = "phone") {
+  if (value === undefined || value === null || (typeof value === "string" && value.trim() === "")) {
+    return null;
+  }
+  const s = str(value, field, { max: 40, min: 4 });
+  if (!/^[0-9+()/.\s-]+$/.test(s)) fail(400, "invalid_phone", field);
+  return s;
+}
+
 export function cents(value, field = "hourly_rate_cents") {
   const n = typeof value === "string" ? Number(value) : (value ?? 0);
   if (!Number.isSafeInteger(n) || n < 0 || n > 100_000_000) fail(400, "invalid_field", field);
   return n;
+}
+
+/**
+ * Money the director has not entered yet. NULL and 0 are different answers here:
+ * NULL = "nobody has told me the contract volume", 0 = "this building is free of charge".
+ * A profitability report has to be able to stay silent about the first case rather than
+ * report a 100% loss, so `cents()`'s ?? 0 default would be wrong.
+ */
+export function optionalCents(value, field) {
+  if (value === undefined || value === null || value === "") return null;
+  return cents(value, field);
+}
+
+/**
+ * Duration as INTEGER MINUTES (target_minutes_per_month). Integers only, same reason as
+ * cents: a target is compared against, and subtracted from, recorded time. Ceiling is a
+ * generous month (31 days x 24h x 60 = 44640) times ten, which catches a value typed in
+ * seconds or in milliseconds by mistake.
+ */
+export function optionalMinutes(value, field) {
+  if (value === undefined || value === null || value === "") return null;
+  const n = typeof value === "string" ? Number(value) : value;
+  if (!Number.isSafeInteger(n) || n < 0 || n > 446_400) fail(400, "invalid_field", field);
+  return n;
+}
+
+/** Closed set of allowed strings (inventory kind). Mirrors a database CHECK; not a substitute for it. */
+export function oneOf(value, field, allowed) {
+  if (typeof value !== "string" || !allowed.includes(value)) fail(400, "invalid_field", field);
+  return value;
 }
 
 export function bool(value, field, fallback = false) {

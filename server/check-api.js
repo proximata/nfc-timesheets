@@ -52,7 +52,32 @@ CREATE TABLE workers (
   active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   apple_sub TEXT UNIQUE,
-  email TEXT UNIQUE CHECK (email = lower(email))
+  email TEXT UNIQUE CHECK (email = lower(email)),
+  phone TEXT
+);
+CREATE TABLE clients (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE contacts (
+  id BIGSERIAL PRIMARY KEY,
+  client_id BIGINT NOT NULL REFERENCES clients(id),
+  name TEXT NOT NULL,
+  email TEXT CHECK (email = lower(email)),
+  phone TEXT,
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX contacts_client_id_idx ON contacts (client_id);
+CREATE TABLE inventory_items (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('product', 'equipment')),
+  unit_cost_cents INTEGER NOT NULL DEFAULT 0 CHECK (unit_cost_cents >= 0),
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE worker_sessions (
   token TEXT PRIMARY KEY,
@@ -83,8 +108,22 @@ CREATE TABLE locations (
   lat DOUBLE PRECISION,
   lng DOUBLE PRECISION,
   active BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  client_id BIGINT REFERENCES clients(id),
+  contact_id BIGINT REFERENCES contacts(id),
+  monthly_contract_cents INTEGER CHECK (monthly_contract_cents >= 0),
+  target_minutes_per_month INTEGER CHECK (target_minutes_per_month >= 0)
 );
+CREATE INDEX locations_client_id_idx ON locations (client_id);
+CREATE TABLE portal_grants (
+  token_hash TEXT PRIMARY KEY,
+  contact_id BIGINT NOT NULL REFERENCES contacts(id),
+  location_id UUID NOT NULL REFERENCES locations(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX portal_grants_one_live_idx
+  ON portal_grants (contact_id, location_id) WHERE revoked_at IS NULL;
 CREATE TABLE shifts (
   id BIGSERIAL PRIMARY KEY,
   worker_id BIGINT NOT NULL REFERENCES workers(id),
@@ -1022,6 +1061,445 @@ try {
     });
     assert.equal(res.status, 400);
     assert.equal(await countShifts(), before, "tables must be intact");
+  });
+
+  // ---- clients, contacts, inventory (003) -------------------------------------------
+  const asAdmin = (path, opts = {}) => call(path, { key: null, cookie: adminCookie, ...opts });
+
+  await test("every new admin route rejects a missing session, app key or not", async () => {
+    // The app key is a coarse "this is our build" gate and must never stand in for an admin
+    // session. A new route that forgot `auth: "admin"` would be a public write endpoint.
+    const newRoutes = [
+      ["POST", "/admin/clients"],
+      ["DELETE", "/admin/clients/1"],
+      ["POST", "/admin/contacts"],
+      ["DELETE", "/admin/contacts/1"],
+      ["POST", "/admin/inventory"],
+      ["DELETE", "/admin/inventory/1"],
+      ["POST", "/admin/portal-grants"],
+      ["DELETE", `/admin/portal-grants/${"a".repeat(64)}`],
+      ["POST", "/admin/shifts"],
+    ];
+    for (const [method, path] of newRoutes) {
+      const body = method === "POST" ? {} : undefined;
+      const noCred = await call(path, { method, key: null, body });
+      assert.equal(noCred.status, 401, `${method} ${path} with no credential`);
+      assert.equal((await noCred.json()).error, "unauthorized");
+      assert.equal(
+        (await call(path, { method, body })).status,
+        401,
+        `${method} ${path} must not accept the app key as an admin credential`,
+      );
+    }
+  });
+
+  let clientId;
+  let contactId;
+  await test("client and contact upsert, then soft deactivate", async () => {
+    const created = await asAdmin("/admin/clients", { method: "POST", body: { name: "Hausverwaltung Meier" } });
+    assert.equal(created.status, 201);
+    clientId = (await created.json()).client.id;
+
+    const renamed = await asAdmin("/admin/clients", {
+      method: "POST",
+      body: { id: clientId, name: "Hausverwaltung Meier GmbH" },
+    });
+    assert.equal(renamed.status, 200, "an id in the body means update, same idiom as /admin/workers");
+    assert.equal((await renamed.json()).client.name, "Hausverwaltung Meier GmbH");
+
+    const contact = await asAdmin("/admin/contacts", {
+      method: "POST",
+      body: { client_id: clientId, name: "Frau Gruber", email: "Gruber@Meier.test", phone: "+43 664 1234567" },
+    });
+    assert.equal(contact.status, 201);
+    const created2 = (await contact.json()).contact;
+    contactId = created2.id;
+    assert.equal(created2.email, "gruber@meier.test", "contact email is lower-cased like a worker's");
+
+    const orphan = await asAdmin("/admin/contacts", { method: "POST", body: { client_id: 999_999, name: "Ghost" } });
+    assert.equal(orphan.status, 422, "a contact must belong to a real client");
+    assert.equal((await orphan.json()).error, "unknown_client");
+
+    const gone = await asAdmin(`/admin/clients/${clientId}`, { method: "DELETE" });
+    assert.equal(gone.status, 200);
+    assert.equal((await gone.json()).client.active, false);
+    assert.equal(
+      (await admin.query("SELECT active FROM clients WHERE id = $1", [clientId])).rows.length,
+      1,
+      "soft delete must keep the row — history has to keep naming who was paying",
+    );
+    await asAdmin("/admin/clients", { method: "POST", body: { id: clientId, name: "Hausverwaltung Meier GmbH" } });
+  });
+
+  await test("inventory is one table for products and equipment, cost in integer cents", async () => {
+    const product = await asAdmin("/admin/inventory", {
+      method: "POST",
+      body: { name: "Allzweckreiniger 5L", kind: "product", unit_cost_cents: 1290 },
+    });
+    assert.equal(product.status, 201);
+    assert.equal((await product.json()).item.unit_cost_cents, 1290);
+
+    const equipment = await asAdmin("/admin/inventory", {
+      method: "POST",
+      body: { name: "Wischmop", kind: "equipment" },
+    });
+    assert.equal(equipment.status, 201);
+    const item = (await equipment.json()).item;
+    assert.equal(item.unit_cost_cents, 0, "not priced yet is a real state");
+
+    for (const bad of [{ name: "Ding", kind: "tool" }, { name: "Ding", kind: "product", unit_cost_cents: 12.5 }]) {
+      const res = await asAdmin("/admin/inventory", { method: "POST", body: bad });
+      assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(bad)}`);
+    }
+
+    const gone = await asAdmin(`/admin/inventory/${item.id}`, { method: "DELETE" });
+    assert.equal((await gone.json()).item.active, false);
+  });
+
+  let contractLocationId;
+  await test("a building carries its client, contact and contract figures", async () => {
+    const res = await asAdmin("/admin/locations", {
+      method: "POST",
+      body: {
+        slug: "meierhof",
+        name: "Meierhof",
+        address: "Praterstrasse 1, 1020 Wien",
+        contact_id: contactId, // client_id deliberately omitted
+        monthly_contract_cents: 120_000,
+        target_minutes_per_month: 1200,
+      },
+    });
+    assert.equal(res.status, 201);
+    const location = (await res.json()).location;
+    contractLocationId = location.id;
+    assert.equal(location.client_id, clientId, "picking the contact must imply the company");
+    assert.equal(location.monthly_contract_cents, 120_000);
+    assert.equal(location.target_minutes_per_month, 1200);
+
+    // A building entered before 003 has no contract data and must still be editable.
+    const bare = await asAdmin("/admin/locations", { method: "POST", body: { slug: "barehaus", name: "Barehaus" } });
+    assert.equal(bare.status, 201);
+    const bareRow = (await bare.json()).location;
+    assert.equal(bareRow.client_id, null);
+    assert.equal(bareRow.monthly_contract_cents, null, "NULL means nobody has told us, not zero revenue");
+
+    const mismatch = await asAdmin("/admin/locations", {
+      method: "POST",
+      body: { id: contractLocationId, slug: "meierhof", name: "Meierhof", client_id: 999_999, contact_id: contactId },
+    });
+    assert.equal(mismatch.status, 422);
+    assert.equal((await mismatch.json()).error, "contact_not_for_client");
+
+    const data = await (await asAdmin("/admin/data")).json();
+    assert.equal(data.clients.length >= 1, true);
+    assert.equal(data.contacts.length >= 1, true);
+    assert.equal(data.inventory.length >= 1, true);
+    assert.ok(Array.isArray(data.portal_grants));
+    assert.equal(data.locations.find((l) => l.id === contractLocationId).contact_name, "Frau Gruber");
+  });
+
+  // ---- POST /admin/shifts (T6: the phone died) --------------------------------------
+  let phoneDeadWorkerId;
+  await test("POST /admin/shifts creates a shift nobody tapped, marked by a NULL client_uuid", async () => {
+    const created = await asAdmin("/admin/workers", {
+      method: "POST",
+      body: { name: "Dead Phone", hourly_rate_cents: 1400, phone: "0664/9999999" },
+    });
+    const worker = (await created.json()).worker;
+    assert.equal(created.status, 201);
+    phoneDeadWorkerId = worker.id;
+    assert.equal(worker.phone, "0664/9999999", "the director asked for name and phone; phone must come back");
+
+    const res = await asAdmin("/admin/shifts", {
+      method: "POST",
+      body: {
+        worker_id: phoneDeadWorkerId,
+        location_id: contractLocationId,
+        start_time: new Date(Date.now() - 5 * 3600_000).toISOString(),
+        end_time: new Date(Date.now() - 3 * 3600_000).toISOString(),
+      },
+    });
+    const shift = (await res.json()).shift;
+    assert.equal(res.status, 201, JSON.stringify(shift));
+    assert.equal(shift.client_uuid, null, "a hand-entered shift is exactly one no phone ever keyed");
+    assert.equal(shift.auto_closed, false, "auto_closed is a machine fact and is not an input here");
+    assert.equal(shift.corrected_at, null);
+  });
+
+  await test("POST /admin/shifts rejects end before start and a future window", async () => {
+    const backwards = await asAdmin("/admin/shifts", {
+      method: "POST",
+      body: {
+        worker_id: phoneDeadWorkerId,
+        location_id: contractLocationId,
+        start_time: new Date(Date.now() - 3600_000).toISOString(),
+        end_time: new Date(Date.now() - 7200_000).toISOString(),
+      },
+    });
+    assert.equal(backwards.status, 422);
+    assert.equal((await backwards.json()).error, "end_before_start");
+
+    const future = await asAdmin("/admin/shifts", {
+      method: "POST",
+      body: {
+        worker_id: phoneDeadWorkerId,
+        location_id: contractLocationId,
+        start_time: new Date(Date.now() + 3600_000).toISOString(),
+        end_time: new Date(Date.now() + 7200_000).toISOString(),
+      },
+    });
+    assert.equal(future.status, 422);
+    assert.equal((await future.json()).error, "timestamp_in_future");
+  });
+
+  await test("POST /admin/shifts rejects an overlap, including with an OPEN shift", async () => {
+    const before = await countShifts();
+    const overlapping = await asAdmin("/admin/shifts", {
+      method: "POST",
+      body: {
+        worker_id: phoneDeadWorkerId,
+        location_id: contractLocationId,
+        start_time: new Date(Date.now() - 4 * 3600_000).toISOString(),
+        end_time: new Date(Date.now() - 2 * 3600_000).toISOString(),
+      },
+    });
+    assert.equal(overlapping.status, 409);
+    const conflict = await overlapping.json();
+    assert.equal(conflict.error, "shift_overlap");
+    assert.ok(conflict.shift, "409 must name the shift that is in the way");
+
+    // An OPEN shift has end_time NULL, so it cannot be caught by comparing end times.
+    await admin.query(
+      "INSERT INTO shifts (worker_id, location_id, start_time, client_uuid) VALUES ($1, $2, now() - interval '30 minutes', 'open-dead-phone')",
+      [phoneDeadWorkerId, contractLocationId],
+    );
+    const duringOpen = await asAdmin("/admin/shifts", {
+      method: "POST",
+      body: {
+        worker_id: phoneDeadWorkerId,
+        location_id: contractLocationId,
+        start_time: new Date(Date.now() - 20 * 60_000).toISOString(),
+        end_time: new Date(Date.now() - 10 * 60_000).toISOString(),
+      },
+    });
+    assert.equal(duringOpen.status, 409, "a worker on the clock cannot also be somewhere else");
+    assert.equal(await countShifts(), before + 1, "a rejected shift must not be written");
+    await admin.query("DELETE FROM shifts WHERE client_uuid = 'open-dead-phone'");
+  });
+
+  await test("POST /admin/shifts refuses an inactive worker or building", async () => {
+    const noWorker = await asAdmin("/admin/shifts", {
+      method: "POST",
+      body: {
+        worker_id: inactiveWorkerId,
+        location_id: contractLocationId,
+        start_time: new Date(Date.now() - 9 * 3600_000).toISOString(),
+        end_time: new Date(Date.now() - 8 * 3600_000).toISOString(),
+      },
+    });
+    assert.equal(noWorker.status, 422);
+    assert.equal((await noWorker.json()).error, "unknown_worker");
+
+    const noLocation = await asAdmin("/admin/shifts", {
+      method: "POST",
+      body: {
+        worker_id: phoneDeadWorkerId,
+        location_id: "00000000-0000-4000-8000-000000000000",
+        start_time: new Date(Date.now() - 9 * 3600_000).toISOString(),
+        end_time: new Date(Date.now() - 8 * 3600_000).toISOString(),
+      },
+    });
+    assert.equal(noLocation.status, 422);
+    assert.equal((await noLocation.json()).error, "unknown_location");
+  });
+
+  // ---- client portal (public trust boundary) ----------------------------------------
+  // The link WILL be forwarded, screenshotted and pasted into a group chat. Everything
+  // below asserts what an outsider holding it can and cannot learn.
+  const SURNAME = "Musterfrau";
+  const CLEANER_EMAIL = "anna.musterfrau@example.test";
+  let portalToken;
+  let portalLocationId; // its OWN building, so the payload assertions below are exact
+
+  await test("a portal grant returns the raw token ONCE and stores only its SHA-256", async () => {
+    resetLoginRate();
+    const madeBuilding = await (
+      await asAdmin("/admin/locations", {
+        method: "POST",
+        body: {
+          slug: "portalhaus",
+          name: "Portalhaus",
+          address: "Taborstrasse 9, 1020 Wien",
+          contact_id: contactId,
+          monthly_contract_cents: 99_000,
+          target_minutes_per_month: 600,
+        },
+      })
+    ).json();
+    portalLocationId = madeBuilding.location.id;
+
+    const { rows } = await admin.query(
+      "INSERT INTO workers (name, email, phone, hourly_rate_cents) VALUES ($1, $2, '+43 660 7654321', 3333) RETURNING id",
+      [`Anna ${SURNAME}`, CLEANER_EMAIL],
+    );
+    const cleanerId = Number(rows[0].id);
+    await admin.query(
+      `INSERT INTO shifts (worker_id, location_id, start_time, end_time, client_uuid) VALUES
+         ($1, $2, now() - interval '2 days',  now() - interval '2 days'  + interval '90 minutes', 'portal-1'),
+         ($1, $2, now() - interval '9 days',  now() - interval '9 days'  + interval '75 minutes', 'portal-2')`,
+      [cleanerId, portalLocationId],
+    );
+    // Must NOT appear: an unresolved 8h stub is a guess, and telling a client we cleaned
+    // for eight hours when nobody confirmed it is worse than telling them nothing.
+    await admin.query(
+      `INSERT INTO shifts (worker_id, location_id, start_time, end_time, auto_closed, client_uuid)
+       VALUES ($1, $2, now() - interval '3 days', now() - interval '3 days' + interval '8 hours', true, 'portal-stub')`,
+      [cleanerId, portalLocationId],
+    );
+    // A shift at a DIFFERENT building, for the same cleaner. Must not leak.
+    await admin.query(
+      `INSERT INTO shifts (worker_id, location_id, start_time, end_time, client_uuid)
+       VALUES ($1, $2, now() - interval '4 days', now() - interval '4 days' + interval '45 minutes', 'portal-other')`,
+      [cleanerId, locationUuid],
+    );
+
+    const res = await asAdmin("/admin/portal-grants", {
+      method: "POST",
+      body: { contact_id: contactId, location_id: portalLocationId },
+    });
+    const issued = await res.json();
+    assert.equal(res.status, 201, JSON.stringify(issued));
+    portalToken = issued.token;
+    assert.match(portalToken, /^[A-Za-z0-9_-]{43}$/, "32 CSPRNG bytes, url-safe, no percent-encoding");
+    assert.equal(issued.path, `/portal/${portalToken}`);
+
+    const stored = await admin.query("SELECT contact_id, location_id FROM portal_grants WHERE token_hash = $1", [
+      hashToken(portalToken),
+    ]);
+    assert.equal(stored.rowCount, 1, "the grant must be stored under SHA-256(token)");
+    assert.equal(stored.rows[0].location_id, portalLocationId);
+    const raw = await admin.query("SELECT 1 FROM portal_grants WHERE token_hash = $1", [portalToken]);
+    assert.equal(raw.rowCount, 0, "a leaked dump must not yield a working link");
+  });
+
+  await test("re-issuing a link revokes the previous one", async () => {
+    const first = await (
+      await asAdmin("/admin/portal-grants", {
+        method: "POST",
+        body: { contact_id: contactId, location_id: portalLocationId },
+      })
+    ).json();
+    assert.equal((await call(`/portal/${portalToken}`, { key: null, ip: "10.9.0.1" })).status, 404);
+    assert.equal((await call(`/portal/${first.token}`, { key: null, ip: "10.9.0.2" })).status, 200);
+    portalToken = first.token;
+    resetLoginRate();
+  });
+
+  await test("the portal payload answers the question and discloses NOTHING else", async () => {
+    const res = await call(`/portal/${portalToken}`, { key: null, ip: "10.9.1.1" });
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    const data = JSON.parse(text);
+
+    assert.equal(data.building.name, "Portalhaus");
+    assert.deepEqual(Object.keys(data).sort(), ["building", "cleanings"]);
+    assert.deepEqual(Object.keys(data.building), ["name"], "not even the building's address or id");
+    assert.equal(data.cleanings.length, 2, "completed and confirmed cleanings only");
+    for (const c of data.cleanings) {
+      assert.deepEqual(Object.keys(c).sort(), ["date", "first_name", "minutes"]);
+      assert.equal(c.first_name, "Anna", "FIRST NAME ONLY — GDPR minimum that answers the question");
+      assert.match(c.date, /^\d{4}-\d{2}-\d{2}$/);
+      assert.equal(Number.isInteger(c.minutes), true);
+    }
+    assert.equal(data.cleanings[0].minutes, 90, "newest first");
+
+    for (const forbidden of [
+      SURNAME, // worker surname
+      CLEANER_EMAIL, // worker email
+      "+43 660 7654321", // worker phone
+      "3333", // hourly rate
+      "apple_sub",
+      "Checkhaus", // another building
+      "Meierhof", // ...and another
+      "Hausverwaltung", // the client company
+      "Frau Gruber", // the contact
+      "99000", // monthly contract volume
+      "Allzweckreiniger", // inventory
+      "Taborstrasse", // the building's address
+      "portal-1", // client_uuid
+      "shift_id",
+      '"id"', // nothing enumerable at all
+    ]) {
+      assert.ok(!text.includes(forbidden), `portal payload must not contain ${forbidden}: ${text}`);
+    }
+    assert.equal(res.headers.get("cache-control"), "no-store", "a shared link must not be cached by a proxy");
+  });
+
+  await test("a revoked token and an unknown token 404 identically", async () => {
+    const unknown = await call(`/portal/${"z".repeat(43)}`, { key: null, ip: "10.9.2.1" });
+    assert.equal(unknown.status, 404);
+
+    const revoked = await asAdmin(`/admin/portal-grants/${hashToken(portalToken)}`, { method: "DELETE" });
+    assert.equal(revoked.status, 200);
+    assert.notEqual((await revoked.json()).grant.revoked_at, null);
+
+    const dead = await call(`/portal/${portalToken}`, { key: null, ip: "10.9.2.2" });
+    assert.equal(dead.status, 404);
+    assert.deepEqual(
+      await dead.json(),
+      await unknown.json(),
+      "'this link used to work' is itself information about our client relationships",
+    );
+    assert.equal(
+      (await admin.query("SELECT 1 FROM portal_grants WHERE token_hash = $1", [hashToken(portalToken)])).rowCount,
+      1,
+      "revoking is an UPDATE: 'we stopped sharing this in March' stays answerable",
+    );
+    resetLoginRate();
+  });
+
+  await test("a malformed portal token never reaches SQL, and the route is rate limited", async () => {
+    resetLoginRate();
+    const injection = await call(`/portal/${encodeURIComponent("'; DROP TABLE shifts; --")}`, {
+      key: null,
+      ip: "10.9.3.1",
+    });
+    assert.equal(injection.status, 404);
+    assert.equal(await countShifts() > 0, true, "tables must be intact");
+
+    const ip = "10.9.4.1";
+    const codes = [];
+    for (let i = 0; i < 7; i++) {
+      codes.push((await call(`/portal/${"y".repeat(43)}`, { key: null, ip })).status);
+    }
+    assert.ok(codes.includes(429), `an unthrottled public route is a DoS lever, got ${codes}`);
+    resetLoginRate();
+  });
+
+  await test("deactivating a contact or a building kills its live links", async () => {
+    const grant = await (
+      await asAdmin("/admin/portal-grants", {
+        method: "POST",
+        body: { contact_id: contactId, location_id: portalLocationId },
+      })
+    ).json();
+    assert.equal((await call(`/portal/${grant.token}`, { key: null, ip: "10.9.5.1" })).status, 200);
+
+    await asAdmin(`/admin/contacts/${contactId}`, { method: "DELETE" });
+    assert.equal(
+      (await call(`/portal/${grant.token}`, { key: null, ip: "10.9.5.2" })).status,
+      404,
+      "a contact who left the client company must lose access at that moment",
+    );
+
+    // ...and an inactive contact cannot be handed a new one.
+    const reissue = await asAdmin("/admin/portal-grants", {
+      method: "POST",
+      body: { contact_id: contactId, location_id: portalLocationId },
+    });
+    assert.equal(reissue.status, 422);
+    assert.equal((await reissue.json()).error, "unknown_contact");
+    resetLoginRate();
   });
 
   await test("unknown route returns a 404 code, not a stack trace", async () => {

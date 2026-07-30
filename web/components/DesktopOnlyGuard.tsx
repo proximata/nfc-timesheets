@@ -1,8 +1,10 @@
 'use client'
 
+import { usePathname } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import type { ReactNode } from 'react'
 import { DESKTOP_MIN_WIDTH_PX } from '@/lib/nav'
+import { isClientPortalPath } from '@/lib/portal'
 
 /**
  * decision-7: desktop-first, no mobile layout. Below the breakpoint the admin UI is replaced
@@ -18,6 +20,15 @@ import { DESKTOP_MIN_WIDTH_PX } from '@/lib/nav'
  */
 export function DesktopOnlyGuard({ children }: { children: ReactNode }) {
   const t = useTranslations('desktopOnly')
+  const pathname = usePathname()
+
+  // DELIBERATE, SINGLE EXCEPTION TO decision-7. decision-7 makes the ADMIN panel desktop
+  // only, because the director does payroll at a desk. The client portal is not the admin
+  // panel and not the director: a client's point of contact opens that link out of a
+  // WhatsApp or Outlook message, on a phone, and a blocker telling them to find a laptop
+  // would make the feature useless for its only audience. That page is therefore built to
+  // work at 320px and is exempt here. Nothing else is.
+  if (isClientPortalPath(pathname)) return <>{children}</>
 
   return (
     <>

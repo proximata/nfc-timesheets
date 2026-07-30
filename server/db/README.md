@@ -6,6 +6,9 @@ bound — decision-16, runbook §1). `pg` is the API's client; this directory on
 
 ```
 migrations/001_init.sql   canonical schema — workers, admins, sessions, locations, shifts
+migrations/002_worker_identity.sql   apple_sub/email + worker_sessions (decision-22)
+migrations/003_clients_contracts_inventory.sql   clients, contacts, inventory_items,
+                          portal_grants, workers.phone, locations contract columns
 migrate.js                runner: applies migrations/*.sql once each, in lexical order
 seed.sql                  DEV ONLY sample data
 check-migrate.js          runnable check (see bottom)
@@ -113,7 +116,27 @@ so it can never reach production by accident.
   `X-Admin-Pin` header is gone. `password_hash` holds a full PHC string; `sessions.token`
   is API-generated random and is the primary key, so logout can actually revoke.
   Sweep with `DELETE FROM sessions WHERE expires_at < now()` (`sessions_expires_at_idx`).
-- Money is `INTEGER` cents (`workers.hourly_rate_cents`). No floats in payroll.
+- Money is `INTEGER` cents (`workers.hourly_rate_cents`, `locations.monthly_contract_cents`,
+  `inventory_items.unit_cost_cents`) and time is `INTEGER` minutes
+  (`locations.target_minutes_per_month`). No floats, no `NUMERIC` for money: actual hours vs
+  target and contract revenue vs labour cost have to be exact subtractions.
+- **003 is additive only** — 001 and 002 are applied on the live box with real shifts in
+  them. Every column it adds is NULLable or has a DEFAULT, because rows that predate a
+  column cannot supply a value. `check-migrate.js` proves this on a second throwaway
+  database: 001 + 002 + live rows, then 003.
+- `clients` = the company holding the contract; `contacts` = a human at that client.
+  **`contacts.email` is NOT a login credential** — there is no password, no session and no
+  auth path that reads it. Client access is a shareable link (`portal_grants`).
+- `inventory_items` holds products AND equipment in one table, separated by `kind`. Two
+  tables would mean two admin screens to model a one-word distinction.
+- `portal_grants.token_hash` is the primary key and stores **SHA-256(token) only**, via the
+  same `hashToken` helper as `sessions`/`worker_sessions`. `portal_grants_one_live_idx` keeps
+  at most one live link per (contact, building); revoking is an `UPDATE revoked_at`, never a
+  delete. `GET /portal/:token` answers 404 identically for revoked and unknown tokens and
+  discloses only building name, date, worker FIRST NAME and minutes (GDPR minimum).
+- **A shift with `client_uuid IS NULL` was typed into the admin panel** (`POST /admin/shifts`,
+  for the worker whose phone died). Every phone-originated shift carries an idempotency key,
+  so no separate "added by hand" flag exists to drift out of agreement with that.
 - 3B (building owners, annual contracts, materials, P&L) is not built. It hangs off
   `locations.id` / `shifts.id`; no change to `001_init.sql` is needed for it.
 

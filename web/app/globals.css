@@ -531,6 +531,12 @@ a {
   color: var(--ink-muted);
 }
 
+/* Weight, not colour: the word itself already says "entered by hand", and this column is
+   read on screen, in greyscale and on a printed payroll audit. */
+.shift-origin-manual {
+  font-weight: 600;
+}
+
 .shift-state-note {
   display: block;
   margin-top: var(--space-1);
@@ -714,4 +720,100 @@ a {
 .toolbar-field {
   max-width: 28rem;
   margin-bottom: var(--space-6);
+}
+
+/* --- The client link, shown exactly once ---------------------------------------------- */
+
+/* Wider than a plain .notice caveat: the URL underneath must be readable whole. A link that
+   has been shortened for layout is a link somebody eventually retypes wrongly. Not a dialog
+   either — the director has to read it, copy it and paste it into their mail client without
+   the panel trapping focus or hiding the building it belongs to. */
+.share-panel {
+  max-width: 80ch;
+  margin-bottom: var(--space-4);
+}
+
+.share-panel p:last-child {
+  margin-bottom: 0;
+}
+
+/* --- Client portal (/reinigung/) --------------------------------------------------------
+ *
+ * The one screen a NON-EMPLOYEE sees, and the ONLY place in this stylesheet that is built
+ * for a phone: decision-7's desktop-only rule covers the admin panel, and a client's point
+ * of contact opens their link from a chat message on a handset (see DesktopOnlyGuard).
+ *
+ * Sizes are in `rem`, deliberately NOT inheriting the `16px` pinned on `body`: `rem` follows
+ * the browser's own font size, so a reader who has set large text (iOS Dynamic Type, Android
+ * font size, desktop zoom) gets it here instead of a fixed 16px. Nothing is `nowrap`, nothing
+ * has a fixed width, and the layout has one column at every width.
+ */
+.portal {
+  display: block;
+  min-height: 100dvh;
+  padding: var(--space-4);
+  font-size: 1.0625rem;
+}
+
+.portal-card {
+  width: min(46rem, 100%);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.portal h1 {
+  /* Grows with the viewport but never below the reader's own text size. */
+  font-size: clamp(1.4rem, 1.2rem + 2vw, 2rem);
+}
+
+.portal h2 {
+  margin-top: var(--space-6);
+}
+
+/* Live region: present even when silent, so a status change is announced as a text change. */
+.portal-status:empty {
+  margin: 0;
+}
+
+.portal-failure p:first-child {
+  font-weight: 600;
+}
+
+.portal-empty,
+.portal-note {
+  color: var(--ink-muted);
+}
+
+.portal-note {
+  margin-top: var(--space-6);
+  margin-bottom: 0;
+  font-size: 0.95rem;
+}
+
+/* A real table with scoped headers. Three short columns fit 320px; `table-layout: auto` plus
+   wrapping cells keeps it readable when the text size is doubled instead of scrolling
+   sideways. */
+.portal-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.portal-table th,
+.portal-table td {
+  padding: var(--space-3) var(--space-2);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: break-word;
+}
+
+.portal-table thead th {
+  /* 4.5:1+ on white, and the header is also marked up as a header — never colour alone. */
+  color: var(--ink);
+  font-size: 0.95rem;
+  text-transform: none;
+  border-bottom: 2px solid var(--ink-muted);
 }

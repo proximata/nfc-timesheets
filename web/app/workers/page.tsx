@@ -21,23 +21,33 @@ import { LOGIN_PATH } from '@/lib/nav'
 /** Shape check only, mirroring server/lib/validate.js. Deliverability is not knowable here. */
 const EMAIL_RE = /^[^\s@,]+@[^\s@,.]+(\.[^\s@,.]+)+$/
 
+/**
+ * Mirrors `optionalPhone` in server/lib/validate.js: digits and dialling punctuation only,
+ * 4..40 characters. Deliberately not a country-specific format — the crew has Austrian
+ * mobiles, landlines and foreign numbers, and a stricter rule would reject real ones.
+ */
+const PHONE_RE = /^[0-9+()/.\s-]{4,40}$/
+
 type Draft = {
   /** Absent = create. Present = update that row. */
   id?: number
   name: string
   email: string
+  /** Contact detail only. Never a credential — see `phoneHint`. */
+  phone: string
   /** Euros as typed. Converted to integer cents at submit, never held as a float. */
   rate: string
   active: boolean
 }
 
-const EMPTY_DRAFT: Draft = { name: '', email: '', rate: '', active: true }
+const EMPTY_DRAFT: Draft = { name: '', email: '', phone: '', rate: '', active: true }
 
 function draftOf(worker: Worker): Draft {
   return {
     id: worker.id,
     name: worker.name,
     email: worker.email ?? '',
+    phone: worker.phone ?? '',
     rate: centsToPlainEuros(worker.hourly_rate_cents),
     active: worker.active,
   }
@@ -48,10 +58,16 @@ type ErrorMessage =
   | 'errorNameRequired'
   | 'errorEmailShape'
   | 'errorEmailTaken'
+  | 'errorPhoneShape'
   | 'errorRateInvalid'
   | 'errorRejected'
 
-type FieldErrors = { name?: ErrorMessage; email?: ErrorMessage; rate?: ErrorMessage }
+type FieldErrors = {
+  name?: ErrorMessage
+  email?: ErrorMessage
+  phone?: ErrorMessage
+  rate?: ErrorMessage
+}
 
 export default function WorkersPage() {
   const t = useTranslations('workers')
@@ -62,6 +78,8 @@ export default function WorkersPage() {
   const nameId = useId()
   const emailId = useId()
   const emailHintId = useId()
+  const phoneId = useId()
+  const phoneHintId = useId()
   const rateId = useId()
   const rateHintId = useId()
   const activeId = useId()
@@ -151,12 +169,14 @@ export default function WorkersPage() {
 
     const name = draft.name.trim()
     const email = draft.email.trim()
+    const phone = draft.phone.trim()
     const cents = parseEuroToCents(draft.rate)
 
     // Client-side validation is UX only — server/lib/validate.js decides for real.
     const errors: FieldErrors = {}
     if (name === '') errors.name = 'errorNameRequired'
     if (email !== '' && !EMAIL_RE.test(email)) errors.email = 'errorEmailShape'
+    if (phone !== '' && !PHONE_RE.test(phone)) errors.phone = 'errorPhoneShape'
     if (cents === null) errors.rate = 'errorRateInvalid'
     setFieldErrors(errors)
     setFormError(null)
@@ -169,6 +189,7 @@ export default function WorkersPage() {
         ...(draft.id === undefined ? {} : { id: draft.id }),
         name,
         email,
+        phone,
         hourly_rate_cents: cents,
         active: draft.active,
       })
@@ -195,10 +216,13 @@ export default function WorkersPage() {
     setSaved(false)
     setFormError(null)
     try {
+      // Every column of the row goes back on the wire: the route UPDATEs all of them, so
+      // an omitted phone number here would be silently erased by a Deactivate click.
       await saveWorker({
         id: worker.id,
         name: worker.name,
         email: worker.email ?? '',
+        phone: worker.phone ?? '',
         hourly_rate_cents: worker.hourly_rate_cents,
         active: !worker.active,
       })
@@ -271,6 +295,30 @@ export default function WorkersPage() {
             </p>
           </div>
 
+          {/* The phone number is NOT a login. A director who assumes it is would enrol the
+              whole crew with numbers and nobody could sign in, so both fields carry the
+              distinction in their label AND in their hint. */}
+          <div className="field">
+            <label htmlFor={phoneId}>{t('fieldPhone')}</label>
+            <input
+              id={phoneId}
+              type="tel"
+              value={draft.phone}
+              onChange={(event) => setDraft({ ...draft, phone: event.target.value })}
+              maxLength={40}
+              autoComplete="off"
+              aria-describedby={`${phoneHintId} ${phoneId}-error`}
+              aria-invalid={fieldErrors.phone !== undefined}
+              disabled={busy}
+            />
+            <p className="field-hint" id={phoneHintId}>
+              {t('phoneHint')}
+            </p>
+            <p className="field-error" id={`${phoneId}-error`} role="alert">
+              {fieldErrors.phone === undefined ? '' : t(fieldErrors.phone)}
+            </p>
+          </div>
+
           <div className="field">
             <label htmlFor={rateId}>{t('fieldRate')}</label>
             <input
@@ -335,6 +383,7 @@ export default function WorkersPage() {
               <tr>
                 <th scope="col">{t('colName')}</th>
                 <th scope="col">{t('colEmail')}</th>
+                <th scope="col">{t('colPhone')}</th>
                 <th scope="col">{t('colRate')}</th>
                 <th scope="col">{t('colStatus')}</th>
                 <th scope="col">{t('colActions')}</th>
@@ -349,6 +398,14 @@ export default function WorkersPage() {
                       <span className="cell-muted">{t('noEmail')}</span>
                     ) : (
                       worker.email
+                    )}
+                  </td>
+                  <td>
+                    {worker.phone === null ? (
+                      <span className="cell-muted">{t('noPhone')}</span>
+                    ) : (
+                      // tel: so a director on a laptop with a softphone can just click it.
+                      <a href={`tel:${worker.phone.replace(/[^0-9+]/g, '')}`}>{worker.phone}</a>
                     )}
                   </td>
                   <td>

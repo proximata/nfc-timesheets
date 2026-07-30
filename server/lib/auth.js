@@ -115,7 +115,11 @@ const WORKER_SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 // Plain SHA-256 is correct HERE and would be wrong for passwords: the token is 32 bytes
 // of CSPRNG output, so there is no dictionary to attack and nothing for a slow KDF to buy.
 // Running scrypt on every authenticated request would only hand out a cheap DoS.
-const hashToken = (token) => createHash("sha256").update(token, "utf8").digest("hex");
+// Exported because portal_grants stores its token the same way (003). ONE hash helper for
+// every bearer token in the system: a second one would be a second chance to get it wrong,
+// and a mismatch between writer and reader is a silent "nothing found" that looks like a
+// revoked link.
+export const hashToken = (token) => createHash("sha256").update(token, "utf8").digest("hex");
 
 export async function createSession(adminId) {
   const token = randomBytes(TOKEN_BYTES).toString("hex");
