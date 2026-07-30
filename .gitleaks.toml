@@ -28,4 +28,20 @@ regexes = [
   # Session tokens are 32-byte hex, NOT UUID-shaped, so this does not blind the scanner
   # to them. Narrow to canonical 8-4-4-4-12 form only.
   '''[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}''',
+
+  # PII-scrubber fixtures. The checks that PROVE we never ship a secret to Sentry have to
+  # contain secret-SHAPED strings, so they trip the JWT and generic-api-key rules:
+  #   NFCTimeSheets/checks/scrub-check.swift, server/check-telemetry-wire.mjs, server/check-api.js
+  # Allowlisted by their fake SENTINELS, deliberately NOT by path. Allowlisting those files
+  # wholesale would mean a real credential pasted into a check later scans clean forever,
+  # and check files are exactly where a copied-in real token would go to die unnoticed.
+  # Every sentinel below is a value no real credential can hold:
+  #   .SIGNATURE     - literal placeholder where a JWT signature belongs
+  #   c2lnbmF0dXJl   - base64 of the word "signature"
+  #   LIVECREDENTIAL - base64 of foobarLIVECREDENTIAL_43chars_aaaa, a fake portal token
+  '''\.SIGNATURE\b''',
+  '''\.c2lnbmF0dXJl\b''',
+  # Matched literally, not by prefix: it is a fixture that will never rotate, and a prefix
+  # here already cost one typo'd character (…QUw vs …QUx) and a failed scan.
+  '''Zm9vYmFyTElWRUNSRURFTlRJQUxfNDNjaGFyc19hYWFh''',
 ]

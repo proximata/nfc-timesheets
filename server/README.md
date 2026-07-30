@@ -1,12 +1,15 @@
 # NFC TimeSheets server
 
 Node 22 + Postgres 16, one process on the exe.dev VM (decision-16). Serves the REST API, the
-AASA / assetlinks / `/t` files and the static Next.js admin export. Only dependency: `pg`.
+AASA / assetlinks / `/t` files and the static Next.js admin export. Two dependencies: `pg`
+and `@sentry/node` (decision-23 — no framework, no ORM, no router, no logging library).
 
 ## Layout
 
 ```
-server.js          http server, route table, static serving, boot + env fail-fast
+server.js          http server, route table, static serving, boot + env fail-fast, access log
+instrument.mjs     Sentry init. Loaded via `node --import`, BEFORE server.js
+lib/scrub.js       redaction at the telemetry boundary (pure, the PII trust boundary)
 routes/app.js      worker-session routes (iOS) /roster /shifts/open /shifts/close
                                               /shifts/unresolved /shifts/:id/resolve
 routes/auth.js     Sign in with Apple (iOS)   /auth/apple /auth/session /auth/logout
@@ -170,16 +173,58 @@ sees that building's cleaning history. Upgrade path: contact accounts + magic-li
 | `PORT`         | yes      | exe.dev proxy terminates TLS in front of it          |
 | `PUBLIC_DIR`   | no       | static root, defaults to `server/public`             |
 | `PG_POOL_MAX`  | no       | pool size, default 10                                |
+| `SENTRY_DSN`   | no       | **absent = the SDK is disabled**, see below          |
+| `SENTRY_ENVIRONMENT` | no | defaults to `production`                            |
+| `SENTRY_RELEASE` | no     | untagged if unset                                    |
 
 Boot aborts with a named list if any required var is missing. No secret is ever logged. There is
 deliberately no admin credential in the environment any more — it lives in the `admins` table.
+
+## Observability (decision-23)
+
+A real tag tap failed in production and this process had **nothing to say about it**: the only
+log line in the server was the 500 branch, so `journalctl` was empty and the diagnosis had to
+come from reading iOS source. Two things fix that, and they are deliberately independent.
+
+**Access log — journald, no dependencies, always on.** One line per request from `console.log`:
+
+```
+[req] POST /shifts/open 201 34ms w=7
+[req] POST /shifts/open 422 11ms w=7 err=unknown_location
+[req] GET /nope 404 1ms
+```
+
+Emitted iff the request **failed**, matched a **route**, or was answered by `wellknown()`. A
+static asset answering 200 is silent — the admin panel is a Next.js export and `/_next/*` alone
+would bury every API line. A 404 for a missing asset still logs; that is a real signal.
+The path is redacted and the **query string is dropped entirely** (`lib/scrub.js`): a
+`/portal/<token>` path is a live credential. `w=<worker id>` is the only identity that appears.
+
+**Sentry — optional, fail-soft, and the half that correlates.** `instrument.mjs` continues the
+`sentry-trace` / `baggage` headers the iOS app sends, so one tap is ONE trace across the phone
+and this process. With `SENTRY_DSN` unset the SDK installs nothing, opens no socket and costs
+nothing; the API boots and serves identically. Nothing in a request handler awaits Sentry, so an
+unreachable ingest cannot slow or fail a clock-in.
+
+PII is scrubbed in **`lib/scrub.js`**, at the SDK boundary, not by remembering: `sendDefaultPii`
+is off, `includeLocalVariables` is off, `dataCollection` is **omitted** (passing it — even `{}` —
+flips cookies and request bodies back **on**), and `beforeSend` / `beforeSendTransaction` /
+`beforeSendLog` / `beforeBreadcrumb` all run the denylist. Never leaves the process: Apple
+identity tokens and nonces, `apple_sub`, `ts_worker` / `ts_session` cookies, `X-App-Key`,
+passwords and hashes, worker emails, `hourly_rate_cents`, portal tokens. `Sentry.setUser` carries
+**the worker id and nothing else**.
 
 ## Run
 
 ```bash
 pnpm install
-node server.js
+node server.js                                # Sentry inert, everything else identical
+node --import ./instrument.mjs server.js      # as production runs it (pnpm start)
 ```
+
+The `--import` flag is required, not cosmetic: this package is `"type": "module"`, so importing
+`instrument.mjs` from inside `server.js` would run after `pg` and `node:http` are loaded and
+nothing would be instrumented.
 
 ## Check
 
@@ -187,10 +232,21 @@ node server.js
 node check-api.js   # uses DATABASE_URL, exits 0 with SKIP when no database is reachable
 ```
 
+The telemetry cases run **first and without a database**, because their whole point is that
+they hold when nothing else does.
+
 Creates a throwaway schema (`check_api_<pid>`), runs the API against it, drops it. Covers login
 success/uniform failure/rate limit, session cookie hardening + expiry + revocation, open/close
 idempotency, the 409 on a second open shift, UUID location resolution, timestamp bounds, 413,
 the decision-10 resolution flow, `corrected_at` stamping rules, and admin CRUD.
+
+Observability (decision-23) is covered by: the scrubber stripping an Apple identity token, a
+session cookie, an app key, an email, a rate and a portal token out of a synthetic event
+(asserted on the serialised JSON, so a value surviving in a nested span attribute fails);
+`instrument.mjs` being import-safe with no DSN; `assertEnv` not requiring `SENTRY_DSN`; the
+API serving with no DSN set; the access log recording a 404 and a 422 with its error code;
+and a sweep asserting that a request battery carrying every one of those secrets writes
+**none of them** to stdout or stderr.
 
 Sign in with Apple is covered with **locally generated RSA keys and an injected JWKS** — the
 check never calls `appleid.apple.com`: forged signature, `alg:"none"`, wrong audience, wrong
@@ -213,6 +269,12 @@ to handle, leaving that worker unable to clock out at all.
 
 ## ponytail: known ceilings
 
+- **The access log fires on `res.on("finish")`.** Ceiling: a client that hangs up mid-response
+  leaves no line. Upgrade path: also listen for `close` and de-duplicate on a flag.
+- **Sentry is a dependency in the request path** (decision-23): ~33 transitive packages,
+  30–60 MB RSS, µs-scale span + AsyncLocalStorage cost per request and per `pg` query.
+  Ceiling: `@sentry/profiling-node` must never be added — it is a native addon and
+  `ops/deploy.sh` rsyncs macOS-built `node_modules` to Linux (the deploy gates on this).
 - **No framework, hand-rolled route table.** Deliberate: keeps a move to Hono/Supabase cheap.
   Ceiling: no middleware chain, no OpenAPI. Upgrade path: handlers are `(ctx) -> {status, body}`,
   re-wiring them is a day of work.

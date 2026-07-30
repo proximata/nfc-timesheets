@@ -3,8 +3,10 @@
 // Skips cleanly (exit 0) when no database is reachable, so it is safe in any environment.
 // Runs against a throwaway Postgres schema; it never touches the real tables.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign as rsaSign } from "node:crypto";
 import pg from "pg";
+import { redactUrl, scrubBreadcrumb, scrubEvent, scrubLogAttributes } from "./lib/scrub.js";
 
 // sessions.token / worker_sessions.token store SHA-256(token), never the raw value, so a
 // leaked dump cannot be replayed as a live session. Any test reaching into either table
@@ -138,19 +140,6 @@ CREATE TABLE shifts (
 CREATE UNIQUE INDEX shifts_one_open_per_worker_idx ON shifts (worker_id) WHERE end_time IS NULL;
 `;
 
-const skip = (why) => {
-  console.log(`check-api: SKIP (${why})`);
-  process.exit(0);
-};
-
-let admin;
-try {
-  admin = new pg.Client({ connectionString: BASE_URL, connectionTimeoutMillis: 2000 });
-  await admin.connect();
-} catch (err) {
-  skip(`no database reachable: ${err.message}`);
-}
-
 const APP_KEY = "check-app-key-aaaaaaaaaaaa";
 const ADMIN_EMAIL = "check-admin@example.test";
 const ADMIN_PASSWORD = "correct horse battery staple";
@@ -167,7 +156,177 @@ const test = async (name, fn) => {
   }
 };
 
+// A SKIP must still fail the run if something already went wrong, or the telemetry cases
+// below would be silently discarded on any machine without a database.
+const skip = (why) => {
+  console.log(`check-api: SKIP (${why})`);
+  process.exit(failures === 0 ? 0 : 1);
+};
+
 const uuid = (n) => `11111111-2222-4333-8444-5555555555${String(n).padStart(2, "0")}`;
+
+// ---- telemetry (decision-23) -----------------------------------------------------
+// These run FIRST and need no database, no network and no Sentry credential — which is
+// the whole point: they assert what must hold when nothing else is available. A leak
+// here is a GDPR problem, not a bug, so it must not be gated behind `psql` being up.
+
+// Every value that must never leave the process, in the shape it really arrives in.
+const SECRETS = {
+  identityToken:
+    "eyJhbGciOiJSUzI1NiIsImtpZCI6ImZha2Uta2lkIn0.eyJzdWIiOiJhcHBsZS1zdWItcmVhbCJ9.c2lnbmF0dXJl",
+  appleSub: "001234.9f8e7d6c5b4a3928.1337",
+  workerCookieValue: "c".repeat(64),
+  appKey: "tsk_live_do_not_log_me_0123456789",
+  email: "anna.mitarbeiterin@example.test",
+  passwordHash: "scrypt$16384$8$1$0f1e2d3c4b5a69788796a5b4c3d2e1f0$deadbeef",
+  rateCents: 1850,
+  portalToken: "pT".repeat(20) + "abc", // 43 base64url chars, as routes/portal.js mints
+  nonce: "a-raw-nonce-from-the-phone",
+};
+
+await test("the scrubber strips every forbidden field out of an event (decision-23)", () => {
+  // Deliberately scattered: headers, parsed cookies, the request body, the user object,
+  // a breadcrumb, a span attribute and the transaction NAME. A scrubber that only cleans
+  // `event.request` passes a lazier test than this and still leaks.
+  const event = {
+    transaction: `GET /portal/${SECRETS.portalToken}`,
+    request: {
+      url: `https://timesheets.exe.xyz/portal/${SECRETS.portalToken}/summary?token=${SECRETS.portalToken}`,
+      query_string: `token=${SECRETS.portalToken}`,
+      headers: {
+        cookie: `ts_worker=${SECRETS.workerCookieValue}`,
+        "x-app-key": SECRETS.appKey,
+        authorization: `Bearer ${SECRETS.identityToken}`,
+        "user-agent": "NFCTimeSheets/2 CFNetwork",
+      },
+      cookies: { ts_worker: SECRETS.workerCookieValue },
+      data: { identity_token: SECRETS.identityToken, nonce: SECRETS.nonce },
+    },
+    user: { id: "7", email: SECRETS.email, username: "Anna M.", ip_address: "81.223.0.1" },
+    // The auto-instrumented `http.server` span, verbatim from a live boot. The query
+    // appears TWICE: inside `http.url` AND on its own as `http.query`, which is not a URL
+    // and has no `?` for redactUrl to split on. That second copy was going out in the
+    // clear; `db.query.text` is here to prove the fix did not also delete parameterised
+    // SQL, which is worth keeping and contains no values.
+    contexts: {
+      trace: {
+        data: {
+          "http.url": `https://x/portal/${SECRETS.portalToken}?token=${SECRETS.portalToken}`,
+          "http.query": `token=${SECRETS.portalToken}&email=${SECRETS.email}`,
+          "db.query.text": "SELECT id FROM shifts WHERE client_uuid = $1",
+        },
+      },
+    },
+    spans: [
+      {
+        description: "SELECT hourly_rate_cents FROM workers",
+        data: { "url.full": `https://x/portal/${SECRETS.portalToken}`, hourly_rate_cents: SECRETS.rateCents },
+      },
+    ],
+    breadcrumbs: {
+      values: [{ type: "http", data: { url: `https://x/portal/${SECRETS.portalToken}` } }],
+    },
+    extra: { password_hash: SECRETS.passwordHash, apple_sub: SECRETS.appleSub },
+  };
+
+  // Assert on the SERIALISED event: a value that survived in a nested span attribute is
+  // just as leaked as one in a header, and only this catches both.
+  const out = JSON.stringify(scrubEvent(event));
+  for (const [name, value] of Object.entries(SECRETS)) {
+    assert.ok(!out.includes(String(value)), `${name} survived scrubEvent: ${out}`);
+  }
+  assert.ok(out.includes("/portal/<redacted>"), "the portal path should still be readable");
+  assert.equal(
+    JSON.parse(out).contexts.trace.data["db.query.text"],
+    "SELECT id FROM shifts WHERE client_uuid = $1",
+    "parameterised SQL is diagnostics, not a secret - the query-key rule must be anchored",
+  );
+  assert.equal(JSON.parse(out).user.id, "7", "the worker id is the one identity we keep");
+  assert.ok(out.includes("CFNetwork"), "scrubbing must not empty the event out entirely");
+});
+
+await test("the scrubber strips log attributes and drops portal breadcrumbs", () => {
+  const attrs = scrubLogAttributes({
+    "ts.shift.client_uuid": uuid(1),
+    "ts.shift.outcome": "created",
+    identity_token: SECRETS.identityToken,
+    apple_sub: SECRETS.appleSub,
+    "user.email": SECRETS.email,
+    hourly_rate_cents: SECRETS.rateCents,
+    "x-app-key": SECRETS.appKey,
+    cookie: `ts_worker=${SECRETS.workerCookieValue}`,
+    note: `see /portal/${SECRETS.portalToken}`,
+  });
+  const out = JSON.stringify(attrs);
+  for (const [name, value] of Object.entries(SECRETS)) {
+    assert.ok(!out.includes(String(value)), `${name} survived scrubLogAttributes: ${out}`);
+  }
+  assert.equal(attrs["ts.shift.outcome"], "created", "useful attributes must survive");
+
+  assert.equal(
+    scrubBreadcrumb({ type: "http", data: { url: `https://x/portal/${SECRETS.portalToken}` } }),
+    null,
+    "a portal breadcrumb is dropped whole: its only content is the credential",
+  );
+  const kept = scrubBreadcrumb({
+    type: "http",
+    data: { url: "https://x/health?token=abc", cookie: "ts_worker=y" },
+  });
+  assert.equal(kept.data.url, "https://x/health", "a normal crumb survives, query dropped");
+  assert.equal(kept.data.cookie, undefined, "...without its cookie");
+});
+
+await test("redactUrl drops the query string and the portal token", () => {
+  assert.equal(redactUrl(`/portal/${SECRETS.portalToken}/summary`), "/portal/<redacted>/summary");
+  assert.equal(redactUrl("/t?l=c3c37d4a-ca0a-42c5-b248-9704b9907ec7"), "/t");
+  assert.equal(redactUrl("/admin/login?token=abc#frag"), "/admin/login");
+  assert.equal(redactUrl(undefined), "");
+  assert.ok(redactUrl(`/x${"y".repeat(9999)}`).length <= 300, "a hostile URL cannot flood the log");
+});
+
+await test("instrument.mjs cannot crash the boot, with or without a DSN", () => {
+  // `Restart=always` + a throwing instrument file = a crash loop that takes the API down
+  // for TELEMETRY. This is the gate ops/deploy.sh relies on. Child process on purpose:
+  // calling Sentry.init() in here would instrument this check's own pg client.
+  const env = { ...process.env };
+  delete env.SENTRY_DSN;
+  const run = (extra) =>
+    execFileSync(process.execPath, ["--import", "./instrument.mjs", "-e", "0"], {
+      cwd: import.meta.dirname,
+      env: { ...env, ...extra },
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+  assert.equal(run({}), "", "no DSN must be silent, not noisy and not fatal");
+  assert.equal(run({ SENTRY_DSN: "https://check@o0.ingest.sentry.io/0" }), "", "a DSN must not print or throw");
+});
+
+await test("the REAL SDK payload leaks nothing and lands as ONE trace", () => {
+  // The case above proves scrubEvent cleans an event WE wrote. This one proves it cleans
+  // the event the SDK writes, which is where the leak actually was: `http.query` is a
+  // field nobody here invented. Child process because instrument.mjs has to be the first
+  // thing loaded (`--import`), and because a fake DSN must not touch this suite's client.
+  // Needs no database and no network - nothing is ever transmitted.
+  const out = execFileSync(
+    process.execPath,
+    ["--import", "./instrument.mjs", "check-telemetry-wire.mjs"],
+    {
+      cwd: import.meta.dirname,
+      env: { ...process.env, SENTRY_DSN: "https://check@o4509000000000000.ingest.de.sentry.io/451" },
+      encoding: "utf8",
+      timeout: 30_000,
+    },
+  );
+  assert.ok(out.includes("check-telemetry-wire: PASS"), out);
+});
+
+let admin;
+try {
+  admin = new pg.Client({ connectionString: BASE_URL, connectionTimeoutMillis: 2000 });
+  await admin.connect();
+} catch (err) {
+  skip(`no database reachable: ${err.message}`);
+}
 
 try {
   await admin.query(`CREATE SCHEMA ${pg.escapeIdentifier(SCHEMA)}`);
@@ -266,6 +425,23 @@ try {
 
   await test("ADMIN_PIN is no longer a required variable (decision-20)", () => {
     assert.doesNotThrow(() => assertEnv({ DATABASE_URL: "x", APP_KEY: "y", PORT: "1" }));
+  });
+
+  // decision-23: telemetry is OPTIONAL. No Sentry credential exists yet, and the API has
+  // to boot and serve without one — today, and on the day someone rotates the DSN and
+  // fat-fingers it. Everything else in this file already runs with SENTRY_DSN unset, so
+  // the whole run is the proof; this states the invariant so a future `REQUIRED_ENV.push`
+  // fails here instead of on the VM.
+  await test("SENTRY_DSN is not required to boot, and is not set for this run", async () => {
+    assert.equal(process.env.SENTRY_DSN, undefined, "this check must run with no DSN");
+    assert.doesNotThrow(() => assertEnv({ DATABASE_URL: "x", APP_KEY: "y", PORT: "1" }));
+    assert.doesNotThrow(
+      () => assertEnv({ DATABASE_URL: "x", APP_KEY: "y", PORT: "1", SENTRY_DSN: "" }),
+      "an empty DSN is 'disabled', not 'missing'",
+    );
+    const res = await call("/health");
+    assert.equal(res.status, 200, "the API must serve with no Sentry credential at all");
+    assert.equal((await res.json()).ok, true);
   });
 
   // ---- app key -------------------------------------------------------------------
@@ -857,6 +1033,35 @@ try {
       (await asOther(`/shifts/${autoShiftId}/resolve`, { method: "POST", body: { end_time: realEnd } })).status,
       409,
     );
+  });
+
+  // The on-device migration's only server call (DataMigrations.swift). If this 404s, a
+  // device holding a legacy row with a real location can NEVER finish migrating: the
+  // fetch throws, the chain defers, and the version never advances.
+  await test("/shifts/mine answers the migration's reconciliation question, session-scoped", async () => {
+    const since = new Date(Date.now() - 30 * 86400_000).toISOString();
+    const res = await asOther(`/shifts/mine?since=${encodeURIComponent(since)}`);
+    assert.equal(res.status, 200, "the iOS migration calls this route by name");
+    const { shifts } = await res.json();
+    assert.ok(shifts.length > 0);
+    assert.ok(
+      shifts.every((s) => s.client_uuid !== undefined),
+      "client_uuid is the idempotency key the migration matches on - it must be in the payload",
+    );
+    assert.deepEqual(
+      [...shifts].sort((a, b) => new Date(b.start_time) - new Date(a.start_time)).map((s) => s.id),
+      shifts.map((s) => s.id),
+      "newest first",
+    );
+
+    const other = await (await asWorker(`/shifts/mine?since=${encodeURIComponent(since)}`)).json();
+    assert.equal(
+      other.shifts.find((s) => s.worker_id === otherWorkerId),
+      undefined,
+      "/shifts/mine must be scoped to the session's worker, never ?worker=",
+    );
+
+    assert.equal((await asOther("/shifts/mine")).status, 400, "since is required");
   });
 
   await test("a worker cannot read or resolve another worker's shifts", async () => {
@@ -1499,6 +1704,81 @@ try {
     });
     assert.equal(reissue.status, 422);
     assert.equal((await reissue.json()).error, "unknown_contact");
+    resetLoginRate();
+  });
+
+  // ---- access log + PII sweep (decision-23) ---------------------------------------
+  // The defect that started this: a tap failed and the server had NO evidence at all.
+  // These two cases pin the fix and its safety rail — there IS a line now, and the line
+  // never carries a credential.
+
+  /** Run `fn` with stdout/stderr collected. The access log fires on res 'finish'. */
+  const withCapturedStdio = async (fn) => {
+    const lines = [];
+    const realLog = console.log;
+    const realError = console.error;
+    const grab = (...args) => lines.push(args.map((a) => String(a)).join(" "));
+    console.log = grab;
+    console.error = grab;
+    try {
+      await fn();
+      // 'finish' lands a tick after the client has its response; without this the last
+      // line is written after the capture is torn down and the case passes for the
+      // wrong reason.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      console.log = realLog;
+      console.error = realError;
+    }
+    return lines;
+  };
+
+  await test("the access log records a routed 200, a 404 and a 4xx with its error code", async () => {
+    const lines = await withCapturedStdio(async () => {
+      await call("/health");
+      await call("/nope");
+      await call("/shifts/open", {
+        method: "POST",
+        cookie: workerCookie,
+        body: { client_uuid: uuid(70), location_uuid: uuid(99), start_time: new Date().toISOString() },
+      });
+    });
+    const log = lines.join("\n");
+    assert.match(log, /\[req\] GET \/health 200 \d+ms/, `routed 200 missing:\n${log}`);
+    assert.match(log, /\[req\] GET \/nope 404 \d+ms/, `404 missing:\n${log}`);
+    assert.match(
+      log,
+      /\[req\] POST \/shifts\/open 422 \d+ms w=\d+ err=unknown_location/,
+      `the 4xx line must name the worker and the reason:\n${log}`,
+    );
+  });
+
+  await test("no credential, cookie, token or email reaches stdout or stderr", async () => {
+    const portalToken = "zZ".repeat(20) + "abc"; // 43 chars, the shape routes/portal.js mints
+    const workerToken = workerCookie.split("=")[1];
+    const identityToken = forgeToken({ sub: WORKER_SUB, email: "check.worker@example.test" });
+
+    const lines = await withCapturedStdio(async () => {
+      await call(`/portal/${portalToken}`, { key: null, ip: "10.9.9.1" }); // 404, path is logged
+      await call("/roster", { cookie: workerCookie }); // app key + live session
+      await appleLogin({ identity_token: identityToken }, { ip: "10.9.9.2" });
+      await login(ADMIN_PASSWORD, { ip: "10.9.9.3" });
+      await call("//", { key: null }); // the malformed-URL 400 branch
+    });
+    const log = lines.join("\n");
+
+    for (const [what, secret] of [
+      ["the portal token", portalToken],
+      ["the worker session token", workerToken],
+      ["the app key", APP_KEY],
+      ["an Apple identity token", identityToken],
+      ["the admin email", ADMIN_EMAIL],
+      ["the admin password", ADMIN_PASSWORD],
+      ["a worker email", "check.worker@example.test"],
+    ]) {
+      assert.ok(!log.includes(secret), `${what} reached the log:\n${log}`);
+    }
+    assert.match(log, /\[req\] GET \/portal\/<redacted> 404/, `the portal path must be redacted, not absent:\n${log}`);
     resetLoginRate();
   });
 

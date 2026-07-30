@@ -20,9 +20,29 @@
 //
 // Both halves are idempotent on client_uuid. The phone retries on flaky network and a
 // double tap at the door must not produce two rows or two invoices.
+import * as Sentry from "@sentry/node";
 import { all, one } from "../lib/db.js";
 import { fail } from "../lib/http.js";
 import * as v from "../lib/validate.js";
+
+/**
+ * The one deliberate piece of instrumentation on the clock-in path (decision-23).
+ *
+ * The question it answers, which nothing else could: "the worker says they tapped — did
+ * the request arrive, and what did the server decide about it?" The access log has the
+ * status code but not the idempotency key, so it cannot tell a fresh clock-in from the
+ * phone's third retry of one, which is the difference between a bug and a working retry.
+ * `ts.shift.outcome` also lands as a span attribute, so the same fact is readable both in
+ * the log search (the needle) and in the trace waterfall next to the DB spans.
+ *
+ * The worker is NOT an attribute here: `Sentry.setUser({id})` in server.js already
+ * attaches them to every event on this request. No names, no emails, no location slug —
+ * a location UUID is meaningless outside our database, a building's name is not.
+ */
+function recordShift(event, attributes) {
+  Sentry.getActiveSpan()?.setAttributes(attributes);
+  Sentry.logger.info(event, attributes);
+}
 
 // Every shift response has the same shape. `auto_closed` + `corrected_at` are the two
 // decision-10 facts; the client derives "needs resolution" as
@@ -102,12 +122,26 @@ async function openShift({ body, session }) {
     if (!CONFLICT_CODES.has(err?.code)) throw err;
     inserted = null;
   }
-  if (inserted) return { status: 201, body: { shift: inserted, duplicate: false } };
+  if (inserted) {
+    recordShift("shift open", {
+      "ts.shift.client_uuid": clientUuid,
+      "ts.shift.outcome": "created",
+      "ts.location.id": location.id,
+    });
+    return { status: 201, body: { shift: inserted, duplicate: false } };
+  }
 
   // Same client_uuid => this is a retry of a request that already landed. Return the
   // stored row unchanged; the first write wins and the phone converges on it.
   const existing = await one(`SELECT ${SHIFT_COLS} FROM shifts WHERE client_uuid = $1`, [clientUuid]);
-  if (existing) return { status: 200, body: { shift: existing, duplicate: true } };
+  if (existing) {
+    recordShift("shift open", {
+      "ts.shift.client_uuid": clientUuid,
+      "ts.shift.outcome": "duplicate",
+      "ts.location.id": location.id,
+    });
+    return { status: 200, body: { shift: existing, duplicate: true } };
+  }
 
   // Different client_uuid => the worker is clocked in somewhere already. Say so, with
   // the offending shift, so the app can offer "close that one first" instead of
@@ -115,7 +149,14 @@ async function openShift({ body, session }) {
   const open = await one(`SELECT ${SHIFT_COLS} FROM shifts WHERE worker_id = $1 AND end_time IS NULL`, [
     workerId,
   ]);
-  if (open) return { status: 409, body: { error: "shift_already_open", shift: open } };
+  if (open) {
+    recordShift("shift open", {
+      "ts.shift.client_uuid": clientUuid,
+      "ts.shift.outcome": "already_open",
+      "ts.location.id": location.id,
+    });
+    return { status: 409, body: { error: "shift_already_open", shift: open } };
+  }
 
   // Raced a concurrent close/delete: neither row is there any more. Retrying works.
   fail(409, "conflict");
@@ -155,6 +196,11 @@ async function closeShift({ body, session }) {
   // row carries auto_closed=true and corrected_at=null and the app routes the worker
   // to the resolution screen — closing does NOT silently resolve it.
   if (current.end_time !== null) {
+    recordShift("shift close", {
+      "ts.shift.client_uuid": clientUuid,
+      "ts.shift.outcome": "duplicate",
+      "ts.shift.auto_closed": current.auto_closed,
+    });
     return { status: 200, body: { shift: current, duplicate: true } };
   }
 
@@ -167,7 +213,17 @@ async function closeShift({ body, session }) {
       WHERE client_uuid = $1 AND worker_id = $4 AND end_time IS NULL RETURNING ${SHIFT_COLS}`,
     [clientUuid, end, autoClosed, session.workerId],
   );
-  if (updated) return { status: 200, body: { shift: updated, duplicate: false } };
+  if (updated) {
+    recordShift("shift close", {
+      "ts.shift.client_uuid": clientUuid,
+      "ts.shift.outcome": "closed",
+      "ts.shift.duration_s": Math.round(
+        (new Date(updated.end_time).getTime() - new Date(updated.start_time).getTime()) / 1000,
+      ),
+      "ts.shift.auto_closed": updated.auto_closed,
+    });
+    return { status: 200, body: { shift: updated, duplicate: false } };
+  }
 
   // Lost the race with a concurrent close (or the timer) between the SELECT and the
   // UPDATE. Re-read and report the winner rather than erroring: the shift IS closed,
@@ -215,6 +271,38 @@ async function unresolvedShifts({ session }) {
 }
 
 /**
+ * GET /shifts/mine?since=<iso8601> -> my shifts from `since` onwards, newest first.
+ *
+ * EXISTS FOR ONE CALLER: the on-device data migration (DataMigrations.swift) asks
+ * "does the server already hold this client_uuid?" before it touches a legacy row.
+ * Without an answer the migration would have to either duplicate the row or guess, and
+ * guessing about somebody's hours is the thing the reconciliation rules forbid.
+ *
+ * Scoped to `session.workerId` like every other read here (decision-22). There is no
+ * `?worker=` and there must never be one.
+ *
+ * `since` is REQUIRED and bounded: the client sends the oldest local row minus a day, so
+ * an unbounded history dump is never needed and is never served. LIMIT is a second
+ * ceiling on top of that — a phone reconciling a handful of rows does not need a year of
+ * payroll on the wire.
+ */
+const MINE_LIMIT = 500;
+
+async function myShifts({ query, session }) {
+  const since = v.timestamp(query.get("since"), "since");
+  const shifts = await all(
+    `SELECT ${S_SHIFT_COLS}, l.slug AS location_slug, l.name AS location_name
+       FROM shifts s
+       JOIN locations l ON l.id = s.location_id
+      WHERE s.worker_id = $1 AND s.start_time >= $2
+      ORDER BY s.start_time DESC
+      LIMIT ${MINE_LIMIT}`,
+    [session.workerId, since],
+  );
+  return { status: 200, body: { shifts } };
+}
+
+/**
  * POST /shifts/:id/resolve {end_time} -> the worker supplies the real end time.
  * Sets end_time and stamps corrected_at. auto_closed is left TRUE on purpose: it is a
  * historical fact about how the shift ended and payroll disputes need it.
@@ -252,5 +340,6 @@ export const appRoutes = [
   { method: "GET", path: "/shifts/open", auth: "worker", handler: currentOpenShift },
   { method: "POST", path: "/shifts/close", auth: "worker", handler: closeShift },
   { method: "GET", path: "/shifts/unresolved", auth: "worker", handler: unresolvedShifts },
+  { method: "GET", path: "/shifts/mine", auth: "worker", handler: myShifts },
   { method: "POST", path: "/shifts/:id/resolve", auth: "worker", handler: resolveShift },
 ];

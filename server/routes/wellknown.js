@@ -18,6 +18,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as Sentry from "@sentry/node";
 
 const DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "wellknown");
 
@@ -70,7 +71,17 @@ export function wellknown(req, res) {
 
   if (isAASA) serve(res, AASA, "application/json");
   else if (isAssetlinks) serve(res, ASSETLINKS, "application/json");
-  else serve(res, LANDING, "text/html; charset=utf-8");
+  else {
+    // WARN, not info, and it is the one log line on this file's path (decision-23).
+    // A tap that WORKS never reaches here: iOS intercepts the universal link and the
+    // request is never made. A GET on /t means the handoff FAILED and the tag opened
+    // Safari instead of the app - AASA cache, a reinstall, a wiped association. That is
+    // a worker standing at a door unable to clock in, and until now it was invisible.
+    // The location id is not read out of the query on purpose: this file never parses
+    // tag input (decision-15), and the app is the only thing entitled to.
+    Sentry.logger.warn("tag link fell back to web");
+    serve(res, LANDING, "text/html; charset=utf-8");
+  }
 
   return true;
 }

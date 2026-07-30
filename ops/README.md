@@ -7,7 +7,7 @@ Conventions come from `backlog/docs/runbook-vm-provisioning.md`:
 |---|---|
 | App user | `app` (system user, nologin) |
 | App dir | `/srv/nfc` (this repo's build artifact, rsynced) |
-| Secrets | `/etc/nfc/env` — `0640 root:app` |
+| Secrets | `/etc/nfc/env` — `0640 root:app`. Required: `DATABASE_URL`, `APP_KEY`, `PORT`. Optional: `PUBLIC_DIR`, `PG_POOL_MAX`, `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE` |
 | DB name / role | `nfc` |
 | Postgres | local unix socket, never publicly bound |
 | Backups | `/var/backups/nfc`, `0700 postgres:postgres` |
@@ -52,7 +52,7 @@ before the restart, which hand-typed rsyncs reliably forget:
 
 | Source | Lands at | Contains |
 |---|---|---|
-| `server/` | `/srv/nfc/` | `server.js`, `lib/`, `routes/`, `db/`, `wellknown/`, `node_modules/` |
+| `server/` | `/srv/nfc/` | `server.js`, `instrument.mjs`, `lib/`, `routes/`, `db/`, `wellknown/`, `node_modules/` |
 | `web/out/` | `/srv/nfc/public/` | the static admin export (`PUBLIC_DIR` default) |
 | `ops/` | `/srv/nfc/ops/` | units, `autoclose.sql`, backup scripts |
 
@@ -118,6 +118,13 @@ only a second copy on the same failing disk.**
 systemctl status nfc-api
 journalctl -u nfc-api -f
 
+# access log (decision-23) — one line per ROUTED request, plus every 4xx/5xx. Static admin
+# assets answering 200 are deliberately silent or `/_next/*` would bury everything.
+#   [req] POST /shifts/open 201 34ms w=7
+#   [req] POST /shifts/open 422 11ms w=7 err=unknown_location
+journalctl -u nfc-api --since today | grep '\[req\]'
+journalctl -u nfc-api --since today | grep -E '\[req\].* (4|5)[0-9][0-9] '   # failures only
+
 systemctl list-timers 'nfc-*'                   # next/last run of both timers
 journalctl -u nfc-autoclose --since today        # "UPDATE <n>" per run = auto-closure log
 journalctl -u nfc-backup --since '7 days ago'
@@ -131,6 +138,13 @@ Redeploy: `./ops/deploy.sh` from the laptop (build → rsync → migrate → res
 
 - **systemd, not PM2** — already installed, survives reboot without `pm2 startup`, journald
   rotates logs, no Node process supervising a Node process. (runbook §5)
+- **The access log is `console.log` to journald, not Sentry** (decision-23) — it must work
+  on a box with no Sentry credential, which is the state this ships in. Sentry adds the
+  correlation (one trace across phone and server); journald is the floor that never
+  depends on a third party being reachable.
+- **`ExecStart` carries `--import /srv/nfc/instrument.mjs`** — required, not cosmetic. The
+  server is ESM; importing the instrumentation from inside `server.js` runs after `pg` and
+  `node:http` are loaded, which silently disables all tracing.
 - **systemd timer, not pg_cron** — pg_cron needs an extension install, a
   `shared_preload_libraries` edit and a **database restart**. That is a scheduled outage for
   one `UPDATE`.
@@ -145,6 +159,10 @@ Redeploy: `./ops/deploy.sh` from the laptop (build → rsync → migrate → res
 - [ ] `ss -tlnp | grep 5432` shows no public bind
 - [ ] `ls -l /etc/nfc/env` is `0640 root:app`; secrets never echoed into a shell transcript
 - [ ] `systemctl status nfc-api` active, and still active after `reboot`
+- [ ] `journalctl -u nfc-api | grep '\[req\]'` shows request lines, and NONE of them
+      contains a `/portal/` token, a cookie, an email or the app key
+- [ ] the API is active with `SENTRY_DSN` absent from `/etc/nfc/env` — that is a supported
+      state, not a misconfiguration (decision-23)
 - [ ] API answers on its port; `/.well-known/apple-app-site-association` returns
       `Content-Type: application/json` (decision-4)
 - [ ] `systemctl list-timers 'nfc-*'` lists both timers with a future NEXT

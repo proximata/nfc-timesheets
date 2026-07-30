@@ -15,6 +15,11 @@ import SwiftData
 /// button, not a link, not a swipe - because the tabs are not built at all in that state.
 struct ContentView: View {
     @Environment(Session.self) private var session
+    /// Rows an on-device migration archived, shown once as a receipt. Loaded lazily and
+    /// only inside the eligible branch: that branch mounts after the launch task has run
+    /// the migrations, so there is no race between "what happened" and "telling them".
+    @State private var receipt: [ArchivedShift] = []
+    @State private var showReceipt = false
 
     var body: some View {
         switch session.state {
@@ -31,6 +36,16 @@ struct ContentView: View {
                 LogView(worker: worker).tabItem { Label("Log", systemImage: "wave.3.right") }
                 HistoryView().tabItem { Label("History", systemImage: "list.bullet") }
                 SettingsView(worker: worker).tabItem { Label("Settings", systemImage: "gear") }
+            }
+            // Four rows must not vanish between launches without a word. If the archive
+            // is empty there is nothing to report, so the flag is simply cleared.
+            .task {
+                guard MigrationReceipt.unseen else { return }
+                receipt = MigrationReceipt.archived()
+                if receipt.isEmpty { MigrationReceipt.unseen = false } else { showReceipt = true }
+            }
+            .sheet(isPresented: $showReceipt, onDismiss: { MigrationReceipt.unseen = false }) {
+                MigrationReceiptSheet(shifts: receipt)
             }
         }
     }
@@ -189,6 +204,8 @@ struct LogView: View {
 
     private var open: [Shift] { shifts.filter(\.isOpen) }
     private var recent: [Shift] { Array(shifts.filter { !$0.isOpen }.prefix(5)) }
+    /// "Unknown location" until the roster arrives, and that is fine: a missing name is
+    /// cosmetic, a missing shift is unpaid work. Nothing branches on this string.
     private func siteName(_ id: String) -> String {
         sites.first { $0.locationId == id }?.name ?? "Unknown location"
     }
@@ -273,16 +290,39 @@ struct LogView: View {
 
     /// One tap = one toggle. The row is written locally first (so a tap in a basement
     /// still counts) and pushed straight after.
+    ///
+    /// A TAP ALWAYS PRODUCES A ROW. There is no longer any branch that returns without
+    /// writing one, and there must never be one again.
+    ///
+    /// DELETED: `guard sites.contains(where: { $0.locationId == locationId })`, which
+    /// refused the tap when the LOCAL roster cache did not know the location. That was
+    /// the wrong invariant and it broke the product: `sites` is filled by refreshRoster(),
+    /// which needs the network, and on a tag-tap cold launch onOpenURL delivers the id
+    /// before any roster fetch has finished - so on a fresh install a perfectly valid tag
+    /// was refused as unknown and the worker lost paid time standing at the door.
+    /// The SERVER is authoritative for whether a location exists (decision-19): POST
+    /// /shifts/open runs validate.js activeLocation and answers 422 unknown_location,
+    /// which APIFailure classifies as terminal, which Sync.record turns into syncBlocked +
+    /// "This location was removed. Ask your admin.", which ShiftRow.syncStatus already
+    /// renders in red. That rejection path exists end to end; the guard only pre-empted it
+    /// with a worse answer. A missing NAME is cosmetic (siteName falls back below); a
+    /// missing SHIFT is unpaid work.
     private func handleTap(_ locationId: String) {
-        guard unresolved.isEmpty else {
-            alertMsg = "Finish your unresolved shift first — tap the warning at the top."
-            return
-        }
-        guard sites.contains(where: { $0.locationId == locationId }) else {
-            alertMsg = "Unknown tag — this location isn't registered. Ask your admin to add it."
-            return
-        }
+        let trace = Telemetry.beginTap(locationId: locationId, cachedLocations: sites.count)
+        let write = trace.child("db", "shift.local_write")
 
+        // decision-10 wants unresolved shifts resolved before the app is USED. Capturing a
+        // timestamp is not use, it is capture: the old code refused the tap outright, so a
+        // worker at the door at 06:02 got an alert, resolved an unrelated three-day-old
+        // auto-closed shift, and tapped again at 06:05 - three minutes of paid time gone,
+        // and only if they tapped again at all. The invariant decision-10 protects is that
+        // no shift reaches payroll with an unconfirmed end time, and a NEW open shift does
+        // not touch it. So: record first, then force the resolver sheet (not a dismissible
+        // alert) so the pressure stays and the data loss goes.
+        let mustResolve = !unresolved.isEmpty
+
+        let action: String
+        let touched: Shift
         if let running = shifts.first(where: \.isOpen) {
             running.endTime = .now
             running.closeSyncedAt = nil
@@ -300,17 +340,64 @@ struct LogView: View {
                 // with an unconfirmed end time. A normal tap-out stays unflagged.
                 running.autoClosed = true
                 alertMsg = "Finished your open shift at \(siteName(running.locationId)) and started at \(siteName(locationId)). Confirm when you actually left \(siteName(running.locationId)) — it will not count until you do."
-                startShift(at: locationId)
+                touched = startShift(at: locationId)
+                action = "switch"
+            } else {
+                touched = running
+                action = "close"
             }
         } else {
-            startShift(at: locationId)
+            touched = startShift(at: locationId)
+            action = "open"
         }
         try? context.save()
-        Task { await syncPending(context: context, workerId: worker.id) }
+
+        write.data("ts.shift.action", action)
+        write.data("ts.shift.client_uuid", touched.clientUuidString)
+        write.finish()
+
+        // `ts.roster.cached_locations` is the one field that would have diagnosed the
+        // deleted guard above in five seconds instead of by reading source. That is why
+        // it exists.
+        Telemetry.log("nfc tap accepted", .info, [
+            "ts.location.id": locationId,
+            "ts.shift.action": action,
+            "ts.shift.client_uuid": touched.clientUuidString,
+            "ts.cold_launch": Telemetry.isColdLaunch(),
+            "ts.roster.cached_locations": sites.count,
+            "ts.tap.unresolved_pending": mustResolve,
+        ])
+
+        // A location switch already claims the screen with an alert, and SwiftUI will not
+        // show an alert and a sheet at once - one of the two would be silently dropped.
+        // The persistent orange warning row at the top of the List is the fallback in that
+        // case, so no information is lost either way.
+        if mustResolve && alertMsg == nil { showResolver = true }
+
+        Task {
+            // Wraps the await rather than being started after it: a span that covers the
+            // push is what shows whether the POST happened at all, and the auto-instrumented
+            // http.client span lands inside this transaction because it is scope-bound.
+            let push = trace.child("function", "shift.push")
+            await syncPending(context: context, workerId: worker.id)
+            if let serverId = touched.serverId { push.data("ts.shift.server_id", serverId) }
+            push.data("ts.shift.outcome", outcome(of: touched))
+            push.finish()
+            trace.data("ts.shift.outcome", outcome(of: touched))
+            trace.finish(ok: !touched.syncBlocked)
+        }
     }
 
-    private func startShift(at locationId: String) {
-        context.insert(Shift(workerId: worker.id, workerName: worker.name, locationId: locationId))
+    private func outcome(of shift: Shift) -> String {
+        if shift.syncBlocked { return "blocked" }
+        return shift.isFullySynced ? "synced" : "queued"
+    }
+
+    @discardableResult
+    private func startShift(at locationId: String) -> Shift {
+        let shift = Shift(workerId: worker.id, workerName: worker.name, locationId: locationId)
+        context.insert(shift)
+        return shift
     }
 }
 
@@ -359,7 +446,9 @@ private func pill(_ t: String, _ c: Color) -> some View {
         .background(c.opacity(0.2)).foregroundStyle(c).clipShape(Capsule())
 }
 
-private func fmtDur(_ s: TimeInterval) -> String { "\(Int(s) / 3600)h \((Int(s) % 3600) / 60)m" }
+/// Not private: LegacyClassifier's "worthless" ceiling is defined as "what this renders
+/// as 0h 0m", and MigrationReceiptView shows archived rows with the same spelling.
+func fmtDur(_ s: TimeInterval) -> String { "\(Int(s) / 3600)h \((Int(s) % 3600) / 60)m" }
 
 // MARK: - Resolution (decision-10)
 
@@ -483,6 +572,16 @@ struct SettingsView: View {
                 Section {
                     Text("Hours, locations and payroll are managed by your admin on the web.")
                         .font(.footnote).foregroundStyle(.secondary)
+                }
+                // Not a flash-and-gone. A worker who dismissed the receipt at 06:00 at a
+                // door can find out later what was cleared off their phone and why.
+                Section {
+                    NavigationLink("Migration history") {
+                        MigrationHistoryView()
+                    }
+                } footer: {
+                    Text("Records an app update archived or flagged on this phone.")
+                        .font(.footnote)
                 }
                 Section {
                     Button("Sign out", role: .destructive) { Task { await session.signOut() } }

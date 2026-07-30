@@ -47,6 +47,18 @@ check(APIFailure(status: 429, code: "too_many_attempts").isRetryable, "429 retry
 check(APIFailure(status: 409, code: "shift_already_open").isRetryable, "409 already-open retryable")
 check(!APIFailure(status: 400, code: "invalid_uuid").isRetryable, "400 terminal")
 check(!APIFailure(status: 422, code: "unknown_worker").isRetryable, "422 terminal")
+
+// ContentView.handleTap no longer checks the LOCAL roster cache before recording a tap -
+// that guard refused valid tags on a cold launch, before any roster fetch had finished,
+// and cost the worker paid time at the door. The SERVER is authoritative for whether a
+// location exists, so THIS is now the whole rejection path for a genuinely unknown tag:
+// 422 unknown_location -> not retryable -> Sync.record sets syncBlocked -> ShiftRow draws
+// it in red with the admin-facing message. If any link in that chain is edited, the app
+// silently swallows bad tags instead of showing them. Pinned here.
+let unknownLocation = APIFailure(status: 422, code: "unknown_location")
+check(!unknownLocation.isRetryable, "422 unknown_location is terminal, so sync stops and blocks")
+check(unknownLocation.workerMessage == "This location was removed. Ask your admin.",
+      "422 unknown_location tells the worker to involve the admin: \(unknownLocation.workerMessage)")
 check(!APIFailure(status: 404, code: "unknown_shift").isRetryable, "404 terminal")
 check(!APIFailure(status: 401, code: "unauthorized").isRetryable, "401 terminal")
 check(!APIFailure(status: 403, code: "not_eligible").isRetryable, "403 not_eligible terminal")

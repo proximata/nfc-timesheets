@@ -481,6 +481,18 @@ enum ShiftAPI {
         return envelope.shifts
     }
 
+    /// GET /shifts/mine?since=<iso8601> - this worker's shifts, newest first.
+    ///
+    /// Exists so the on-device migration can ask "does the server already hold this
+    /// client_uuid?" before touching a legacy row (DataMigrations.swift), instead of
+    /// guessing or duplicating. The worker is the session's worker; there is no ?worker=
+    /// and there must never be one (decision-22).
+    static func mine(since: Date) async throws -> [WireShift] {
+        let envelope: WireShiftListEnvelope =
+            try await apiGet("/shifts/mine", query: ["since": Wire.string(from: since)])
+        return envelope.shifts
+    }
+
     /// POST /shifts/:id/resolve {end_time} - the worker supplies the real finish time.
     static func resolve(shiftId: Int, endTime: Date) async throws -> WireShift {
         let envelope: WireShiftEnvelope = try await apiPost("/shifts/\(shiftId)/resolve",

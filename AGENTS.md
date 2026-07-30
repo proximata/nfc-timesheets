@@ -31,8 +31,8 @@ NFC-based shift tracking for a Vienna cleaning company. Workers tap NFC tags at 
 
 ### Hosting
 
-- **API + DB**: exe.dev VM `timesheets.exe.xyz` (SSH: `ssh timesheets.exe.xyz`). PM2 + Postgres on localhost. No Docker (decision-1). May be replaced by Supabase if decision-12 accepted.
-- **Frontend**: Vercel (decision-11). Next.js static/SSR deploy. API URL as env var.
+- **API + DB**: exe.dev VM `timesheets.exe.xyz` (SSH: `ssh timesheets.exe.xyz`). **systemd** + Postgres on localhost. No Docker (decision-1); systemd replaced PM2 (decision-18). Supabase is deferred, not rejected (decision-16).
+- **Frontend**: static Next.js export served by the same Node API process (decision-16). NOT Vercel — decision-11 is superseded. Cloudflare Pages (decision-14) is deferred.
 - **AASA**: served from API server (same as timesheets.exe.xyz or Supabase edge function)
 - Auto TLS via exe.dev proxy (API) and Vercel (frontend)
 
@@ -61,8 +61,19 @@ Decision checklist (keep updated as decisions are added):
 - All strings externalized for i18n (decision-8)
 - npm versions pinned exact (decision-9)
 - 8h shift auto-timeout + mandatory resolution (decision-10)
-- Frontend on Vercel, VM only for API + DB (decision-11)
-- Supabase exploration — check status before infra work (decision-12)
+- ~~Frontend on Vercel~~ (decision-11) — SUPERSEDED by decision-16
+- Supabase (decision-12) DEFERRED and its free-tier risk (decision-13) MOOTED by decision-16
+- Cloudflare Pages for the admin panel (decision-14) DEFERRED by decision-16
+- Tag hostname stays `timesheets.exe.xyz`, tags left unlocked (decision-15)
+- Everything server-side on the one exe.dev VM; no framework, no ORM, no router (decision-16)
+- next-intl, English messages for MVP (decision-17)
+- systemd, not PM2 (decision-18)
+- Shift posted at clock-IN; server is authoritative for open shifts (decision-19)
+- Web admin uses email + password; the admin PIN is gone (decision-20)
+- Tag URI carries the location UUID, never the slug (decision-21)
+- Worker identity via Sign in with Apple; identity comes from the session, never the body (decision-22)
+- Sentry on API + iOS; server deps are now `pg` + `@sentry/node` and nothing else. Telemetry
+  must never be required to boot and must never block a clock-in (decision-23, amends decision-16)
 
 Decisions can only be changed by creating a new decision record that supersedes the old one.
 

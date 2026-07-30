@@ -152,6 +152,16 @@ private func apply(_ wire: WireShift, to shift: Shift) {
 private func record(_ failure: APIFailure, on shift: Shift) {
     shift.syncError = failure.workerMessage
     shift.syncBlocked = !failure.isRetryable
+    // The one place every rejection passes through, so this is the one place it has to be
+    // reported from. `ts.api.code` is the server's own error code, which is what makes a
+    // failed clock-in diagnosable without reading this file.
+    Telemetry.log("shift sync rejected", .error, [
+        "ts.api.status": failure.status,
+        "ts.api.code": failure.code,
+        "ts.sync.blocked": !failure.isRetryable,
+        "ts.shift.client_uuid": shift.clientUuidString,
+        "ts.location.id": shift.locationId,
+    ])
 }
 
 // MARK: - Server-authoritative reconciliation

@@ -73,6 +73,18 @@ Secrets come from the environment only. The server refuses to boot if `DATABASE_
 `APP_KEY` or `PORT` is missing; nothing is hardcoded and the app key is never logged.
 On the VM they live in `/etc/nfc/env` (`0640 root:app`).
 
+`SENTRY_DSN` is **optional** (decision-23). Unset — which is how it runs locally and how it
+ships — the SDK disables itself and the API behaves identically. With one set, start the
+server as production does, or the instrumentation loads too late to see anything:
+
+```bash
+SENTRY_DSN=https://...  DATABASE_URL=postgres:///nfc APP_KEY=dev-app-key-xxxx \
+  PORT=8080 PUBLIC_DIR=../web/out node --import ./instrument.mjs server.js
+```
+
+The per-request access log (`[req] POST /shifts/open 201 34ms w=7`) does **not** depend on
+Sentry; it is stdout, captured by journald on the VM.
+
 There is **no `ADMIN_PIN`** (decision-20). Admin credentials are an email + a scrypt hash in
 the `admins` table, created interactively with `server/bin/create-admin.js`. Nothing about the
 admin login lives in the environment, a unit file, or a shell history.

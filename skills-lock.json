@@ -19,6 +19,12 @@
       "skillPath": "skills/requirements-gathering/SKILL.md",
       "computedHash": "381a0d339bd69a59c1b2149fcb34905e6c10da009d29bb763179fd7fe9e79ce0"
     },
+    "sentry-sdk-setup": {
+      "source": "getsentry/sentry-for-ai",
+      "sourceType": "github",
+      "skillPath": "skills-legacy/sentry-sdk-setup/SKILL.md",
+      "computedHash": "d7fb017bcc2e3eb93280843b3343cc3aa8040a8667208c1ee083738be6420b7a"
+    },
     "supabase": {
       "source": "supabase/agent-skills",
       "sourceType": "github",

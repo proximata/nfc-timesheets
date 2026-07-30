@@ -15,12 +15,20 @@ Type=simple
 User=app
 Group=app
 WorkingDirectory=/srv/nfc
-# 0640 root:app. Holds DATABASE_URL, APP_KEY, PORT — and nothing else. No ADMIN_PIN:
-# decision-20 moved admin auth to email + password in the `admins` table, so there is no
-# admin secret in the environment to leak into a unit file, a shell history or a log line.
-# Never logged, never echoed.
+# 0640 root:app. REQUIRED: DATABASE_URL, APP_KEY, PORT. OPTIONAL: PUBLIC_DIR, PG_POOL_MAX,
+# and SENTRY_DSN / SENTRY_ENVIRONMENT / SENTRY_RELEASE (decision-23).
+# No ADMIN_PIN: decision-20 moved admin auth to email + password in the `admins` table, so
+# there is no admin secret in the environment to leak into a unit file, a shell history or
+# a log line. Never logged, never echoed.
+#
+# SENTRY_DSN absent is a SUPPORTED state, not a broken one: the SDK disables itself and the
+# API boots and serves identically. It is not in the server's REQUIRED_ENV and must not be
+# added there — telemetry must never be able to keep the API from starting.
 EnvironmentFile=/etc/nfc/env
-ExecStart=/usr/bin/node /srv/nfc/server.js
+# --import is REQUIRED, not a style choice (server/package.json is "type": "module").
+# `import "./instrument.mjs"` from inside server.js runs too late: pg and node:http are
+# already loaded and never get instrumented. Dropping the flag silently loses all tracing.
+ExecStart=/usr/bin/node --import /srv/nfc/instrument.mjs /srv/nfc/server.js
 Restart=always
 RestartSec=5
 
@@ -39,6 +47,7 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 # ProtectSystem=strict makes the whole tree read-only; name the one path that is not.
+# Sentry writes nothing to disk, so this needs no widening for it.
 ReadWritePaths=/srv/nfc
 
 [Install]

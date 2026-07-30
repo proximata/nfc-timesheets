@@ -17,12 +17,14 @@ TASKS
      DATABASE_URL=postgres://nfc:<generated>@127.0.0.1:5432/nfc
      PORT=8000
    Leave APP_KEY OUT of the file for now - it is delivered separately from a secrets vault. Add a comment line noting it is required before the service will start.
+   Add a second comment line listing the OPTIONAL variables, which are not needed for the service to start: SENTRY_DSN, SENTRY_ENVIRONMENT, SENTRY_RELEASE (decision-23), plus PUBLIC_DIR and PG_POOL_MAX. Do NOT invent a Sentry DSN. With SENTRY_DSN absent the SDK disables itself and the API behaves exactly as it does without it - that is a supported state, not a misconfiguration.
    Do NOT add an ADMIN_PIN. There is no admin secret in the environment (decision-20): the web admin authenticates against an email + password hash in the 'admins' table, seeded interactively with server/bin/create-admin.js after the first deploy.
 
 5. Create /srv/nfc owned exedev:exedev. This is where application code will be rsynced later.
 
 6. Write /etc/systemd/system/nfc-api.service:
-     runs 'node /srv/nfc/server.js' as user exedev
+     runs 'node --import /srv/nfc/instrument.mjs /srv/nfc/server.js' as user exedev
+     the --import flag is REQUIRED, not optional: the server is an ESM package, and loading the Sentry instrumentation from inside server.js instead would run after pg and node:http are already loaded, which silently disables all tracing
      WorkingDirectory=/srv/nfc
      EnvironmentFile=/etc/nfc/env
      Restart=always, RestartSec=5

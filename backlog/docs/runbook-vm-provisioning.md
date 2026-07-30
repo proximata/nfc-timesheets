@@ -71,6 +71,12 @@ psst tag DATABASE_URL server prod
 psst tag APP_KEY     server prod
 ```
 
+`SENTRY_DSN` (and the optional `SENTRY_ENVIRONMENT` / `SENTRY_RELEASE`) go in the same
+file but are **not required** and are **not secrets** — a DSN is write-only ingest
+identification (decision-23). They live in `/etc/nfc/env` because that is where server
+config lives, not because they need protecting. With `SENTRY_DSN` absent the SDK disables
+itself and the API behaves identically; never add it to the server's required-env list.
+
 There is no `ADMIN_PIN` to push (decision-20). The web admin authenticates against a
 password hash in the `admins` table; seed the first one **on the VM** after the first
 deploy with `node /srv/nfc/bin/create-admin.js`, which reads the password from a tty and
@@ -128,7 +134,9 @@ Type=simple
 User=app
 WorkingDirectory=/srv/<project>
 EnvironmentFile=/etc/<project>/env
-ExecStart=/usr/bin/node server.js
+# ESM + Sentry: --import must load the instrumentation BEFORE the app, or pg and node:http
+# are already loaded and never get instrumented (decision-23).
+ExecStart=/usr/bin/node --import /srv/<project>/instrument.mjs /srv/<project>/server.js
 Restart=always
 RestartSec=5
 

@@ -13,7 +13,7 @@
 #   the end. Upgrade path: a GitHub Action running these same lines against a deploy key.
 #
 # Artifact layout on the VM (/srv/nfc):
-#   server.js, lib/, routes/, db/, wellknown/, node_modules/   <- server/
+#   server.js, instrument.mjs, lib/, routes/, db/, wellknown/, node_modules/   <- server/
 #   public/                                                    <- web/out/  (static admin export)
 #   ops/                                                       <- ops/      (units, sql, backups)
 
@@ -33,8 +33,18 @@ echo "==> 1/6 build the admin export (web/out)"
 # (decision-8) regardless of who runs the deploy. English is still one click away in the UI.
 (cd web && pnpm install --frozen-lockfile && NEXT_PUBLIC_DEFAULT_LOCALE=de pnpm verify)
 
-echo "==> 2/6 install server runtime deps (pg only, pure JS — safe to ship from macOS)"
+echo "==> 2/6 install server runtime deps (pg + @sentry/node, both pure JS — safe to ship from macOS)"
 (cd server && pnpm install --prod --frozen-lockfile)
+
+# node_modules is built HERE (macOS) and rsynced to Linux, which is only safe while every
+# dependency is pure JavaScript. A native addon would ship a darwin-arm64 .node binary to an
+# x86 Linux box and the service would crash-loop on import. @sentry/profiling-node is exactly
+# such a package and must never be added (decision-23). Gate, not a comment:
+if find server/node_modules -name '*.node' -print -quit | grep -q .; then
+  echo "FATAL: a native addon is in server/node_modules — the macOS->Linux rsync is unsafe." >&2
+  find server/node_modules -name '*.node' >&2
+  exit 1
+fi
 
 [ -d web/out ] || { echo "FATAL: web/out missing — the export did not build" >&2; exit 1; }
 

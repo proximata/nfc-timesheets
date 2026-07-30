@@ -230,6 +230,10 @@ final class Session {
     private func store(_ session: WireSession) {
         UserDefaults.standard.set(session.worker.id, forKey: Cache.workerId)
         UserDefaults.standard.set(session.worker.name, forKey: Cache.workerName)
+        // Worker ID and nothing else. Not the name, not the address Apple gave us, not
+        // the Apple `sub` - this is EU payroll data about a named person and the id is
+        // enough to correlate a client trace with the server's.
+        Telemetry.setWorker(id: session.worker.id)
         state = .eligible(session.worker)
     }
 
@@ -243,6 +247,7 @@ final class Session {
     /// person straight back in as this worker.
     private func clearLocalSession() {
         clearCache()
+        Telemetry.clearWorker()
         UserDefaults.standard.removeObject(forKey: Cache.appleUserId)
         let storage = HTTPCookieStorage.shared
         for cookie in storage.cookies(for: API.base) ?? [] { storage.deleteCookie(cookie) }

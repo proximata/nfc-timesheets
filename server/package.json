@@ -8,10 +8,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node server.js",
+    "start": "node --import ./instrument.mjs server.js",
     "check": "node check-api.js"
   },
   "dependencies": {
+    "@sentry/node": "10.68.0",
     "pg": "8.21.0"
   },
   "packageManager": "pnpm@10.15.1"

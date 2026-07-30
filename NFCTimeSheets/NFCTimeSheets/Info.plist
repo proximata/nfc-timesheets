@@ -1,5 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict/>
+<dict>
+	<!-- Sentry DSN for the iOS project. EMPTY = telemetry is off and the SDK is never
+	     started; the app behaves exactly as it does with no Sentry at all.
+
+	     Deliberately committed in cleartext, reasoned exactly like API.appKey in
+	     API.swift: it is compiled into the binary, so `strings` on any installed IPA
+	     recovers it, and hiding it from git would protect nothing while it sits readable
+	     on every worker's phone. It is strictly WEAKER than the app key - it grants no
+	     read and no write of company data; the worst case if extracted is junk events
+	     burning Sentry quota, answered with inbound filters and rate limits.
+	     Intentionally NOT in the psst vault, same reasoning as API.appKey.
+	     Read in Telemetry.swift. This file is already wired via INFOPLIST_FILE, so
+	     adding this key needs no project.pbxproj edit. -->
+	<key>SentryDSN</key>
+	<string></string>
+</dict>
 </plist>

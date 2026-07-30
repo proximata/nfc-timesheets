@@ -74,28 +74,8 @@ final class Site {
     }
 }
 
-/// Where a tap arrives from, whichever way it came in: the in-app NDEF scan, or iOS
-/// opening the universal link off the tag while the app was in the background.
-///
-/// Both paths can fire for a single physical tap, so identical taps inside a short
-/// window collapse into one. Without this, one tap would clock in and straight back out.
-@Observable
-final class TapInbox {
-    var pendingLocationId: String?
-    private var last: (locationId: String, at: Date)?
-    private let window: TimeInterval = 3
-
-    func accept(_ locationId: String) {
-        if let last, last.locationId == locationId, Date.now.timeIntervalSince(last.at) < window { return }
-        last = (locationId, .now)
-        pendingLocationId = locationId
-    }
-
-    func take() -> String? {
-        defer { pendingLocationId = nil }
-        return pendingLocationId
-    }
-}
+// TapInbox moved to TapInbox.swift - the cold-launch ordering it guarantees is the exact
+// thing that lost the owner's first real tap, and it is now pinned by a runnable check.
 
 @main
 struct NFCTimeSheetsApp: App {
@@ -104,6 +84,28 @@ struct NFCTimeSheetsApp: App {
     // switches on (decision-22) and it is the only thing that talks to /auth/*.
     @State private var session = Session()
 
+    /// Built here rather than by the `.modelContainer(for:)` modifier so the app owns a
+    /// ModelContext before any view exists. SwiftData's own lightweight SCHEMA migration
+    /// happens inside this initialiser; our DATA migration runs after it, below.
+    private let container: ModelContainer
+
+    init() {
+        // First statement, before the container: a crash in schema or data migration is a
+        // silent launch failure otherwise, and that is precisely the class of bug this
+        // whole change exists to make visible. Costs nothing when no DSN is configured -
+        // SentrySDK.start is then never called at all.
+        Telemetry.start()
+        do {
+            container = try ModelContainer(for: Shift.self, Site.self)
+        } catch {
+            // Parity with the `.modelContainer(for:)` modifier this replaced, which also
+            // fatalErrors on a store it cannot open. The difference is that the reason now
+            // reaches Sentry before the process dies. No recovery path is invented here.
+            Telemetry.capture(error)
+            fatalError("SwiftData store could not be opened: \(error)")
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -111,8 +113,14 @@ struct NFCTimeSheetsApp: App {
                 .environment(session)
                 // Cached worker first, server's verdict second. A worker deactivated in
                 // the admin panel is signed out here, on their next launch.
+                //
+                // Data migrations run BEFORE session.restore() on purpose: until the
+                // session resolves, ContentView renders a spinner and nothing else, so no
+                // @Query is on screen and the worker never sees a flash of pre-migration
+                // rows that are about to disappear.
                 .task {
                     purgeLegacyIdentityDefaults()
+                    await DataMigrations.runPending(context: container.mainContext)
                     await session.restore()
                 }
                 // Universal link off the tag: https://timesheets.exe.xyz/t?l=<uuid>.
@@ -122,6 +130,6 @@ struct NFCTimeSheetsApp: App {
                     if let id = TagLink.locationId(from: url) { inbox.accept(id) }
                 }
         }
-        .modelContainer(for: [Shift.self, Site.self])
+        .modelContainer(container)
     }
 }
