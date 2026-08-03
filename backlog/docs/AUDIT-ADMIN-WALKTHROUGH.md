@@ -2,7 +2,7 @@
 
 Audit only. No product code written. Date of record: **2026-08-03**, Europe/Vienna.
 
-Live data used throughout: 1 worker (Ivan Kotelnikov), 1 building (HOIV), 1 client, 1 contact,
+Live data used throughout: 1 worker (Demo Worker), 1 building (HOIV), 1 client, 1 contact,
 0 inventory, 1 live portal link, 5 shifts — **all on 2026-07-30**, all closed, none auto-closed,
 none corrected. Server `hours` aggregate: worker 1 → `hours 0.341`, `pay_cents 5118`.
 
@@ -76,7 +76,7 @@ sends the director to the dashboard, not back to payroll. Both are annoyances, n
 
 ## `/workers/` — `web/app/workers/page.tsx`
 
-**Renders today.** One row: Ivan Kotelnikov, his email or *"Keine E-Mail – keine Anmeldung
+**Renders today.** One row: Demo Worker, his email or *"Keine E-Mail – keine Anmeldung
 möglich"*, phone or *"Keine Nummer hinterlegt"*, rate as `format.number(cents/100, currency EUR)`,
 *Aktiv*. Form above it in "anlegen" mode.
 

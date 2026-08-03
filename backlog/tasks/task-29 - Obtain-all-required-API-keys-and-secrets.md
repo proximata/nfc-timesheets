@@ -46,7 +46,7 @@ DONE - Google Maps Platform:
 - Verified working against live Street View metadata endpoint
 
 DONE - Auth sessions (gstack browse, cookies imported from Chrome):
-- Vercel: authed as ivan.d.kotelnikov@gmail.com, team qwadratics-projects
+- Vercel: authed as <owner-email-redacted>, team qwadratics-projects
 - GitHub: authed
 - Google Cloud: authed (gcloud CLI also authed as same account)
 

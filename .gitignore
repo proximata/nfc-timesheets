@@ -23,3 +23,10 @@ id_ed25519
 # Xcode per-user UI state - changes on every click, never meaningful in a diff
 *.xcuserstate
 xcuserdata/
+
+# macOS junk
+.DS_Store
+
+# obsolete: legacy demo video (pre decision-20/22) and GitHub Pages AASA (superseded by decision-4)
+video/
+pages/
