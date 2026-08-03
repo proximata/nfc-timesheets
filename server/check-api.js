@@ -1782,6 +1782,225 @@ try {
     resetLoginRate();
   });
 
+  // ---- GET /admin/data?from=&to= : the period the total describes (T4) --------------
+  //
+  // The defect this guards: the `hours` aggregate had NO date bound while the shift rows
+  // were period-filtered in the browser and row-capped here, so on 3 August 2026 the panel
+  // showed EUR 51.18 of July pay next to an empty August table. Totals that describe
+  // different days from the rows beneath them is how somebody is paid twice, or not at all.
+  //
+  // Every boundary below is a VIENNA midnight expressed in UTC, which is what the admin
+  // panel puts on the wire. July starts at 21:00/22:00 UTC the previous day depending on
+  // the season, and that is exactly the hour that moves a shift between payslips.
+  {
+    const rangeWorker = Number(
+      (
+        await admin.query(
+          "INSERT INTO workers (name, email, hourly_rate_cents) VALUES ('Range Worker', 'range.worker@example.test', 1000) RETURNING id",
+        )
+      ).rows[0].id,
+    );
+
+    // One hour each, so 1 shift = 1.000 h = 1000 cents at this worker's rate.
+    const seed = async (startIso) =>
+      Number(
+        (
+          await admin.query(
+            `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+             VALUES ($1, $2, $3::timestamptz, $3::timestamptz + interval '1 hour') RETURNING id`,
+            [rangeWorker, locationUuid, startIso],
+          )
+        ).rows[0].id,
+      );
+
+    // Vienna 2026-07-31 23:59 (CEST, +02:00) - the last minute of July.
+    const julyLast = await seed("2026-07-31T21:59:00Z");
+    // Vienna 2026-08-01 00:00 - the first minute of August. One minute later, another month.
+    const augustFirst = await seed("2026-07-31T22:00:00Z");
+    // Vienna 2026-09-30 23:30 (CEST) - September, i.e. just OUTSIDE October.
+    const septemberLast = await seed("2026-09-30T21:30:00Z");
+    // Vienna 2026-10-01 00:30 (CEST) - the first hours of October.
+    const octoberFirst = await seed("2026-09-30T22:30:00Z");
+    // Vienna 2026-10-31 23:30 (CET, +01:00) - the last hours of October, AFTER the clocks
+    // went back on 25 October. A period built with one fixed offset loses this shift.
+    const octoberLast = await seed("2026-10-31T22:30:00Z");
+
+    const VIENNA_JULY = { from: "2026-06-30T22:00:00Z", to: "2026-07-31T22:00:00Z" };
+    const VIENNA_AUGUST = { from: "2026-07-31T22:00:00Z", to: "2026-08-31T22:00:00Z" };
+    // Starts at +02:00 and ends at +01:00: a period whose two ends sit on opposite sides of
+    // a daylight-saving change, and therefore 31 days AND one hour long.
+    const VIENNA_OCTOBER = { from: "2026-09-30T22:00:00Z", to: "2026-10-31T23:00:00Z" };
+
+    const data = async (params = "") =>
+      (await asAdmin(`/admin/data?limit=2000${params}`)).json();
+    const range = ({ from, to }) => `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+    const ids = (payload) => payload.shifts.map((s) => Number(s.id));
+    const centsFor = (payload, workerId) =>
+      Number(payload.hours.find((h) => h.worker_id === workerId)?.pay_cents ?? 0);
+
+    await test("no from/to behaves exactly as it did before the parameter existed", async () => {
+      const payload = await data();
+
+      // The literal pre-change aggregate, run straight against the table.
+      const { rows: expected } = await admin.query(
+        `SELECT s.worker_id,
+                ROUND(SUM(EXTRACT(EPOCH FROM (s.end_time - s.start_time)) / 3600.0) * w.hourly_rate_cents) AS pay_cents
+           FROM shifts s JOIN workers w ON w.id = s.worker_id
+          WHERE s.end_time IS NOT NULL AND NOT (s.auto_closed AND s.corrected_at IS NULL)
+          GROUP BY s.worker_id, w.hourly_rate_cents
+          ORDER BY s.worker_id`,
+      );
+      const got = [...payload.hours].sort((a, b) => a.worker_id - b.worker_id);
+      assert.deepEqual(
+        got.map((h) => [h.worker_id, Number(h.pay_cents)]),
+        expected.map((h) => [Number(h.worker_id), Number(h.pay_cents)]),
+        "an unparameterised call must still return the all-time aggregate the iOS app and the dashboard expect",
+      );
+
+      const { rows: rowCount } = await admin.query("SELECT count(*)::int AS n FROM shifts");
+      assert.equal(payload.shifts.length, rowCount[0].n, "and every shift row");
+      assert.deepEqual(payload.shift_range, { from: null, to: null }, "and must say it applied no range");
+    });
+
+    await test("a Vienna month boundary puts each shift in exactly one month", async () => {
+      const july = ids(await data(range(VIENNA_JULY)));
+      const august = ids(await data(range(VIENNA_AUGUST)));
+
+      assert.ok(july.includes(julyLast), "23:59 Vienna on 31 July is July");
+      assert.ok(!july.includes(augustFirst), "00:00 Vienna on 1 August is not July");
+      assert.ok(august.includes(augustFirst), "00:00 Vienna on 1 August is August");
+      assert.ok(!august.includes(julyLast), "and 23:59 on 31 July is not August");
+      // The two shifts are one minute apart. A UTC-midnight boundary would put both in
+      // August and move an hour of pay onto the wrong payslip.
+      assert.equal(
+        july.filter((id) => id === julyLast || id === augustFirst).length +
+          august.filter((id) => id === julyLast || id === augustFirst).length,
+        2,
+        "each shift lands in exactly one of the two months, never both and never neither",
+      );
+    });
+
+    await test("a period that crosses the October clock change keeps its last day", async () => {
+      const october = ids(await data(range(VIENNA_OCTOBER)));
+      assert.ok(october.includes(octoberFirst), "00:30 Vienna on 1 October is October");
+      assert.ok(october.includes(octoberLast), "23:30 Vienna on 31 October is October");
+      assert.ok(!october.includes(septemberLast), "23:30 Vienna on 30 September is not October");
+
+      // What a fixed +02:00 offset would have produced: the end bound one hour early, and
+      // the last evening of the month silently unpaid. Asserted so the check states what it
+      // is defending rather than merely passing.
+      const naive = ids(await data(range({ from: VIENNA_OCTOBER.from, to: "2026-10-31T22:00:00Z" })));
+      assert.ok(
+        !naive.includes(octoberLast),
+        "a period built with one fixed UTC offset must be visibly wrong, or this check proves nothing",
+      );
+    });
+
+    await test("the hours total and the shift rows describe the SAME period", async () => {
+      for (const [name, window] of [
+        ["July", VIENNA_JULY],
+        ["August", VIENNA_AUGUST],
+        ["October", VIENNA_OCTOBER],
+      ]) {
+        const payload = await data(range(window));
+        // Echoed as a canonical instant, so compare instants and not text.
+        assert.deepEqual(
+          [Date.parse(payload.shift_range.from), Date.parse(payload.shift_range.to)],
+          [Date.parse(window.from), Date.parse(window.to)],
+          `${name}: the server must echo the range it actually applied`,
+        );
+
+        // Recompute the total from the rows the same response returned, in integer cents.
+        const ms = payload.shifts
+          .filter((s) => s.worker_id === rangeWorker && s.end_time !== null)
+          .reduce((sum, s) => sum + (Date.parse(s.end_time) - Date.parse(s.start_time)), 0);
+        assert.equal(
+          centsFor(payload, rangeWorker),
+          Math.round((ms * 1000) / 3_600_000),
+          `${name}: the aggregate must equal the rows shown beside it`,
+        );
+      }
+
+      // The concrete regression: one payable hour in July, one in August, never both.
+      assert.equal(centsFor(await data(range(VIENNA_JULY)), rangeWorker), 1000);
+      assert.equal(centsFor(await data(range(VIENNA_AUGUST)), rangeWorker), 1000);
+      assert.equal(centsFor(await data(range(VIENNA_OCTOBER)), rangeWorker), 2000);
+    });
+
+    await test("a bounded period still excludes unresolved auto-closed shifts (decision-10)", async () => {
+      const { rows } = await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, start_time, end_time, auto_closed)
+         VALUES ($1, $2, '2026-08-05T06:00:00Z', '2026-08-05T14:00:00Z', true) RETURNING id`,
+        [rangeWorker, locationUuid],
+      );
+      const stub = Number(rows[0].id);
+      const payload = await data(range(VIENNA_AUGUST));
+
+      assert.ok(ids(payload).includes(stub), "the stub must still be VISIBLE so a human can resolve it");
+      assert.equal(
+        centsFor(payload, rangeWorker),
+        1000,
+        "but a start+8h guess must not become money just because a period was named",
+      );
+
+      await admin.query("UPDATE shifts SET corrected_at = now() WHERE id = $1", [stub]);
+      assert.equal(
+        centsFor(await data(range(VIENNA_AUGUST)), rangeWorker),
+        9000,
+        "and must count once a human has confirmed it",
+      );
+      await admin.query("DELETE FROM shifts WHERE id = $1", [stub]);
+    });
+
+    await test("shift_bounds ignores both the period and the row cap", async () => {
+      const { rows } = await admin.query("SELECT min(start_time) AS lo, max(start_time) AS hi FROM shifts");
+      for (const params of ["", range(VIENNA_JULY), "&limit=1"]) {
+        const payload = await data(params);
+        assert.equal(payload.shift_bounds.earliest, rows[0].lo.toISOString(), params);
+        assert.equal(payload.shift_bounds.latest, rows[0].hi.toISOString(), params);
+      }
+      // Without this an empty list means "nobody worked" and "your data is gone" at once.
+      assert.equal((await data(range({ from: "2020-01-01T00:00:00Z", to: "2020-02-01T00:00:00Z" }))).shifts.length, 0);
+    });
+
+    await test("garbage from/to is REFUSED, never ignored", async () => {
+      const before = await countShifts();
+      const bad = [
+        ["from=nonsense", 400],
+        ["from=30", 400], // new Date("30") is the year 2030 in V8, not NaN
+        ["from=2026-08-01T00:00", 400], // no zone: would be read in the server's zone
+        ["from=2026-08-01", 400], // date only, same reason
+        ["to=' OR 1=1 --", 400],
+        ["from=2026-08-01T00:00:00Z&to=2026-08-01T00:00:00Z", 422], // empty range
+        ["from=2026-09-01T00:00:00Z&to=2026-08-01T00:00:00Z", 422], // inverted
+        ["from=1799-01-01T00:00:00Z", 422], // outside any plausible ledger
+      ];
+      for (const [params, status] of bad) {
+        const res = await asAdmin(`/admin/data?limit=2000&${params}`);
+        assert.equal(res.status, status, `${params} must be refused, got ${res.status}`);
+        const body = await res.json();
+        assert.ok(body.error, `${params} must name the failure`);
+        // Answering 200 with an empty list is the dangerous outcome: it is indistinguishable
+        // from "nobody worked that month" and would be paid as such.
+        assert.notEqual(res.status, 200);
+      }
+      assert.equal(await countShifts(), before, "and nothing may be written by a rejected query");
+    });
+
+    await test("a from/to that only bounds one side leaves the other unbounded", async () => {
+      const onlyFrom = ids(await data("&from=2026-07-31T22:00:00Z"));
+      assert.ok(onlyFrom.includes(augustFirst) && onlyFrom.includes(octoberLast));
+      assert.ok(!onlyFrom.includes(julyLast));
+
+      const onlyTo = ids(await data("&to=2026-07-31T22:00:00Z"));
+      assert.ok(onlyTo.includes(julyLast));
+      assert.ok(!onlyTo.includes(augustFirst));
+    });
+
+    await admin.query("DELETE FROM shifts WHERE worker_id = $1", [rangeWorker]);
+    await admin.query("DELETE FROM workers WHERE id = $1", [rangeWorker]);
+  }
+
   await test("unknown route returns a 404 code, not a stack trace", async () => {
     const res = await call("/nope");
     assert.equal(res.status, 404);

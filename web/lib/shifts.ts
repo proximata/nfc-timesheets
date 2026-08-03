@@ -88,38 +88,9 @@ export function formatDuration(minutes: number): string {
   return `${sign}${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
-export const PERIODS = ['week', 'month', 'quarter', 'year', 'all'] as const
-export type Period = (typeof PERIODS)[number]
-
-export function isPeriod(value: string): value is Period {
-  return (PERIODS as readonly string[]).includes(value)
-}
-
-/**
- * Start of the chosen period in the BROWSER's local time, which for this business is
- * Europe/Vienna — the admin closes a month against a wall calendar, not against UTC.
- * `null` = no lower bound.
- *
- * The week starts on Monday (ISO-8601 / Austrian practice), not Sunday.
- */
-export function periodStart(period: Period, now: Date): Date | null {
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  switch (period) {
-    case 'week': {
-      const isoWeekday = (now.getDay() + 6) % 7 // Mon = 0
-      start.setDate(start.getDate() - isoWeekday)
-      return start
-    }
-    case 'month':
-      return new Date(now.getFullYear(), now.getMonth(), 1)
-    case 'quarter':
-      return new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1)
-    case 'year':
-      return new Date(now.getFullYear(), 0, 1)
-    case 'all':
-      return null
-  }
-}
+// Reporting periods used to live here, computed in the BROWSER's zone. They now live in
+// lib/period.ts, pinned to Vienna and shared with /payroll/ — see the header of that file
+// for why two period vocabularies was a money defect and not a tidiness one.
 
 /**
  * The one clock this business runs on. The company, its buildings and its director are all

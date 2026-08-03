@@ -102,12 +102,31 @@ async function whoami({ session }) {
   return { status: 200, body: { admin: { id: session.adminId, email: session.email } } };
 }
 
-/** GET /admin/data -> everything the admin panel renders in one round trip. */
+/**
+ * GET /admin/data -> everything the admin panel renders in one round trip.
+ *
+ * `?from=` / `?to=` bound the reporting period, half-open `[from, to)` on `start_time`.
+ * BOTH the `shifts` rows and the `hours` aggregate use the SAME predicate, because the
+ * whole point of the parameter is that a screen can never show a total for one range next
+ * to the rows of another. Omitting either end leaves that side unbounded, which is exactly
+ * what every caller got before the parameter existed (the iOS app sends neither).
+ *
+ * A shift belongs to the period its START falls in — the same rule as `startsWithin` in
+ * web/lib/payroll.ts. One rule, stated in both places, or the two disagree at month end.
+ *
+ * Boundaries arrive as UTC instants; Vienna wall time is converted by the caller
+ * (web/lib/period.ts), which is where the DST arithmetic lives and is tested.
+ */
 async function adminData({ query }) {
   const rawLimit = query.get("limit");
   const limit = rawLimit === null ? SHIFT_PAGE_DEFAULT : Math.min(v.id(rawLimit, "limit"), SHIFT_PAGE_MAX);
+  const { from, to } = v.optionalRange(query.get("from"), query.get("to"));
+  // Cast once: a NULL parameter has no type of its own, and `$1 IS NULL` on an untyped
+  // parameter is a 42P08 from Postgres.
+  const inRange =
+    "($1::timestamptz IS NULL OR s.start_time >= $1) AND ($2::timestamptz IS NULL OR s.start_time < $2)";
 
-  const [workers, locations, shifts, hours, clients, contacts, inventory, portalGrants] = await Promise.all([
+  const [workers, locations, shifts, hours, clients, contacts, inventory, portalGrants, bounds] = await Promise.all([
     all(`SELECT ${WORKER_COLS} FROM workers ORDER BY active DESC, name`),
     // id is the UUID that goes on the tag; slug is the human handle (decision-21).
     // client_name / contact_name ride along so the buildings screen can show "Hausverwaltung
@@ -128,9 +147,10 @@ async function adminData({ query }) {
        FROM shifts s
        JOIN workers w ON w.id = s.worker_id
        JOIN locations l ON l.id = s.location_id
+       WHERE ${inRange}
        ORDER BY s.start_time DESC
-       LIMIT $1`,
-      [limit],
+       LIMIT $3`,
+      [from, to, limit],
     ),
     // Payroll excludes open shifts (no end_time yet) and unresolved auto-closed ones
     // (decision-10): a start+8h stub is a placeholder, not hours worked. Once a human
@@ -142,7 +162,9 @@ async function adminData({ query }) {
        FROM shifts s
        JOIN workers w ON w.id = s.worker_id
        WHERE s.end_time IS NOT NULL AND NOT (s.auto_closed AND s.corrected_at IS NULL)
+         AND ${inRange}
        GROUP BY s.worker_id, w.hourly_rate_cents`,
+      [from, to],
     ),
     all(`SELECT ${CLIENT_COLS} FROM clients ORDER BY active DESC, name`),
     all(`SELECT ${CONTACT_COLS} FROM contacts ORDER BY active DESC, name`),
@@ -161,6 +183,11 @@ async function adminData({ query }) {
         WHERE g.revoked_at IS NULL
         ORDER BY l.name, ct.name`,
     ),
+    // The full extent of the ledger: NOT bounded by from/to and NOT capped by limit.
+    // Without it an empty `shifts` array is ambiguous between "nobody worked in the period
+    // you asked for" and "the data is gone", and the admin panel has no way to tell the
+    // director which one it is. Two aggregates over an indexed column.
+    one("SELECT min(start_time) AS earliest, max(start_time) AS latest FROM shifts"),
   ]);
 
   return {
@@ -175,6 +202,12 @@ async function adminData({ query }) {
       inventory,
       portal_grants: portalGrants,
       shift_limit: limit,
+      // Echoed so a screen can prove what it is showing rather than assume it.
+      shift_range: { from: from === null ? null : from.toISOString(), to: to === null ? null : to.toISOString() },
+      shift_bounds: {
+        earliest: bounds.earliest === null ? null : bounds.earliest.toISOString(),
+        latest: bounds.latest === null ? null : bounds.latest.toISOString(),
+      },
     },
   };
 }

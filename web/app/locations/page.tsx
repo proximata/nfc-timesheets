@@ -9,6 +9,7 @@ import {
   type BuildingsSnapshot,
   type Contact,
   createClientLink,
+  deactivateLocation,
   fetchBuildingsSnapshot,
   type Location,
   revokeClientLink,
@@ -20,13 +21,15 @@ import {
 import type { ErrorKey } from '@/lib/locale'
 import { centsToPlainEuros, parseEuroToCents } from '@/lib/money'
 import { LOGIN_PATH } from '@/lib/nav'
+import { businessMidnight, type PeriodRange, withinRange } from '@/lib/period'
 import { clientPortalUrl } from '@/lib/portal'
 import {
+  BUSINESS_TIME_ZONE,
   blocksPayroll,
   durationMinutes,
   formatDuration,
-  periodStart,
   shiftState,
+  toBusinessInput,
 } from '@/lib/shifts'
 import { tagUri } from '@/lib/tag'
 
@@ -166,22 +169,40 @@ type FieldErrors = {
   targetHours?: ErrorMessage
 }
 
-/** Recorded and not-yet-counted time for one building in the current calendar month. */
+/** Recorded and not-yet-counted time for one building in the CHOSEN calendar month. */
 type MonthTime = { minutes: number; pending: number }
 
+/** `YYYY-MM`, exactly what `<input type="month">` produces and consumes. */
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
+
+/** The Vienna calendar month an instant falls in. */
+function businessMonthOf(iso: string): string {
+  return toBusinessInput(iso).slice(0, 7)
+}
+
 /**
- * Time per building since the 1st of this month, in the browser's local time — the director
- * compares against a wall calendar, not against UTC.
+ * `YYYY-MM` -> the half-open `[from, to)` of that month in VIENNA wall time.
+ *
+ * Not the browser's zone: 1 August 00:00 in Vienna is 31 July 22:00 UTC, and a shift in
+ * that gap belongs to July on every other screen. `businessMidnight` handles month 13.
+ */
+function monthRange(month: string): PeriodRange {
+  const year = Number(month.slice(0, 4))
+  const index = Number(month.slice(5, 7))
+  return { from: businessMidnight(year, index, 1), to: businessMidnight(year, index + 1, 1) }
+}
+
+/**
+ * Time per building in `range`.
  *
  * A shift that is still open, or that the 8-hour timer closed and nobody has confirmed, is
  * counted as PENDING and not as time worked (decision-10): a start-plus-8h stub is a
  * placeholder, and adding it to the hours would answer "are we overservicing" with a guess.
  */
-function timeThisMonth(shifts: readonly Shift[]): Map<string, MonthTime> {
-  const from = periodStart('month', new Date())
+function timeInMonth(shifts: readonly Shift[], range: PeriodRange): Map<string, MonthTime> {
   const byLocation = new Map<string, MonthTime>()
   for (const shift of shifts) {
-    if (from !== null && new Date(shift.start_time) < from) continue
+    if (!withinRange(shift.start_time, range)) continue
     const entry = byLocation.get(shift.location_id) ?? { minutes: 0, pending: 0 }
     if (shift.end_time === null || blocksPayroll(shiftState(shift))) entry.pending += 1
     else entry.minutes += durationMinutes(shift.start_time, shift.end_time)
@@ -213,6 +234,8 @@ export default function LocationsPage() {
   const monthlyHintId = useId()
   const targetId = useId()
   const targetHintId = useId()
+  const monthId = useId()
+  const monthHintId = useId()
   const activeId = useId()
   const errorId = useId()
   const statusId = useId()
@@ -268,7 +291,30 @@ export default function LocationsPage() {
     return () => controller.abort()
   }, [load])
 
-  const monthTime = useMemo(() => timeThisMonth(snapshot?.shifts ?? []), [snapshot])
+  /**
+   * The month the time column reports on. It used to be hard-locked to the current calendar
+   * month with no control at all, so on the 3rd of a month every building read 0:00 and —
+   * where a Sollzeit was agreed — the screen asserted "40:00 unter der Sollzeit", which is a
+   * false statement about a contract and not a display quirk.
+   */
+  const [month, setMonth] = useState(() => businessMonthOf(new Date().toISOString()))
+  const monthValid = MONTH_RE.test(month)
+  const monthTime = useMemo(
+    () =>
+      monthValid
+        ? timeInMonth(snapshot?.shifts ?? [], monthRange(month))
+        : new Map<string, MonthTime>(),
+    [snapshot, month, monthValid],
+  )
+
+  /**
+   * When the chosen month is empty, the ledger's real extent is what tells "nobody cleaned
+   * in July" apart from "the records are gone". It comes from the server unbounded by both
+   * the period and the row cap.
+   */
+  const latestStart = snapshot?.shift_bounds.latest ?? null
+  const latestMonth = latestStart === null ? null : businessMonthOf(latestStart)
+  const monthIsEmpty = monthValid && monthTime.size === 0
 
   const locations = snapshot?.locations ?? []
   const clients = snapshot?.clients ?? []
@@ -431,9 +477,16 @@ export default function LocationsPage() {
 
   /**
    * Soft deactivate / reactivate. The tag on the wall stays physically valid, it just stops
-   * resolving — nothing is ever destroyed, because shifts point at these rows. Every column
-   * is written back: the route's UPDATE sets them all, so an omitted contract field would
-   * be cleared by a click on "Deactivate".
+   * resolving — nothing is ever destroyed, because shifts point at these rows.
+   *
+   * The two directions are NOT the same call. Deactivating goes through `DELETE`, which
+   * also revokes the building's live client links: standing a building down while its
+   * client's point of contact keeps reading its cleaning history is an access decision
+   * about an outsider, and it must not depend on the admin remembering the Kundenlink
+   * column. It touches only `active`, so no contract field can be cleared by the click.
+   *
+   * Reactivating is a normal save, and every column is written back: the route's UPDATE
+   * sets them all, so an omitted contract field would be cleared by the click.
    */
   async function toggleActive(location: Location) {
     if (busy) return
@@ -441,19 +494,23 @@ export default function LocationsPage() {
     setSaved(false)
     setFormError(null)
     try {
-      await saveLocation({
-        id: location.id,
-        name: location.name,
-        slug: location.slug,
-        address: location.address ?? '',
-        lat: location.lat,
-        lng: location.lng,
-        active: !location.active,
-        client_id: location.client_id,
-        contact_id: location.contact_id,
-        monthly_contract_cents: location.monthly_contract_cents,
-        target_minutes_per_month: location.target_minutes_per_month,
-      })
+      if (location.active) {
+        await deactivateLocation(location.id)
+      } else {
+        await saveLocation({
+          id: location.id,
+          name: location.name,
+          slug: location.slug,
+          address: location.address ?? '',
+          lat: location.lat,
+          lng: location.lng,
+          active: true,
+          client_id: location.client_id,
+          contact_id: location.contact_id,
+          monthly_contract_cents: location.monthly_contract_cents,
+          target_minutes_per_month: location.target_minutes_per_month,
+        })
+      }
       await load()
     } catch (cause) {
       reportSaveFailure(cause)
@@ -886,6 +943,58 @@ export default function LocationsPage() {
             {tError(loadError)}
           </p>
         ) : null}
+
+        {/* The month the time column reports on. Native control: no dependency, keyboard
+            reachable, and it already speaks the browser's locale. */}
+        <div className="field toolbar-field">
+          <label htmlFor={monthId}>{t('fieldMonth')}</label>
+          <input
+            id={monthId}
+            type="month"
+            value={month}
+            aria-describedby={monthHintId}
+            aria-invalid={!monthValid}
+            onChange={(event) => setMonth(event.target.value)}
+          />
+          <p className="field-hint" id={monthHintId}>
+            {t('monthHint')}
+          </p>
+        </div>
+
+        {/* Never let an empty month read as an empty database. Live region: changing the
+            month above is what makes this appear and disappear. */}
+        <div role="status">
+          {snapshot === null || !monthIsEmpty ? null : (
+            <div className="notice">
+              <p>{t('monthEmpty')}</p>
+              {latestStart === null || latestMonth === null ? (
+                <p>{t('monthNever')}</p>
+              ) : (
+                <>
+                  <p>
+                    {t('monthLatest', {
+                      date: format.dateTime(new Date(latestStart), {
+                        dateStyle: 'long',
+                        timeZone: BUSINESS_TIME_ZONE,
+                      }),
+                    })}
+                  </p>
+                  {latestMonth === month ? null : (
+                    <p className="form-actions">
+                      <button
+                        type="button"
+                        className="button-primary"
+                        onClick={() => setMonth(latestMonth)}
+                      >
+                        {t('monthJump')}
+                      </button>
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
 
         {snapshot !== null && truncated ? (
           <p className="notice">{t('truncatedNote', { limit: snapshot.shift_limit })}</p>

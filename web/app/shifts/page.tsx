@@ -15,17 +15,21 @@ import {
 import type { ErrorKey } from '@/lib/locale'
 import { LOGIN_PATH } from '@/lib/nav'
 import {
+  isPeriod,
+  PERIODS,
+  type Period,
+  periodContaining,
+  periodRange,
+  withinRange,
+} from '@/lib/period'
+import {
   BUSINESS_TIME_ZONE,
   blocksPayroll,
   durationMinutes,
   formatDuration,
   fromBusinessInput,
   isManualEntry,
-  isPeriod,
   overlappingShift,
-  PERIODS,
-  type Period,
-  periodStart,
   type ShiftState,
   shiftState,
   toBusinessInput,
@@ -47,9 +51,14 @@ import {
  * its own column in the log, because payroll gets audited and a typed shift must never be
  * read as a tapped one.
  *
- * Filtering and sorting happen in the browser over the single `/admin/data` payload: the
- * bundle is a static export (decision-16), the route takes no date range yet, and it
- * answers with at most `shift_limit` rows. That truncation is surfaced, never hidden.
+ * Filtering and sorting happen in the browser over the single UNBOUNDED `/admin/data`
+ * payload, even though the route now takes `?from=&to=`. That is deliberate: this screen
+ * has to be able to say "no shifts in August — 5 exist in earlier periods", and it can only
+ * count what it holds. A server-bounded fetch would answer the period question and destroy
+ * the only fact that tells an empty FILTER apart from an empty DATABASE. On 3 August 2026
+ * the difference between those two readings was the difference between "fine" and "our
+ * payroll data is gone". The payload is still capped at `shift_limit` rows and that
+ * truncation is surfaced, never hidden.
  *
  * EVERY time on this screen — shown or typed — is Vienna wall-clock time, converted to and
  * from UTC in lib/shifts.ts and labelled as such. See BUSINESS_TIME_ZONE for why it is not
@@ -136,6 +145,7 @@ export default function ShiftsPage() {
   const workerFilterId = useId()
   const locationFilterId = useId()
   const periodFilterId = useId()
+  const periodRangeId = useId()
   const startId = useId()
   const endId = useId()
   const endHintId = useId()
@@ -161,7 +171,15 @@ export default function ShiftsPage() {
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
   const [workerFilter, setWorkerFilter] = useState<string>(WORKER_ALL)
   const [locationFilter, setLocationFilter] = useState<string>(LOCATION_ALL)
-  const [period, setPeriod] = useState<Period>('month')
+  /**
+   * A ROLLING window, not the calendar month it used to be. On the 1st of a month a
+   * calendar default renders an empty table to a company that worked all of yesterday, and
+   * an empty table is exactly what a director reads as data loss.
+   */
+  const [period, setPeriod] = useState<Period>('last30Days')
+  // Frozen at mount, so "last 30 days" cannot mean one thing at the top of the table and
+  // another at the bottom, and cannot shift under a tab left open overnight.
+  const [now] = useState(() => new Date())
   const [draft, setDraft] = useState<Draft | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [formError, setFormError] = useState<ErrorMessage | null>(null)
@@ -210,21 +228,41 @@ export default function ShiftsPage() {
 
   const shifts = snapshot?.shifts ?? []
 
+  const range = useMemo(() => periodRange(period, now), [period, now])
+
+  /** Everything the worker/building filters keep, before the period is applied. */
+  const matching = useMemo(
+    () =>
+      shifts
+        .filter((shift) => {
+          if (workerFilter !== WORKER_ALL && String(shift.worker_id) !== workerFilter) return false
+          if (locationFilter !== LOCATION_ALL && shift.location_id !== locationFilter) return false
+          return true
+        })
+        .sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime()),
+    [shifts, workerFilter, locationFilter],
+  )
+
+  const visible = useMemo(
+    () => matching.filter((shift) => withinRange(shift.start_time, range)),
+    [matching, range],
+  )
+
   /**
-   * The period boundary is pinned to the moment the list was rendered rather than
-   * recomputed per row, so a filter cannot change meaning halfway down the table.
+   * Shifts this worker/building filter keeps that the PERIOD is hiding. The number the
+   * screen was missing: without it "no rows" cannot be told apart from "everything is gone",
+   * and the director has no reason to prefer the harmless reading.
    */
-  const visible = useMemo(() => {
-    const from = periodStart(period, new Date())
-    return shifts
-      .filter((shift) => {
-        if (workerFilter !== WORKER_ALL && String(shift.worker_id) !== workerFilter) return false
-        if (locationFilter !== LOCATION_ALL && shift.location_id !== locationFilter) return false
-        if (from !== null && new Date(shift.start_time).getTime() < from.getTime()) return false
-        return true
-      })
-      .sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime())
-  }, [shifts, workerFilter, locationFilter, period])
+  const outsideCount = matching.length - visible.length
+
+  /**
+   * The newest shift in the WHOLE ledger — not bounded by this period and not capped by the
+   * row limit — and the period that would show it. The one-click escape from an empty
+   * table, and the sentence that proves the records are still there.
+   */
+  const latestStart = snapshot?.shift_bounds.latest ?? null
+  const latest = latestStart === null ? null : periodContaining(latestStart, now)
+  const latestPeriod = latest === 'all' || latest === period ? null : latest
 
   /** How many of the shifts on screen the payroll total will silently leave out. */
   const blockedCount = visible.filter((shift) => blocksPayroll(shiftState(shift))).length
@@ -393,12 +431,24 @@ export default function ShiftsPage() {
   }
 
   const periodLabel: Record<Period, string> = {
-    week: t('periodWeek'),
-    month: t('periodMonth'),
-    quarter: t('periodQuarter'),
-    year: t('periodYear'),
+    last30Days: t('periodLast30Days'),
+    thisMonth: t('periodThisMonth'),
+    lastMonth: t('periodLastMonth'),
+    thisQuarter: t('periodThisQuarter'),
+    thisYear: t('periodThisYear'),
     all: t('periodAll'),
   }
+
+  /** `1. Juli 2026 bis 31. Juli 2026`. The range is half-open, so the last day is one ms back. */
+  const showDay = (iso: string) =>
+    format.dateTime(new Date(iso), { dateStyle: 'long', timeZone: BUSINESS_TIME_ZONE })
+  const rangeLabel =
+    range.from === null || range.to === null
+      ? t('rangeAll')
+      : t('rangeLabel', {
+          from: showDay(range.from),
+          to: showDay(new Date(new Date(range.to).getTime() - 1).toISOString()),
+        })
 
   const stateLabel: Record<ShiftState, string> = {
     open: t('stateOpen'),
@@ -469,6 +519,7 @@ export default function ShiftsPage() {
             <select
               id={periodFilterId}
               value={period}
+              aria-describedby={periodRangeId}
               onChange={(event) => {
                 if (isPeriod(event.target.value)) setPeriod(event.target.value)
               }}
@@ -479,17 +530,34 @@ export default function ShiftsPage() {
                 </option>
               ))}
             </select>
+            <p className="field-hint" id={periodRangeId}>
+              {rangeLabel}
+            </p>
           </div>
         </div>
 
         {/* Live region: the table has no other way to tell a screen reader that changing
-            a select just changed what is below it. */}
+            a select just changed what is below it. The count of shifts the PERIOD is
+            hiding is part of the same sentence on purpose — it is the fact that makes an
+            empty table readable, and it must not be somewhere the eye can skip. */}
         <p role="status">
           {snapshot === null
             ? ''
-            : `${t('resultCount', { count: visible.length })} ${
-                blockedCount === 0 ? t('noneBlocked') : t('blockedCount', { count: blockedCount })
-              }`}
+            : [
+                t('resultCount', { count: visible.length }),
+                // Only when there IS something on screen for it to be about. "All of them
+                // count towards pay" said over an empty table is a claim about nothing,
+                // and it was part of what made the empty table unreadable in the first
+                // place. The sentence that matters when the table is empty is the next one.
+                visible.length === 0
+                  ? null
+                  : blockedCount === 0
+                    ? t('noneBlocked')
+                    : t('blockedCount', { count: blockedCount }),
+                outsideCount === 0 ? null : t('outsideCount', { count: outsideCount }),
+              ]
+                .filter((part) => part !== null)
+                .join(' ')}
         </p>
 
         {truncated ? (
@@ -757,10 +825,37 @@ export default function ShiftsPage() {
 
         {snapshot === null ? (
           <p role="status">{t('loading')}</p>
-        ) : shifts.length === 0 ? (
+        ) : shifts.length === 0 && latestStart === null ? (
           <p>{t('emptyBody')}</p>
         ) : visible.length === 0 ? (
-          <p>{t('emptyFiltered')}</p>
+          /* The empty state that started all of this. It now states, in words, how many
+             shifts exist just outside the chosen period and when the most recent one was,
+             and puts the way out one keystroke away. "Nothing here" and "everything is
+             gone" must never render the same. */
+          <div className="notice">
+            <p>
+              {outsideCount === 0 ? t('emptyFiltered') : t('emptyOutside', { count: outsideCount })}
+            </p>
+            {latestStart === null ? null : (
+              <p>{t('latestRecorded', { date: showDateTime(latestStart) })}</p>
+            )}
+            {outsideCount === 0 && latestStart === null ? null : (
+              <p className="form-actions">
+                <button type="button" className="button-primary" onClick={() => setPeriod('all')}>
+                  {t('showAll')}
+                </button>
+                {latestPeriod === null ? null : (
+                  <button
+                    type="button"
+                    className="button-secondary"
+                    onClick={() => setPeriod(latestPeriod)}
+                  >
+                    {t('jumpToLatest', { period: periodLabel[latestPeriod] })}
+                  </button>
+                )}
+              </p>
+            )}
+          </div>
         ) : (
           <table className="data-table" aria-busy={busy}>
             <caption className="visually-hidden">{t('tableCaption')}</caption>

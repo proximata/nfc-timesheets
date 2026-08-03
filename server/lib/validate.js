@@ -165,6 +165,48 @@ export function timestamp(value, field) {
   return d;
 }
 
+// A period boundary on the wire. Zone designator REQUIRED: a naked "2026-08-01T00:00"
+// would be read in whatever zone this process happens to run in, and an hour of drift at a
+// month boundary moves a shift between payslips. Callers convert Vienna wall time to UTC
+// themselves (web/lib/period.ts) and send the instant.
+const ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/;
+// Absurdity guard only. Not the shift window: `to` is legitimately in the FUTURE (the end
+// of the current month is), and `from` may predate the first shift.
+const RANGE_FLOOR_MS = Date.UTC(2000, 0, 1);
+const RANGE_CEIL_MS = Date.UTC(2100, 0, 1);
+
+/**
+ * One end of a reporting period (`?from=` / `?to=` on GET /admin/data).
+ *
+ * TRUST BOUNDARY: this is user input that reaches a WHERE clause. It is shape-checked
+ * before parsing because Date.parse is lenient enough to turn junk into a real instant —
+ * `new Date("30")` is the year 2030 in V8, not NaN — and a silently accepted garbage bound
+ * would answer a payroll question with the wrong shifts. It never becomes SQL text: the
+ * returned Date is passed as a bound parameter.
+ */
+export function rangeBound(value, field) {
+  if (typeof value !== "string") fail(400, "invalid_field", field);
+  const s = value.trim();
+  if (!ISO_INSTANT_RE.test(s)) fail(400, "invalid_timestamp", field);
+  const ms = Date.parse(s);
+  if (!Number.isFinite(ms)) fail(400, "invalid_timestamp", field);
+  if (ms < RANGE_FLOOR_MS || ms > RANGE_CEIL_MS) fail(422, "timestamp_out_of_range", field);
+  return new Date(ms);
+}
+
+/**
+ * Half-open `[from, to)`, either end optional. Absent means unbounded on that side, which
+ * is what every caller before this parameter existed got and must keep getting.
+ */
+export function optionalRange(fromValue, toValue) {
+  const from = fromValue === null || fromValue === undefined ? null : rangeBound(fromValue, "from");
+  const to = toValue === null || toValue === undefined ? null : rangeBound(toValue, "to");
+  // An empty or inverted range is a mistake, not a request for zero rows: answering 200
+  // with an empty list would look exactly like "nobody worked".
+  if (from !== null && to !== null && from.getTime() >= to.getTime()) fail(422, "invalid_range");
+  return { from, to };
+}
+
 /**
  * start < end, no future start. Returns the pair.
  *

@@ -1,4 +1,5 @@
 import type { HoursRow, Shift, Worker } from '@/lib/api'
+import type { PeriodRange } from '@/lib/period'
 import { blocksPayroll, isManualEntry, shiftState } from '@/lib/shifts'
 
 /**
@@ -10,55 +11,14 @@ import { blocksPayroll, isManualEntry, shiftState } from '@/lib/shifts'
  *     a float for display, never as an intermediate in a money calculation — `14.5 * 0.75`
  *     is fine and `1.005 * 100` is not, and a rate that is a cent out is wrong on every
  *     payslip until somebody notices.
- *  2. THE PERIOD IS DECIDED HERE, NOT BY THE SERVER. `/admin/data` has no `from`/`to`
- *     (see `adminData` in server/routes/admin.js), so its `hours` aggregate is all-time and
- *     cannot be used to pay anybody for a month. It survives here only as a cross-check.
+ *  2. THE PERIOD IS DECIDED BY THE SERVER AND BY NOBODY ELSE. `GET /admin/data?from=&to=`
+ *     bounds the shift ROWS and the `hours` AGGREGATE with the same predicate, so the total
+ *     at the bottom of the screen and the rows above it describe the same days by
+ *     construction. This file therefore sums whatever it is handed: re-filtering here would
+ *     reintroduce exactly the second opinion that was the bug (a July pay total beside an
+ *     empty August table). `hours` is now a like-for-like cross-check, see `reconcile`.
+ *     The period vocabulary itself lives in lib/period.ts.
  */
-
-/**
- * Calendar periods, because payroll runs monthly and reporting runs yearly against a wall
- * calendar. Deliberately NOT the `Period` in lib/shifts.ts, which is a browsing filter with
- * an open upper bound ("this month so far, plus anything logged since"); this one is a
- * closed `[start, end)` pay period, and it has a `lastMonth` because that is the one payroll
- * is actually run for.
- */
-export const PAYROLL_PERIODS = ['thisMonth', 'lastMonth', 'thisQuarter', 'thisYear'] as const
-export type PayrollPeriod = (typeof PAYROLL_PERIODS)[number]
-
-export function isPayrollPeriod(value: string): value is PayrollPeriod {
-  return (PAYROLL_PERIODS as readonly string[]).includes(value)
-}
-
-/** Half-open `[start, end)` in the BROWSER's local time — Europe/Vienna for this business. */
-export type PeriodRange = { start: Date; end: Date }
-
-export function periodRange(period: PayrollPeriod, now: Date): PeriodRange {
-  const year = now.getFullYear()
-  const month = now.getMonth()
-  switch (period) {
-    case 'thisMonth':
-      return { start: new Date(year, month, 1), end: new Date(year, month + 1, 1) }
-    case 'lastMonth':
-      return { start: new Date(year, month - 1, 1), end: new Date(year, month, 1) }
-    case 'thisQuarter': {
-      const first = Math.floor(month / 3) * 3
-      return { start: new Date(year, first, 1), end: new Date(year, first + 3, 1) }
-    }
-    case 'thisYear':
-      return { start: new Date(year, 0, 1), end: new Date(year + 1, 0, 1) }
-  }
-}
-
-/**
- * A shift belongs to the period its START falls in. A shift that runs across midnight on
- * the 31st is therefore paid in the month it began — one rule, applied to every row, and
- * stated on screen so nobody has to reverse-engineer it from a total.
- */
-function startsWithin(shift: Shift, range: PeriodRange | null): boolean {
-  if (range === null) return true
-  const startedAt = new Date(shift.start_time).getTime()
-  return startedAt >= range.start.getTime() && startedAt < range.end.getTime()
-}
 
 export type PayrollLine = {
   worker: Worker
@@ -100,17 +60,14 @@ export type PayrollTotals = {
 }
 
 /**
- * Per-worker hours and pay for `range` (null = everything supplied).
+ * Per-worker hours and pay over exactly the shifts supplied — which is exactly the period
+ * the server was asked for.
  *
  * Rounding matches the server's `ROUND(SUM(hours) * hourly_rate_cents)` exactly: sum the
  * whole period first, price it once. Rounding each shift instead would drift by up to half
  * a cent per shift, which is a reconciliation argument nobody wants to have.
  */
-export function payrollFor(
-  workers: Worker[],
-  shifts: Shift[],
-  range: PeriodRange | null,
-): PayrollTotals {
+export function payrollFor(workers: Worker[], shifts: Shift[]): PayrollTotals {
   const lines = new Map<number, PayrollLine>(
     workers.map((worker) => [
       worker.id,
@@ -128,7 +85,6 @@ export function payrollFor(
   let orphanShifts = 0
 
   for (const shift of shifts) {
-    if (!startsWithin(shift, range)) continue
     const line = lines.get(shift.worker_id)
     if (line === undefined) {
       orphanShifts += 1
@@ -182,10 +138,11 @@ export function msToHours(ms: number): number {
 /**
  * How much of the ledger this browser actually holds.
  *
- * `adminData` returns `ORDER BY start_time DESC LIMIT $1`, so when the row count reaches
- * the limit the payload is the most recent N shifts and everything older is simply absent.
- * A period that begins before `earliestStart` is therefore INCOMPLETE, and a total computed
- * over it is too low. That has to be said out loud, not inferred.
+ * `adminData` orders by `start_time DESC` and applies a `LIMIT`, so when the row count
+ * reaches the limit the payload is the most recent N shifts OF THE REQUESTED PERIOD and
+ * everything older within it is simply absent. A period that begins before `earliestStart`
+ * is therefore INCOMPLETE, and a total computed over it is too low. That has to be said out
+ * loud, not inferred.
  */
 export type Coverage = {
   truncated: boolean
@@ -203,21 +160,23 @@ export function coverageOf(shifts: Shift[], shiftLimit: number): Coverage {
 /** True when the period reaches back past the oldest row we were given. */
 export function periodExceedsCoverage(range: PeriodRange, coverage: Coverage): boolean {
   if (!coverage.truncated || coverage.earliestStart === null) return false
-  return range.start.getTime() < new Date(coverage.earliestStart).getTime()
+  if (range.from === null) return true // unbounded start, and we were given a partial list
+  return new Date(range.from).getTime() < new Date(coverage.earliestStart).getTime()
 }
 
 /**
- * Cross-check against the server's own aggregate.
+ * Cross-check against the server's own aggregate FOR THE SAME PERIOD.
  *
- * Both sides price all-time payable hours at the worker's current rate, so on a complete
- * payload they must be identical to the cent. Any gap is the tail the `limit` cut off, and
- * the screen reports it as such rather than showing a total that will not reconcile.
+ * Both sides now apply the same `[from, to)` and the same decision-10 exclusions and price
+ * at the worker's current rate, so they must be identical to the cent. The only thing that
+ * can make them differ is the `LIMIT` on the row list, and the difference is then exactly
+ * the truncated tail — which the screen reports rather than quietly under-paying.
  */
 export type Reconciliation = { serverCents: number; visibleCents: number; missingCents: number }
 
 export function reconcile(workers: Worker[], shifts: Shift[], hours: HoursRow[]): Reconciliation {
   const serverCents = hours.reduce((sum, row) => sum + row.pay_cents, 0)
-  const visibleCents = payrollFor(workers, shifts, null).payCents
+  const visibleCents = payrollFor(workers, shifts).payCents
   return { serverCents, visibleCents, missingCents: serverCents - visibleCents }
 }
 

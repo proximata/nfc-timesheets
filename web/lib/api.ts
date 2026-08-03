@@ -1,4 +1,5 @@
 import type { ErrorKey } from '@/lib/locale'
+import { type PeriodRange, rangeQuery } from '@/lib/period'
 
 /**
  * Typed fetch wrapper for the NFC TimeSheets REST API.
@@ -197,6 +198,24 @@ export type LocationInput = {
   target_minutes_per_month?: number | null
 }
 
+/**
+ * Soft deactivate. NOT `saveLocation({ active: false })`, for the same reason
+ * `deactivateContact` is not `saveContact({ active: false })`: this route ALSO revokes
+ * every live client link on the building, and a contact must stop being able to read the
+ * cleaning history of a building we no longer clean at the moment it is stood down, not
+ * whenever somebody remembers the links exist.
+ *
+ * It touches only `active`, so no contract field can be cleared by a mis-sent payload.
+ * Reactivating is a normal `saveLocation` with `active: true`; the links are not restored,
+ * which is correct — a revoked token is gone and a fresh link has to be issued.
+ */
+export function deactivateLocation(id: string, signal?: AbortSignal): Promise<void> {
+  return apiFetch<void>(`/admin/locations/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    signal,
+  })
+}
+
 export function fetchLocations(signal?: AbortSignal): Promise<Location[]> {
   return apiFetch<{ locations: Location[] }>('/admin/data', { signal }).then(
     (data) => data.locations,
@@ -207,9 +226,9 @@ export function fetchLocations(signal?: AbortSignal): Promise<Location[]> {
  * Upsert. A 409 here can only be `slug_taken` — the route raises no other conflict — so
  * callers may read `ApiError.status === 409` as "that slug belongs to another building".
  *
- * ponytail: deactivation goes through this route with `active: false` rather than
- * `DELETE /admin/locations/:id`, because DELETE is one-way and the admin has to be able to
- * put a building back. Both are soft; nothing here ever destroys a row that shifts point at.
+ * Reactivation goes through here with `active: true`. DEACTIVATION does not — see
+ * `deactivateLocation`, which additionally revokes the building's live client links.
+ * Both are soft; nothing here ever destroys a row that shifts point at.
  */
 export function saveLocation(input: LocationInput, signal?: AbortSignal): Promise<Location> {
   return apiFetch<{ location: Location }>('/admin/locations', {
@@ -312,20 +331,45 @@ export type Shift = {
 }
 
 /**
+ * The full extent of the ledger, regardless of period and regardless of `limit`: the
+ * earliest and latest `start_time` in the whole `shifts` table.
+ *
+ * This is what lets a screen tell "nobody worked in the period you asked for" apart from
+ * "the data is gone". Without it an empty table means both at once, and the second reading
+ * is the one that makes a director phone at midnight. Null on both when nothing has ever
+ * been recorded, which is the genuine first-run state.
+ */
+export type ShiftBounds = { earliest: string | null; latest: string | null }
+
+/**
  * `/admin/data` in the shape the shift log needs: the shifts plus the two lists the
  * filters and the correction form pick from.
  *
  * `shift_limit` is the LIMIT the server actually applied (500 by default, 2000 max). When
  * the row count reaches it the list is TRUNCATED, and the screen has to say so — an
  * incomplete shift table read as a complete one is how somebody gets underpaid.
+ *
+ * `shift_range` echoes the `[from, to)` the server actually applied, so a screen can state
+ * what it is showing instead of assuming its own request arrived intact.
  */
 export type ShiftSnapshot = {
   workers: Worker[]
   locations: Location[]
   shifts: Shift[]
   shift_limit: number
+  shift_range: { from: string | null; to: string | null }
+  shift_bounds: ShiftBounds
 }
 
+/**
+ * The shift log deliberately fetches UNBOUNDED and filters in the browser.
+ *
+ * That is not an oversight now that `?from=&to=` exists: this screen has to be able to say
+ * "no shifts in August — 5 exist in earlier periods", and it can only count what it holds.
+ * A server-bounded fetch would answer the period question and lose the only fact that
+ * distinguishes an empty filter from an empty database. Payroll, whose totals must match
+ * its rows, does the opposite — see `fetchPayrollSnapshot`.
+ */
 export function fetchShiftSnapshot(signal?: AbortSignal): Promise<ShiftSnapshot> {
   // Same page size as `fetchAdminSnapshot`. If the shift log asked for the server's 500
   // default while payroll asked for 2000, payroll would count shifts the log cannot show —
@@ -405,23 +449,21 @@ export function updateShift(
 }
 
 /**
- * The server's own payroll aggregate. READ `adminData` in server/routes/admin.js before
- * trusting it, because it does not mean what a payroll screen wants it to mean:
+ * The server's own payroll aggregate, over EXACTLY the `[from, to)` the request asked for
+ * and with exactly the decision-10 exclusions (open shifts and unconfirmed auto-closed ones
+ * are out). It is the same period as the `shifts` rows in the same response — that is the
+ * whole point of the parameter, and it is why a payroll total can no longer describe
+ * different days from the table underneath it.
  *
- *   - it is ALL-TIME. There is no `from`/`to` parameter on `/admin/data`, so this number
- *     cannot answer "October" and paying from it pays every hour ever worked.
- *   - it is NOT capped by `limit`, unlike `shifts`. So it can legitimately be larger than
- *     the returned rows add up to, and the difference is exactly the truncated tail.
- *   - it already excludes open shifts and unresolved auto-closed ones (decision-10).
- *
- * Screens that need a period must aggregate the shift rows themselves. This row is useful
- * only as a cross-check against that sum — which is what /payroll/ uses it for.
+ * It is still NOT capped by `limit`, unlike `shifts`. So it can legitimately exceed what
+ * the returned rows add up to, and the difference is then exactly the truncated tail. That
+ * is what /payroll/ reconciles and reports.
  */
 export type HoursRow = {
   worker_id: number
-  /** Payable hours, all time. Postgres `numeric`, parsed server-side to a JS number. */
+  /** Payable hours in the requested period. Postgres `numeric`, parsed to a JS number. */
   hours: number
-  /** Payable cents, all time, at the worker's CURRENT rate. */
+  /** Payable cents in the requested period, at the worker's CURRENT rate. */
   pay_cents: number
 }
 
@@ -429,12 +471,31 @@ export type HoursRow = {
 export type AdminSnapshot = ShiftSnapshot & { hours: HoursRow[] }
 
 /**
- * Everything the dashboard and payroll render, in one request, asking for the server's
- * maximum page rather than its 500 default: both screens count and total shift rows, so a
- * silently short list would be a wrong answer rather than a slow one.
+ * Everything the dashboard renders, in one request, asking for the server's maximum page
+ * rather than its 500 default: the screen counts shift rows, so a silently short list would
+ * be a wrong answer rather than a slow one. No period — the dashboard is about now.
  */
 export function fetchAdminSnapshot(signal?: AbortSignal): Promise<AdminSnapshot> {
   return apiFetch<AdminSnapshot>(`/admin/data?limit=${ADMIN_SHIFT_LIMIT}`, { signal })
+}
+
+/**
+ * The same payload bounded to one pay period, server-side.
+ *
+ * The range goes on the wire so that `hours` and `shifts` are cut by the same WHERE clause.
+ * It also removes the history horizon: the old all-time query returned the most recent
+ * `limit` rows, so a period further back than roughly ten weeks of a busy crew simply had
+ * no rows to sum and paid too little.
+ */
+export function fetchPayrollSnapshot(
+  range: PeriodRange,
+  signal?: AbortSignal,
+): Promise<AdminSnapshot> {
+  const query = rangeQuery(range)
+  return apiFetch<AdminSnapshot>(
+    `/admin/data?limit=${ADMIN_SHIFT_LIMIT}${query === '' ? '' : `&${query}`}`,
+    { signal },
+  )
 }
 
 /* --- Clients, contacts and the client link ---------------------------------------------
@@ -493,6 +554,7 @@ export type BuildingsSnapshot = {
   portal_grants: PortalGrant[]
   shifts: Shift[]
   shift_limit: number
+  shift_bounds: ShiftBounds
 }
 
 export function fetchBuildingsSnapshot(signal?: AbortSignal): Promise<BuildingsSnapshot> {

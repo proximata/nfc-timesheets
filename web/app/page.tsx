@@ -4,24 +4,42 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useFormatter, useTranslations } from 'next-intl'
 import { useCallback, useEffect, useState } from 'react'
-import { type AdminSnapshot, ApiError, fetchAdminSnapshot } from '@/lib/api'
+import { type AdminSnapshot, ApiError, fetchAdminSnapshot, type Shift } from '@/lib/api'
 import type { ErrorKey } from '@/lib/locale'
 import { LOGIN_PATH } from '@/lib/nav'
-import { formatDuration, shiftState } from '@/lib/shifts'
+import {
+  BUSINESS_TIME_ZONE,
+  blocksPayroll,
+  durationMinutes,
+  formatDuration,
+  shiftState,
+} from '@/lib/shifts'
 
 /**
- * Dashboard — the answer to "is anything wrong right now?", and nothing else.
+ * Dashboard — the answer to "is anything wrong right now?", plus one plain answer to "did
+ * my people tap in at all?".
  *
- * Deliberately not a metrics wall. Every block here is either a person currently on site,
- * something that will cost somebody money if it is ignored, or a thing that is already
- * broken; and every one of them links to the screen that fixes it. A number with no action
- * attached does not belong on this page.
+ * Deliberately not a metrics wall. Every block above the last one is either a person
+ * currently on site, something that will cost somebody money if it is ignored, or a thing
+ * that is already broken; and every one of them links to the screen that fixes it.
  *
- * No new API: this is `GET /admin/data` (one round trip) sliced four ways.
+ * THE LAST BLOCK IS THE EXCEPTION AND IT IS BOUNDED ON PURPOSE. The director opened an
+ * admin panel that showed him nothing at all and concluded his data was gone; in fact five
+ * clean shifts existed and the exception view correctly had nothing to report. So there is
+ * now a recent-activity list. It carries NO period filter — every period filter in this app
+ * is exactly what produced that misreading — no total, no badge, no colour and no count,
+ * and it is not part of `problemCount`. It goes LAST so that "something is wrong" keeps the
+ * top of the page. A "hours this month" tile was rejected for the same reason: on the 3rd
+ * of August it would have read EUR 0,00 and raised the alarm all over again.
+ *
+ * No new API: this is `GET /admin/data` (one round trip) sliced five ways.
  */
 
 /** ops/sql/autoclose.sql closes an open shift at start + 8h (decision-10). */
 const AUTO_CLOSE_MINUTES = 8 * 60
+
+/** How many recent shifts the activity block shows. Named in the heading, never summed. */
+const RECENT_SHIFTS = 10
 
 const SHIFTS_PATH = '/shifts/'
 const WORKERS_PATH = '/workers/'
@@ -108,14 +126,45 @@ export default function DashboardPage() {
           (location) => location.active && !seenLocationIds.has(location.id),
         )
 
+  /**
+   * The last completed shifts, newest first. `/admin/data` already returns shifts in
+   * `start_time DESC`, so this is a slice and not a sort.
+   *
+   * Completed means the same thing it means everywhere else: an end time that counts
+   * towards pay. An open or unconfirmed shift is an EXCEPTION and belongs to the blocks
+   * above, not to a list whose only job is to prove that recording works.
+   */
+  const recentShifts =
+    snapshot === null
+      ? []
+      : snapshot.shifts
+          .filter(
+            // Narrowed, not cast: the duration column below must not be able to compile
+            // against a null end time.
+            (shift): shift is Shift & { end_time: string } =>
+              shift.end_time !== null && !blocksPayroll(shiftState(shift)),
+          )
+          .slice(0, RECENT_SHIFTS)
+
   const minutesOnSite = (startIso: string) =>
     Math.round((asOf.getTime() - new Date(startIso).getTime()) / 60_000)
 
+  // Vienna, explicitly — not the browser's zone. The shift log pins it too, and two screens
+  // that name the same shift two hours (or one DAY, near midnight) apart is how a director
+  // stops believing either of them.
   const clockTime = (iso: string) =>
     format.dateTime(new Date(iso), {
       weekday: 'short',
       hour: '2-digit',
       minute: '2-digit',
+      timeZone: BUSINESS_TIME_ZONE,
+    })
+
+  const dayTime = (iso: string) =>
+    format.dateTime(new Date(iso), {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone: BUSINESS_TIME_ZONE,
     })
 
   const problemCount = unresolvedCount + workersWithoutEmail.length + locationsWithoutShifts.length
@@ -176,7 +225,13 @@ export default function DashboardPage() {
               </table>
             )}
             <p className="field-hint">
-              {t('asOf', { time: format.dateTime(asOf, { hour: '2-digit', minute: '2-digit' }) })}
+              {t('asOf', {
+                time: format.dateTime(asOf, {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  timeZone: BUSINESS_TIME_ZONE,
+                }),
+              })}
             </p>
             <div className="form-actions">
               <button
@@ -239,6 +294,41 @@ export default function DashboardPage() {
             {snapshot.shifts.length >= snapshot.shift_limit ? (
               <p className="field-hint">{t('truncatedNote', { limit: snapshot.shift_limit })}</p>
             ) : null}
+          </section>
+
+          {/* Last, and deliberately plain. Not a live region: it is not news, it is
+              reassurance, and announcing it would compete with the summary above. */}
+          <section aria-labelledby="recent-heading">
+            <h2 id="recent-heading">{t('recentHeading', { count: RECENT_SHIFTS })}</h2>
+            {recentShifts.length === 0 ? (
+              <p>{t('recentEmpty')}</p>
+            ) : (
+              <table className="data-table">
+                <caption className="visually-hidden">{t('recentCaption')}</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">{t('colWhen')}</th>
+                    <th scope="col">{t('colWorker')}</th>
+                    <th scope="col">{t('colLocation')}</th>
+                    <th scope="col">{t('colDuration')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentShifts.map((shift) => (
+                    <tr key={shift.id}>
+                      <th scope="row">{dayTime(shift.start_time)}</th>
+                      <td>{shift.worker_name}</td>
+                      <td>{shift.location_name}</td>
+                      <td>{formatDuration(durationMinutes(shift.start_time, shift.end_time))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <p className="field-hint">{t('recentScope', { count: RECENT_SHIFTS })}</p>
+            <p>
+              <Link href={SHIFTS_PATH}>{t('recentLink')}</Link>
+            </p>
           </section>
         </>
       )}

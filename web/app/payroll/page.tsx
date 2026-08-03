@@ -4,35 +4,41 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useFormatter, useLocale, useTranslations } from 'next-intl'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
-import { type AdminSnapshot, ApiError, fetchAdminSnapshot } from '@/lib/api'
+import { type AdminSnapshot, ApiError, fetchPayrollSnapshot } from '@/lib/api'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { centsToPlainEuros } from '@/lib/money'
 import { LOGIN_PATH } from '@/lib/nav'
 import {
   coverageOf,
-  isPayrollPeriod,
   msToHours,
-  PAYROLL_PERIODS,
-  type PayrollPeriod,
   payrollFor,
   periodExceedsCoverage,
-  periodRange,
   reconcile,
   toCsv,
 } from '@/lib/payroll'
+import { isPeriod, PAYROLL_PERIODS, type Period, periodContaining, periodRange } from '@/lib/period'
+import { toBusinessInput } from '@/lib/shifts'
 
 /**
  * Payroll — what to actually pay each person for a calendar period.
  *
  * WHERE THE NUMBERS COME FROM, because this is the screen where being vague costs money:
  *
- * `GET /admin/data` returns a pre-aggregated `hours` array. It is NOT used as the payroll
- * figure, for two reasons that are both visible in `adminData` in server/routes/admin.js:
- * it has no period filter at all (it sums the entire shifts table, so paying from it pays
- * every hour ever worked), and it is not bounded by the `limit` that truncates the shift
- * list, so it can disagree with the rows on screen. This page therefore sums the shift rows
- * itself for the selected period — and uses `hours` only as a cross-check, reporting any
- * gap out loud instead of showing a total that will not reconcile.
+ * THE PERIOD GOES TO THE SERVER. `GET /admin/data?from=&to=` cuts the shift ROWS and the
+ * pre-aggregated `hours` with the same WHERE clause, so the total under the table and the
+ * rows in it describe the same days by construction rather than by two pieces of code
+ * happening to agree. Until that parameter existed, `hours` was an ALL-TIME sum sitting
+ * next to a period-filtered, row-capped list — which on 3 August 2026 could put July money
+ * beside an empty August table, and which capped usable history at whatever the most recent
+ * 2000 shifts happened to cover (roughly ten weeks at 20 workers).
+ *
+ * The page still sums the rows itself and compares the two, because they can still differ
+ * in exactly one way: `hours` is not capped by `limit` and the row list is. That gap is the
+ * truncated tail, and it is reported out loud instead of shown as a total that will not
+ * reconcile.
+ *
+ * Changing the period REFETCHES. It has to: the rows for last March are not in a payload
+ * fetched for August.
  *
  * What it excludes and says so: open shifts, and auto-closed shifts nobody has confirmed
  * (decision-10). Those are unpaid work belonging to a real person, so they are counted,
@@ -45,10 +51,15 @@ import {
 
 const SHIFTS_PATH = '/shifts/'
 
-/** `YYYY-MM-DD` in LOCAL time, for the export filename. Not `toISOString`, which is UTC. */
-function localDate(date: Date): string {
-  const pad = (value: number) => String(value).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+/**
+ * `YYYY-MM-DD` for the export filename, in VIENNA time and not the browser's.
+ *
+ * The period starts at Vienna midnight, which is 22:00 or 23:00 UTC the day before; naming
+ * the file from the raw instant would date `payroll-2026-06-30.csv` for July, and the
+ * accountant files by that name.
+ */
+function businessDate(iso: string): string {
+  return toBusinessInput(iso).slice(0, 10)
 }
 
 export default function PayrollPage() {
@@ -83,11 +94,13 @@ export default function PayrollPage() {
   // null = still loading. Never rendered as "no hours yet".
   const [snapshot, setSnapshot] = useState<AdminSnapshot | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
-  const [period, setPeriod] = useState<PayrollPeriod>('lastMonth')
+  /** Payroll is run for the month that has ENDED. Same vocabulary as /shifts/ (lib/period.ts). */
+  const [period, setPeriod] = useState<Period>('lastMonth')
   const [exported, setExported] = useState(false)
   const [exportFailed, setExportFailed] = useState(false)
   // Frozen at mount: "this month" must not change meaning halfway through a re-render.
   const [now] = useState(() => new Date())
+  const range = useMemo(() => periodRange(period, now), [period, now])
 
   const handleAuthLoss = useCallback(
     (cause: unknown): boolean => {
@@ -102,9 +115,12 @@ export default function PayrollPage() {
 
   useEffect(() => {
     const controller = new AbortController()
+    // The payload IS the period. Clear it first, or the old period's rows stay on screen
+    // under the new period's heading while the request is in flight.
+    setSnapshot(null)
     void (async () => {
       try {
-        setSnapshot(await fetchAdminSnapshot(controller.signal))
+        setSnapshot(await fetchPayrollSnapshot(range, controller.signal))
         setLoadError(null)
       } catch (cause) {
         if (cause instanceof DOMException && cause.name === 'AbortError') return
@@ -113,16 +129,11 @@ export default function PayrollPage() {
       }
     })()
     return () => controller.abort()
-  }, [handleAuthLoss])
+  }, [handleAuthLoss, range])
 
-  const range = periodRange(period, now)
-  const rangeLabel = t('rangeLabel', {
-    from: monthDayFormat.format(range.start),
-    // The range is half-open, so the last day the admin cares about is one millisecond back.
-    to: monthDayFormat.format(new Date(range.end.getTime() - 1)),
-  })
-
-  const totals = snapshot === null ? null : payrollFor(snapshot.workers, snapshot.shifts, range)
+  // No client-side period filter: the server already applied one, and a second opinion here
+  // is precisely the disagreement this screen exists to have eliminated.
+  const totals = snapshot === null ? null : payrollFor(snapshot.workers, snapshot.shifts)
   const coverage = snapshot === null ? null : coverageOf(snapshot.shifts, snapshot.shift_limit)
   const incomplete = coverage !== null && periodExceedsCoverage(range, coverage)
   const reconciliation =
@@ -130,12 +141,36 @@ export default function PayrollPage() {
 
   // Explicit map, not a template-literal key: messages are typed (global.d.ts), and a
   // computed key would defeat the check that catches a typo at build time.
-  const periodLabel: Record<PayrollPeriod, string> = {
+  const periodLabel: Record<Period, string> = {
+    last30Days: t('periodLast30Days'),
     thisMonth: t('periodThisMonth'),
     lastMonth: t('periodLastMonth'),
     thisQuarter: t('periodThisQuarter'),
     thisYear: t('periodThisYear'),
+    all: t('periodAll'),
   }
+
+  // PAYROLL_PERIODS has no open-ended member, so both ends are always set; the fallback is
+  // there so a future one cannot render "undefined bis undefined" on a payslip screen.
+  const rangeLabel =
+    range.from === null || range.to === null
+      ? periodLabel[period]
+      : t('rangeLabel', {
+          from: monthDayFormat.format(new Date(range.from)),
+          // Half-open, so the last day the admin cares about is one millisecond back.
+          to: monthDayFormat.format(new Date(new Date(range.to).getTime() - 1)),
+        })
+
+  /**
+   * The ledger's real extent, straight from the server and bounded by neither the period
+   * nor the row cap. An empty pay period must never be able to read as "the data is gone".
+   *
+   * `all` is not a pay period, so a shift older than every named period offers no jump —
+   * the sentence naming its date still does the work.
+   */
+  const latestStart = snapshot?.shift_bounds.latest ?? null
+  const latest = latestStart === null ? null : periodContaining(latestStart, now)
+  const latestPeriod = latest === 'all' ? null : latest
 
   const money = (cents: number) =>
     format.number(cents / 100, { style: 'currency', currency: 'EUR' })
@@ -180,7 +215,7 @@ export default function PayrollPage() {
     try {
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = `payroll-${localDate(range.start)}.csv`
+      anchor.download = `payroll-${range.from === null ? 'alle' : businessDate(range.from)}.csv`
       // In the document and revoked on the next tick: a detached anchor is ignored by
       // Firefox, and revoking the object URL in the same turn as the click cancels the
       // download in Safari. Both fail SILENTLY, which is the worst possible outcome for a
@@ -216,7 +251,7 @@ export default function PayrollPage() {
             aria-describedby={periodHintId}
             onChange={(event) => {
               const next = event.target.value
-              if (isPayrollPeriod(next)) setPeriod(next)
+              if (isPeriod(next)) setPeriod(next)
               setExported(false)
               setExportFailed(false)
             }}
@@ -311,8 +346,38 @@ export default function PayrollPage() {
             </div>
 
             {totals.lines.length === 0 ? (
-              // Empty is not an error: nobody worked, or nothing has been recorded yet.
-              <p>{t('emptyBody')}</p>
+              /* Empty is not an error. But it is ambiguous, and the ambiguous reading is the
+                 expensive one, so the screen says which: nothing in THIS period, and here is
+                 when something was last recorded, and here is one click to that period. */
+              <div className="notice">
+                <p>{t('emptyBody')}</p>
+                {latestStart === null ? (
+                  <p>{t('emptyNeverRecorded')}</p>
+                ) : (
+                  <>
+                    <p>
+                      {t('emptyLatestRecorded', {
+                        date: monthDayFormat.format(new Date(latestStart)),
+                      })}
+                    </p>
+                    {latestPeriod === null || latestPeriod === period ? null : (
+                      <p className="form-actions">
+                        <button
+                          type="button"
+                          className="button-primary"
+                          onClick={() => {
+                            setPeriod(latestPeriod)
+                            setExported(false)
+                            setExportFailed(false)
+                          }}
+                        >
+                          {t('emptyJump', { period: periodLabel[latestPeriod] })}
+                        </button>
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
             ) : (
               <>
                 <table className="data-table">

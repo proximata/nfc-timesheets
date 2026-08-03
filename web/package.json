@@ -14,7 +14,7 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "typecheck": "tsc --noEmit",
-    "check": "node scripts/check.mjs",
+    "check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check.mjs",
     "verify": "pnpm check && pnpm lint && pnpm typecheck && pnpm build"
   },
   "dependencies": {
