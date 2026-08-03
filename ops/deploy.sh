@@ -2,7 +2,7 @@
 #
 # Build locally, rsync to the VM, migrate, restart. decision-16: no Docker, no CI, no registry.
 #
-#   ./ops/deploy.sh [host]        # host defaults to timesheets.exe.xyz
+#   ./ops/deploy.sh [host]        # host defaults to ops/branding.json `host`
 #
 # ponytail: a shell script, not a Makefile and not a CI pipeline. Ladder step 5/6 — this is
 #   four rsyncs and two ssh commands. It exists as a script rather than a README paragraph for
@@ -19,13 +19,23 @@
 
 set -euo pipefail
 
-HOST="${1:-timesheets.exe.xyz}"
 DEST=/srv/nfc
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cd "$REPO"
 
-echo "==> 1/6 build the admin export (web/out)"
+# Default host comes from ops/branding.json, not a literal here. A literal survives a
+# rebrand and then deploys the new operator's code to the OLD operator's box.
+HOST="${1:-$(node -e 'process.stdout.write(require("./ops/branding.json").host)')}"
+
+echo "==> 0/7 operator identity (ops/branding.json is the source of truth)"
+# BEFORE the build and before any rsync. Both are cheap and both gate the one failure in this
+# product that costs a site visit: a served association file that does not name this app.
+# Nothing further down can fix that, so nothing further down runs until it holds.
+node ops/gen-wellknown.mjs
+node ops/check-branding.mjs
+
+echo "==> 1/7 build the admin export (web/out)"
 # NEXT_PUBLIC_DEFAULT_LOCALE is baked into the bundle at BUILD time, and this build runs on a
 # developer's machine. web/.env.local is gitignored, so whatever locale that untracked file
 # happens to hold would otherwise decide the language the director sees in production. A shell
@@ -33,7 +43,7 @@ echo "==> 1/6 build the admin export (web/out)"
 # (decision-8) regardless of who runs the deploy. English is still one click away in the UI.
 (cd web && pnpm install --frozen-lockfile && NEXT_PUBLIC_DEFAULT_LOCALE=de pnpm verify)
 
-echo "==> 2/6 install server runtime deps (pg + @sentry/node, both pure JS — safe to ship from macOS)"
+echo "==> 2/7 install server runtime deps (pg + @sentry/node, both pure JS — safe to ship from macOS)"
 (cd server && pnpm install --prod --frozen-lockfile)
 
 # node_modules is built HERE (macOS) and rsynced to Linux, which is only safe while every
@@ -48,7 +58,7 @@ fi
 
 [ -d web/out ] || { echo "FATAL: web/out missing — the export did not build" >&2; exit 1; }
 
-echo "==> 3/6 rsync server -> $HOST:$DEST"
+echo "==> 3/7 rsync server -> $HOST:$DEST"
 # --delete prunes removed server files. public/ and ops/ are the OTHER halves of the artifact
 # and live under the same root, so they must be excluded or this wipes them.
 # Test material is excluded on purpose: check-api.js CREATEs and DROPs schemas and
@@ -59,11 +69,11 @@ rsync -az --delete --exclude 'public/' --exclude 'ops/' \
   --exclude '*.test.js' --exclude 'db/seed.sql' \
   ./server/ "$HOST:$DEST/"
 
-echo "==> 4/6 rsync admin export -> $DEST/public  and ops -> $DEST/ops"
+echo "==> 4/7 rsync admin export -> $DEST/public  and ops -> $DEST/ops"
 rsync -az --delete ./web/out/ "$HOST:$DEST/public/"
 rsync -az --delete ./ops/     "$HOST:$DEST/ops/"
 
-echo "==> 5/6 migrate BEFORE restart (new code may need new columns)"
+echo "==> 5/7 migrate BEFORE restart (new code may need new columns)"
 # /etc/nfc/env is 0640 root:app; sudo to read it. Secrets stay on the VM, never echoed.
 # Owner is the DEPLOY user (exedev) so rsync can write; group is the SERVICE user (app),
 # read-only. app is a --system user with no shell and no sudo: if the API is ever popped,
@@ -76,10 +86,10 @@ ssh "$HOST" 'sudo bash -euc "
   node '"$DEST"'/db/migrate.js
 "'
 
-echo "==> 6/6 restart"
+echo "==> 6/7 restart"
 ssh "$HOST" 'sudo systemctl restart nfc-api && sleep 2 && systemctl is-active nfc-api'
 
-echo "==> verify association files (an NFC tag is worthless if these regress)"
+echo "==> 7/7 verify association files (an NFC tag is worthless if these regress)"
 ./server/wellknown/verify.sh "$HOST"
 
 echo "deploy ok: $HOST"

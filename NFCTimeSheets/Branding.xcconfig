@@ -1,0 +1,44 @@
+// Branding.xcconfig — operator identity for the iOS build.
+//
+// THIS FILE IS NOT REFERENCED BY THE PROJECT AND CHANGES NOTHING UNTIL YOU ATTACH IT.
+// That is deliberate: a white-label knob that alters behaviour on day one is a bug. The
+// values below are exactly what the app ships with today, so attaching it is a no-op and
+// leaving it detached is a no-op.
+//
+// Attaching it is step 3 of ops/REBRAND.md, which also carries the Xcode click path.
+// project.pbxproj is hand-edited by the owner and is never touched by an agent.
+//
+// KEEP IN SYNC WITH ops/branding.json. `node ops/check-branding.mjs` fails if they drift.
+
+// ---- the four values a new signing entity changes ------------------------------------
+TS_TEAM_ID   = 6Y842FE8Q4
+TS_BUNDLE_ID = io.github.qwadratic.NFCTimeSheets
+TS_APP_NAME  = NFC TimeSheets
+TS_TAG_HOST  = timesheets.exe.xyz
+
+// ---- what those drive ----------------------------------------------------------------
+// Xcode substitutes build settings into Info.plist, so TS_TAG_HOST reaches Swift through
+// the TSTagHost key in NFCTimeSheets/Info.plist. Read by Branding.swift, which falls back
+// to the literal below when the key is missing OR EMPTY — and an undefined build setting
+// expands to the empty string, which is precisely why the fallback exists.
+DEVELOPMENT_TEAM                  = $(TS_TEAM_ID)
+PRODUCT_BUNDLE_IDENTIFIER         = $(TS_BUNDLE_ID)
+INFOPLIST_KEY_CFBundleDisplayName = $(TS_APP_NAME)
+
+// ---- what this file CANNOT do --------------------------------------------------------
+// 1. The Associated Domains entitlement. `applinks:$(TS_TAG_HOST)` does substitute, but an
+//    UNDEFINED setting expands to the empty string, so with this file detached the
+//    entitlement would silently become `applinks:` and universal links would die on the
+//    NEXT build — shipping a dead tap to TestFlight with a green build. So
+//    NFCTimeSheets/NFCTimeSheets.entitlements keeps its LITERAL host and
+//    ops/check-branding.mjs enforces that it mirrors ops/branding.json.
+//    Edit that file by hand. It is step 5 of ops/REBRAND.md.
+// 2. Anything in the Apple Developer portal: registering the App ID, enabling Sign in with
+//    Apple and Associated Domains on it, provisioning, the App Store Connect record.
+// 3. Clearing the TARGET-level overrides. PRODUCT_BUNDLE_IDENTIFIER and DEVELOPMENT_TEAM
+//    are set at target level today, and target level BEATS a project-level xcconfig. Those
+//    rows must be deleted in Xcode or this file is ignored for exactly those two settings.
+// 4. Secrecy. This file is committed and its values are compiled into the binary. The app
+//    key (API.swift, via Branding.swift) and the Sentry DSN (Info.plist) are deliberately
+//    NOT here: they are credentials, not identity, and a second copy is only a second thing
+//    to desync. An xcconfig is not a vault.

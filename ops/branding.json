@@ -1,0 +1,51 @@
+{
+  "_readme": [
+    "SINGLE SOURCE OF TRUTH for operator identity. Whoever signs and ships this app edits",
+    "THIS file, then runs `node ops/gen-wellknown.mjs --write` and `node ops/check-branding.mjs`.",
+    "Full runbook: ops/REBRAND.md. Rationale: backlog/decisions/ (configuration-surface record).",
+    "",
+    "The defaults below are the values the live deployment already serves. Changing any of",
+    "them changes a file that gates PHYSICAL NFC TAGS: get one wrong and every tap opens a",
+    "browser instead of the app, which is only fixable by walking to every building.",
+    "",
+    "host                          the tag URI host, https://<host>/t?l=<uuid> (decision-5, d21).",
+    "                              MUST be the host that actually serves the two well-known",
+    "                              files, with no redirect and no CDN alias, and MUST match the",
+    "                              app's Associated Domains entitlement (decision-4).",
+    "apple.teamId                  10-char Apple Developer Team ID.",
+    "apple.bundleIds               APPEND-ONLY. Apple caches AASA and installed apps hold their",
+    "                              association until reinstall. Removing an id bricks every",
+    "                              installed copy of that app; the generator refuses unless you",
+    "                              pass --allow-removal.",
+    "apple.paths                   AASA path patterns. Widening this hands more of the site to",
+    "                              the app; /t* is the whole tag surface.",
+    "android.packageName           Play applicationId. IMMUTABLE after the first Play upload.",
+    "android.sha256CertFingerprints",
+    "                              PLURAL, and this is where Android App Links die. With Play",
+    "                              App Signing on (the default) the UPLOAD key and the PLAY",
+    "                              SIGNING key are different certificates and BOTH must be",
+    "                              listed. Take the Play one from Play Console > Release >",
+    "                              Setup > App signing - NEVER from keytool, which only ever",
+    "                              knows your local key. Add the debug keystore fingerprint too",
+    "                              if you want ./gradlew installDebug to verify.",
+    "                              Format is enforced: uppercase, colon-separated, 32 bytes.",
+    "                              A lowercase fingerprint is valid JSON and is silently",
+    "                              IGNORED by Android - the exact failure this validation exists",
+    "                              to stop. Empty is legal and means: App Links unverified.",
+    "",
+    "NOT in this file on purpose: the app key (API.swift / /etc/nfc/env - a credential, not an",
+    "identity, and a third copy would only be a third thing to desync) and the Sentry DSN",
+    "(per-project, optional, decision-23)."
+  ],
+  "host": "timesheets.exe.xyz",
+  "appName": "NFC TimeSheets",
+  "apple": {
+    "teamId": "6Y842FE8Q4",
+    "bundleIds": ["io.github.qwadratic.NFCTimeSheets"],
+    "paths": ["/t*"]
+  },
+  "android": {
+    "packageName": "io.github.qwadratic.NFCTimeSheets",
+    "sha256CertFingerprints": []
+  }
+}

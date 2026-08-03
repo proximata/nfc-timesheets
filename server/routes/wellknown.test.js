@@ -2,7 +2,13 @@
 // Live-host equivalent (the TASK-6 gate) is wellknown/verify.sh.
 import assert from "node:assert/strict";
 import http from "node:http";
+// Operator identity is configuration, not source: the expected bytes are RENDERED from
+// ops/branding.json rather than spelled out here, so a rebrand cannot leave this test
+// asserting the previous company's team id. dev-only import; the server never loads it.
+import { readBranding, renderAASA, renderAssetlinks } from "../../ops/gen-wellknown.mjs";
 import { wellknown } from "./wellknown.js";
+
+const branding = readBranding();
 
 const srv = http.createServer((req, res) => {
   if (wellknown(req, res)) return;
@@ -23,22 +29,33 @@ srv.listen(0, async () => {
         .end();
     });
 
-  // AASA: 200, exact content-type, correct appID + paths. Wrong = every tag rewritten.
+  // AASA: 200, exact content-type, and the EXACT bytes ops/branding.json renders. A
+  // substring match would pass on a file that also carried a stale appID or a widened
+  // `paths`; wrong bytes here means every tag in every building gets rewritten by hand.
   let r = await get("/.well-known/apple-app-site-association");
   assert.strictEqual(r.status, 200);
   assert.strictEqual(r.headers["content-type"], "application/json");
+  assert.strictEqual(r.body, renderAASA(branding));
   const aasa = JSON.parse(r.body);
-  assert.strictEqual(aasa.applinks.details[0].appID, "6Y842FE8Q4.io.github.qwadratic.NFCTimeSheets");
-  assert.deepStrictEqual(aasa.applinks.details[0].paths, ["/t*"]);
+  assert.strictEqual(
+    aasa.applinks.details[0].appID,
+    `${branding.apple.teamId}.${branding.apple.bundleIds[0]}`,
+  );
+  assert.deepStrictEqual(aasa.applinks.details[0].paths, branding.apple.paths);
 
-  // assetlinks: valid JSON, empty fingerprints until an Android key exists.
+  // assetlinks: same, byte-exact. Fingerprints stay empty until an Android signing key
+  // exists; empty is legal and simply means App Links are unverified.
   r = await get("/.well-known/assetlinks.json");
   assert.strictEqual(r.status, 200);
   assert.strictEqual(r.headers["content-type"], "application/json");
+  assert.strictEqual(r.body, renderAssetlinks(branding));
   const links = JSON.parse(r.body);
   assert.deepStrictEqual(links[0].relation, ["delegate_permission/common.handle_all_urls"]);
-  assert.strictEqual(links[0].target.package_name, "io.github.qwadratic.NFCTimeSheets");
-  assert.deepStrictEqual(links[0].target.sha256_cert_fingerprints, []);
+  assert.strictEqual(links[0].target.package_name, branding.android.packageName);
+  assert.deepStrictEqual(
+    links[0].target.sha256_cert_fingerprints,
+    branding.android.sha256CertFingerprints,
+  );
 
   // /t: served for the shapes a tag can produce, never redirected.
   // A real tag carries the location UUID, never the slug (decision-21).

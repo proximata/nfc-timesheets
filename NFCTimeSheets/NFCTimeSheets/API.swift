@@ -4,7 +4,8 @@
 //
 //  The wire contract, and nothing else. Foundation + CryptoKit only - no SwiftUI, no
 //  SwiftData, no AuthenticationServices - so checks/tag-link-check.swift can compile and
-//  exercise it outside Xcode.
+//  exercise it outside Xcode. (Branding.swift and TagLink.swift are Foundation-only too and
+//  must be concatenated ahead of this file; see the header of that check.)
 //
 //  Every field name below is snake_case and spelled out in an explicit CodingKeys. The
 //  previous version of this file used camelCase names of its own invention ("worker",
@@ -18,7 +19,12 @@ import CryptoKit
 import Foundation
 
 enum API {
-    static let base = URL(string: "https://timesheets.exe.xyz")!
+    // Derived from TagLink.host, never a second host literal: the REST host and the
+    // universal-link host are the same machine, and two literals is two chances to point
+    // half the app at a host whose AASA does not name this app. The fallback on the right
+    // is unreachable in practice - Branding.tagHost is already validated non-empty - and is
+    // there so a typo'd host cannot turn into a force-unwrap crash on launch.
+    static let base = URL(string: "https://\(TagLink.host)") ?? URL(string: "https://\(Branding.defaultTagHost)")!
 
     // This key is NOT a secret, and is deliberately committed in cleartext.
     //
@@ -49,8 +55,10 @@ enum API {
     // password-authenticated on the web (decision-20).
 
     /// Apple audience for the identity token. The SERVER verifies this claim; it is
-    /// written here only so the two halves can be diffed by eye.
-    static let bundleId = "io.github.qwadratic.NFCTimeSheets"
+    /// surfaced here only so the two halves can be diffed by eye against
+    /// server/lib/apple.js APPLE_AUDIENCE. Read from the running bundle (Branding), so it
+    /// stays correct automatically when a different entity signs with their own bundle id.
+    static let bundleId = Branding.bundleId
 }
 
 /// The session died server-side (expired, revoked, worker deactivated). Posted from the

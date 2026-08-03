@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Platform theme, not AppCompat: everything on screen is Compose Material 3 (see
+  ui/Theme.kt), so this only has to hand the window over without an action bar. Using
+  AppCompat here would mean an appcompat dependency for nothing.
+-->
+<resources>
+    <style name="Theme.TimeSheets" parent="@android:style/Theme.Material.Light.NoActionBar" />
+</resources>

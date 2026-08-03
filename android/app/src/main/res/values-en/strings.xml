@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  English. The SOURCE language, not the default one — see values/strings.xml, which is
+  German because the product's default language is German (decision-8) and values/ is
+  what Android falls back to for every unmatched locale.
+
+  Key set must match values/strings.xml exactly; android/checks/core-check.kt fails if
+  it does not.
+-->
+<resources>
+
+    <string name="loading_session">Checking your sign-in …</string>
+    <string name="signin_subtitle">Sign in to log your hours.</string>
+
+    <string name="signin_unconfigured_title">Sign-in is not set up yet</string>
+    <string name="signin_unconfigured_body">No sign-in method has been chosen for this build. Without one no shift can be logged — the server would not know who is clocking in.</string>
+    <string name="signin_unconfigured_detail">Please contact your admin. There is nothing wrong with your phone.</string>
+    <string name="signin_failed">Sign-in failed.</string>
+
+    <string name="ineligible_title">You\'re not on the worker list</string>
+    <string name="ineligible_body">This account isn\'t registered as a worker. Ask your admin to add you, then sign in again.</string>
+    <string name="ineligible_email_label">Your sign-in address</string>
+    <string name="sign_out">Sign out</string>
+
+    <string name="tab_log">Log</string>
+    <string name="tab_history">History</string>
+    <string name="tab_settings">Settings</string>
+
+    <string name="log_title">TimeSheet</string>
+    <string name="log_open_section">In progress</string>
+    <string name="log_recent_section">Recent</string>
+    <string name="log_recent_empty">No completed shifts yet.</string>
+    <string name="log_hint_start">Hold your phone to the tag by the entrance to start.</string>
+    <string name="log_hint_stop">Hold your phone to the tag again to finish.</string>
+    <string name="log_refresh">Refresh</string>
+    <string name="unknown_location">Unknown location</string>
+    <string name="status_running">In progress</string>
+    <string name="status_auto_closed">Auto-closed</string>
+    <string name="status_corrected">Corrected</string>
+    <string name="sync_sent">Sent</string>
+    <string name="sync_sending">Sending …</string>
+    <string name="switch_notice">Finished your open shift at %1$s and started at %2$s. Confirm when you actually left %1$s — it will not count until you do.</string>
+
+    <plurals name="resolve_banner">
+        <item quantity="one">%d unfinished shift needs a finish time</item>
+        <item quantity="other">%d unfinished shifts need a finish time</item>
+    </plurals>
+    <string name="resolve_title">Unfinished shifts</string>
+    <string name="resolve_intro">These shifts were closed automatically after 8 hours. Enter when you actually finished.</string>
+    <string name="resolve_started">Started</string>
+    <string name="resolve_finished">Finished</string>
+    <string name="resolve_save">Save finish time</string>
+    <string name="resolve_saving">Saving …</string>
+    <string name="resolve_later">Later</string>
+
+    <string name="history_title">History</string>
+    <string name="history_summary">Summary</string>
+    <string name="history_this_week">This week</string>
+    <string name="history_total">Total</string>
+    <string name="history_shifts">Shifts</string>
+    <string name="history_empty">No shifts yet.</string>
+    <string name="hours_format">%1$s h</string>
+    <string name="duration_format">%1$dh %2$dm</string>
+
+    <string name="settings_title">Settings</string>
+    <string name="settings_signed_in_as">Signed in as</string>
+    <string name="settings_name">Name</string>
+    <string name="settings_admin_note">Hours, locations and payroll are managed by your admin on the web.</string>
+    <string name="settings_sign_out_note">Shifts already sent stay on the server. Anything still waiting to send will be blocked until you sign back in.</string>
+
+    <string name="nfc_missing_title">This phone has no NFC</string>
+    <string name="nfc_missing_body">Without NFC you can\'t clock in at the tags. Tell your admin.</string>
+    <string name="nfc_off_title">NFC is switched off</string>
+    <string name="nfc_off_body">Turn NFC on, or the tag by the entrance will do nothing.</string>
+    <string name="nfc_off_action">Open NFC settings</string>
+    <string name="nfc_blocked_title">This app isn\'t allowed to read tags</string>
+    <string name="nfc_blocked_body">Android has blocked NFC tag scanning for this app. While that is the case, holding your phone to the tag does nothing — and your time is not recorded.</string>
+    <string name="nfc_blocked_action">Allow</string>
+    <string name="nfc_first_run_note">Open the app once after installing it. Android delivers no NFC intents to an app that has never been launched.</string>
+
+    <string name="err_network">No connection — will send when you\'re back online.</string>
+    <string name="err_unknown_worker">Your name is no longer on the roster. Ask your admin.</string>
+    <string name="err_unknown_location">This location was removed. Ask your admin.</string>
+    <string name="err_unknown_shift">The server doesn\'t have this shift. Ask your admin.</string>
+    <string name="err_shift_already_open">Another shift is still running — finishing it first.</string>
+    <string name="err_end_before_start">Finish time is before the start time.</string>
+    <string name="err_clock">This phone\'s clock looks wrong. Check the date and time.</string>
+    <string name="err_unauthorized">This app version was rejected by the server. Update it.</string>
+    <string name="err_no_session">You were signed out. Sign in again.</string>
+    <string name="err_invalid_token">Sign-in was not accepted. Try again.</string>
+    <string name="err_not_eligible">This account isn\'t registered as a worker.</string>
+    <string name="err_too_many_attempts">Too many attempts — try again shortly.</string>
+    <string name="err_sign_in_unconfigured">No sign-in method has been chosen for this build.</string>
+    <string name="err_missing_location">This shift is missing its location and can\'t be sent.</string>
+    <string name="err_wrong_account">This shift was logged by a different account and can\'t be sent.</string>
+    <string name="err_server">Server trouble — will retry.</string>
+    <string name="err_rejected">Rejected by the server. Report this shift to your admin.</string>
+
+    <string name="a11y_tap_hint">Hold the phone to the NFC tag by the entrance to clock in or out.</string>
+    <string name="a11y_shift_open">Shift in progress</string>
+    <string name="a11y_needs_resolution">This shift needs a confirmed finish time</string>
+
+</resources>

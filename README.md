@@ -106,8 +106,21 @@ Against a running server (local or live):
 
 ```bash
 SCHEME=http server/wellknown/verify.sh 127.0.0.1:8080
-server/wellknown/verify.sh timesheets.exe.xyz
+server/wellknown/verify.sh                    # host from ops/branding.json
 ```
+
+`verify.sh` byte-compares the LIVE bodies against the reviewed files in `server/wellknown/`.
+Those files are generated from `ops/branding.json` and committed, so the bytes on a phone are
+the bytes someone read in a diff:
+
+```bash
+node ops/gen-wellknown.mjs            # in sync?
+node ops/gen-wellknown.mjs --write    # regenerate, then READ THE DIFF
+node ops/check-branding.mjs           # every other copy of the identity agrees?
+```
+
+Shipping under a different signing identity (different team, bundle id, package, host):
+**`ops/REBRAND.md`** (decision-24).
 
 ## Things that will bite you
 

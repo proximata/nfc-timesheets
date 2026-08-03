@@ -24,10 +24,16 @@ NFC-based shift tracking for a Vienna cleaning company. Workers tap NFC tags at 
 
 ### Apple Developer
 
+**Source of truth is `ops/branding.json`, not this list** (decision-24). The values below are a
+convenience copy; if they ever disagree with `branding.json`, `branding.json` wins and
+`node ops/check-branding.mjs` is what says so. Shipping under a different signing identity:
+`ops/REBRAND.md`.
+
 - Team ID: `6Y842FE8Q4`
 - Bundle ID: `io.github.qwadratic.NFCTimeSheets`
 - TestFlight: active, internal track
-- Associated Domains: `applinks:timesheets.exe.xyz`
+- Associated Domains: `applinks:timesheets.exe.xyz` (literal in the entitlement on purpose —
+  templating it makes an unconfigured build emit `applinks:` and kills universal links)
 
 ### Hosting
 
@@ -74,6 +80,10 @@ Decision checklist (keep updated as decisions are added):
 - Worker identity via Sign in with Apple; identity comes from the session, never the body (decision-22)
 - Sentry on API + iOS; server deps are now `pg` + `@sentry/node` and nothing else. Telemetry
   must never be required to boot and must never block a clock-in (decision-23, amends decision-16)
+- Operator identity is configuration: `ops/branding.json` is the single source, the well-known
+  files are generated (`ops/gen-wellknown.mjs`) and committed, the AASA appID list is
+  append-only, the iOS entitlement stays a checked literal, and `ops/check-branding.mjs` +
+  `server/wellknown/verify.sh` are the gates (decision-24)
 
 Decisions can only be changed by creating a new decision record that supersedes the old one.
 

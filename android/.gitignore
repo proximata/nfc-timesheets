@@ -1,0 +1,27 @@
+# Signing material. NOTHING here may ever be committed: a keystore + its password is
+# the operator's whole Play identity, and the SHA-256 of that cert is what
+# assetlinks.json publishes. Losing it means a new app listing.
+keystore.properties
+*.jks
+*.keystore
+
+# Machine-local SDK path
+local.properties
+
+# Build output
+.gradle/
+build/
+app/build/
+captures/
+.cxx/
+
+# Google services config, if push is ever added (decision: not in the first pass)
+app/google-services.json
+
+# Check runner scratch: third-party jars fetched on demand, never vendored
+checks/.lib/
+checks/.out/
+
+# Android Studio per-user state
+.idea/
+*.iml

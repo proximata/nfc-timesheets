@@ -1,0 +1,44 @@
+# Version catalog. Pinned EXACT, no ranges, no `+` — same rule as the npm side
+# (decision-9, AGENTS.md). "Latest stable minus one minor" where a choice existed.
+#
+# UNVERIFIED: no Gradle, no Android SDK and no network dependency resolution was
+# available on the machine that wrote this file. These coordinates were read from the
+# live maven-metadata.xml of each repository, so every version below EXISTS — but the
+# combination has never been resolved or compiled. Expect the first `Sync Project` in
+# Android Studio to be the first real test. See android/README.md § "What is unproven".
+#
+# Deliberately ABSENT and to be kept absent unless a decision record says otherwise:
+#   - OkHttp / Retrofit  — six endpoints; java.net.HttpURLConnection is the platform.
+#   - kotlinx.serialization — org.json is in android.jar; the wire layer is hand-written
+#     and byte-pinned by android/checks (which is exactly where the iOS client's
+#     "every POST 400s" bug would have been caught).
+#   - Room / KSP — the queue is a few hundred rows a year; SQLiteOpenHelper is platform
+#     and needs no annotation processor. See data/ShiftStore.kt for the ceiling.
+#   - Sentry — telemetry is scoped to API + iOS (decision-23). A third SDK is a decision.
+#   - Play Services / FCM — decision-10 is satisfied by a local notification.
+
+[versions]
+agp = "9.2.1"
+kotlin = "2.3.21"
+coreKtx = "1.18.0"
+activityCompose = "1.12.4"
+lifecycle = "2.10.0"
+composeBom = "2026.05.01"
+coroutines = "1.10.2"
+
+[libraries]
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+androidx-compose-ui = { module = "androidx.compose.ui:ui" }
+androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

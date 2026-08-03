@@ -2,7 +2,8 @@
 // archive merge. No test framework, no Xcode.
 //
 //   cd NFCTimeSheets
-//   cat NFCTimeSheets/TagLink.swift NFCTimeSheets/API.swift NFCTimeSheets/MigrationCore.swift \
+//   cat NFCTimeSheets/Branding.swift NFCTimeSheets/TagLink.swift NFCTimeSheets/API.swift \
+//       NFCTimeSheets/MigrationCore.swift \
 //       checks/migration-check.swift > /tmp/migration-check.swift && swift /tmp/migration-check.swift
 //
 // (MigrationCore.swift is Foundation-only precisely so this is possible; the SwiftData

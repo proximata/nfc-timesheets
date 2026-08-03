@@ -2,11 +2,12 @@
 // app puts on the wire. No test framework, no Xcode.
 //
 //   cd NFCTimeSheets
-//   cat NFCTimeSheets/TagLink.swift NFCTimeSheets/API.swift checks/tag-link-check.swift \
+//   cat NFCTimeSheets/Branding.swift NFCTimeSheets/TagLink.swift NFCTimeSheets/API.swift \
+//       checks/tag-link-check.swift \
 //     > /tmp/tag-link-check.swift && swift /tmp/tag-link-check.swift
 //
-// (concatenated because the swift interpreter only runs one file; TagLink.swift and
-// API.swift are pure Foundation precisely so this stays possible.)
+// (concatenated because the swift interpreter only runs one file; Branding.swift,
+// TagLink.swift and API.swift are pure Foundation precisely so this stays possible.)
 
 func check(_ ok: Bool, _ what: String) {
     if !ok {
@@ -14,6 +15,25 @@ func check(_ ok: Bool, _ what: String) {
         exit(1)
     }
 }
+
+// --- inert by default ---------------------------------------------------------------
+// THE WHITE-LABEL CONTRACT. Operator identity moved out of source and into configuration
+// (Branding.xcconfig -> Info.plist -> Branding). With NOTHING configured - which is how the
+// app ships and how this check runs, outside any app bundle - every value must be the one
+// the current TestFlight build uses. If these four lines fail, the config surface has
+// changed live behaviour, which is the one thing it is not allowed to do.
+check(Branding.infoString("TSTagHost") == nil, "no Info.plist value is present in this harness")
+check(TagLink.host == "timesheets.exe.xyz", "unconfigured tag host: \(TagLink.host)")
+check(API.base.absoluteString == "https://timesheets.exe.xyz", "unconfigured API base: \(API.base)")
+check(API.bundleId == "io.github.qwadratic.NFCTimeSheets", "unconfigured bundle id: \(API.bundleId)")
+// An UNDEFINED Xcode build setting expands to the EMPTY STRING, not to nothing, so "" is the
+// exact byte sequence a build with Branding.xcconfig detached hands Branding. It must read as
+// unconfigured, or the app points at `https://` and every single request dies.
+check(Branding.normalize(nil) == nil, "missing key is unconfigured")
+check(Branding.normalize("") == nil, "EMPTY key is unconfigured - undefined build setting")
+check(Branding.normalize("   ") == nil, "whitespace-only key is unconfigured")
+check(Branding.normalize("$(TS_TAG_HOST)") == nil, "unsubstituted $(VAR) is unconfigured")
+check(Branding.normalize(" cleanco.example ") == "cleanco.example", "a real value is trimmed and used")
 
 let good = "https://timesheets.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301"
 

@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.NFC" />
+
+    <!--
+      required="true": this app is a tag reader and nothing else. A phone without NFC
+      cannot clock anyone in, so Play should not offer it. NfcReadiness.UNSUPPORTED still
+      exists because a sideloaded install bypasses this filter.
+    -->
+    <uses-feature android:name="android.hardware.nfc" android:required="true" />
+
+    <application
+        android:name=".TimeSheetsApplication"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.TimeSheets">
+
+        <!--
+          ONE tap surface. Both dispatch paths converge here, so TapInbox's 3-second
+          window can collapse a physical tap that gets delivered twice.
+
+          singleTask + onNewIntent: a tap while the app is already open must reuse the
+          running instance, or the worker ends up with two stacked copies and a queue
+          split across them.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:windowSoftInputMode="adjustResize">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+              THE TAG PATH ON ANDROID 16+.
+
+              "Starting Android 16, scanning NFC tags that store URL links will trigger the
+              ACTION_VIEW intent... Use Android app links to open your app for the URL."
+
+              So the mechanism is exactly the iOS universal-link model, against the exact
+              URI already written on the walls: https://<host>/t?l=<uuid>. ZERO tag rewrites.
+
+              ${tagHost} is injected from branding.properties. Gradle FAILS the build on an
+              unresolved placeholder — deliberately unlike Xcode, where an undefined build
+              setting expands to the empty string and silently kills the association.
+
+              autoVerify="true" makes Android fetch https://<host>/.well-known/assetlinks.json.
+              That file is ALREADY SERVED, and its sha256_cert_fingerprints array is still
+              empty, so verification WILL FAIL and every tap WILL open Chrome until the
+              owner pastes both Play fingerprints (upload + Play App Signing) into
+              ops/branding.json. That is step 21 of the plan and it is not an agent's to do.
+              Proof, on the device: adb shell pm get-app-links <applicationId>
+
+              android:path="/t" and not pathPrefix: /t is the whole path. A prefix would
+              also claim /tags, /t-anything and any future route under it.
+            -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="${tagHost}" android:path="/t" />
+                <!-- The server serves both /t and /t/ rather than redirecting: a redirect
+                     breaks the App-Link handoff. Claim both. -->
+                <data android:scheme="https" android:host="${tagHost}" android:path="/t/" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          THE TAG PATH ON ANDROID <= 15, where an NDEF URI record fires
+          ACTION_NDEF_DISCOVERED instead of ACTION_VIEW.
+
+          A SEPARATE activity on purpose, and this is not tidiness:
+
+          TRAP — Android 17 (API 37) requires an NFC-dispatched activity to be protected by
+          android.permission.DISPATCH_NFC_MESSAGE when targetSdk > 36. `android:permission`
+          restricts who may START an activity, so putting it on MainActivity would stop the
+          launcher and the browser from opening the app at all. It can only ever go on an
+          activity that NOTHING BUT the NFC service starts — which is this one.
+
+          WHEN targetSdk MOVES TO 37, add exactly this attribute to THIS activity, and to
+          no other:
+              android:permission="android.permission.DISPATCH_NFC_MESSAGE"
+          Adding it TODAY breaks Android <= 16, where that permission does not exist and
+          therefore nobody holds it — i.e. it would break precisely the devices this
+          activity exists for.
+
+          Deliberately NOT filtering ACTION_TAG_DISCOVERED: deprecated in Android 17, and
+          "your application has a low probability of starting" — it is the catch-all that
+          makes the app fight every other NFC app on the phone.
+
+          noHistory + excludeFromRecents: this is a doorway, not a screen.
+        -->
+        <activity
+            android:name=".NfcTapActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.nfc.action.NDEF_DISCOVERED" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="https" android:host="${tagHost}" android:path="/t" />
+                <data android:scheme="https" android:host="${tagHost}" android:path="/t/" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -16,7 +16,11 @@
 import Foundation
 
 enum TagLink {
-    static let host = "timesheets.exe.xyz"
+    /// The one host this app will accept a tag from. Resolved through Branding so a different
+    /// signing entity can point the app at their own host without editing source; unconfigured
+    /// it is "timesheets.exe.xyz", exactly as before. It MUST match the `applinks:` entry in
+    /// NFCTimeSheets.entitlements or iOS never hands the link over in the first place.
+    static let host = Branding.tagHost
     static let path = "/t"
 
     /// Location UUID carried by a tag link, lowercased. `nil` = not one of our tags.

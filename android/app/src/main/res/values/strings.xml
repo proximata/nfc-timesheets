@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEFAULT LOCALE = GERMAN (decision-8: the product's default language is German).
+
+  values/ is the fallback Android uses when the phone's locale matches nothing else, so
+  putting German here means a crew phone shows German no matter how it is configured.
+  English lives in values-en/ as the source language. android/checks/core-check.kt
+  asserts the two files have identical key sets and that every ApiFailure.messageKey
+  resolves to a real string.
+
+  Vocabulary is taken from web/messages/de.json so one worker who also sees the admin
+  panel reads the same words: Objekt (building/location), Kunde (client),
+  Schicht (shift), Mitarbeiter (worker), eingestempelt.
+
+  app_name is NOT here: it comes from branding.properties via resValue(). Defining it in
+  both places is a duplicate-resource build failure.
+-->
+<resources>
+
+    <!-- Launch / session -->
+    <string name="loading_session">Anmeldung wird geprüft …</string>
+    <string name="signin_subtitle">Melden Sie sich an, um Ihre Stunden zu erfassen.</string>
+
+    <!-- Sign-in seam. The identity mechanism for Android is decision-26 and is still
+         PROPOSED. Until it is decided the app says so, plainly, instead of showing a
+         button that cannot work. -->
+    <string name="signin_unconfigured_title">Anmeldung ist noch nicht eingerichtet</string>
+    <string name="signin_unconfigured_body">Für diese Version wurde noch kein Anmeldeverfahren festgelegt. Ohne Anmeldung kann keine Schicht erfasst werden – der Server weiß sonst nicht, wer stempelt.</string>
+    <string name="signin_unconfigured_detail">Bitte wenden Sie sich an Ihre Verwaltung. Es fehlt nichts an Ihrem Telefon.</string>
+    <string name="signin_failed">Die Anmeldung ist fehlgeschlagen.</string>
+
+    <string name="ineligible_title">Sie stehen nicht auf der Mitarbeiterliste</string>
+    <string name="ineligible_body">Dieses Konto ist nicht als Mitarbeiter hinterlegt. Bitte die Verwaltung bitten, Sie einzutragen, und danach erneut anmelden.</string>
+    <string name="ineligible_email_label">Ihre Anmeldeadresse</string>
+    <string name="sign_out">Abmelden</string>
+
+    <!-- Tabs -->
+    <string name="tab_log">Erfassen</string>
+    <string name="tab_history">Verlauf</string>
+    <string name="tab_settings">Einstellungen</string>
+
+    <!-- Log -->
+    <string name="log_title">Zeiterfassung</string>
+    <string name="log_open_section">Läuft gerade</string>
+    <string name="log_recent_section">Zuletzt</string>
+    <string name="log_recent_empty">Noch keine abgeschlossenen Schichten.</string>
+    <string name="log_hint_start">Halten Sie Ihr Telefon an den Tag beim Eingang, um zu beginnen.</string>
+    <string name="log_hint_stop">Halten Sie Ihr Telefon erneut an den Tag, um zu beenden.</string>
+    <string name="log_refresh">Aktualisieren</string>
+    <string name="unknown_location">Unbekanntes Objekt</string>
+    <string name="status_running">Läuft</string>
+    <string name="status_auto_closed">Automatisch beendet</string>
+    <string name="status_corrected">Korrigiert</string>
+    <string name="sync_sent">Gesendet</string>
+    <string name="sync_sending">Wird gesendet …</string>
+    <!-- %1$s = Objekt der beendeten Schicht, %2$s = Objekt der neuen Schicht -->
+    <string name="switch_notice">Ihre offene Schicht bei %1$s wurde beendet und bei %2$s wurde eine neue begonnen. Bitte bestätigen Sie, wann Sie %1$s wirklich verlassen haben – bis dahin wird die Schicht nicht bezahlt.</string>
+
+    <!-- Auflösung nicht bestätigter Schichten (decision-10) -->
+    <plurals name="resolve_banner">
+        <item quantity="one">%d Schicht braucht eine Endzeit</item>
+        <item quantity="other">%d Schichten brauchen eine Endzeit</item>
+    </plurals>
+    <string name="resolve_title">Nicht abgeschlossene Schichten</string>
+    <string name="resolve_intro">Diese Schichten wurden nach 8 Stunden automatisch beendet. Bitte eintragen, wann Sie tatsächlich fertig waren.</string>
+    <string name="resolve_started">Begonnen</string>
+    <string name="resolve_finished">Beendet</string>
+    <string name="resolve_save">Endzeit speichern</string>
+    <string name="resolve_saving">Wird gespeichert …</string>
+    <string name="resolve_later">Später</string>
+
+    <!-- Verlauf -->
+    <string name="history_title">Verlauf</string>
+    <string name="history_summary">Übersicht</string>
+    <string name="history_this_week">Diese Woche</string>
+    <string name="history_total">Gesamt</string>
+    <string name="history_shifts">Schichten</string>
+    <string name="history_empty">Noch keine Schichten.</string>
+    <!-- %1$s = Stunden mit einer Nachkommastelle -->
+    <string name="hours_format">%1$s Std.</string>
+    <!-- %1$d = Stunden, %2$d = Minuten -->
+    <string name="duration_format">%1$d Std. %2$d Min.</string>
+
+    <!-- Einstellungen -->
+    <string name="settings_title">Einstellungen</string>
+    <string name="settings_signed_in_as">Angemeldet als</string>
+    <string name="settings_name">Name</string>
+    <string name="settings_admin_note">Stunden, Objekte und Lohnabrechnung verwaltet Ihre Verwaltung im Web.</string>
+    <string name="settings_sign_out_note">Bereits gesendete Schichten bleiben auf dem Server. Was noch nicht gesendet wurde, bleibt liegen, bis Sie sich wieder anmelden.</string>
+
+    <!-- NFC. Jede dieser Meldungen steht für einen Weg, auf dem das Stempeln
+         still aufhört zu funktionieren. -->
+    <string name="nfc_missing_title">Dieses Telefon hat kein NFC</string>
+    <string name="nfc_missing_body">Ohne NFC kann an den Tags nicht gestempelt werden. Bitte bei der Verwaltung melden.</string>
+    <string name="nfc_off_title">NFC ist ausgeschaltet</string>
+    <string name="nfc_off_body">Schalten Sie NFC ein, sonst reagiert der Tag beim Eingang nicht.</string>
+    <string name="nfc_off_action">NFC-Einstellungen öffnen</string>
+    <string name="nfc_blocked_title">Diese App darf keine Tags lesen</string>
+    <string name="nfc_blocked_body">Android hat das Lesen von NFC-Tags für diese App gesperrt. Solange das so bleibt, passiert beim Anhalten an den Tag nichts – und die Arbeitszeit wird nicht erfasst.</string>
+    <string name="nfc_blocked_action">Erlauben</string>
+    <string name="nfc_first_run_note">Bitte die App nach der Installation einmal öffnen. Android liefert einem nie geöffneten Programm keine NFC-Signale.</string>
+
+    <!-- Fehlermeldungen. Die Schlüssel werden von ApiFailure.messageKey geliefert;
+         sie sagen, was zu TUN ist, nicht was kaputt ist. -->
+    <string name="err_network">Keine Verbindung – wird gesendet, sobald Sie wieder online sind.</string>
+    <string name="err_unknown_worker">Ihr Name steht nicht mehr auf der Liste. Bitte bei der Verwaltung melden.</string>
+    <string name="err_unknown_location">Dieses Objekt wurde entfernt. Bitte bei der Verwaltung melden.</string>
+    <string name="err_unknown_shift">Der Server kennt diese Schicht nicht. Bitte bei der Verwaltung melden.</string>
+    <string name="err_shift_already_open">Eine andere Schicht läuft noch – sie wird zuerst beendet.</string>
+    <string name="err_end_before_start">Die Endzeit liegt vor der Startzeit.</string>
+    <string name="err_clock">Die Uhr dieses Telefons scheint falsch zu gehen. Bitte Datum und Uhrzeit prüfen.</string>
+    <string name="err_unauthorized">Diese App-Version wurde vom Server abgelehnt. Bitte aktualisieren.</string>
+    <string name="err_no_session">Sie wurden abgemeldet. Bitte erneut anmelden.</string>
+    <string name="err_invalid_token">Die Anmeldung wurde nicht akzeptiert. Bitte erneut versuchen.</string>
+    <string name="err_not_eligible">Dieses Konto ist nicht als Mitarbeiter hinterlegt.</string>
+    <string name="err_too_many_attempts">Zu viele Versuche – bitte in Kürze erneut versuchen.</string>
+    <string name="err_sign_in_unconfigured">Für diese Version wurde noch kein Anmeldeverfahren festgelegt.</string>
+    <string name="err_missing_location">Zu dieser Schicht fehlt das Objekt, sie kann nicht gesendet werden.</string>
+    <string name="err_wrong_account">Diese Schicht wurde mit einem anderen Konto erfasst und kann nicht gesendet werden.</string>
+    <string name="err_server">Serverproblem – wird erneut versucht.</string>
+    <string name="err_rejected">Vom Server abgelehnt. Diese Schicht bitte der Verwaltung melden.</string>
+
+    <!-- Barrierefreiheit -->
+    <string name="a11y_tap_hint">Zum Stempeln das Telefon an den NFC-Tag beim Eingang halten.</string>
+    <string name="a11y_shift_open">Schicht läuft</string>
+    <string name="a11y_needs_resolution">Diese Schicht braucht eine bestätigte Endzeit</string>
+
+</resources>

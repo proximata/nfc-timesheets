@@ -16,5 +16,19 @@
 	     adding this key needs no project.pbxproj edit. -->
 	<key>SentryDSN</key>
 	<string></string>
+
+	<!-- Universal-link host for the NFC tag URI, i.e. the operator's identity (see
+	     ops/branding.json). Filled by Xcode from TS_TAG_HOST in NFCTimeSheets/Branding.xcconfig.
+
+	     With that xcconfig NOT attached - which is the state this ships in - TS_TAG_HOST is an
+	     undefined build setting and Xcode substitutes the EMPTY STRING here. Branding.swift
+	     treats empty as unconfigured and falls back to "timesheets.exe.xyz", so this key
+	     changes nothing until someone deliberately attaches the xcconfig.
+
+	     NOT a secret and not a credential; it is on every tag in every stairwell.
+	     This file is already wired via INFOPLIST_FILE, so adding this key needs no
+	     project.pbxproj edit. -->
+	<key>TSTagHost</key>
+	<string>$(TS_TAG_HOST)</string>
 </dict>
 </plist>

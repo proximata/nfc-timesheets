@@ -6,6 +6,9 @@
 See `backlog/docs/BLOCKER-FIX-REPORT.md` for what still blocks deploy.
 
 ## Confirmed Facts
+- **Operator identity lives in `ops/branding.json`** (decision-24). The three lines below are a
+  copy for readers; the file is the source and `node ops/check-branding.mjs` enforces it.
+  Rebranding runbook: `ops/REBRAND.md`.
 - Apple Developer Team: `6Y842FE8Q4`
 - Bundle ID: `io.github.qwadratic.NFCTimeSheets`
 - TestFlight: active, v1.0 build 1+ on internal track
