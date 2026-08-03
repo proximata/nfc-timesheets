@@ -19,12 +19,26 @@ import {
 } from "../lib/auth.js";
 import { all, one, query } from "../lib/db.js";
 import { CODE_TTL_MS, newEnrolmentCode } from "../lib/enrolment.js";
+import { geocode } from "../lib/geocode.js";
 import { fail } from "../lib/http.js";
+import {
+  assertTransition,
+  M_MATERIAL_REQUEST_COLS,
+  MATERIAL_OPEN_STATUSES,
+  MATERIAL_REQUEST_COLS,
+  MATERIAL_STATUSES,
+} from "../lib/materials.js";
+import { buildingAnalytics, profitAndLoss } from "../lib/reporting.js";
 import * as v from "../lib/validate.js";
 import { newPortalToken, portalPath } from "./portal.js";
 
 const SHIFT_PAGE_DEFAULT = 500;
 const SHIFT_PAGE_MAX = 2000;
+const MATERIAL_REQUEST_PAGE = 500;
+
+// Trend length for GET /admin/analytics, in Vienna calendar months.
+const TREND_MONTHS_DEFAULT = 6;
+const TREND_MONTHS_MAX = 24;
 
 // Columns returned for a worker. `email` is here because the admin has to be able to
 // SEE what they registered — it is the only thing standing between a worker and a
@@ -43,11 +57,43 @@ const WORKER_COLS =
   "id, name, email, phone, hourly_rate_cents, active, created_at, " +
   "enrolment_code_expires_at, enrolment_code_redeemed_at";
 
-// The building, including the four contract facts added in 003. All four are NULLable:
-// buildings existed before the columns did and the director fills them in over weeks.
+// The building, including the four contract facts added in 003 and the two geocoding
+// facts added in 005. All NULLable: buildings existed before the columns did, the director
+// fills contract figures in over weeks, and geocoding is allowed to fail.
+//
+// monthly_contract_cents / target_minutes_per_month are now a MIRROR of the building's
+// CURRENT location_contracts row (005). They stay here so /locations/, /reinigung/ and the
+// already-shipped iOS build keep working unchanged; `syncContractFromLocation` +
+// `mirrorLocationFromContract` below are the only writers, and check-api.js asserts the
+// two never disagree. Two sources of truth are only safe when one is derived and something
+// fails loudly when it drifts.
 const LOCATION_COLS =
   "id, slug, name, address, lat, lng, active, created_at, " +
-  "client_id, contact_id, monthly_contract_cents, target_minutes_per_month";
+  "client_id, contact_id, monthly_contract_cents, target_minutes_per_month, " +
+  "geocoded_at, geocode_status, street_view_status";
+
+const CONTRACT_COLS =
+  "id, location_id, client_id, monthly_contract_cents, target_minutes_per_month, " +
+  "valid_from, valid_to, note, created_at";
+
+// Vienna's own idea of "today". Contract validity is a CALENDAR DATE, so `now()::date`
+// in whatever zone the server runs in would move a price change by a day for anything
+// entered between midnight UTC and midnight Vienna — i.e. every evening.
+const VIENNA_TODAY = "(now() AT TIME ZONE 'Europe/Vienna')::date";
+
+// Settings the panel is allowed to write, and what a legal value is. An allowlist and not
+// a free key/value POST: app_settings is read by the P&L, so an arbitrary key is at best
+// dead weight and at worst a typo that silently disables the margin flag
+// (`pl_margin_baseline_bpp`, and nothing ever says why nothing is flagged).
+const SETTINGS = {
+  // Margin floor in BASIS POINTS. Signed on purpose: "do not lose more than 5%" (-500) is
+  // a target a cleaning company can legitimately set for a building it is winning back.
+  pl_margin_baseline_bp: (value, field) => {
+    const n = typeof value === "string" ? Number(value.trim()) : value;
+    if (!Number.isSafeInteger(n) || n < -10_000 || n > 10_000) fail(400, "invalid_field", field);
+    return String(n);
+  },
+};
 
 const CLIENT_COLS = "id, name, active, created_at";
 const CONTACT_COLS = "id, client_id, name, email, phone, active, created_at";
@@ -135,7 +181,19 @@ async function adminData({ query }) {
   const inRange =
     "($1::timestamptz IS NULL OR s.start_time >= $1) AND ($2::timestamptz IS NULL OR s.start_time < $2)";
 
-  const [workers, locations, shifts, hours, clients, contacts, inventory, portalGrants, bounds] = await Promise.all([
+  const [
+    workers,
+    locations,
+    shifts,
+    hours,
+    clients,
+    contacts,
+    inventory,
+    portalGrants,
+    bounds,
+    materialRequests,
+    settings,
+  ] = await Promise.all([
     all(`SELECT ${WORKER_COLS} FROM workers ORDER BY active DESC, name`),
     // id is the UUID that goes on the tag; slug is the human handle (decision-21).
     // client_name / contact_name ride along so the buildings screen can show "Hausverwaltung
@@ -197,6 +255,24 @@ async function adminData({ query }) {
     // you asked for" and "the data is gone", and the admin panel has no way to tell the
     // director which one it is. Two aggregates over an indexed column.
     one("SELECT min(start_time) AS earliest, max(start_time) AS latest FROM shifts"),
+    // NOT bounded by from/to. A request submitted in June that is still unordered in
+    // August is exactly the row the director needs to see while looking at August, and a
+    // period filter would hide it. Open ones first, then recent history; the cap is a
+    // ceiling on the response, not a filter with an opinion.
+    all(
+      `SELECT ${M_MATERIAL_REQUEST_COLS},
+              w.name AS worker_name, l.name AS location_name, i.name AS item_name
+         FROM material_requests m
+         JOIN workers w             ON w.id = m.worker_id
+         LEFT JOIN locations l      ON l.id = m.location_id
+         LEFT JOIN inventory_items i ON i.id = m.inventory_item_id
+        ORDER BY (m.status = ANY ($1::text[])) DESC, m.created_at DESC
+        LIMIT ${MATERIAL_REQUEST_PAGE}`,
+      [MATERIAL_OPEN_STATUSES],
+    ),
+    // Operator-set numbers this codebase must not invent (005). An EMPTY object is the
+    // normal, supported state on a fresh box: nothing is configured, so nothing is flagged.
+    all("SELECT key, value, updated_at FROM app_settings"),
   ]);
 
   return {
@@ -210,6 +286,9 @@ async function adminData({ query }) {
       contacts,
       inventory,
       portal_grants: portalGrants,
+      material_requests: materialRequests,
+      material_request_limit: MATERIAL_REQUEST_PAGE,
+      settings: Object.fromEntries(settings.map((s) => [s.key, s.value])),
       shift_limit: limit,
       // Echoed so a screen can prove what it is showing rather than assume it.
       shift_range: { from: from === null ? null : from.toISOString(), to: to === null ? null : to.toISOString() },
@@ -396,6 +475,96 @@ async function resolveClientAndContact(body) {
 }
 
 /**
+ * locations.* <- the building's CURRENT contract row. The ONLY place those two columns are
+ * derived, so "the mirror disagrees with the contract" is a state one function owns.
+ * No current contract => both NULL, which is "nobody has told me", not "free of charge".
+ */
+async function mirrorLocationFromContract(locationId) {
+  await query(
+    `UPDATE locations l
+        SET monthly_contract_cents   = c.monthly_contract_cents,
+            target_minutes_per_month = c.target_minutes_per_month
+       FROM location_contracts c
+      WHERE c.location_id = l.id AND c.valid_to IS NULL AND l.id = $1`,
+    [locationId],
+  );
+  await query(
+    `UPDATE locations SET monthly_contract_cents = NULL, target_minutes_per_month = NULL
+      WHERE id = $1
+        AND NOT EXISTS (SELECT 1 FROM location_contracts c WHERE c.location_id = $1 AND c.valid_to IS NULL)`,
+    [locationId],
+  );
+}
+
+/**
+ * The buildings FORM writes a contract figure, and that has to reach location_contracts or
+ * the P&L keeps reading a price nobody entered there.
+ *
+ * IT EDITS THE CURRENT PERIOD IN PLACE; it does not open a new one. A director correcting
+ * a typo in the buildings form means "this number was always wrong", not "the price changed
+ * today" — and silently minting a period boundary would split a month's revenue between a
+ * wrong figure and a right one. Recording an actual price CHANGE is an explicit, dated
+ * action: POST /admin/locations/:id/contracts.
+ *
+ * Clearing the figure closes the current period as of today rather than deleting it: we
+ * stop knowing the price from now on, we do not stop having known it in March. Closing on
+ * the day it opened yields a zero-day period, which the 005 CHECK allows precisely so
+ * "entered and cleared the same afternoon" has an honest representation.
+ */
+async function syncContractFromLocation(locationId, monthly, targetMinutes, clientId) {
+  const current = await one(
+    "SELECT id, valid_from FROM location_contracts WHERE location_id = $1 AND valid_to IS NULL",
+    [locationId],
+  );
+
+  if (monthly === null) {
+    if (current) {
+      await query(`UPDATE location_contracts SET valid_to = GREATEST(valid_from, ${VIENNA_TODAY}) WHERE id = $1`, [
+        current.id,
+      ]);
+    }
+  } else if (current) {
+    await query(
+      "UPDATE location_contracts SET monthly_contract_cents = $2, target_minutes_per_month = $3, client_id = $4 WHERE id = $1",
+      [current.id, monthly, targetMinutes, clientId],
+    );
+  } else {
+    await query(
+      `INSERT INTO location_contracts (location_id, client_id, monthly_contract_cents,
+                                       target_minutes_per_month, valid_from, note)
+       VALUES ($1, $2, $3, $4, ${VIENNA_TODAY}, 'Aus dem Gebäudeformular')`,
+      [locationId, clientId, monthly, targetMinutes],
+    );
+  }
+
+  await mirrorLocationFromContract(locationId);
+}
+
+/**
+ * Geocode a building and write the result. NEVER THROWS, never blocks a save.
+ *
+ * Called AFTER the row exists, on purpose: the building is already committed, so no
+ * outcome of this function can turn into "your building was not saved because Google was
+ * down". `geocoded_at` is stamped whichever way it goes, which is what makes "we asked and
+ * got nothing" distinguishable from "nobody has asked yet" (005_v2_features.sql) — without
+ * that the panel cannot tell a missing pin from an unattempted one and would either
+ * re-query on every render or never offer a retry.
+ *
+ * lat/lng are cleared on a failed re-geocode of a CHANGED address on purpose: a pin
+ * pointing at the previous tenant's street is worse than no pin.
+ */
+async function applyGeocode(locationId, address) {
+  const geo = await geocode(address);
+  return one(
+    `UPDATE locations
+        SET lat = $2, lng = $3, geocode_status = $4, street_view_status = $5, geocoded_at = now()
+      WHERE id = $1
+      RETURNING ${LOCATION_COLS}`,
+    [locationId, geo.lat, geo.lng, geo.status, geo.street_view_status],
+  );
+}
+
+/**
  * POST /admin/locations -> create (no id) or update (id, a UUID).
  * The id is generated by the database and is what gets written to the tag; it is never
  * chosen by the caller, so a location cannot be given a guessable identifier by hand.
@@ -404,6 +573,10 @@ async function resolveClientAndContact(body) {
  * stay NULL until the director types them: NULL means "nobody has told me", 0 means "free
  * of charge", and a profitability report has to be able to say "unknown" instead of
  * reporting a 100% loss on every building entered before the column existed.
+ *
+ * 005 adds GEOCODING, and it runs after the row is written, never before. An explicit
+ * lat/lng in the body always wins — a human who has dropped the pin themselves is more
+ * authoritative than a geocoder, and re-querying would overwrite their correction.
  */
 async function upsertLocation({ body }) {
   const locationSlug = v.slug(body.slug);
@@ -420,28 +593,193 @@ async function upsertLocation({ body }) {
   const clash = await one("SELECT id FROM locations WHERE slug = $1", [locationSlug]);
   if (clash && clash.id !== targetId) fail(409, "slug_taken");
 
+  // Ask Google only when there is a question. A building whose address has not changed and
+  // has already been looked up is not re-queried on every save of an unrelated field —
+  // that would burn quota to learn nothing, and quota exhaustion is how the NEXT building
+  // ends up unpinned.
+  const existing =
+    targetId === null ? null : await one("SELECT address, geocoded_at FROM locations WHERE id = $1", [targetId]);
+  if (targetId !== null && !existing) fail(404, "unknown_location");
+  const manualPin = lat !== null || lng !== null;
+  const shouldGeocode =
+    !manualPin && address !== null && (existing === null || existing.address !== address || existing.geocoded_at === null);
+
   const values = [locationSlug, name, address, lat, lng, active, clientId, contactId, monthly, targetMinutes];
 
+  let row;
+  let status;
   if (targetId === null) {
-    const row = await one(
+    row = await one(
       `INSERT INTO locations (slug, name, address, lat, lng, active,
                               client_id, contact_id, monthly_contract_cents, target_minutes_per_month)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING ${LOCATION_COLS}`,
       values,
     );
-    return { status: 201, body: { location: row } };
+    status = 201;
+  } else {
+    // The geocoding metadata DESCRIBES lat/lng, so it cannot outlive them.
+    //
+    // This UPDATE writes every column, so a caller that omits `lat`/`lng` clears them
+    // (LocationInput in web/lib/api.ts documents that, and both panel call sites pass the
+    // row's current values back). Before 005 that cost nothing, because lat/lng were
+    // always NULL anyway. Now it strands the row: coordinates gone, but `geocoded_at`
+    // still set and `geocode_status` still saying 'OK'. That row is then invisible to
+    // BOTH repair paths - `shouldGeocode` above is false while `geocoded_at` is not null,
+    // and bin/geocode-backfill.js selects on `geocoded_at IS NULL` unless run with
+    // --retry-failed. A building would sit permanently unpinned while its own status
+    // column claimed it was on the map.
+    //
+    // So: only when a coordinate that WAS set is being nulled. A building whose geocode
+    // legitimately failed (lat already NULL, status 'ZERO_RESULTS') keeps its reason and
+    // does not get re-queried on every unrelated save - that reason is the difference
+    // between "fix the address" and "try again later", and burning quota to re-learn it is
+    // how the NEXT building ends up unpinned.
+    const clearsPin = "($5::double precision IS NULL AND lat IS NOT NULL)";
+    row = await one(
+      `UPDATE locations SET slug = $2, name = $3, address = $4, lat = $5, lng = $6, active = $7,
+              client_id = $8, contact_id = $9, monthly_contract_cents = $10, target_minutes_per_month = $11,
+              geocoded_at        = CASE WHEN ${clearsPin} THEN NULL ELSE geocoded_at        END,
+              geocode_status     = CASE WHEN ${clearsPin} THEN NULL ELSE geocode_status     END,
+              street_view_status = CASE WHEN ${clearsPin} THEN NULL ELSE street_view_status END
+       WHERE id = $1
+       RETURNING ${LOCATION_COLS}`,
+      [targetId, ...values],
+    );
+    if (!row) fail(404, "unknown_location"); // deleted between the SELECT and here
+    status = 200;
   }
 
-  const row = await one(
-    `UPDATE locations SET slug = $2, name = $3, address = $4, lat = $5, lng = $6, active = $7,
-            client_id = $8, contact_id = $9, monthly_contract_cents = $10, target_minutes_per_month = $11
-     WHERE id = $1
-     RETURNING ${LOCATION_COLS}`,
-    [targetId, ...values],
+  // THE BUILDING IS SAVED FROM HERE ON. Everything below is enrichment and none of it is
+  // allowed to take that back.
+  await syncContractFromLocation(row.id, monthly, targetMinutes, clientId);
+  if (shouldGeocode) row = (await applyGeocode(row.id, address)) ?? row;
+
+  return { status, body: { location: await one(`SELECT ${LOCATION_COLS} FROM locations WHERE id = $1`, [row.id]) } };
+}
+
+/**
+ * POST /admin/locations/:id/geocode -> "erneut geokodieren".
+ *
+ * The retry button, and the backfill path for every building entered before 005 existed
+ * (bin/geocode-backfill.js drives this same helper). Answers 200 with the row whether or
+ * not a pin came back — "we asked again and Google still has nothing" is a successful
+ * request with a null answer, not a server error, and the response carries `geocoded_at`
+ * so the panel can say when we last tried.
+ */
+async function geocodeLocation({ params }) {
+  const locationId = v.uuid(params.id, "id");
+  const current = await one("SELECT id, address FROM locations WHERE id = $1", [locationId]);
+  if (!current) fail(404, "unknown_location");
+  // Nothing to geocode is a client error worth naming: the fix is to type an address, and
+  // silently answering 200 with no pin would look like Google's fault.
+  if (!current.address) fail(422, "location_has_no_address");
+  return { status: 200, body: { location: await applyGeocode(locationId, current.address) } };
+}
+
+// ---- contract history (005) -------------------------------------------------------
+//
+// WHAT THIS BUYS AND WHAT IT DOES NOT. A period-scoped price makes the REVENUE line of the
+// P&L honest: March is valued at the March price even after a September increase.
+//
+// THE COST LINE STAYS DISHONEST, and the API says so out loud in `labour.rate_basis`
+// (lib/reporting.js). `workers.hourly_rate_cents` is one mutable column with no history, so
+// raising a wage silently rewrites every past month's labour cost. Fixing that means a
+// `worker_rates` table that PAYROLL reads — changing the arithmetic of a system in daily
+// use with real money attached. That is a decision record, not a commit.
+
+/** GET /admin/locations/:id/contracts -> the price history, newest first. */
+async function listContracts({ params }) {
+  const locationId = v.uuid(params.id, "id");
+  if (!(await one("SELECT id FROM locations WHERE id = $1", [locationId]))) fail(404, "unknown_location");
+  const contracts = await all(
+    `SELECT ${CONTRACT_COLS} FROM location_contracts WHERE location_id = $1 ORDER BY valid_from DESC, id DESC`,
+    [locationId],
   );
-  if (!row) fail(404, "unknown_location");
-  return { status: 200, body: { location: row } };
+  return { status: 200, body: { contracts } };
+}
+
+/**
+ * POST /admin/locations/:id/contracts {monthly_contract_cents, target_minutes_per_month?,
+ *                                      valid_from, note?}
+ * -> the price changed, from this day.
+ *
+ * Closes the current period at `valid_from` (half-open, so the old price's last day is the
+ * day before) and opens a new one. `valid_from` must be strictly after the current period
+ * started and not before any closed period ended — overlapping periods would make "the
+ * price on 3 March" have two answers, and the P&L would count both.
+ *
+ * Non-overlap is checked HERE and not by an EXCLUDE constraint: that needs btree_gist, and
+ * a Postgres extension on a live payroll box is not worth one guarded INSERT (005).
+ * ponytail: CEILING — two admins posting concurrently could interleave past this check.
+ * There is one admin. UPGRADE PATH: btree_gist + EXCLUDE.
+ */
+async function createContract({ params, body }) {
+  const locationId = v.uuid(params.id, "id");
+  const location = await one("SELECT id, client_id FROM locations WHERE id = $1", [locationId]);
+  if (!location) fail(404, "unknown_location");
+
+  const monthly = v.cents(body.monthly_contract_cents, "monthly_contract_cents");
+  const targetMinutes = v.optionalMinutes(body.target_minutes_per_month, "target_minutes_per_month");
+  const validFrom = v.isoDate(body.valid_from, "valid_from");
+  const note = v.optionalStr(body.note, "note", { max: 500 });
+  // The company holding the contract AT THE TIME. Defaults to the building's current
+  // client because that is nearly always right; overridable because a handover is exactly
+  // when a new contract period gets recorded.
+  const clientId = body.client_id === undefined ? location.client_id : v.optionalId(body.client_id, "client_id");
+
+  const boundary = await one(
+    `SELECT max(valid_from) FILTER (WHERE valid_to IS NULL) AS current_from,
+            max(valid_to)                                  AS last_closed_to
+       FROM location_contracts WHERE location_id = $1`,
+    [locationId],
+  );
+  // Dates arrive as 'YYYY-MM-DD' strings (lib/db.js pins the `date` parser precisely so
+  // they are not silently shifted a day by a timezone), and that format sorts lexically.
+  const notAfter = (a, b) => a !== null && b !== null && a <= b;
+  if (notAfter(validFrom, boundary.current_from)) fail(409, "contract_overlap", "valid_from");
+  if (boundary.current_from === null && notAfter(validFrom, boundary.last_closed_to)) {
+    fail(409, "contract_overlap", "valid_from");
+  }
+
+  await query(
+    "UPDATE location_contracts SET valid_to = $2 WHERE location_id = $1 AND valid_to IS NULL",
+    [locationId, validFrom],
+  );
+  const contract = await one(
+    `INSERT INTO location_contracts (location_id, client_id, monthly_contract_cents,
+                                     target_minutes_per_month, valid_from, note)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING ${CONTRACT_COLS}`,
+    [locationId, clientId, monthly, targetMinutes, validFrom, note],
+  );
+  await mirrorLocationFromContract(locationId);
+  return { status: 201, body: { contract } };
+}
+
+/**
+ * DELETE /admin/contracts/:id -> undo a contract period that was entered wrong.
+ *
+ * ONLY THE CURRENT ONE. A closed period has already been used to value a month somebody
+ * has seen a report for; deleting it would silently rewrite that month with no trace.
+ * Removing the current row REOPENS its predecessor — the price reverts to what it was
+ * before the mistake, rather than the building falling to "no contract on file".
+ */
+async function deleteContract({ params }) {
+  const contractId = v.id(params.id, "id");
+  const contract = await one(`SELECT ${CONTRACT_COLS} FROM location_contracts WHERE id = $1`, [contractId]);
+  if (!contract) fail(404, "unknown_contract");
+  if (contract.valid_to !== null) fail(409, "contract_not_current");
+
+  await query("DELETE FROM location_contracts WHERE id = $1", [contractId]);
+  await query(
+    `UPDATE location_contracts SET valid_to = NULL
+      WHERE id = (SELECT id FROM location_contracts WHERE location_id = $1
+                   ORDER BY valid_from DESC, id DESC LIMIT 1)`,
+    [contract.location_id],
+  );
+  await mirrorLocationFromContract(contract.location_id);
+  return { status: 200, body: { contract, deleted: true } };
 }
 
 /**
@@ -771,6 +1109,167 @@ async function patchShift({ params, body }) {
   return { status: 200, body: { shift: row } };
 }
 
+// ---- material requests (admin side) -----------------------------------------------
+
+/**
+ * PATCH /admin/material-requests/:id -> validate, price and advance a worker's request.
+ *
+ * `status` is a TRANSITION REQUEST, not an assignment: lib/materials.js holds the legal
+ * moves and `assertTransition` refuses the rest. Without that, a panel bug or a replayed
+ * request could jump `submitted` straight to `arrived` and stamp `ordered_at`, putting a
+ * cost into a period in which nothing was ever ordered.
+ *
+ * The three timestamps are stamped BY THE SERVER at the moment of the transition and are
+ * not settable from the body. `ordered_at` in particular is what pins a cost to a P&L
+ * period, so a client that could choose it could move a spend between months.
+ *
+ * WHAT THIS ROUTE DOES NOT DO: guess. There is no fuzzy match from the worker's free text
+ * to an inventory item, no default quantity and no default cost. `cost_cents` left NULL
+ * means UNPRICED — the P&L excludes it from the pool and reports how many it excluded,
+ * which is a visible "somebody still has to type the invoice", not a silent zero.
+ *
+ * Cost, quantity, item and note stay editable after arrival on purpose: an invoice turns
+ * up late. The period does not move with it, because `ordered_at` is already fixed.
+ */
+async function patchMaterialRequest({ params, body, session }) {
+  const requestId = v.id(params.id, "id");
+  const current = await one("SELECT id, status FROM material_requests WHERE id = $1", [requestId]);
+  if (!current) fail(404, "unknown_request");
+
+  const next = body.status === undefined || body.status === null ? null : v.oneOf(body.status, "status", MATERIAL_STATUSES);
+  if (next !== null && next !== current.status) assertTransition(current.status, next);
+  const status = next ?? current.status;
+
+  // A rejected request is a closed refusal. Editing its cost would be attributing money to
+  // something we declined to buy.
+  if (current.status === "rejected") fail(409, "request_rejected");
+
+  const adminNote = body.admin_note === undefined ? undefined : v.optionalStr(body.admin_note, "admin_note", { max: 1000 });
+  const quantity = body.quantity === undefined ? undefined : v.optionalCount(body.quantity, "quantity");
+  const costCents = body.cost_cents === undefined ? undefined : v.optionalCents(body.cost_cents, "cost_cents");
+  const locationId = body.location_id === undefined ? undefined : v.optionalUuid(body.location_id, "location_id");
+
+  let itemId;
+  if (body.inventory_item_id !== undefined) {
+    itemId = v.optionalId(body.inventory_item_id, "inventory_item_id");
+    // Existence, not `active`: mapping an old request to a product that has since been
+    // deactivated is exactly what happens when the invoice arrives after the shelf change.
+    if (itemId !== null && !(await one("SELECT id FROM inventory_items WHERE id = $1", [itemId]))) {
+      fail(422, "unknown_item");
+    }
+  }
+  if (locationId !== undefined && locationId !== null) {
+    if (!(await one("SELECT id FROM locations WHERE id = $1", [locationId]))) fail(422, "unknown_location");
+  }
+  const decided = next === "approved" || next === "rejected";
+  const row = await one(
+    `UPDATE material_requests
+        SET status            = $2,
+            admin_note        = COALESCE($3, admin_note),
+            quantity          = COALESCE($4, quantity),
+            cost_cents        = COALESCE($5, cost_cents),
+            inventory_item_id = COALESCE($6, inventory_item_id),
+            location_id       = COALESCE($7, location_id),
+            decided_by        = CASE WHEN $8 THEN $9 ELSE decided_by END,
+            decided_at        = CASE WHEN $8 THEN now() ELSE decided_at END,
+            ordered_at        = CASE WHEN $2 = 'ordered' AND ordered_at IS NULL THEN now() ELSE ordered_at END,
+            arrived_at        = CASE WHEN $2 = 'arrived' AND arrived_at IS NULL THEN now() ELSE arrived_at END
+      WHERE id = $1
+      RETURNING ${MATERIAL_REQUEST_COLS}`,
+    [
+      requestId,
+      status,
+      // COALESCE means "absent leaves it alone". An explicit null in the body therefore
+      // cannot CLEAR a field — stated here rather than discovered later. Clearing a cost
+      // that was typed wrong is done by typing the right one; clearing it to "unpriced"
+      // is not a thing the director has asked for and inventing a sentinel for it would
+      // be a second meaning for null.
+      adminNote ?? null,
+      quantity ?? null,
+      costCents ?? null,
+      itemId ?? null,
+      locationId ?? null,
+      decided,
+      session.adminId,
+    ],
+  );
+  return { status: 200, body: { request: row } };
+}
+
+// ---- reports (005) ----------------------------------------------------------------
+
+/**
+ * GET /admin/pl?from=&to= -> revenue minus labour minus materials, per building.
+ *
+ * BOTH ends are REQUIRED (`v.requiredRange`). Revenue is a monthly contract pro-rated over
+ * the days of the period, so an unbounded end is either infinitely many days or a default
+ * month the caller never asked for. Refusing beats guessing.
+ *
+ * Boundaries are UTC instants on the wire; every calendar question inside is answered in
+ * Europe/Vienna by Postgres (lib/reporting.js). The arithmetic — decision-6's pro-rata
+ * split, decision-10's exclusions, and every "we do not know this" — lives there.
+ */
+async function plReport({ query: q }) {
+  const { from, to } = v.requiredRange(q.get("from"), q.get("to"));
+  return { status: 200, body: await profitAndLoss(from, to) };
+}
+
+/**
+ * GET /admin/analytics?from=&to=&months= -> actual vs target time, plus a trend and the
+ * map state for every building.
+ *
+ * `months` is the trend length in Vienna calendar months, clamped rather than rejected:
+ * asking for 200 months of a two-year-old company is a UI slider at its end stop, not an
+ * attack, and 24 buckets x 11 buildings is already more than a screen can show.
+ */
+async function analyticsReport({ query: q }) {
+  const { from, to } = v.requiredRange(q.get("from"), q.get("to"));
+  const raw = q.get("months");
+  const months = raw === null ? TREND_MONTHS_DEFAULT : Math.min(v.id(raw, "months"), TREND_MONTHS_MAX);
+  return { status: 200, body: await buildingAnalytics(from, to, months) };
+}
+
+// ---- settings ---------------------------------------------------------------------
+
+/**
+ * POST /admin/settings {key, value} -> the operator tells us a number we refuse to invent.
+ *
+ * Today there is exactly one: `pl_margin_baseline_bp`. NOTHING inserts a default for it,
+ * and with it unset the P&L flags no building at all and says "Zielmarge nicht gesetzt".
+ * A hardcoded 15% would be this codebase having an opinion about a Viennese cleaning
+ * company's margins, which it has no basis for.
+ *
+ * The key is checked against an allowlist, not stored freely: app_settings is READ by the
+ * P&L, so `pl_margin_baseline_bpp` would be accepted, stored, and then quietly do nothing
+ * forever while the director wonders why no building is ever flagged.
+ */
+async function putSetting({ body }) {
+  const key = v.oneOf(body.key, "key", Object.keys(SETTINGS));
+  const value = SETTINGS[key](body.value, "value");
+  const row = await one(
+    `INSERT INTO app_settings (key, value) VALUES ($1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+     RETURNING key, value, updated_at`,
+    [key, value],
+  );
+  return { status: 200, body: { setting: row } };
+}
+
+/**
+ * DELETE /admin/settings/:key -> back to "nobody has told me".
+ *
+ * Unsetting has to be reachable. Without it the first value ever typed becomes permanent
+ * policy, and "I do not want buildings flagged any more" would have no expression except a
+ * baseline so low it is a lie.
+ */
+async function deleteSetting({ params }) {
+  const key = v.oneOf(params.key, "key", Object.keys(SETTINGS));
+  await query("DELETE FROM app_settings WHERE key = $1", [key]);
+  // Idempotent, and the body states the RESULTING state rather than whether a row happened
+  // to be there: deleting an already-unset key must not look like a failure to the panel.
+  return { status: 200, body: { setting: { key, value: null } } };
+}
+
 export const adminRoutes = [
   { method: "POST", path: "/admin/login", auth: null, handler: login },
   { method: "POST", path: "/admin/logout", auth: "admin", handler: logout },
@@ -792,4 +1291,13 @@ export const adminRoutes = [
   { method: "DELETE", path: "/admin/portal-grants/:token_hash", auth: "admin", handler: revokePortalGrant },
   { method: "POST", path: "/admin/shifts", auth: "admin", handler: createShift },
   { method: "PATCH", path: "/admin/shifts/:id", auth: "admin", handler: patchShift },
+  { method: "PATCH", path: "/admin/material-requests/:id", auth: "admin", handler: patchMaterialRequest },
+  { method: "POST", path: "/admin/locations/:id/geocode", auth: "admin", handler: geocodeLocation },
+  { method: "GET", path: "/admin/locations/:id/contracts", auth: "admin", handler: listContracts },
+  { method: "POST", path: "/admin/locations/:id/contracts", auth: "admin", handler: createContract },
+  { method: "DELETE", path: "/admin/contracts/:id", auth: "admin", handler: deleteContract },
+  { method: "GET", path: "/admin/pl", auth: "admin", handler: plReport },
+  { method: "GET", path: "/admin/analytics", auth: "admin", handler: analyticsReport },
+  { method: "POST", path: "/admin/settings", auth: "admin", handler: putSetting },
+  { method: "DELETE", path: "/admin/settings/:key", auth: "admin", handler: deleteSetting },
 ];

@@ -35,6 +35,7 @@
 
     <!-- Tabs -->
     <string name="tab_log">Erfassen</string>
+    <string name="tab_material">Material</string>
     <string name="tab_history">Verlauf</string>
     <string name="tab_settings">Einstellungen</string>
 
@@ -122,10 +123,63 @@
     <string name="err_wrong_account">Diese Schicht wurde mit einem anderen Konto erfasst und kann nicht gesendet werden.</string>
     <string name="err_server">Serverproblem – wird erneut versucht.</string>
     <string name="err_rejected">Vom Server abgelehnt. Diese Schicht bitte der Verwaltung melden.</string>
+    <string name="err_unknown_request">Diese Anfrage kennt der Server nicht mehr. Bitte bei der Verwaltung melden.</string>
+    <!-- Wie err_rejected / err_wrong_account, aber für eine Materialanfrage: "Schicht"
+         würde den Mitarbeiter wegen der falschen Sache zur Verwaltung schicken. -->
+    <string name="err_rejected_request">Vom Server abgelehnt. Diese Anfrage bitte der Verwaltung melden.</string>
+    <string name="err_wrong_account_request">Diese Anfrage wurde mit einem anderen Konto erfasst und kann nicht gesendet werden.</string>
+    <!-- KEINE Ablehnung: der Server hat diese Funktion noch nicht. Die Anfrage bleibt
+         gespeichert und wird später gesendet (MaterialQueue.outcome). -->
+    <string name="err_feature_unavailable">Auf dem Server noch nicht freigeschaltet – gespeichert und wird später gesendet.</string>
+
+    <!-- Materialanfragen (decision-6: die Anfrage nennt ein Objekt nur als Hinweis, sie
+         bucht keine Kosten darauf). Es gibt KEINE Push-Benachrichtigung in diesem System
+         (decision-23), deshalb darf hier nirgends stehen, dass sich das Telefon meldet. -->
+    <string name="material_title">Material</string>
+    <string name="material_ask_section">Material anfordern</string>
+    <string name="material_input_label">Was brauchen Sie?</string>
+    <string name="material_input_hint">In eigenen Worten, zum Beispiel: zwei Mopps und eine große Flasche Glasreiniger.</string>
+    <!-- %1$d = eingegebene Zeichen, %2$d = Höchstzahl -->
+    <string name="material_char_count">%1$d von %2$d Zeichen</string>
+    <!-- %1$s = Objektname der laufenden Schicht -->
+    <string name="material_for_site">Für %1$s</string>
+    <string name="material_for_current_site">Für das Objekt, in dem Sie gerade eingestempelt sind</string>
+    <string name="material_submit">Anfrage senden</string>
+    <string name="material_saved">Anfrage gespeichert. Sie wird gesendet, sobald Sie online sind.</string>
+    <string name="material_no_push_note">Die Verwaltung liest die Anfragen im Web. Öffnen Sie diesen Reiter, um zu sehen, wann etwas eingetroffen ist – Ihr Telefon meldet sich nicht von selbst.</string>
+    <string name="material_ready_section">Zum Abholen bereit</string>
+    <string name="material_ready">Im Lager eingetroffen</string>
+    <!-- %1$s = Datum und Uhrzeit -->
+    <string name="material_arrived_at">Eingetroffen am %1$s</string>
+    <string name="material_ack">Habe ich gesehen</string>
+    <string name="material_list_section">Ihre Anfragen</string>
+    <string name="material_list_empty">Noch nichts angefordert.</string>
+    <string name="material_unavailable_note">Die Verwaltung hat das noch nicht freigeschaltet. Was Sie schreiben, wird gespeichert und gesendet, sobald es so weit ist.</string>
+    <!-- %1$s = Anmerkung der Verwaltung -->
+    <string name="material_admin_note">Anmerkung der Verwaltung: %1$s</string>
+    <!-- %1$d = Anzahl, %2$s = Artikelname, den die Verwaltung zugeordnet hat -->
+    <string name="material_quantity_item">%1$d × %2$s</string>
+
+    <!-- Status einer Materialanfrage. Der Server kennt genau fünf; ein sechster darf
+         nicht als "in Arbeit" geraten werden, sondern muss unbekannt heißen. -->
+    <string name="material_status_submitted">Wartet auf die Verwaltung</string>
+    <string name="material_status_approved">Genehmigt – noch nicht bestellt</string>
+    <string name="material_status_ordered">Bestellt</string>
+    <string name="material_status_arrived">Im Lager eingetroffen</string>
+    <string name="material_status_collected">Abgeholt</string>
+    <string name="material_status_rejected">Nicht genehmigt</string>
+    <string name="material_status_unknown">Status unbekannt – bitte bei der Verwaltung nachfragen</string>
 
     <!-- Barrierefreiheit -->
     <string name="a11y_tap_hint">Zum Stempeln das Telefon an den NFC-Tag beim Eingang halten.</string>
     <string name="a11y_shift_open">Schicht läuft</string>
     <string name="a11y_needs_resolution">Diese Schicht braucht eine bestätigte Endzeit</string>
+    <!-- %1$s = Text der Anfrage oder der zugeordnete Artikel -->
+    <string name="a11y_material_ready">Zum Abholen bereit: %1$s</string>
+    <!-- %1$d = Anzahl eingetroffener, noch nicht bestätigter Anfragen -->
+    <plurals name="a11y_material_badge">
+        <item quantity="one">%d Materialanfrage ist eingetroffen</item>
+        <item quantity="other">%d Materialanfragen sind eingetroffen</item>
+    </plurals>
 
 </resources>

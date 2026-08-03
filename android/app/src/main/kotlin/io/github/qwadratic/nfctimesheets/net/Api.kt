@@ -3,6 +3,7 @@ package io.github.qwadratic.nfctimesheets.net
 import io.github.qwadratic.nfctimesheets.BuildConfig
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.CloseShiftRequest
+import io.github.qwadratic.nfctimesheets.core.CreateMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.EnrolmentRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
@@ -120,6 +121,42 @@ class Api(
         Wire.shift(
             post("/shifts/$shiftId/resolve", ResolveShiftRequest(endTime).toJson()).getJSONObject("shift"),
         )
+
+    // ---- material requests --------------------------------------------------------
+    //
+    // THESE THREE RETURN RAW JSON, unlike everything above, and that is deliberate:
+    // data/MaterialStore.kt caches the server's bytes verbatim so a field the server adds
+    // later needs no client migration. Wire.materialRequest() is what turns them into a
+    // type, and the store calls it before it writes.
+    //
+    // ALL THREE ARE OPTIONAL TO THE PRODUCT. A server without them answers 404
+    // {"error":"not_found"}, which MaterialQueue.outcome() reads as "not deployed yet"
+    // and NOT as a rejection. Nothing here is on the clock-in path.
+
+    /**
+     * POST /material-requests {body, location_uuid?} -> 201 {request}.
+     * decision-22: no worker field, here or in [CreateMaterialRequest].
+     */
+    suspend fun createMaterialRequest(body: String, locationId: String?): JSONObject =
+        post("/material-requests", CreateMaterialRequest(body, locationId).toJson())
+            .getJSONObject("request")
+
+    /**
+     * GET /material-requests/mine -> this session's worker only, newest first. There is
+     * no ?worker= and there must never be one.
+     */
+    suspend fun myMaterialRequests(): List<JSONObject> {
+        val array = get("/material-requests/mine").getJSONArray("requests")
+        return (0 until array.length()).map { array.getJSONObject(it) }
+    }
+
+    /**
+     * POST /material-requests/:id/seen — "I have read that it arrived". Idempotent
+     * server-side (COALESCE keeps the FIRST acknowledgement), so a double tap does not
+     * rewrite when the worker actually found out.
+     */
+    suspend fun markMaterialRequestSeen(id: Int): JSONObject =
+        post("/material-requests/$id/seen", "{}").getJSONObject("request")
 
     // ---- transport ----------------------------------------------------------------
 

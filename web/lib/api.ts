@@ -165,9 +165,30 @@ export type Location = {
   slug: string
   name: string
   address: string | null
-  /** Recorded if known; 3A shows the address instead and draws no map. */
+  /** Set by the geocoder (migration 005). Null = no pin; see `geocoded_at` for why. */
   lat: number | null
   lng: number | null
+  /**
+   * When we last asked Google. With `lat` this is the whole map state, and the three
+   * cases are genuinely different problems:
+   *   null                      — nobody has ever asked
+   *   set, `lat` null           — we asked and got no usable pin
+   *   set, `lat` present        — pinned
+   */
+  geocoded_at: string | null
+  /**
+   * Google's own vocabulary plus a few of ours: 'OK', 'ZERO_RESULTS', 'PARTIAL_MATCH',
+   * 'APPROXIMATE_ONLY', 'REQUEST_DENIED', 'OVER_QUERY_LIMIT', 'no_key', 'timeout',
+   * 'network:...'. It is the difference between "fix the address you typed" and "try
+   * again later" — two problems with different owners.
+   */
+  geocode_status: string | null
+  /**
+   * What the Street View METADATA endpoint said. A photo may be rendered ONLY on 'OK':
+   * the static image endpoint answers 200 with a grey "no imagery" tile, so anything
+   * looser ships a grey rectangle and calls it a photograph of the building.
+   */
+  street_view_status: string | null
   active: boolean
   created_at: string
   /** The company under contract. Null = nobody has filled it in yet. */
@@ -193,9 +214,10 @@ export type LocationInput = {
   name: string
   address: string
   /**
-   * 3A has no input for coordinates, but the route's UPDATE writes every column, so an
-   * edit that omitted these would silently null out coordinates set elsewhere. Callers
-   * editing an existing row must pass the row's current values back.
+   * There is no form input for coordinates — they come from the geocoder — but the
+   * route's UPDATE writes every column, so an edit that omitted these would silently null
+   * out coordinates set elsewhere. Callers editing an existing row must pass the row's
+   * current values back.
    *
    * The same hazard applies to the four contract fields below: omitting one on an edit
    * CLEARS it. Send the row's current value when the form did not change it.
@@ -727,4 +749,414 @@ export type PortalView = {
  */
 export function fetchPortalView(token: string, signal?: AbortSignal): Promise<PortalView> {
   return apiFetch<PortalView>(`/portal/${encodeURIComponent(token)}`, { signal })
+}
+
+/* --- Material requests (migration 005) --------------------------------------------------
+ *
+ * A worker asks for something IN THEIR OWN WORDS and then waits. Nothing here guesses what
+ * they meant: there is no fuzzy match onto `inventory_items`, no default quantity and no
+ * default cost. An admin maps it, prices it and moves it along, and every one of those is
+ * a deliberate human act.
+ *
+ * THERE IS NO PUSH. Server deps are `pg` + `@sentry/node` and nothing else (decision-23
+ * amending decision-16), so the worker's app POLLS `/material-requests/mine`. Screen copy
+ * must never promise a notification.
+ */
+
+/** Mirrors MATERIAL_TRANSITIONS in server/lib/materials.js. Order = lifecycle order. */
+export const MATERIAL_STATUSES = [
+  'submitted',
+  'approved',
+  'ordered',
+  'arrived',
+  'rejected',
+] as const
+export type MaterialStatus = (typeof MATERIAL_STATUSES)[number]
+
+export type MaterialRequest = {
+  id: number
+  worker_id: number
+  /**
+   * The building the worker NAMED, e.g. "the mop for Neuhaus". CONTEXT ONLY. It is
+   * explicitly NOT a cost attribution: decision-6 splits materials pro-rata by labour
+   * hours and rejected per-request attribution outright. No screen may total costs by it.
+   */
+  location_id: string | null
+  /** The worker's own words. Never parsed, never matched, never rewritten. */
+  body: string
+  status: MaterialStatus
+  admin_note: string | null
+  /** Set by an admin when they decide which catalogue item was meant. Null = unmapped. */
+  inventory_item_id: number | null
+  quantity: number | null
+  /**
+   * ACTUAL cost, integer cents. Null = UNPRICED, which is NOT free: the P&L leaves it out
+   * of the material pool and reports how many it left out.
+   */
+  cost_cents: number | null
+  decided_by: number | null
+  decided_at: string | null
+  /**
+   * The period pin. A cost belongs to the month the money was committed in, not the month
+   * the worker asked or the month the box turned up. Server-stamped; not settable.
+   */
+  ordered_at: string | null
+  arrived_at: string | null
+  /** The worker acknowledged the arrival, by polling. Null = they have not seen it yet. */
+  seen_at: string | null
+  created_at: string
+}
+
+/** `/admin/data` joins these three so no screen has to look them up itself. */
+export type MaterialRequestRow = MaterialRequest & {
+  worker_name: string
+  location_name: string | null
+  item_name: string | null
+}
+
+/**
+ * What `PATCH /admin/material-requests/:id` returns: the bare row, WITHOUT the three
+ * joined names. Typing it as `MaterialRequestRow` would be a lie that renders as
+ * `undefined` in the first cell that trusts it. Callers re-read `/admin/data`.
+ */
+export type MaterialRequestPatched = MaterialRequest
+
+/**
+ * MATERIAL_REQUEST_PAGE in server/routes/admin.js. Open requests come first, so the cap
+ * can only ever truncate history \u2014 but the screen still has to say when it did.
+ */
+export const ADMIN_MATERIAL_REQUEST_LIMIT = 500
+
+/**
+ * Operator-set numbers this codebase refuses to invent (migration 005). Values are TEXT
+ * on the wire because `app_settings.value` is a TEXT column.
+ *
+ * An EMPTY object is the normal, supported state on a box nobody has configured. It is
+ * NOT an error and NOT a zero: with `pl_margin_baseline_bp` absent the P&L flags nothing
+ * and says so.
+ */
+export type AppSettings = Record<string, string>
+
+/** The margin floor, in BASIS POINTS. Signed: -500 is a legitimate "lose at most 5%". */
+export const MARGIN_BASELINE_KEY = 'pl_margin_baseline_bp'
+
+/** One request behind /material-requests/: the queue plus the two lists its selects offer. */
+export type MaterialSnapshot = {
+  material_requests: MaterialRequestRow[]
+  material_request_limit: number
+  locations: Location[]
+  inventory: InventoryItem[]
+}
+
+export function fetchMaterialSnapshot(signal?: AbortSignal): Promise<MaterialSnapshot> {
+  return apiFetch<MaterialSnapshot>('/admin/data', { signal })
+}
+
+/**
+ * Everything `PATCH /admin/material-requests/:id` accepts.
+ *
+ * `status` is a TRANSITION REQUEST, not an assignment \u2014 the server holds the legal moves
+ * and answers 409 for the rest, which is what stops a double-clicked button jumping
+ * `submitted` straight to `arrived` and stamping `ordered_at` in a period nothing was
+ * ordered in. The three timestamps are stamped server-side and are deliberately absent.
+ *
+ * Every field is COALESCEd server-side: omitting one leaves it alone, and an explicit
+ * `null` therefore cannot clear it. Correcting a wrong cost means typing the right one.
+ */
+export type MaterialRequestPatch = {
+  status?: MaterialStatus
+  admin_note?: string
+  inventory_item_id?: number | null
+  quantity?: number
+  cost_cents?: number
+  location_id?: string
+}
+
+/**
+ * 404 = the request is gone. 422 = unknown item or building. 409 = either the row moved
+ * under us (illegal transition) or it was already rejected \u2014 `ApiError` carries no server
+ * text, so both read as "reload and look again", which is the only correct action for both.
+ */
+export function patchMaterialRequest(
+  id: number,
+  patch: MaterialRequestPatch,
+  signal?: AbortSignal,
+): Promise<MaterialRequestPatched> {
+  return apiFetch<{ request: MaterialRequestPatched }>(`/admin/material-requests/${id}`, {
+    method: 'PATCH',
+    body: patch,
+    signal,
+  }).then((data) => data.request)
+}
+
+/**
+ * `POST /admin/settings`. The key is checked against a server-side allowlist, so a typo is
+ * a 400 rather than a value that is stored and then quietly does nothing forever.
+ */
+export function saveSetting(key: string, value: number, signal?: AbortSignal): Promise<void> {
+  return apiFetch<{ setting: unknown }>('/admin/settings', {
+    method: 'POST',
+    body: { key, value },
+    signal,
+  }).then(() => undefined)
+}
+
+/** Back to "nobody has told me". Idempotent: unsetting an unset key is a 200, not a 404. */
+export function clearSetting(key: string, signal?: AbortSignal): Promise<void> {
+  return apiFetch<{ setting: unknown }>(`/admin/settings/${encodeURIComponent(key)}`, {
+    method: 'DELETE',
+    signal,
+  }).then(() => undefined)
+}
+
+/* --- Contract history (migration 005, decision-28) --------------------------------------
+ *
+ * What a building was priced at, WHEN. `locations.monthly_contract_cents` is a mirror of
+ * the CURRENT row here, kept so the already-shipped iOS build and /locations/ keep working.
+ */
+
+export type Contract = {
+  id: number
+  location_id: string
+  /** Who was paying AT THE TIME. `locations.client_id` is current-only. */
+  client_id: number | null
+  monthly_contract_cents: number
+  target_minutes_per_month: number | null
+  /**
+   * VIENNA CALENDAR DATES as `YYYY-MM-DD`, half-open `[valid_from, valid_to)`. Not
+   * instants: a contract changes on a day, and a date has no daylight saving to get wrong.
+   * `valid_to` null = this is the current period.
+   */
+  valid_from: string
+  valid_to: string | null
+  note: string | null
+  created_at: string
+}
+
+export type ContractInput = {
+  monthly_contract_cents: number
+  target_minutes_per_month: number | null
+  /** `YYYY-MM-DD`. */
+  valid_from: string
+  note?: string
+  client_id?: number | null
+}
+
+/** 404 = unknown building. Newest period first. */
+export function fetchContracts(locationId: string, signal?: AbortSignal): Promise<Contract[]> {
+  return apiFetch<{ contracts: Contract[] }>(
+    `/admin/locations/${encodeURIComponent(locationId)}/contracts`,
+    { signal },
+  ).then((data) => data.contracts)
+}
+
+/**
+ * The price changed, from this day. Closes the current period at `valid_from` and opens a
+ * new one. 409 = the new period would overlap an existing one, which is the server
+ * refusing to let "the price on 3 March" have two answers.
+ */
+export function createContract(
+  locationId: string,
+  input: ContractInput,
+  signal?: AbortSignal,
+): Promise<Contract> {
+  return apiFetch<{ contract: Contract }>(
+    `/admin/locations/${encodeURIComponent(locationId)}/contracts`,
+    { method: 'POST', body: input, signal },
+  ).then((data) => data.contract)
+}
+
+/**
+ * Undo a contract period entered wrongly. ONLY the current one: a closed period has
+ * already valued a month somebody has seen a report for. Deleting it REOPENS its
+ * predecessor, so the price reverts instead of the building falling to "no contract".
+ * 409 = it is not the current period.
+ */
+export function deleteContract(id: number, signal?: AbortSignal): Promise<void> {
+  return apiFetch<{ contract: Contract }>(`/admin/contracts/${id}`, {
+    method: 'DELETE',
+    signal,
+  }).then(() => undefined)
+}
+
+/**
+ * Ask Google again for this building's pin. Answers 200 WITH OR WITHOUT a pin \u2014 a failed
+ * geocode is a successful request with a null answer \u2014 so the caller must read the
+ * returned row rather than treat 200 as success. 422 = the building has no address to
+ * geocode, and the fix is to type one on /locations/.
+ */
+export function geocodeLocation(id: string, signal?: AbortSignal): Promise<Location> {
+  return apiFetch<{ location: Location }>(`/admin/locations/${encodeURIComponent(id)}/geocode`, {
+    method: 'POST',
+    signal,
+  }).then((data) => data.location)
+}
+
+/* --- Reports: P&L and building analytics (migration 005) --------------------------------
+ *
+ * Both are aggregated IN SQL, not in the browser, because `/admin/data` caps shift rows at
+ * 2000 and a client-side aggregate would silently report a smaller month than happened.
+ *
+ * Both REQUIRE both period bounds \u2014 hence `ClosedRange` rather than `PeriodRange`. Revenue
+ * is a monthly contract pro-rated over the days of the period, so an unbounded end is
+ * either infinitely many days or a default month nobody asked for.
+ *
+ * EVERY `null` BELOW IS A REFUSAL TO GUESS AND MUST BE RENDERED AS ONE. `revenue_cents`
+ * null is "nobody has priced this building", never EUR 0. `below_baseline` null is "not
+ * assessable", never a pass.
+ */
+
+/** A period with both ends set. `periodRange(p)` for any p except `'all'` produces one. */
+export type ClosedRange = { from: string; to: string }
+
+export function isClosedRange(range: PeriodRange): range is ClosedRange {
+  return range.from !== null && range.to !== null
+}
+
+export type PlBuilding = {
+  location_id: string
+  slug: string
+  name: string
+  active: boolean
+  client_id: number | null
+  client_name: string | null
+
+  labour_seconds: number
+  labour_minutes: number
+  /** Payable labour only (decision-10), valued at CURRENT rates \u2014 see `PlLabourBasis`. */
+  labour_cents: number
+  /** This building's share of the period's material pool, pro-rata by labour (decision-6). */
+  material_cents: number
+
+  /** Null = no contract covering any day of the period. NOT zero. */
+  revenue_cents: number | null
+  revenue_unknown_reason: 'no_contract' | null
+  /** Days of the period this building actually had a price for. */
+  revenue_days: number
+  period_days: number
+
+  target_minutes: number | null
+  target_unknown_days: number
+
+  profit_cents: number | null
+  /** Margin in basis points. Null when revenue is unknown or exactly zero. */
+  margin_bp: number | null
+  margin_unknown_reason: 'no_contract' | 'zero_revenue' | null
+  /**
+   * TRUE = below the operator's floor. FALSE = at or above it. NULL = NOT ASSESSABLE,
+   * because either the margin or the baseline is unknown. Null is not a pass and must
+   * never be rendered as one.
+   */
+  below_baseline: boolean | null
+
+  /**
+   * decision-10, per building. A building looks CHEAP precisely because these hours were
+   * withheld from its cost. Not a footnote \u2014 rendering the cost without them is lying.
+   */
+  excluded_unresolved_shifts: number
+  excluded_unresolved_seconds: number
+  open_shifts: number
+}
+
+/**
+ * `rate_basis: 'current'` is the standing limitation: `workers.hourly_rate_cents` is one
+ * mutable column with no history, so raising a wage silently rewrites every past month's
+ * labour cost (decision-28). `rate_basis_note` is the server's own German sentence; the
+ * screens render their OWN translated line off `rate_basis` so it is not German on the
+ * English locale, and it must be PERMANENTLY VISIBLE, not a tooltip.
+ */
+export type PlLabourBasis = { rate_basis: 'current'; rate_basis_note: string }
+
+export type PlMaterials = {
+  basis: 'pro_rata_labour_hours'
+  basis_decision: string
+  /** Everything ORDERED in the period, priced. Integer cents. */
+  pool_cents: number
+  allocated_cents: number
+  /** Ordered but unsplittable, because nobody worked anywhere in the period. Reported. */
+  unallocated_cents: number
+  unallocated_reason: 'no_payable_labour_in_period' | null
+  /** Ordered but not yet priced. Excluded from the pool, and counted so it can be said. */
+  unpriced_requests: number
+  priced_requests: number
+}
+
+export type PlReport = {
+  range: ClosedRange
+  period_days: number
+  timezone: string
+  baseline_margin_bp: number | null
+  baseline_set: boolean
+  labour: PlLabourBasis
+  materials: PlMaterials
+  buildings: PlBuilding[]
+}
+
+export function fetchPl(range: ClosedRange, signal?: AbortSignal): Promise<PlReport> {
+  return apiFetch<PlReport>(`/admin/pl?${rangeQuery(range)}`, { signal })
+}
+
+/** One Vienna calendar month of actual payable time at one building. */
+export type TrendPoint = { month: string; actual_minutes: number; shifts: number }
+
+export type AnalyticsBuilding = {
+  location_id: string
+  slug: string
+  name: string
+  active: boolean
+  address: string | null
+  client_id: number | null
+  client_name: string | null
+  contact_id: number | null
+  contact_name: string | null
+
+  lat: number | null
+  lng: number | null
+  geocoded_at: string | null
+  /**
+   * The map state, decided by the SERVER. Never re-derive it from `lat === null`: that
+   * cannot tell "nobody has asked yet" from "we asked and Google had nothing", and those
+   * have different fixes.
+   */
+  geocode_state: 'pinned' | 'never_attempted' | 'failed'
+  geocode_status: string | null
+  street_view_status: string | null
+
+  actual_minutes: number
+  target_minutes: number | null
+  target_unknown_days: number
+  variance_minutes: number | null
+
+  /** Oldest month first, one entry per requested month, zero-filled. */
+  trend: TrendPoint[]
+  /** Null = fewer than two months carry any shift at all. Not a flat line. */
+  trend_delta_minutes: number | null
+  trend_direction: 'up' | 'down' | 'flat' | null
+  trend_reason: 'insufficient_data' | null
+
+  excluded_unresolved_shifts: number
+  excluded_unresolved_seconds: number
+  open_shifts: number
+}
+
+export type AnalyticsReport = {
+  range: ClosedRange
+  period_days: number
+  timezone: string
+  trend_months: number
+  buildings: AnalyticsBuilding[]
+}
+
+/** TREND_MONTHS_DEFAULT / TREND_MONTHS_MAX in server/routes/admin.js. Clamped, not rejected. */
+export const TREND_MONTHS_DEFAULT = 6
+export const TREND_MONTHS_MAX = 24
+
+export function fetchAnalytics(
+  range: ClosedRange,
+  months: number,
+  signal?: AbortSignal,
+): Promise<AnalyticsReport> {
+  return apiFetch<AnalyticsReport>(`/admin/analytics?${rangeQuery(range)}&months=${months}`, {
+    signal,
+  })
 }

@@ -36,37 +36,45 @@ export function SidebarNav() {
         })}
       </ul>
 
-      <p className="nav-heading" id="nav-future-heading">
-        {t('futureHeading')}
-      </p>
-      {/*
-        aria-disabled rather than `disabled`: a `disabled` button is removed from the tab order,
-        so a keyboard user would never learn these roadmap items exist. This stays focusable and
-        announces itself as disabled. There is no click handler because there is nothing to do.
-      */}
-      <ul className="nav-list" aria-labelledby="nav-future-heading">
-        {FUTURE_NAV.map((labelKey) => (
-          <li key={labelKey}>
-            <button
-              type="button"
-              className="nav-link nav-link-locked"
-              aria-disabled="true"
-              aria-describedby={FUTURE_HINT_ID}
-            >
-              <span className="nav-lock" aria-hidden="true">
-                🔒
-              </span>
-              <span className="nav-label">{t(labelKey)}</span>
-              <span className="nav-tooltip" aria-hidden="true">
-                {t('futureTooltip')}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
-      <p id={FUTURE_HINT_ID} className="visually-hidden">
-        {t('futureTooltip')}
-      </p>
+      {/* The whole block disappears when nothing is queued up. A "Kommt später" heading over
+          an empty list reads as a sidebar that failed to load, which is the one impression a
+          navigation must never give. See FUTURE_NAV in lib/nav.ts. */}
+      {FUTURE_NAV.length === 0 ? null : (
+        <>
+          <p className="nav-heading" id="nav-future-heading">
+            {t('futureHeading')}
+          </p>
+          {/*
+            aria-disabled rather than `disabled`: a `disabled` button is removed from the tab
+            order, so a keyboard user would never learn these roadmap items exist. This stays
+            focusable and announces itself as disabled. There is no click handler because
+            there is nothing to do.
+          */}
+          <ul className="nav-list" aria-labelledby="nav-future-heading">
+            {FUTURE_NAV.map((labelKey) => (
+              <li key={labelKey}>
+                <button
+                  type="button"
+                  className="nav-link nav-link-locked"
+                  aria-disabled="true"
+                  aria-describedby={FUTURE_HINT_ID}
+                >
+                  <span className="nav-lock" aria-hidden="true">
+                    🔒
+                  </span>
+                  <span className="nav-label">{t(labelKey)}</span>
+                  <span className="nav-tooltip" aria-hidden="true">
+                    {t('futureTooltip')}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p id={FUTURE_HINT_ID} className="visually-hidden">
+            {t('futureTooltip')}
+          </p>
+        </>
+      )}
     </nav>
   )
 }

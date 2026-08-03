@@ -70,6 +70,8 @@ object Wire {
 
     private fun JSONObject.instantOrNull(key: String): Instant? = stringOrNull(key)?.let(::instant)
 
+    private fun JSONObject.intOrNull(key: String): Int? = if (isNull(key)) null else optInt(key).takeIf { has(key) }
+
     fun worker(o: JSONObject) = WireWorker(id = o.getInt("id"), name = o.optString("name", ""))
 
     fun location(o: JSONObject) = WireLocation(
@@ -89,6 +91,29 @@ object Wire {
         clientUuid = o.stringOrNull("client_uuid"),
         locationSlug = o.stringOrNull("location_slug"),
         locationName = o.stringOrNull("location_name"),
+    )
+
+    /**
+     * One row of GET /material-requests/mine, or the {request} of a POST.
+     *
+     * `status` is read as a raw string and mapped afterwards ([WireMaterialRequest.status]):
+     * a sixth status added server-side must degrade to "unknown" on a phone in the field,
+     * not throw and blank the list. Everything except `id`, `body`, `status` and
+     * `created_at` is optional, because a request the admin has not touched has nothing
+     * else filled in.
+     */
+    fun materialRequest(o: JSONObject) = WireMaterialRequest(
+        id = o.getInt("id"),
+        body = o.optString("body", ""),
+        statusRaw = o.optString("status", ""),
+        adminNote = o.stringOrNull("admin_note"),
+        quantity = o.intOrNull("quantity"),
+        orderedAt = o.instantOrNull("ordered_at"),
+        arrivedAt = o.instantOrNull("arrived_at"),
+        seenAt = o.instantOrNull("seen_at"),
+        createdAt = instant(o.getString("created_at")),
+        locationName = o.stringOrNull("location_name"),
+        itemName = o.stringOrNull("item_name"),
     )
 }
 

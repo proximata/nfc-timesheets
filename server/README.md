@@ -10,8 +10,7 @@ and `@sentry/node` (decision-23 — no framework, no ORM, no router, no logging 
 server.js          http server, route table, static serving, boot + env fail-fast, access log
 instrument.mjs     Sentry init. Loaded via `node --import`, BEFORE server.js
 lib/scrub.js       redaction at the telemetry boundary (pure, the PII trust boundary)
-routes/app.js      worker-session routes (iOS) /roster /shifts/open /shifts/close
-                                              /shifts/unresolved /shifts/:id/resolve
+routes/app.js      worker-session routes (iOS + Android) /roster /shifts/* /material-requests/*
 routes/auth.js     Sign in with Apple (iOS)   /auth/apple /auth/session /auth/logout
 lib/apple.js       Apple identity token verification (RS256 + JWKS, stdlib only)
 routes/admin.js    session-cookie routes (web) /admin/*  (+ /admin/login, unauthenticated)
@@ -20,7 +19,12 @@ lib/db.js          pg pool
 lib/auth.js        app-key compare, scrypt passwords, sessions, login rate limit
 lib/validate.js    input validation (tag values are untrusted - decision-15)
 lib/http.js        JSON responses, machine-readable errors, bounded body reader
+lib/materials.js   material-request shape + the status transition table (one copy)
+lib/reporting.js   P&L and building analytics SQL (Vienna calendar, integer cents)
+lib/prorata.js     largest-remainder split of a cent pot by weight (decision-6)
+lib/geocode.js     address -> lat/lng via Google, FAILS SOFT, key never leaves the file
 bin/create-admin.js  interactive CLI to create/re-password an admin
+bin/geocode-backfill.js  pin buildings entered before geocoding existed; safe to re-run
 check-api.js       runnable self-check (assert, no framework)
 public/            static root for the Next.js admin export, override with PUBLIC_DIR
 ```
@@ -102,6 +106,9 @@ session; `body.worker_id` and `?worker=` are gone (decision-22) and are ignored 
 | `GET /shifts/open`         | —                                        | my running shift; server is authoritative |
 | `GET /shifts/unresolved`   | —                                        | mine only: `auto_closed AND corrected_at IS NULL` |
 | `POST /shifts/:id/resolve` | `end_time`                                | mine only; stamps `corrected_at`. 404 otherwise |
+| `POST /material-requests`  | `body, location_uuid?`                    | 201; free text, `worker_id` from the session |
+| `GET /material-requests/mine` | —                                      | mine only; the arrival banner polls this |
+| `POST /material-requests/:id/seen` | —                                | mine only, `arrived` only; idempotent |
 
 Every lookup is scoped to the session's worker, so another worker's `id` or `client_uuid`
 answers `404` exactly like a nonexistent one — no existence oracle, no cross-worker writes.
@@ -141,11 +148,100 @@ keep naming the worker, the building, the client that was paying and the person 
 | `POST /admin/shifts` | `worker_id, location_id, start_time, end_time` | 201; the phone-died recovery |
 | `POST /admin/portal-grants` | `contact_id, location_id` | 201 `{grant, token, path}` — **raw token returned once** |
 | `DELETE /admin/portal-grants/:token_hash` | — | revoke, idempotent |
+| `PATCH /admin/material-requests/:id` | `status?, admin_note?, inventory_item_id?, quantity?, cost_cents?, location_id?` | `status` is a *transition*, checked against `lib/materials.js`; `409 invalid_transition` otherwise |
+| `GET /admin/locations/:id/contracts` | — | price history, newest first |
+| `POST /admin/locations/:id/contracts` | `monthly_contract_cents, target_minutes_per_month?, valid_from, note?, client_id?` | 201; closes the current period at `valid_from`. `409 contract_overlap` |
+| `DELETE /admin/contracts/:id` | — | **current period only**; reopens its predecessor |
+| `POST /admin/locations/:id/geocode` | — | "erneut geokodieren". 200 whether or not a pin came back |
+| `POST /admin/settings` | `key, value` | allowlisted keys only; today just `pl_margin_baseline_bp` |
+| `DELETE /admin/settings/:key` | — | back to "nobody has told me"; nothing is flagged again |
 
 `POST /admin/shifts` enforces the same invariants as the tap path (active worker, active
 building, end after start, nothing in the future) plus `409 shift_overlap` against any existing
 shift of that worker, including an open one. `end_time` is required. It sets **no** flag: the
 shift is marked by `client_uuid IS NULL`, which already means "no phone ever keyed this".
+
+## Reports (005)
+
+Both need the `ts_session` cookie and both **require** `from` and `to` (UTC instants, half-open
+`[from, to)`). Unbounded is meaningful for a shift list and meaningless for a P&L, so a missing
+end is `400 missing_field` rather than a silently substituted default month.
+
+| route | notes |
+| ----- | ----- |
+| `GET /admin/pl?from=&to=` | revenue − labour − materials per building |
+| `GET /admin/analytics?from=&to=&months=` | actual vs target minutes, trend, map state. `months` ≤ 24, clamped |
+
+**Every calendar question is answered in `Europe/Vienna` by Postgres**, from the tz database,
+never from a fixed `+01:00`/`+02:00`. A day belongs to the period its own Vienna midnight falls
+in — the same "belongs to where it starts" rule as a shift. Vienna October is 31 days *and one
+hour* long; Vienna March is 31 days *minus* one hour, so any day count derived by dividing by
+86 400 000 is a day short every spring.
+
+**Money is integer cents end to end.** Pro-ration uses `numeric` (exact decimal), never a float,
+and rounds once at the end of a `SUM`.
+
+What these routes refuse to guess — each is a `null` **plus a reason**, never a confident zero:
+
+| situation | answer |
+| --------- | ------ |
+| no contract in the period | `revenue_cents: null`, `revenue_unknown_reason: "no_contract"` |
+| revenue of exactly 0 | `margin_bp: null`, `margin_unknown_reason: "zero_revenue"` |
+| no baseline configured | `baseline_set: false`, every `below_baseline: null` — **nothing is flagged** |
+| materials but no payable hours | `unallocated_cents`, `unallocated_reason: "no_payable_labour_in_period"` |
+| a request the admin has not priced | excluded from the pool **and** counted in `unpriced_requests` |
+| no `target_minutes_per_month` | `target_minutes: null`, `variance_minutes: null` |
+| fewer than two months with shifts | `trend_direction: null`, `trend_reason: "insufficient_data"` |
+
+**Materials are split pro-rata by labour hours (decision-6)**, using largest remainder
+(`lib/prorata.js`), so the per-building column sums back to the pot **exactly** — `round(total ×
+share)` loses a cent on almost every three-way split. `material_requests.location_id` records
+the building the worker *named* and is **not** a cost attribution: decision-6 considered and
+rejected per-request attribution.
+
+**decision-10 is honoured and made visible.** Labour uses exactly
+`end_time IS NOT NULL AND NOT (auto_closed AND corrected_at IS NULL)` — copied, never
+reformulated. The excluded shifts are reported per building as
+`excluded_unresolved_shifts` / `excluded_unresolved_seconds`: a building that looks cheap
+because three shifts are stuck awaiting resolution is not a cheap building.
+
+**The known dishonesty, stated on the wire.** `labour.rate_basis` is `"current"`.
+`workers.hourly_rate_cents` is one mutable column with no history, so every figure values *all*
+history at *today's* rate. The screen must carry that as a permanent visible notice, not a
+tooltip. Fixing it needs a `worker_rates` table that payroll reads — a decision record, not a
+commit.
+
+### Contract history
+
+`location_contracts` is period-scoped (`valid_from`, `valid_to`, Vienna calendar `DATE`s,
+half-open). `locations.monthly_contract_cents` / `target_minutes_per_month` remain as a **mirror
+of the current row** so `/locations/`, `/reinigung/` and the shipped iOS build keep working with
+no change. `syncContractFromLocation` + `mirrorLocationFromContract` are the only writers, and
+`check-api.js` asserts the two never disagree.
+
+The buildings **form** edits the current period *in place* (a typo was always wrong); recording
+an actual price change is the explicit, dated `POST /admin/locations/:id/contracts`.
+
+### Geocoding
+
+`GOOGLE_GEOCODING_KEY` is optional and lives only in `/etc/nfc/env` — **not** in
+`ops/branding.json` (decision-24 §9: identity is committed, a credential is not). `fetch` is
+stdlib, so this adds no dependency.
+
+**It can never block saving a building.** The row is written first; geocoding runs after and
+every outcome — no key, quota, timeout, DNS failure — ends with `lat/lng` NULL and the building
+created. Same rule decision-23 gives telemetry.
+
+Three columns, none derivable from the others: `geocoded_at` (when we asked),
+`geocode_status` (what happened), `street_view_status` (whether a photo exists).
+
+- A **fuzzy match is not a pin.** Measured against the live key, `Nirgendwogasse 99999, 1010
+  Wien` answers HTTP 200 / `status: OK` with `partial_match: true` and the centre of the 1st
+  district; `Quatsch Quatsch Quatsch` answers with the centre of Austria. Both are rejected
+  (`PARTIAL_MATCH` / `APPROXIMATE_ONLY`). A wrong pin is worse than no pin.
+- **Render a Street View photo only when `street_view_status === 'OK'`.** The static image
+  endpoint serves a grey "no imagery" JPEG with HTTP 200, so an `onError` handler alone ships a
+  grey box and calls it a photograph.
 
 ## Client portal (public trust boundary)
 
@@ -176,6 +272,7 @@ sees that building's cleaning history. Upgrade path: contact accounts + magic-li
 | `SENTRY_DSN`   | no       | **absent = the SDK is disabled**, see below          |
 | `SENTRY_ENVIRONMENT` | no | defaults to `production`                            |
 | `SENTRY_RELEASE` | no     | untagged if unset                                    |
+| `GOOGLE_GEOCODING_KEY` | no | absent = buildings are saved with no pin, which is a supported state. **Never logged, never returned to a client** |
 
 Boot aborts with a named list if any required var is missing. No secret is ever logged. There is
 deliberately no admin credential in the environment any more — it lives in the `admins` table.
@@ -254,6 +351,34 @@ issuer, expired, unknown `kid`, unknown email → `403` with the address echoed,
 rejected (with and without a bound sub), a valid worker getting a session whose token is stored
 hashed, cross-worker isolation on `/shifts/*`, and deactivation killing a live session.
 
+005 adds, in the same file:
+
+- **The pro-rata split** (`lib/prorata.js`, no database needed, so it runs anywhere): exhaustive
+  over awkward pots × lopsided weights, asserting the parts sum back **exactly**; zero weight
+  → zero cents; no weight at all → `null`, not a pile of zeroes; deterministic across re-runs.
+- **The Vienna calendar on `/admin/pl`**: October 2025 (31 days *and an hour*) and March 2026
+  (31 days *minus* an hour) both priced at exactly one monthly fee, with the naive
+  `Δms / 86 400 000` shown to produce 30 for March; a 23:30 shift on 31 October (CET) counted in
+  October, with the fixed-`+02:00` end bound shown to lose it.
+- **A price change is period-correct**: 15 days at the old price + 16 at the new, never 31 at
+  today's; overlapping periods refused; the `locations.*` mirror asserted to agree with the
+  current contract row after *every* write path.
+- **decision-10 is not regressed**: an unresolved auto-closed shift stays out of `labour_cents`,
+  is reported in `excluded_unresolved_shifts`, and counts once `corrected_at` is stamped — with
+  the material split still summing to the pot as the weights move.
+- **Geocoding fails soft**: no key, a thrown geocoder and an exhausted quota all still create
+  the building; the retry route pins it; a hand-placed `lat`/`lng` is never overwritten. A
+  separate case drives the **real parser** with Google's real response shapes (captured from the
+  live key) and asserts a `partial_match` / `APPROXIMATE` answer never becomes a pin.
+- **Material requests**: `worker_id` taken from the session with a hostile `worker_id` in the
+  body ignored; worker B cannot list or acknowledge worker A's request (`404`, nothing written);
+  the lifecycle refuses every illegal jump; a late invoice edits the cost without moving
+  `ordered_at`.
+
+```bash
+node db/check-migrate.js   # 005 applies over live rows; the contract backfill is idempotent
+```
+
 ## Errors
 
 `4xx` bodies are `{ "error": "<code>" }` (plus `"field"` for validation failures). Never a stack
@@ -262,7 +387,10 @@ trace. Codes: `unauthorized`, `invalid_credentials`, `too_many_attempts`, `not_f
 `invalid_uuid`, `invalid_id`, `invalid_timestamp`, `timestamp_out_of_range`,
 `timestamp_in_future`, `end_before_start`, `unknown_worker`, `unknown_location`,
 `unknown_shift`, `shift_already_open`, `already_resolved`, `slug_taken`, `conflict`,
-`invalid_email`, `email_taken`, `invalid_token`, `not_eligible`, `internal_error`.
+`invalid_email`, `email_taken`, `invalid_token`, `not_eligible`, `internal_error`,
+`missing_field`, `invalid_date`, `invalid_range`, `invalid_transition`, `unknown_request`,
+`request_rejected`, `unknown_item`, `unknown_contract`, `contract_overlap`,
+`contract_not_current`, `location_has_no_address`.
 
 `shift_too_long` is gone on purpose: it rejected exactly the runaway shift the 8h timer exists
 to handle, leaving that worker unable to clock out at all.
@@ -290,3 +418,21 @@ to handle, leaving that worker unable to clock out at all.
 - **`/admin/data` is one unpaginated blob** (capped at `?limit=`, default 500, max 2000).
   Upgrade path: real pagination + CSV export.
 - **int8 ids parsed as JS numbers** (`lib/db.js`). Ceiling 2^53 rows.
+- **Material arrival is POLLED, not pushed.** There is no APNs certificate, no FCM project and
+  no device-token table, and server deps stay `pg` + `@sentry/node` (decision-23). The clients
+  ask `GET /material-requests/mine` on launch and on refresh. Ceiling: a worker who never opens
+  the app is never told. Upgrade path: APNs + FCM — a decision record and two vendor keys, not
+  a commit.
+- **Contract non-overlap is checked in the route**, not by an `EXCLUDE` constraint: that needs
+  `btree_gist`, and installing an extension on a live payroll box is not worth one guarded
+  `INSERT`. Ceiling: two admins posting concurrently could interleave. There is one admin.
+- **Geocoding runs inside the request** (~8 s + ~4 s worst case on the buildings form). It never
+  blocks the save. Upgrade path: a queue, which needs a retry policy and a way to tell the panel
+  the row changed underneath it.
+- **`app_settings` is a key/value table**, not a settings framework: no types (the route
+  validates), no per-building override, no history. Upgrade path: a typed column per setting
+  once there are three.
+- **The trend is actual minutes only**, with no per-month target beside it. Ceiling: a building
+  whose contracted target changed mid-trend shows the time moving without showing why.
+- **`GET /admin/data` now also carries every open material request** plus the 500 most recent.
+  Same unpaginated-blob ceiling as the rest of it.

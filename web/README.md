@@ -131,11 +131,65 @@ component.
 
 ### Navigation — `lib/nav.ts`
 
-Live entries and the four v2 roadmap stubs (Material Requests, P&L Dashboard, Contract
-Management, Building Analytics) are declared here. Stubs render with a lock icon and a tooltip;
-they use `aria-disabled` rather than `disabled` so a keyboard user can still reach them and
-learn the items exist, and the tooltip text is also exposed via `aria-describedby`. No pages
-exist behind them and none should be created here.
+Every live entry is declared here. `FUTURE_NAV` is the roadmap-stub mechanism — locked items
+with a lock icon and a tooltip, `aria-disabled` rather than `disabled` so a keyboard user can
+still reach them and learn the items exist — and it is currently **empty**, because the four
+that were in it shipped: `/material-requests/`, `/pl/`, `/contracts/` and `/analytics/`.
+`SidebarNav` renders the whole "Kommt später" block only when `FUTURE_NAV` has entries; a
+heading over an empty list reads as a sidebar that failed to load.
+
+### The four v2 screens
+
+All of them are client components that fetch on mount, exactly like `/workers/`. Each one has
+one rule that is not a matter of taste:
+
+- **`/material-requests/`** — the lifecycle move is a single button in the row. `status` is a
+  TRANSITION request and the server refuses illegal ones with a 409, so `lib/materials.ts`
+  holds a copy of the transition table to decide which buttons to draw; `pnpm check` compares
+  that copy against `server/lib/materials.js` rather than trusting it. There is **no push** in
+  this system — the worker's app polls — and no copy on the screen may say otherwise.
+- **`/pl/`** — `null` from the API is a refusal to guess and is rendered as one. Revenue `null`
+  is "no contract on file", never EUR 0. `below_baseline: null` is "cannot be assessed", never a
+  pass. The margin baseline (`app_settings.pl_margin_baseline_bp`) ships UNSET and nothing
+  defaults it; setting and unsetting it are both controls on the page. A flag is not a red dot:
+  every flagged building gets a paragraph naming the margin, the floor, the shortfall and where
+  the money went, including the decision-10 hours deliberately left out of the cost.
+- **`/contracts/`** — revenue becomes period-correct, labour does not (decision-28). That is a
+  permanent on-screen notice, not a release note. Only the CURRENT period can be undone.
+- **`/analytics/`** — the table is the primary presentation and the map is the optional part.
+  Buildings without coordinates are in the table with the reason and a retry button; they are
+  never invisible.
+
+### The map — `lib/map.ts` (no npm package)
+
+Google Maps is loaded with a `<script>` tag and an eleven-line structural interface. No
+`@googlemaps/js-api-loader`, no `@react-google-maps/api`, no `@types/google.maps`.
+
+`NEXT_PUBLIC_GOOGLE_MAPS_KEY` is a **browser** key, inlined into the bundle at build time and
+readable by anyone who opens the panel. That is only safe because it is restricted by HTTP
+referrer in the Google Cloud console. The server's `GOOGLE_GEOCODING_KEY` is IP-restricted and
+must never be put here.
+
+Six states, all named on screen and none of them a blank rectangle: `noKey` (the build had no
+key), `noPins` (nothing is geocoded yet), `loading`, `ready`, `blocked` (Google rejected the
+key — caught via `gm_authFailure`, because an unauthorised key still loads the script and still
+constructs a `Map`), and `failed` (offline, blocked by an extension, or a ten-second timeout).
+
+A Street View photograph is requested **only** when `locations.street_view_status === 'OK'`,
+i.e. when the metadata endpoint has already confirmed coverage. The static image endpoint
+answers HTTP 200 with a grey "no imagery" tile, so an `onError` handler alone ships that tile
+and presents it as a photograph of a client's building. `pnpm check` covers the gate.
+
+**Two things the owner has to do, which no code here can do for them:**
+
+1. `ops/deploy.sh` does not pass `NEXT_PUBLIC_GOOGLE_MAPS_KEY` to `pnpm verify`, so a production
+   build currently ships with no map. Next does read `web/.env.local` during the deploy build,
+   so putting the key there works — but that file is gitignored and per-machine, which makes it
+   a deploy that silently depends on who ran it. The durable fix is one line in `ops/deploy.sh`.
+2. The **Street View Static API is not enabled** on the operator's Google Cloud project. The
+   server's metadata probe answers `REQUEST_DENIED`, so `street_view_status` is never `OK` and
+   no photograph renders anywhere. The panel says exactly that, in German, with the reason.
+   It starts working the day the box is ticked; nothing here needs to change.
 
 ### Accessibility
 

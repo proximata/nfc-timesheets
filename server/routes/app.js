@@ -23,6 +23,7 @@
 import * as Sentry from "@sentry/node";
 import { all, one } from "../lib/db.js";
 import { fail } from "../lib/http.js";
+import { M_MATERIAL_REQUEST_COLS, MATERIAL_REQUEST_COLS } from "../lib/materials.js";
 import * as v from "../lib/validate.js";
 
 /**
@@ -331,6 +332,110 @@ async function resolveShift({ params, body, session }) {
   return { status: 200, body: { shift: updated } };
 }
 
+// ---- material requests (worker side) ----------------------------------------------
+//
+// decision-22 ONCE MORE, and it is the whole security model of these three routes:
+// `worker_id` comes from `session.workerId`. There is no `worker_id` in any body and no
+// `?worker=` on any query here, and there must never be one — a material request names a
+// person, carries their free text and (once priced) costs the company money.
+//
+// THERE IS NO PUSH NOTIFICATION IN THIS SYSTEM and these routes do not pretend otherwise.
+// Server dependencies are pg + @sentry/node and nothing else (decision-23 amending
+// decision-16); no APNs certificate, no FCM project and no device-token table exists. The
+// clients POLL `GET /material-requests/mine` on launch and on refresh and raise a banner
+// for rows the server marks `arrived` and not yet seen. The UI copy says so, because a
+// worker who is told "you will be notified" and then is not has been lied to.
+//   ponytail: polling. CEILING: a worker who never opens the app is never told.
+//   UPGRADE PATH: APNs + FCM, which is a decision record, an Apple key and a Play
+//   project — not a commit.
+
+// The worker's own words. 2000 characters is roughly two screens of typing on a phone and
+// is a cap on request size, not an opinion about how much detail is welcome.
+const REQUEST_BODY_MAX = 2000;
+
+/**
+ * POST /material-requests {body, location_uuid?} -> a request in the worker's own words.
+ *
+ * `location_uuid` is OPTIONAL and is CONTEXT, never a cost attribution: it records the
+ * building the worker had in mind, which is the one thing they actually know. decision-6
+ * splits material cost pro-rata by labour hours and explicitly rejected per-request
+ * building attribution, so nothing downstream charges this building for this bottle.
+ *
+ * Nothing is matched against `inventory_items` here. "der blaue Reiniger, der große" is
+ * not a foreign key, and guessing which product was meant would put a wrong number into a
+ * P&L with nobody able to see why. A human maps it in the admin panel or it stays free
+ * text forever.
+ *
+ * NOT idempotent, deliberately — unlike a clock-in there is no client_uuid, because two
+ * identical requests for mops on the same day is a real thing a worker might mean, and
+ * silently swallowing the second one loses a request nobody can then find.
+ */
+async function createMaterialRequest({ body, session }) {
+  const text = v.str(body.body, "body", { max: REQUEST_BODY_MAX });
+  // Resolved server-side against ACTIVE locations exactly like a tap (decision-15): the
+  // id may have come off an unlocked tag and unguessable is not authenticated.
+  const locationId =
+    body.location_uuid === undefined || body.location_uuid === null || body.location_uuid === ""
+      ? null
+      : (await v.activeLocation(body.location_uuid)).id;
+
+  const row = await one(
+    `INSERT INTO material_requests (worker_id, location_id, body) VALUES ($1, $2, $3)
+     RETURNING ${MATERIAL_REQUEST_COLS}`,
+    [session.workerId, locationId, text],
+  );
+  return { status: 201, body: { request: row } };
+}
+
+/**
+ * GET /material-requests/mine -> MY requests, newest first.
+ *
+ * `WHERE worker_id = $1` is the entire access control and it is not optional: ids are
+ * sequential, so without it any signed-in worker could read every colleague's requests,
+ * which are free text people write about their own workplace.
+ *
+ * The location NAME rides along so the app can render "Neuhaus" without a second call.
+ * The slug does not (decision-21): it is a human handle for the admin panel and log lines
+ * and must never travel next to something a client could put back into a URL.
+ */
+const MINE_REQUEST_LIMIT = 200;
+
+async function myMaterialRequests({ session }) {
+  const requests = await all(
+    `SELECT ${M_MATERIAL_REQUEST_COLS}, l.name AS location_name, i.name AS item_name
+       FROM material_requests m
+       LEFT JOIN locations l       ON l.id = m.location_id
+       LEFT JOIN inventory_items i ON i.id = m.inventory_item_id
+      WHERE m.worker_id = $1
+      ORDER BY m.created_at DESC
+      LIMIT ${MINE_REQUEST_LIMIT}`,
+    [session.workerId],
+  );
+  return { status: 200, body: { requests } };
+}
+
+/**
+ * POST /material-requests/:id/seen -> "I have read that it arrived".
+ *
+ * Only the owner's own rows and only once the admin has marked them `arrived`: stamping
+ * `seen_at` on anything else would let a client clear its own arrival banner for a request
+ * that has not arrived. Idempotent — COALESCE keeps the FIRST acknowledgement, so a
+ * double tap does not rewrite when the worker actually found out.
+ */
+async function markMaterialRequestSeen({ params, session }) {
+  const requestId = v.id(params.id, "id");
+  const row = await one(
+    `UPDATE material_requests SET seen_at = COALESCE(seen_at, now())
+      WHERE id = $1 AND worker_id = $2 AND status = 'arrived'
+      RETURNING ${MATERIAL_REQUEST_COLS}`,
+    [requestId, session.workerId],
+  );
+  // 404 and not 403 for somebody else's row: an existence oracle over a colleague's
+  // requests is not worth a better error message. Same rule as POST /shifts/:id/resolve.
+  if (!row) fail(404, "unknown_request");
+  return { status: 200, body: { request: row } };
+}
+
 // Every one of these is `auth: "worker"` — X-App-Key AND a signed-in worker. There is
 // no app-key-only shift route left; that combination is what made body.worker_id
 // authoritative in the first place.
@@ -342,4 +447,7 @@ export const appRoutes = [
   { method: "GET", path: "/shifts/unresolved", auth: "worker", handler: unresolvedShifts },
   { method: "GET", path: "/shifts/mine", auth: "worker", handler: myShifts },
   { method: "POST", path: "/shifts/:id/resolve", auth: "worker", handler: resolveShift },
+  { method: "POST", path: "/material-requests", auth: "worker", handler: createMaterialRequest },
+  { method: "GET", path: "/material-requests/mine", auth: "worker", handler: myMaterialRequests },
+  { method: "POST", path: "/material-requests/:id/seen", auth: "worker", handler: markMaterialRequestSeen },
 ];

@@ -56,6 +56,12 @@ data class ApiFailure(
             "too_many_attempts" -> "err_too_many_attempts"
             "missing_location" -> "err_missing_location"
             "wrong_account" -> "err_wrong_account"
+            // Material requests. `unknown_request` is somebody else's row or one the
+            // admin deleted; `not_found` is an UNROUTED PATH, i.e. this build is ahead
+            // of the server — never a rejection of what was sent. MaterialQueue.outcome()
+            // is what keeps the row queued; this only supplies the words.
+            "unknown_request" -> "err_unknown_request"
+            "not_found" -> "err_feature_unavailable"
             else -> if (status >= 500 || status == 0) "err_server" else "err_rejected"
         }
 

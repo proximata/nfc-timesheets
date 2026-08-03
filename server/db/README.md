@@ -10,6 +10,8 @@ migrations/002_worker_identity.sql   apple_sub/email + worker_sessions (decision
 migrations/003_clients_contracts_inventory.sql   clients, contacts, inventory_items,
                           portal_grants, workers.phone, locations contract columns
 migrations/004_worker_enrolment_codes.sql   workers.enrolment_code_* (decision-26)
+migrations/005_v2_features.sql   material_requests, location_contracts, app_settings,
+                          locations.geocoded_at / geocode_status / street_view_status
 migrate.js                runner: applies migrations/*.sql once each, in lexical order
 seed.sql                  DEV ONLY sample data
 check-migrate.js          runnable check (see bottom)
@@ -138,8 +140,41 @@ so it can never reach production by accident.
 - **A shift with `client_uuid IS NULL` was typed into the admin panel** (`POST /admin/shifts`,
   for the worker whose phone died). Every phone-originated shift carries an idempotency key,
   so no separate "added by hand" flag exists to drift out of agreement with that.
-- 3B (building owners, annual contracts, materials, P&L) is not built. It hangs off
-  `locations.id` / `shifts.id`; no change to `001_init.sql` is needed for it.
+- **005 is additive only**, like 003 and 004: 001-004 are applied on the live box with real
+  shifts in them. `check-migrate.js` proves 005 lands on a database that already holds a
+  worker, a building with a contract figure, a building without one, a closed shift and an
+  open one.
+- `material_requests` is the worker's own words plus an explicit lifecycle
+  (`submitted -> approved -> ordered -> arrived`, with `rejected` reachable from the first
+  two; `arrived` and `rejected` are terminal). `ordered_at` **pins the period a cost belongs
+  to**, so a late invoice correction changes the amount without moving the spend to another
+  month. `cost_cents IS NULL` means *unpriced*, which is not *free*: the P&L leaves it out of
+  the pool and reports how many it left out.
+- **`material_requests.location_id` is context, not a cost attribution.** It records the
+  building the worker named, which is the one thing they actually know. decision-6 splits
+  material cost pro-rata by labour hours and explicitly rejected "worker assigns to building"
+  ("nobody will do it"). Anything that starts charging `cost_cents` to `location_id` is
+  overturning decision-6 and needs a new decision record first.
+- `location_contracts` gives a building a **period-scoped price**, so a March P&L uses the
+  March price. `valid_from`/`valid_to` are Vienna calendar `DATE`s, half-open, `valid_to NULL`
+  = current, at most one current per building (partial UNIQUE index). `valid_to >= valid_from`,
+  not `>`: a zero-length row is the honest record of a price entered and cleared the same day.
+  `client_id` is stored, not derived — `locations.client_id` is current-only, and "who was
+  paying in March" is exactly what history has to answer.
+- `locations.monthly_contract_cents` / `target_minutes_per_month` survive as a **mirror of the
+  current contract row**, so `/locations/`, `/reinigung/` and the shipped iOS build need no
+  change. `routes/admin.js` is the only writer and `check-api.js` asserts they never disagree.
+  Two sources of truth are only safe when one is derived and something fails loudly when it
+  drifts.
+- `app_settings` **ships empty on purpose**. `pl_margin_baseline_bp` (margin floor, basis
+  points) has no default row: nobody has said what "ineffective" means for a Viennese cleaning
+  contract, so with the key absent the P&L flags nothing and says so. `check-migrate.js`
+  asserts the table is empty, so a future migration that seeds a number has to justify it.
+- Three geocoding columns on `locations`, none derivable from the others: `geocoded_at` (when
+  we asked), `geocode_status` (what happened — the difference between "fix the address" and
+  "try again later") and `street_view_status` (whether a photo exists; the static image
+  endpoint answers 200 with a grey "no imagery" tile, so this is the only honest signal).
+  All NULLable, because geocoding **fails soft** and must never block saving a building.
 
 ## Backups
 

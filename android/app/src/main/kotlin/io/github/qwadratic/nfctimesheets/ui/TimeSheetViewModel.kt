@@ -7,7 +7,10 @@ import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
+import io.github.qwadratic.nfctimesheets.core.MaterialEntry
+import io.github.qwadratic.nfctimesheets.core.MaterialQueue
 import io.github.qwadratic.nfctimesheets.core.TapInbox
+import io.github.qwadratic.nfctimesheets.core.WireMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.core.WireWorker
 import io.github.qwadratic.nfctimesheets.data.LocalShift
@@ -53,6 +56,21 @@ data class LogState(
     val recent: List<LocalShift> get() = shifts.filter { !it.isOpen }.take(5)
 }
 
+/**
+ * Material requests, worker side. Entirely separate from [LogState] on purpose: nothing
+ * about materials may ever be able to delay or block a clock-in, and two flows cannot
+ * accidentally await each other.
+ *
+ * @param featureUnavailable the server answered 404 not_found — these routes are not
+ *        deployed yet. NOT an error: queued rows are kept untouched and go out later.
+ */
+data class MaterialState(
+    val entries: List<MaterialEntry> = emptyList(),
+    val unseenArrivals: List<WireMaterialRequest> = emptyList(),
+    val featureUnavailable: Boolean = false,
+    val busy: Boolean = false,
+)
+
 class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
     /** One mailbox for every way a tap can arrive. See core/TapInbox.kt. */
@@ -85,6 +103,12 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
     private val _log = MutableStateFlow(LogState())
     val log: StateFlow<LogState> = _log.asStateFlow()
+
+    private val _materials = MutableStateFlow(MaterialState())
+    val materials: StateFlow<MaterialState> = _materials.asStateFlow()
+
+    /** A material pass is in flight. Two overlapping passes could post the same row twice. */
+    private var materialPassRunning = false
 
     private val _signingIn = MutableStateFlow(false)
 
@@ -128,7 +152,14 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                     }
                 }
             }
-            if (_session.value is SessionState.SignedIn) refresh()
+            if (_session.value is SessionState.SignedIn) {
+                refresh()
+                // At LAUNCH, not when the material tab is opened: the tab badge is the
+                // only thing telling a worker something is waiting for them at the
+                // warehouse, and a badge that only appears once you have looked is not a
+                // badge. Its own coroutine, so it cannot delay the log.
+                startMaterials()
+            }
         }
     }
 
@@ -164,6 +195,7 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 // files nothing.
                 adopt(app.api.session())
                 refresh()
+                startMaterials()
             } catch (failure: ApiFailure) {
                 app.workers.clear()
                 _session.value = SessionState.SignedOut(
@@ -194,6 +226,10 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             app.workers.clear()
             _session.value = SessionState.SignedOut()
             _log.value = LogState()
+            // Not the STORE, only the screen. Queued material requests belong to the
+            // worker who wrote them; MaterialStore.adopt() deletes them when a DIFFERENT
+            // worker signs in, and the same worker signing back in still has them.
+            _materials.value = MaterialState()
         }
     }
 
@@ -300,6 +336,84 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
     fun siteName(locationId: String): String? = _log.value.locationNames[locationId]
 
+    // ---- material requests ---------------------------------------------------------
+    //
+    // NONE of this is reachable from handleTap, refresh() or the launch path. It is
+    // driven by the material tab and nothing else, so a slow or missing materials API
+    // cannot cost anybody a clock-in.
+
+    /**
+     * Called when the material tab appears. Adopt (a different worker gets an empty
+     * store), show what is on disk immediately, then push and pull.
+     */
+    fun startMaterials() {
+        val worker = (_session.value as? SessionState.SignedIn)?.worker ?: return
+        viewModelScope.launch {
+            io { app.materials.adopt(worker.id) }
+            readMaterials()
+            syncMaterials()
+        }
+    }
+
+    /** Push then pull, so an arrival that lands mid-push is visible on the same refresh. */
+    fun syncMaterials() {
+        val worker = (_session.value as? SessionState.SignedIn)?.worker ?: return
+        if (materialPassRunning) return
+        viewModelScope.launch {
+            materialPassRunning = true
+            _materials.value = _materials.value.copy(busy = true)
+            try {
+                // withContext and not io{}: these are suspend functions that touch both
+                // SQLite and the network, so they need the dispatcher, not a wrapper for
+                // a blocking call.
+                val pushMissing = withContext(Dispatchers.IO) { app.materialSync.push(worker.id) }
+                val pullMissing = withContext(Dispatchers.IO) { app.materialSync.pull(worker.id) }
+                readMaterials(featureUnavailable = pushMissing || pullMissing)
+            } finally {
+                materialPassRunning = false
+                _materials.value = _materials.value.copy(busy = false)
+            }
+        }
+    }
+
+    /**
+     * The worker asked for something. The row is written to disk FIRST and pushed
+     * afterwards, exactly like a tap: a request typed in a basement has to survive.
+     *
+     * @return false when there was nothing to ask for — empty, or past the server's own
+     *         length cap. The screen disables the button for both, so this is the net.
+     */
+    fun submitMaterial(typed: String): Boolean {
+        val worker = (_session.value as? SessionState.SignedIn)?.worker ?: return false
+        val body = MaterialQueue.normalise(typed) ?: return false
+        viewModelScope.launch {
+            io { app.materials.enqueue(worker.id, body, locationId = _log.value.open?.locationId) }
+            readMaterials()
+            syncMaterials()
+        }
+        return true
+    }
+
+    /** "I have read that it arrived." Idempotent server-side. */
+    fun markMaterialSeen(request: WireMaterialRequest) {
+        val worker = (_session.value as? SessionState.SignedIn)?.worker ?: return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { app.materialSync.markSeen(worker.id, request.id) }
+            readMaterials()
+        }
+    }
+
+    /** Disk -> screen. The only place [MaterialState] entries are built. */
+    private suspend fun readMaterials(featureUnavailable: Boolean = _materials.value.featureUnavailable) {
+        val outbox = io { app.materials.outbox() }
+        val server = io { app.materials.server() }
+        _materials.value = _materials.value.copy(
+            entries = MaterialQueue.entries(outbox, server),
+            unseenArrivals = server.filter { it.isUnseenArrival },
+            featureUnavailable = featureUnavailable,
+        )
+    }
+
     /** A 401 came back from somewhere: expired, revoked, or the worker was deactivated. */
     private fun dropToSignedOut() {
         app.sessionRejected = false
@@ -338,6 +452,10 @@ fun stringIdFor(key: String): Int = when (key) {
     "err_too_many_attempts" -> R.string.err_too_many_attempts
     "err_missing_location" -> R.string.err_missing_location
     "err_wrong_account" -> R.string.err_wrong_account
+    "err_unknown_request" -> R.string.err_unknown_request
+    "err_feature_unavailable" -> R.string.err_feature_unavailable
+    "err_rejected_request" -> R.string.err_rejected_request
+    "err_wrong_account_request" -> R.string.err_wrong_account_request
     "err_rejected" -> R.string.err_rejected
     "err_server" -> R.string.err_server
     else -> R.string.err_server

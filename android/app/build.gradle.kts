@@ -1,8 +1,10 @@
 import java.util.Properties
 
 plugins {
+    // AGP 9 has built-in Kotlin support: applying org.jetbrains.kotlin.android on top of it
+    // is a hard error ("no longer required for Kotlin support since AGP 9.0").
+    // See https://kotl.in/gradle/agp-built-in-kotlin
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
 
@@ -100,6 +102,10 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        // AGP 9 turns resValues off by default. defaultConfig calls resValue("string",
+        // "app_name", ...) — without this the build fails with "defaultConfig contains
+        // custom resource values, but the feature is disabled".
+        resValues = true
     }
 
     compileOptions {
@@ -107,7 +113,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    sourceSets.getByName("main").java.srcDir("src/main/kotlin")
+    // src/main/kotlin is a default Kotlin source directory under AGP 9's built-in Kotlin.
+    // The old sourceSets.getByName("main").java.srcDir(...) is both redundant and deprecated.
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"

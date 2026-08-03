@@ -14,6 +14,14 @@
  *   4. lib/period.ts computes Vienna wall-clock boundaries, including across a daylight
  *      saving change. Those instants go on the wire as a payroll period; an hour of drift
  *      at a month end moves a shift onto the wrong payslip.
+ *   5. lib/pl.ts refuses to sum a building whose revenue nobody knows as if it earned zero,
+ *      and converts the director's percent to basis points without a float ever touching it.
+ *   6. lib/materials.ts holds a COPY of the server's lifecycle table, so the copy is
+ *      compared against server/lib/materials.js rather than trusted.
+ *   7. lib/map.ts only ever asks Google for a building photograph when the Street View
+ *      METADATA endpoint has already said there is one — the image endpoint answers 200
+ *      with a grey "no imagery" tile, which would otherwise ship as a photo of a client's
+ *      building.
  *
  * Message files are nested objects (next-intl's namespace format, decision-17); they are
  * flattened to dotted paths here so the comparison stays a plain set difference.
@@ -375,6 +383,215 @@ check('lib/enrolment.ts: a code that has run out is not reported as a live one',
   // Issuing resets redeemed_at, so a live code never carries a redemption from an older
   // one; if that pairing ever appears anyway, the LIVE code is what the director can act on.
   assert.equal(state('2026-08-03T12:30:00Z', '2026-08-01T09:00:00Z'), 'live')
+})
+
+// --- 6. P&L arithmetic (lib/pl.ts) ------------------------------------------------------
+
+const { bpToPlainPercent, parsePercentToBp, plTotals, shareBp, shortfallBp } = await import(
+  pathToFileURL(join(ROOT, 'lib/pl.ts')).href
+)
+
+check('lib/pl.ts: a target margin survives the round trip through the input field', () => {
+  assert.equal(parsePercentToBp('15'), 1500)
+  // German keyboards produce the comma. Both separators, same answer.
+  assert.equal(parsePercentToBp('12,5'), 1250)
+  assert.equal(parsePercentToBp('12.5'), 1250)
+  // THE FLOAT TRAP: `2.03 * 100` is 202.99999999999997, and a baseline one basis point out
+  // puts a building on the wrong side of a flag the director has to defend to a client.
+  assert.equal(parsePercentToBp('2,03'), 203)
+  // Signed on purpose: "do not lose more than 5%" is a real target for a building being
+  // won back. `-0` is break-even and must not round-trip as the string "-0".
+  assert.equal(parsePercentToBp('-5'), -500)
+  assert.equal(Object.is(parsePercentToBp('-0'), 0), true)
+  // Rejections are never a silent 0 — a silent 0 sets the floor to break-even and flags
+  // half the portfolio.
+  assert.equal(parsePercentToBp(''), null)
+  assert.equal(parsePercentToBp('abc'), null)
+  assert.equal(parsePercentToBp('101'), null, '101% is past the server\u2019s own bound')
+  assert.equal(parsePercentToBp('100'), 10_000)
+
+  assert.equal(bpToPlainPercent(1250), '12.5')
+  assert.equal(bpToPlainPercent(1200), '12', 'not "12.0", which reads as an unsaved edit')
+  assert.equal(bpToPlainPercent(1234), '12.34')
+  assert.equal(bpToPlainPercent(5), '0.05')
+  assert.equal(bpToPlainPercent(-500), '-5')
+  for (const bp of [0, 5, 203, 1200, 1250, 1234, -500, 10_000]) {
+    assert.equal(parsePercentToBp(bpToPlainPercent(bp)), bp, `round trip of ${bp}`)
+  }
+})
+
+check('lib/pl.ts: a share of nothing is unknown, not zero', () => {
+  assert.equal(shareBp(5_000, 10_000), 5_000)
+  assert.equal(shareBp(1, 3), 3_333)
+  // "Labour was 0% of revenue" for a building nobody has priced is a sentence a director
+  // cannot defend. So is a division by zero.
+  assert.equal(shareBp(1, 0), null)
+  assert.equal(shareBp(1, null), null)
+
+  assert.equal(shortfallBp(1_000, 1_500), 500)
+  assert.equal(shortfallBp(2_000, 1_500), -500)
+  // Either half unknown => NOT ASSESSABLE. Zero here would claim the building sits exactly
+  // on target, which is the same lie as `below_baseline: false`.
+  assert.equal(shortfallBp(null, 1_500), null)
+  assert.equal(shortfallBp(1_000, null), null)
+})
+
+check('lib/pl.ts: a building nobody has priced is not summed as if it earned zero', () => {
+  const building = (over) => ({
+    location_id: over.location_id,
+    labour_cents: 0,
+    material_cents: 0,
+    revenue_cents: null,
+    below_baseline: null,
+    excluded_unresolved_shifts: 0,
+    open_shifts: 0,
+    ...over,
+  })
+  const totals = plTotals([
+    building({
+      location_id: 'a',
+      revenue_cents: 100_000,
+      labour_cents: 60_000,
+      material_cents: 10_000,
+      below_baseline: false,
+    }),
+    // No contract on file. Real cost, unknown income.
+    building({
+      location_id: 'b',
+      labour_cents: 50_000,
+      material_cents: 5_000,
+      excluded_unresolved_shifts: 2,
+      open_shifts: 1,
+    }),
+  ])
+
+  assert.equal(totals.revenueCents, 100_000, 'only the priced building contributes revenue')
+  assert.equal(totals.unpricedBuildings, 1)
+  assert.equal(totals.costCentsUnpriced, 55_000, 'its cost is reported, not discarded')
+  // Whole-period cost is still available for the methodology note...
+  assert.equal(totals.labourCents, 110_000)
+  assert.equal(totals.materialCents, 15_000)
+  // ...but the bottom line is taken over the priced buildings ALONE. Counting b's revenue
+  // as 0 would report EUR -250.00 and a -25% margin for a portfolio that made +30%.
+  assert.equal(totals.profitCents, 30_000)
+  assert.equal(totals.marginBp, 3_000)
+  assert.equal(totals.notAssessable, 1, 'null below_baseline is counted, never read as a pass')
+  assert.equal(totals.flagged, 0)
+  assert.equal(totals.excludedUnresolvedShifts, 2)
+  assert.equal(totals.openShifts, 1)
+
+  // Nothing priced at all => no bottom line is claimed.
+  const none = plTotals([building({ location_id: 'c', labour_cents: 900 })])
+  assert.equal(none.profitCents, null)
+  assert.equal(none.marginBp, null)
+  assert.deepEqual(plTotals([]).profitCents, null)
+})
+
+// --- 7. material lifecycle (lib/materials.ts) -------------------------------------------
+
+const { MATERIAL_TRANSITIONS, isOpen, isUnpriced, nextStatuses, stageOf } = await import(
+  pathToFileURL(join(ROOT, 'lib/materials.ts')).href
+)
+
+check('lib/materials.ts: the lifecycle table still matches server/lib/materials.js', () => {
+  // The browser holds a COPY, because the queue screen has to know which buttons to draw
+  // BEFORE it clicks anything. A copy nobody compares is a copy that drifts, and the drift
+  // shows up as a button that produces a 409 the director cannot act on.
+  //
+  // Read out of the server source rather than imported: server/ is a separate package with
+  // its own node_modules, and importing across that boundary would drag lib/http.js and
+  // therefore Sentry into a build check. FAILS LOUDLY if the file moves — a silently
+  // skipped check on a lifecycle is worse than no check.
+  const source = readFileSync(join(ROOT, '../server/lib/materials.js'), 'utf8')
+  const match = source.match(/export const MATERIAL_TRANSITIONS = (\{[\s\S]*?\n\});/)
+  assert.ok(match, 'MATERIAL_TRANSITIONS not found in server/lib/materials.js')
+  // A plain object literal of string arrays. `Function` rather than JSON.parse because the
+  // keys are unquoted in the source.
+  const server = new Function(`return ${match[1]}`)()
+  assert.deepEqual(MATERIAL_TRANSITIONS, server)
+})
+
+check('lib/materials.ts: terminal states offer no action, open ones do', () => {
+  assert.deepEqual(nextStatuses('submitted'), ['approved', 'rejected'])
+  assert.deepEqual(nextStatuses('approved'), ['ordered', 'rejected'])
+  assert.deepEqual(nextStatuses('ordered'), ['arrived'])
+  // No un-reject and no un-deliver: the refusal stays where a dispute can find it.
+  assert.deepEqual(nextStatuses('arrived'), [])
+  assert.deepEqual(nextStatuses('rejected'), [])
+
+  assert.deepEqual(['submitted', 'approved', 'ordered', 'arrived', 'rejected'].map(isOpen), [
+    true,
+    true,
+    true,
+    false,
+    false,
+  ])
+  assert.deepEqual(['submitted', 'approved', 'ordered', 'arrived', 'rejected'].map(stageOf), [
+    'decide',
+    'order',
+    'deliver',
+    'done',
+    'refused',
+  ])
+})
+
+check('lib/materials.ts: unpriced means money was committed and nobody typed the invoice', () => {
+  // These two are what the P&L silently counts as zero, so they are what the screen counts
+  // out loud.
+  assert.equal(isUnpriced({ status: 'ordered', cost_cents: null }), true)
+  assert.equal(isUnpriced({ status: 'arrived', cost_cents: null }), true)
+  // Nothing was committed yet, so there is nothing to price.
+  assert.equal(isUnpriced({ status: 'submitted', cost_cents: null }), false)
+  assert.equal(isUnpriced({ status: 'approved', cost_cents: null }), false)
+  assert.equal(isUnpriced({ status: 'rejected', cost_cents: null }), false)
+  // 0 is a real price — a free sample — and is NOT the same as "nobody has said".
+  assert.equal(isUnpriced({ status: 'ordered', cost_cents: 0 }), false)
+})
+
+// --- 8. the building photograph gate (lib/map.ts) ---------------------------------------
+
+const mapUrl = pathToFileURL(join(ROOT, 'lib/map.ts')).href
+
+// `MAPS_API_KEY` is read once at module scope, so the two key states are two module
+// instances. A distinct URL query is what makes Node load it twice.
+delete process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY
+const mapWithoutKey = await import(`${mapUrl}?nokey`)
+process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY = 'test-browser-key'
+const mapWithKey = await import(`${mapUrl}?withkey`)
+
+check('lib/map.ts: no photo is requested unless Street View said there is one', () => {
+  const at = { lat: 48.2082, lng: 16.3738 }
+  const url = mapWithKey.streetViewUrl({ ...at, street_view_status: 'OK' })
+  assert.ok(url?.startsWith('https://maps.googleapis.com/maps/api/streetview?'))
+  assert.match(url, /location=48\.2082%2C16\.3738/)
+  assert.match(url, /key=test-browser-key/)
+  // A late refusal becomes a real 404 the <img> onError can see, instead of a grey tile.
+  assert.match(url, /return_error_code=true/)
+
+  // THE RULE. The static image endpoint answers HTTP 200 with a grey "no imagery" tile, so
+  // anything looser than an explicit OK from the METADATA endpoint ships that tile and
+  // presents it as a photograph of the client's building.
+  for (const status of [null, 'ZERO_RESULTS', 'REQUEST_DENIED', 'OVER_QUERY_LIMIT', 'ok']) {
+    assert.equal(mapWithKey.streetViewUrl({ ...at, street_view_status: status }), null, status)
+  }
+  // OK with no coordinates cannot be asked for at all.
+  assert.equal(mapWithKey.streetViewUrl({ lat: null, lng: null, street_view_status: 'OK' }), null)
+  assert.equal(mapWithKey.streetViewUrl({ lat: 48.2, lng: null, street_view_status: 'OK' }), null)
+  // No key in the build => no request, and the screen says why.
+  assert.equal(mapWithoutKey.MAPS_API_KEY, '')
+  assert.equal(mapWithoutKey.streetViewUrl({ ...at, street_view_status: 'OK' }), null)
+})
+
+check('lib/map.ts: a pin needs BOTH coordinates, and a failure has a name', () => {
+  assert.equal(mapWithKey.isPinned({ lat: 48.2, lng: 16.3 }), true)
+  assert.equal(mapWithKey.isPinned({ lat: 48.2, lng: null }), false)
+  assert.equal(mapWithKey.isPinned({ lat: null, lng: 16.3 }), false)
+  // Every load failure lands on a state the screen has words for; the default is `auth`,
+  // because Google's own rejection is the one that arrives without an Error we threw.
+  assert.equal(mapWithKey.failureOf(new Error('timeout')), 'timeout')
+  assert.equal(mapWithKey.failureOf(new Error('network')), 'network')
+  assert.equal(mapWithKey.failureOf(new Error('failed')), 'auth')
+  assert.equal(mapWithKey.failureOf(undefined), 'auth')
 })
 
 // --- report -----------------------------------------------------------------------------

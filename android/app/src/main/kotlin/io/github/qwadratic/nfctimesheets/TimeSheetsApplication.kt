@@ -2,6 +2,8 @@ package io.github.qwadratic.nfctimesheets
 
 import android.app.Application
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.data.MaterialStore
+import io.github.qwadratic.nfctimesheets.data.MaterialSync
 import io.github.qwadratic.nfctimesheets.data.ShiftStore
 import io.github.qwadratic.nfctimesheets.data.ShiftSync
 import io.github.qwadratic.nfctimesheets.data.WorkerCache
@@ -10,11 +12,12 @@ import io.github.qwadratic.nfctimesheets.net.CookieJar
 import io.github.qwadratic.nfctimesheets.net.PrefsCookieJar
 
 /**
- * Object graph. Six objects, constructed by hand.
+ * Object graph. Eight objects, constructed by hand.
  *
- * ponytail: no Hilt, no Koin. CEILING: adding a seventh collaborator with its own
- * lifecycle is the point to reconsider. UPGRADE PATH: whatever DI arrives constructs the
- * same objects; nothing below is a framework type.
+ * ponytail: no Hilt, no Koin. CEILING: this is the size at which hand-wiring stops being
+ * obviously cheaper — the next collaborator with its own lifecycle is the point to
+ * reconsider. UPGRADE PATH: whatever DI arrives constructs the same objects; nothing
+ * below is a framework type.
  */
 class TimeSheetsApplication : Application() {
 
@@ -39,4 +42,14 @@ class TimeSheetsApplication : Application() {
     val api: Api by lazy { Api(cookies) { sessionRejected = true } }
 
     val sync: ShiftSync by lazy { ShiftSync(api, store) }
+
+    /**
+     * Material requests. A SEPARATE database file from [store] — see MaterialStore's
+     * header. `by lazy` matters here: a phone that never opens the material tab never
+     * even creates the file, so a feature that is not the product costs a clock-in
+     * nothing.
+     */
+    val materials: MaterialStore by lazy { MaterialStore(this) }
+
+    val materialSync: MaterialSync by lazy { MaterialSync(api, materials) }
 }

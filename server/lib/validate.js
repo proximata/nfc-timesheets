@@ -44,6 +44,16 @@ export function uuid(value, field = "id") {
   return s;
 }
 
+/**
+ * A UUID the director has not filled in yet. Same reasoning as `optionalId`: an HTML
+ * <select> with no choice made posts an empty string, and "the worker did not say which
+ * building" is a legitimate, permanent state for a material request.
+ */
+export function optionalUuid(value, field) {
+  if (value === undefined || value === null || value === "") return null;
+  return uuid(value, field);
+}
+
 // Deliberately loose. A regex cannot decide whether an address is deliverable, and the
 // strict RFC 5322 grammar rejects real addresses people actually have. This checks the
 // SHAPE only — one @, something either side, a dot in the domain, no whitespace — which
@@ -133,6 +143,19 @@ export function optionalMinutes(value, field) {
   return n;
 }
 
+/**
+ * "How many of them" (material_requests.quantity). STRICTLY POSITIVE, mirroring the 005
+ * CHECK: a request for zero bottles is not a request, and letting 0 through would surface
+ * Postgres' 23514 as a 500 instead of naming the field. NULL means the admin has not said
+ * yet, which is a real state while a request is still being validated.
+ */
+export function optionalCount(value, field) {
+  if (value === undefined || value === null || value === "") return null;
+  const n = typeof value === "string" ? Number(value) : value;
+  if (!Number.isSafeInteger(n) || n < 1 || n > 1_000_000) fail(400, "invalid_field", field);
+  return n;
+}
+
 /** Closed set of allowed strings (inventory kind). Mirrors a database CHECK; not a substitute for it. */
 export function oneOf(value, field, allowed) {
   if (typeof value !== "string" || !allowed.includes(value)) fail(400, "invalid_field", field);
@@ -205,6 +228,43 @@ export function optionalRange(fromValue, toValue) {
   // with an empty list would look exactly like "nobody worked".
   if (from !== null && to !== null && from.getTime() >= to.getTime()) fail(422, "invalid_range");
   return { from, to };
+}
+
+/**
+ * Half-open `[from, to)` with BOTH ends mandatory — the reporting-period parameter for
+ * GET /admin/pl and GET /admin/analytics.
+ *
+ * Unbounded is meaningful for a shift LIST ("show me everything") and meaningless for a
+ * P&L: revenue is a monthly contract pro-rated over the days in the period, so an open
+ * end is either an infinite number of days or a silent substitution of some default month
+ * the caller never asked for. Refusing is the only honest answer.
+ */
+export function requiredRange(fromValue, toValue) {
+  if (fromValue === null || fromValue === undefined) fail(400, "missing_field", "from");
+  if (toValue === null || toValue === undefined) fail(400, "missing_field", "to");
+  return optionalRange(fromValue, toValue);
+}
+
+// A Vienna CALENDAR DATE on the wire, `YYYY-MM-DD`. Used for contract validity bounds:
+// a price changes on a day, not at an instant, so this deliberately carries no time and
+// no zone and therefore has no DST to get wrong.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Returns the STRING, not a Date. It is handed to Postgres as a `date` parameter, and
+ * turning it into a JS Date first would re-introduce the very timezone question the DATE
+ * type exists to avoid (`new Date("2026-03-29")` is UTC midnight, which is 01:00 or 02:00
+ * in Vienna depending on the month).
+ */
+export function isoDate(value, field) {
+  const s = str(value, field, { max: 10, min: 10 });
+  if (!ISO_DATE_RE.test(s)) fail(400, "invalid_date", field);
+  // Round-trip through UTC to reject 2026-02-31 and friends, which the regex accepts.
+  const d = new Date(`${s}T00:00:00Z`);
+  if (!Number.isFinite(d.getTime()) || d.toISOString().slice(0, 10) !== s) fail(400, "invalid_date", field);
+  const year = Number(s.slice(0, 4));
+  if (year < 2000 || year > 2100) fail(422, "timestamp_out_of_range", field);
+  return s;
 }
 
 /**

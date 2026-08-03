@@ -7,27 +7,70 @@ buildings and payroll in a German web panel.
 No app to open, no button to press, no login at the door. The phone can be locked and the app
 closed — iOS wakes it from the tag itself.
 
-|  |  |  |
+## Demo
+
+Everything below runs against a **local** database of invented workers, invented Vienna
+buildings and invented prices. No live data, no real person. `backlog/docs/DEMO.md` has the
+exact commands to reproduce any of it.
+
+### The worker's phone — Android
+
+▶ [`docs/media/android-journey.mp4`](docs/media/android-journey.mp4) — **71 s.** First launch,
+enrolment-code sign-in, a tag URL opening a shift, the same URL ending it, history, materials.
+
+> **The NFC tap in that clip is mocked, and the clip says so on screen.** No emulator has NFC
+> hardware, so the tag URL is delivered as the same `VIEW` intent the OS sends after the radio
+> reads a tag. Everything downstream of that is the real code path; the radio is not exercised.
+> The app's own screen also says *„Dieses Telefon hat kein NFC“*.
+
+| Sign in | Shift running | Materials |
 |:--:|:--:|:--:|
-| ![Tap the tag](docs/media/app-tap-banner.png) | ![Shift in progress](docs/media/app-shift.png) | ![History](docs/media/app-history.png) |
-| **1.** Phone locked, app closed. Tap. | **2.** Shift open, already synced. | **3.** History, per building. |
+| ![Enrolment code](docs/media/android-signin.png) | ![Shift open](docs/media/android-shift.png) | ![Material requests](docs/media/android-materials.png) |
+| One code, one worker, one hour, single use (decision-26) | Opened by the tag URL. The worker's identity came from the session, never the request (decision-22) | Ask for supplies in your own words. There is no push, and the screen says so |
 
-▶ [`docs/media/demo-tap.mp4`](docs/media/demo-tap.mp4) — tap to clock in (6 s)
-▶ [`docs/media/demo-write-tag.mp4`](docs/media/demo-write-tag.mp4) — provisioning a blank tag (30 s)
+That APK is the shipping debug build with **no edits** — `branding.properties` untouched, so the
+URL in the recording is the real tag URL. It reaches the demo server through `adb reverse` and a
+hosts file inside the emulator.
 
-> The phone's home screen is blurred in the clip and the admin screenshots are redacted — they
-> were recorded against the live system with a real worker, a real building and a real client.
+### The worker's phone — iOS
 
-## The admin panel
+| Shift in progress | History |
+|:--:|:--:|
+| ![Shift in progress](docs/media/app-shift.png) | ![History](docs/media/app-history.png) |
+
+**These two are old, and they are the only iOS media here.** They were shot on the live system,
+so the building name in them is a real client's. A clean iOS capture could not be produced:
+port 443 under the tag hostname needs root, and Sign in with Apple needs a real Apple ID in the
+simulator. `backlog/docs/DEMO.md` has both blockers with the exact commands to clear them, plus
+one verified surprise — `simctl openurl` does **not** hand a universal link to the app on a
+simulator, tried twice, with correct entitlements.
+
+▶ [`docs/media/demo-write-tag.mp4`](docs/media/demo-write-tag.mp4) — provisioning a blank tag with
+NFC Tools on a real phone (30 s). Real hardware, no app of ours in it.
+
+### The admin panel
 
 Desktop-first, German by default, built for one non-technical director.
 
-| Workers | Buildings |
-|:--:|:--:|
-| ![Workers](docs/media/admin-workers.png) | ![Buildings](docs/media/admin-locations.png) |
+▶ [`docs/media/admin-walkthrough.mp4`](docs/media/admin-walkthrough.mp4) — **38 s.** Sign in,
+the day's exceptions, the material queue, contract history, the P&L before and after a target
+margin is set, building analytics, payroll. Real speed, nothing cut or annotated.
 
-Each building row shows the exact URL that gets written onto its NFC tag, with one-click copy.
-That URL *is* the building's identity, so the screen treats it as the point of the page.
+| ![Dashboard](docs/media/admin-dashboard.png) | ![Profit and loss](docs/media/admin-pl.png) |
+|:--:|:--:|
+| **Übersicht.** Who is clocked in now, what is holding payroll up, which building has no shifts. | **Gewinn & Verlust.** Revenue − labour − materials per building. One building is losing money; one has no contract and is refused a number rather than given a zero. |
+| ![Material requests](docs/media/admin-material-requests.png) | ![Contract history](docs/media/admin-contracts.png) |
+| **Materialanforderungen.** The worker's own words, and a lifecycle that cannot skip a step. Nothing is auto-matched to a product — a guess would put a wrong price into the P&L. | **Vertragsverwaltung.** A price has a start date and an end date. Raising it today does not rewrite last March. The replaced period is closed, not deleted. |
+| ![Shift log](docs/media/admin-shifts.png) | ![Workers](docs/media/admin-workers.png) |
+| **Schichten.** Every row says whether it counts towards pay and why: *Läuft*, *Abgeschlossen*, *Nicht bestätigt*. The 8-hour one is the auto-close safety net waiting on a human. | **Mitarbeiter.** Where an enrolment code is issued for a non-iPhone (decision-26). It is shown once and never again — not by you, not from the database, which stores only a hash. |
+| ![Building analytics](docs/media/admin-analytics.png) | ![Buildings](docs/media/admin-locations.png) |
+| **Objektauswertung.** Hours worked against hours agreed, month by month. The map is missing because **this build carries no Google Maps key — and so does the deployed one**; the screen says so and the table below it still carries every building. | **Objekte.** Each row shows the exact URL written onto that building's NFC tag, with one-click copy. That URL *is* the building's identity. |
+
+Two details in those screenshots are the product being careful rather than the demo being tidy:
+*„1 Schicht nicht gezählt – Endzeit nicht bestätigt“* under a building name is decision-10 keeping
+unconfirmed hours out of both pay and cost, said out loud so a building cannot look cheap by
+accident; and *„Nicht beurteilbar“* is what every row reads until a human types a target margin,
+because the software has no opinion about the business.
 
 ## How a tap actually works
 
@@ -60,13 +103,14 @@ Four things about that chain are load-bearing, and each one is a decision record
 | Dir | What | Runs where |
 |---|---|---|
 | `NFCTimeSheets/` | SwiftUI + CoreNFC iOS app | TestFlight |
-| `android/` | Kotlin + Jetpack Compose client | not yet built — see below |
+| `android/` | Kotlin + Jetpack Compose client | builds and runs; no signing key, no Play listing |
 | `server/` | Node 22 REST API. Also serves AASA, `/t` and the admin panel | VM, `/srv/nfc` |
 | `server/db/` | Postgres 16 schema + migration runner | VM |
 | `web/` | Next.js admin panel, **static export** (`output: 'export'`) | built to `web/out/`, served by `server/` |
 | `ops/` | systemd units, 8 h auto-close, backups, `deploy.sh` | VM, `/srv/nfc/ops` |
 | `backlog/decisions/` | architecture decision records — **binding** | — |
 | `backlog/docs/` | runbooks, journey map, audit reports | — |
+| `demo/` | seed data and the scripts that produce `docs/media/` | local only, loopback-guarded |
 
 Everything server-side is **one Node process on one VM** (decision-16): no Docker (decision-1), no
 Supabase, no Cloudflare, no Vercel, no PM2. One process serves association files, then REST
@@ -133,6 +177,17 @@ DATABASE_URL=postgres:///nfc APP_KEY=dev-app-key-xxxx \
 DATABASE_URL=postgres:///nfc node server/bin/create-admin.js   # first web-admin login
 ```
 
+For a database with something in it — four months of shifts, contracts, material requests — use
+the demo seed instead of `seed.sql`, and read `backlog/docs/DEMO.md` first: it truncates, and it
+refuses to run on any database not named `nfc_demo`.
+
+```sh
+createdb nfc_demo
+DATABASE_URL=postgres:///nfc_demo node server/db/migrate.js
+psql -d nfc_demo -v ON_ERROR_STOP=1 -f demo/seed.sql
+DATABASE_URL=postgres:///nfc_demo node demo/make-admin.mjs     # demo@example.test
+```
+
 **Log in against the same origin.** `pnpm dev` on :3000 cannot authenticate against the API on
 :8080 — the server sends no CORS headers and the session cookie is `Secure; SameSite=Strict`.
 Build the export and let the API serve it, which is also exactly how it runs in production. Use
@@ -163,6 +218,7 @@ node server/db/check-migrate.js       # migrations apply once, re-run is a no-op
 node server/check-api.js              # API behaviour against a throwaway schema
 node server/routes/wellknown.test.js  # AASA / assetlinks / /t handler
 ./ops/check-autoclose.sh              # 8h auto-close SQL is correct and idempotent
+sh demo/check-guards.sh               # the demo scripts still refuse the live db and host
 cd web && pnpm check                  # exact versions, en/de key parity, ICU plurals
 ```
 
@@ -190,10 +246,17 @@ offline queue, 8 h auto-close with mandatory resolution, workers / buildings / c
 payroll / inventory admin, a read-only client portal, nightly backups with a tested restore, and
 German throughout.
 
-Not done: the Android client has never been compiled — it has no signing key and no Play listing,
-and NFC cannot be tested on an emulator. Worker identity on Android is an admin-issued enrolment
-code (decision-26), not a third-party provider. Backups still land on the same disk as the
-database; an offsite target is unresolved.
+The Android client compiles, installs, signs in with an enrolment code (decision-26) and records
+a shift end to end — demonstrated in the clip above, against a local server. What it still does
+not have is a **signing key** and a **Play listing**, both of which are the owner's to create,
+and until the key exists `assetlinks.json` has no fingerprints, so on a real handset a tag opens
+Chrome instead of the app. A real NFC tap has never happened on Android: no emulator has the
+radio.
+
+Also not done: the four newest admin screens are built and checked but **not deployed** — the
+live server is still on the previous version. Backups still land on the same disk as the
+database; an offsite target is unresolved. `backlog/docs/V2-FEATURES.md` leads with the full
+blocker list in severity order.
 
 ## Things that will bite you
 

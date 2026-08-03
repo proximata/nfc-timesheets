@@ -20,6 +20,12 @@ struct ContentView: View {
     /// the migrations, so there is no race between "what happened" and "telling them".
     @State private var receipt: [ArchivedShift] = []
     @State private var showReceipt = false
+    /// Material requests. Owned HERE and not in NFCTimeSheetsApp on purpose: it is only
+    /// needed once the server has said who this is, and it dies on sign-out, which is
+    /// exactly the lifetime a queue of one worker's own words should have. It is a plain
+    /// observable object over a JSON file - it does NOT touch the SwiftData store that
+    /// holds unpushed shifts. See the header of Materials.swift.
+    @State private var materials = MaterialStore()
 
     var body: some View {
         switch session.state {
@@ -34,9 +40,22 @@ struct ContentView: View {
         case .eligible(let worker):
             TabView {
                 LogView(worker: worker).tabItem { Label("Log", systemImage: "wave.3.right") }
+                // The badge counts requests the warehouse has and the worker has not been
+                // told about. There is no push in this system (decision-23: the server's
+                // dependencies are pg + @sentry/node), so this number only moves when the
+                // app is opened, and the screen says so in words.
+                MaterialsView(worker: worker)
+                    .tabItem { Label("Materials", systemImage: "shippingbox") }
+                    .badge(materials.unseenArrivalCount)
                 HistoryView().tabItem { Label("History", systemImage: "list.bullet") }
                 SettingsView(worker: worker).tabItem { Label("Settings", systemImage: "gear") }
             }
+            .environment(materials)
+            // At LAUNCH, not when the Materials tab is opened: the badge is the only
+            // thing telling a worker something is waiting for them at the warehouse, and
+            // a badge that only appears once you have looked is not a badge. Its own
+            // task, so a slow or missing materials API cannot delay the Log tab.
+            .task(id: worker.id) { await materials.start(workerId: worker.id) }
             // Four rows must not vanish between launches without a word. If the archive
             // is empty there is nothing to report, so the flag is simply cleared.
             .task {

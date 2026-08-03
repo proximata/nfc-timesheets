@@ -1,7 +1,15 @@
 // Check: what the Sentry SDK ACTUALLY puts on the wire for a real request.
 //
-//   cd server && node --import ./instrument.mjs check-telemetry-wire.mjs
-//   (check-api.js runs it as a child process; it needs no database and no network)
+//   cd server && SENTRY_DSN='https://check@o4509000000000000.ingest.de.sentry.io/451' \
+//     node --import ./instrument.mjs check-telemetry-wire.mjs
+//   (check-api.js runs it as a child process and sets exactly that DSN; it needs no
+//   database and no network)
+//
+//   THE DSN IS NOT OPTIONAL. With SENTRY_DSN unset the SDK is disabled by design
+//   (instrument.mjs), so it emits no payloads and four cases here fail with "got 0" —
+//   which looks like a broken scrubber and is really just an unset variable. The DSN is
+//   a syntactically valid fake; nothing is ever transmitted (every transport hook
+//   returns null).
 //
 // WHY THIS EXISTS AND WHY THE SYNTHETIC SCRUBBER TEST IS NOT ENOUGH.
 // check-api.js hands scrubEvent() an event WE wrote, so it can only prove the scrubber

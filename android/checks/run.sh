@@ -17,10 +17,20 @@ set -euo pipefail
 cd "$(dirname "$0")/.."     # android/
 
 KOTLINC="${KOTLINC:-kotlinc}"
+# Fallback: Android Studio ships both a kotlinc and a JDK. On a machine set up for this
+# project that is the toolchain that is already there, so use it rather than asking for a
+# second one. Explicit KOTLINC still wins.
+STUDIO="/Applications/Android Studio.app/Contents"
+if ! command -v "$KOTLINC" >/dev/null 2>&1 && [ -x "$STUDIO/plugins/Kotlin/kotlinc/bin/kotlinc" ]; then
+  KOTLINC="$STUDIO/plugins/Kotlin/kotlinc/bin/kotlinc"
+  [ -n "${JAVA_HOME:-}" ] || export JAVA_HOME="$STUDIO/jbr/Contents/Home"
+fi
 if ! command -v "$KOTLINC" >/dev/null 2>&1; then
   echo "checks: kotlinc not found. brew install kotlin, or set KOTLINC=/path/to/kotlinc" >&2
   exit 127
 fi
+# kotlinc and the `java` on PATH may be different JVMs; JAVA_HOME decides for both.
+JAVA_BIN="${JAVA_HOME:+$JAVA_HOME/bin/}java"
 
 JSON_VERSION=20250107
 LIB=checks/.lib
@@ -40,11 +50,11 @@ CORE=app/src/main/kotlin/io/github/qwadratic/nfctimesheets/core
 
 "$KOTLINC" -nowarn -cp "$JSON_JAR" -d "$OUT" \
   "$CORE"/TagLink.kt "$CORE"/ApiFailure.kt "$CORE"/TapInbox.kt "$CORE"/Wire.kt "$CORE"/SyncPlan.kt \
-  "$CORE"/EnrolmentCode.kt "$CORE"/SessionCookie.kt \
+  "$CORE"/EnrolmentCode.kt "$CORE"/SessionCookie.kt "$CORE"/MaterialQueue.kt \
   checks/core-check.kt
 
 KOTLIN_HOME="$(dirname "$(dirname "$(command -v "$KOTLINC")")")"
 STDLIB="$KOTLIN_HOME/lib/kotlin-stdlib.jar"
 [ -f "$STDLIB" ] || STDLIB="$(find "$KOTLIN_HOME" -name 'kotlin-stdlib*.jar' | head -1)"
 
-java -cp "$OUT:$JSON_JAR:$STDLIB" io.github.qwadratic.nfctimesheets.checks.CoreCheck
+"$JAVA_BIN" -cp "$OUT:$JSON_JAR:$STDLIB" io.github.qwadratic.nfctimesheets.checks.CoreCheck

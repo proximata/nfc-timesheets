@@ -20,6 +20,12 @@ import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.CloseShiftRequest
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
 import io.github.qwadratic.nfctimesheets.core.EnrolmentRequest
+import io.github.qwadratic.nfctimesheets.core.CreateMaterialRequest
+import io.github.qwadratic.nfctimesheets.core.MaterialEntry
+import io.github.qwadratic.nfctimesheets.core.MaterialPushOutcome
+import io.github.qwadratic.nfctimesheets.core.MaterialQueue
+import io.github.qwadratic.nfctimesheets.core.MaterialStatus
+import io.github.qwadratic.nfctimesheets.core.QueuedMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
 import io.github.qwadratic.nfctimesheets.core.SessionCookie
@@ -72,6 +78,7 @@ fun main() {
     enrolmentCode()
     enrolmentAgainstServer()
     sessionPersistence()
+    materialRequests()
 
     if (failed) exitProcess(1)
     println("core-check: OK")
@@ -520,6 +527,35 @@ private fun manifestAndWiring() {
 
     check(live.contains("\${tagHost}"), "the tag host is a manifest placeholder, not a literal")
 
+    // THE JOIN between "Android delivered the intent" and "TagLink parsed it". Both ends
+    // are proven elsewhere — the manifest filter above, and section 1 which runs the real
+    // parser — but the four lines that connect them import Android and so can only be read
+    // as text. They were exercised once on an emulator with:
+    //   adb shell am start -a android.intent.action.VIEW -c android.intent.category.BROWSABLE \
+    //     -d "https://<tagHost>/t?l=<uuid>"
+    // which is not repeatable in this runner. Deleting any one of them makes a tap open the
+    // app and then do nothing, which is the failure mode that looks exactly like success.
+    val activity = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/MainActivity.kt").readText()
+    check(
+        activity.contains("if (intent?.action != Intent.ACTION_VIEW) return"),
+        "MainActivity.handle only acts on ACTION_VIEW",
+    )
+    check(
+        activity.contains("app.tagLink.locationId(intent.dataString) ?: return"),
+        "MainActivity.handle parses the URL with TagLink and drops anything else (decision-15)",
+    )
+    check(activity.contains("model.acceptTap(locationId)"), "a parsed tap reaches the inbox")
+
+    // COLD-LAUNCH ORDERING. On a tap-launch the intent is already present while the session
+    // is still Unknown, so handle() must run before setContent — TapInbox parks it until a
+    // screen exists. This exact ordering is what lost the owner's first real tap on iOS.
+    check(
+        activity.indexOf("handle(intent)") in 0 until activity.indexOf("setContent {"),
+        "handle(intent) runs before the first composition",
+    )
+    // singleTask means a tap while the app is open is delivered here, not to a new instance.
+    check(activity.contains("override fun onNewIntent"), "a tap on a running app is handled")
+
     // WHITE LABEL: the operator's host is typed in exactly one place. A second copy in
     // source is how an App Link silently stops matching the tags already on the walls.
     val sources = File("app/src").walkTopDown().filter { it.isFile && it.extension in setOf("kt", "xml") }
@@ -796,5 +832,234 @@ private fun sessionPersistence() {
     check(
         !Regex("""\b(status == 401|status == 403|expired|already)\b""").containsMatchIn(signIn),
         "signIn must not branch on which kind of refusal it was",
+    )
+}
+
+// ---------------------------------------------------------------------------------
+// 12. Material requests, worker half. Ported case-for-case from
+//     NFCTimeSheets/checks/materials-check.swift so the two clients cannot drift.
+//
+//     The bytes, the decoder against the shape server/routes/app.js actually returns,
+//     and the four outcomes — which are the only place this feature can silently lose
+//     something a worker asked for.
+// ---------------------------------------------------------------------------------
+private fun materialRequests() {
+    // ---- the bytes. decision-22: who asked is the session's worker. --------------
+    val withLocation = CreateMaterialRequest("zwei Mopps", UUID_A).toJson()
+    check(
+        withLocation == """{"body":"zwei Mopps","location_uuid":"$UUID_A"}""",
+        "exact create bytes: $withLocation",
+    )
+    check(!withLocation.lowercase().contains("worker"), "NO worker field, ever: $withLocation")
+    check(!withLocation.contains("status"), "the app never proposes a status: $withLocation")
+
+    val bare = CreateMaterialRequest("Glasreiniger", null).toJson()
+    check(bare == """{"body":"Glasreiniger","location_uuid":null}""", "no building -> explicit null: $bare")
+    check(!bare.contains("location_id"), "the column name is not a wire name: $bare")
+
+    // Free text is whatever a phone keyboard produces, and Wire.obj has to escape it.
+    val awkward = CreateMaterialRequest("\"Ajax\"\n\tund 3 Säcke", null).toJson()
+    check(awkward.contains("""\"Ajax\""""), "quotes escaped: $awkward")
+    check(awkward.contains("""\n""") && awkward.contains("""\t"""), "control characters escaped: $awkward")
+    check(awkward.contains("Säcke"), "umlauts are not mangled: $awkward")
+    check(JSONObject(awkward).getString("body") == "\"Ajax\"\n\tund 3 Säcke", "and it round-trips")
+
+    // ---- decoding, against the real response shape -------------------------------
+    val full = JSONObject(
+        """
+        {"id": 7, "worker_id": 1, "location_id": "$UUID_A",
+         "body": "der blaue Reiniger, der große", "status": "arrived",
+         "admin_note": "5 Liter bestellt", "inventory_item_id": 3, "quantity": 2,
+         "cost_cents": 1799, "decided_by": 1,
+         "decided_at": "2026-08-01T09:00:00.000Z", "ordered_at": "2026-08-01T10:00:00.000Z",
+         "arrived_at": "2026-08-04T07:30:00Z", "seen_at": null,
+         "created_at": "2026-07-31T18:12:04.412Z",
+         "location_name": "HOIV", "item_name": "Glasreiniger 5 l"}
+        """.trimIndent(),
+    )
+    val row = Wire.materialRequest(full)
+    check(row.id == 7 && row.status == MaterialStatus.ARRIVED, "id and status")
+    check(row.itemName == "Glasreiniger 5 l" && row.locationName == "HOIV", "names ride along")
+    check(row.adminNote == "5 Liter bestellt", "admin_note reaches the worker")
+    check(row.quantity == 2, "quantity")
+    check(row.seenAt == null, "seen_at null decodes as null")
+    // Whole-second AND fractional timestamps in one payload. Postgres emits both.
+    check(row.arrivedAt == Instant.parse("2026-08-04T07:30:00Z"), "whole-second timestamp")
+    check(row.orderedAt == Instant.parse("2026-08-01T10:00:00Z"), "fractional timestamp")
+    check(row.isUnseenArrival, "arrived + never seen = the banner")
+
+    // A row the admin has not touched: everything nullable actually null.
+    val fresh = JSONObject(
+        """
+        {"id": 8, "worker_id": 1, "location_id": null, "body": "Mopp", "status": "submitted",
+         "admin_note": null, "inventory_item_id": null, "quantity": null, "cost_cents": null,
+         "decided_by": null, "decided_at": null, "ordered_at": null, "arrived_at": null,
+         "seen_at": null, "created_at": "2026-07-31T18:12:04.412Z"}
+        """.trimIndent(),
+    )
+    val new = Wire.materialRequest(fresh)
+    check(new.status == MaterialStatus.SUBMITTED, "a fresh request is submitted")
+    check(new.quantity == null, "a null integer stays null, not 0 — 0 would read as 'none ordered'")
+    check(new.locationName == null && new.itemName == null, "absent joined columns are null")
+    check(!new.isUnseenArrival, "submitted is not an arrival")
+
+    // A SIXTH STATUS. A phone in the field must degrade to "unknown", not throw and
+    // blank the whole list.
+    val future = Wire.materialRequest(JSONObject(fresh.toString()).put("status", "back_ordered"))
+    check(future.status == null, "an unknown status maps to null, not a crash")
+    check(future.statusRaw == "back_ordered", "the raw value is kept")
+    check(!future.isUnseenArrival, "an unknown status never raises the arrival banner")
+
+    // The lifecycle, copied from server/lib/materials.js MATERIAL_TRANSITIONS.
+    check(MaterialStatus.entries.size == 5, "exactly five statuses exist server-side")
+    check(
+        MaterialStatus.SUBMITTED.isOpen && MaterialStatus.APPROVED.isOpen && MaterialStatus.ORDERED.isOpen,
+        "submitted/approved/ordered are open",
+    )
+    check(!MaterialStatus.ARRIVED.isOpen && !MaterialStatus.REJECTED.isOpen, "arrived and rejected are terminal")
+
+    // ---- what the worker typed ---------------------------------------------------
+    check(MaterialQueue.normalise("  zwei Mopps \n") == "zwei Mopps", "trimmed")
+    check(MaterialQueue.normalise("") == null, "empty is not a request")
+    check(MaterialQueue.normalise("   \n\t ") == null, "whitespace-only is not a request")
+    val atLimit = "a".repeat(MaterialQueue.BODY_MAX)
+    check(MaterialQueue.normalise(atLimit) == atLimit, "exactly the server's cap is accepted")
+    check(MaterialQueue.normalise(atLimit + "a") == null, "one over the cap is refused")
+    check(MaterialQueue.BODY_MAX == 2000, "same cap as server/routes/app.js REQUEST_BODY_MAX")
+
+    // ---- THE FOUR OUTCOMES -------------------------------------------------------
+    // The one that would otherwise be catastrophic: 404 not_found is an UNROUTED PATH
+    // (server.js answers {"error":"not_found"}), i.e. this build is ahead of the deploy.
+    // ApiFailure classifies 404 as terminal, so without this arm every queued request
+    // would be permanently blocked by a deploy that had not happened yet.
+    check(!ApiFailure(404, "not_found").isRetryable, "404 is terminal by the general rule...")
+    check(
+        MaterialQueue.outcome(ApiFailure(404, "not_found")) == MaterialPushOutcome.FEATURE_UNAVAILABLE,
+        "...which is why an unrouted path keeps the row queued and untouched",
+    )
+    check(MaterialQueue.outcome(ApiFailure.network()) == MaterialPushOutcome.STOP_PASS, "no network stops the pass")
+    check(MaterialQueue.outcome(ApiFailure(503, "http_503")) == MaterialPushOutcome.RETRY_LATER, "5xx retries")
+    check(
+        MaterialQueue.outcome(ApiFailure(429, "too_many_attempts")) == MaterialPushOutcome.RETRY_LATER,
+        "429 retries",
+    )
+    check(
+        MaterialQueue.outcome(ApiFailure(400, "invalid_field")) == MaterialPushOutcome.BLOCKED,
+        "a rejected payload is terminal - a human must act",
+    )
+    check(
+        MaterialQueue.outcome(ApiFailure(422, "unknown_location")) == MaterialPushOutcome.BLOCKED,
+        "a removed building is terminal",
+    )
+    check(
+        MaterialQueue.outcome(ApiFailure(401, "no_session")) == MaterialPushOutcome.BLOCKED,
+        "a dead session is terminal here; the 401 choke point drops the app to signed out",
+    )
+
+    // Every one of them has words behind it. A blank row is a row that looks sent.
+    val deKeys = keysIn(File("app/src/main/res/values/strings.xml"))
+    for (code in listOf("unknown_request", "not_found")) {
+        check(ApiFailure(404, code).messageKey in deKeys, "'$code' has no German string")
+    }
+
+    // ---- and the words say "Anfrage", not "Schicht" -------------------------------
+    // ApiFailure.messageKey is shared with the shift queue and two of its strings name a
+    // shift out loud. Sending a worker to the admin about the wrong thing is a support
+    // call, so the request queue re-words exactly those two and nothing else.
+    check(
+        MaterialQueue.messageKey(ApiFailure(400, "invalid_field")) == "err_rejected_request",
+        "a rejected request is not reported as a rejected shift",
+    )
+    check(
+        MaterialQueue.messageKey(ApiFailure(0, "wrong_account")) == "err_wrong_account_request",
+        "a colleague's request is not reported as a colleague's shift",
+    )
+    for ((status, code) in listOf(
+        0 to "network", 422 to "unknown_location", 401 to "no_session",
+        503 to "http_503", 404 to "not_found",
+    )) {
+        val failure = ApiFailure(status, code)
+        check(
+            MaterialQueue.messageKey(failure) == failure.messageKey,
+            "'$code' is already noun-neutral and must pass through untouched",
+        )
+    }
+    for (key in listOf("err_rejected_request", "err_wrong_account_request")) {
+        check(key in deKeys, "'$key' has no German string")
+    }
+
+    // ---- the queue plan. decision-22 from the client side. ------------------------
+    val t0 = Instant.parse("2026-08-01T06:00:00Z")
+    fun queuedMaterial(id: String, workerId: Int, body: String, at: Instant, blocked: Boolean = false) =
+        QueuedMaterialRequest(id, workerId, body, null, at, if (blocked) "err_rejected" else null, blocked)
+
+    val mine1 = queuedMaterial("a", 1, "erste", t0)
+    val mine2 = queuedMaterial("b", 1, "zweite", t0.plusSeconds(60))
+    val theirs = queuedMaterial("c", 2, "kollege", t0.plusSeconds(30))
+    val dead = queuedMaterial("d", 1, "schon abgelehnt", t0.plusSeconds(10), blocked = true)
+
+    val plan = MaterialQueue.plan(listOf(mine2, theirs, dead, mine1), sessionWorkerId = 1)
+    check(plan.send.map { it.body } == listOf("erste", "zweite"), "oldest first, mine only: ${plan.send}")
+    check(plan.wrongAccount == listOf("c"), "a colleague's row is never posted under my session")
+    check(plan.send.none { it.blocked }, "a blocked row is not retried")
+
+    val flipped = MaterialQueue.plan(listOf(mine2, theirs, dead, mine1), sessionWorkerId = 2)
+    check(flipped.send.map { it.body } == listOf("kollege"), "only the session's own rows go out")
+    check(flipped.wrongAccount.toSet() == setOf("a", "b"), "and mine are the blocked ones now")
+
+    // ---- the list ----------------------------------------------------------------
+    fun serverRow(id: Int, at: Instant) = Wire.materialRequest(
+        JSONObject(fresh.toString()).put("id", id).put("body", "s$id").put("created_at", at.toString()),
+    )
+    val entries = MaterialQueue.entries(
+        outbox = listOf(
+            queuedMaterial("q1", 1, "q-neu", t0.plusSeconds(300)),
+            queuedMaterial("q2", 1, "q-alt", t0.plusSeconds(100)),
+        ),
+        server = listOf(serverRow(2, t0.plusSeconds(200)), serverRow(1, t0)),
+    )
+    val bodies = entries.map {
+        when (it) {
+            is MaterialEntry.Queued -> it.row.body
+            is MaterialEntry.Sent -> it.row.body
+        }
+    }
+    check(
+        bodies == listOf("q-neu", "s2", "q-alt", "s1"),
+        "queued and sent interleave by when they were written: $bodies",
+    )
+    check(entries.map { it.key }.toSet().size == 4, "a local UUID and a server integer never collide")
+    check(MaterialQueue.entries(emptyList(), emptyList()).isEmpty(), "an empty queue is an empty list")
+
+    // ---- the seams that import Android, read as text -----------------------------
+    // Two invariants that only matter on a device and that a regression would make
+    // invisible: materials must never be awaited from the tap/refresh path, and the
+    // material database must be a SEPARATE FILE from the one holding unpaid hours.
+    val model = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetViewModel.kt").readText()
+    val logRefresh = model.substringAfter("fun refresh()").substringBefore("\n    /**")
+    check(
+        !logRefresh.contains("material", ignoreCase = true),
+        "the log refresh must never await anything material - clocking in is the product",
+    )
+    val tap = model.substringAfter("fun handleTap(").substringBefore("\n    /**")
+    check(!tap.contains("material", ignoreCase = true), "the tap path must never touch materials")
+
+    val materialStore = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/data/MaterialStore.kt").readText()
+    val shiftStore = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/data/ShiftStore.kt").readText()
+    check(materialStore.contains("\"materials.db\""), "materials live in their own database file")
+    check(shiftStore.contains("\"timesheets.db\""), "...which is not the one holding unpaid hours")
+    check(
+        !materialStore.contains("\"timesheets.db\""),
+        "a material feature must never bump the schema version of the shifts database",
+    )
+    // decision-22 at the point the row is written: the worker comes from the session,
+    // never from the screen.
+    check(
+        model.contains("val worker = (_session.value as? SessionState.SignedIn)?.worker ?: return false"),
+        "submitMaterial takes the worker from the session, not from an argument",
+    )
+    check(
+        !Regex("""fun submitMaterial\([^)]*worker""").containsMatchIn(model),
+        "and there is no worker parameter to pass a different one in",
     )
 }

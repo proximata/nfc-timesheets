@@ -14,6 +14,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -225,6 +226,82 @@ try {
     assert.equal(query(`SELECT to_regclass('public.${table}') IS NOT NULL;`), "t", `${table} table missing`);
   }
 
+  // --- 005 spot-checks: material requests, contract history, settings --------
+  for (const table of ["material_requests", "location_contracts", "app_settings"]) {
+    assert.equal(query(`SELECT to_regclass('public.${table}') IS NOT NULL;`), "t", `${table} table missing`);
+  }
+
+  // NO DEFAULT BASELINE ROW. With `pl_margin_baseline_bp` absent the P&L flags nothing and
+  // says so; a seeded 15% would be this schema having an opinion about a Viennese cleaning
+  // company's margins. If a future migration seeds one, this fails and asks why.
+  assert.equal(query("SELECT count(*) FROM app_settings;"), "0", "app_settings must ship EMPTY");
+
+  // At most one CURRENT contract per building, enforced by the database. Two would make
+  // "the price today" have two answers and the P&L would count both.
+  assert.equal(
+    query(
+      "SELECT indisunique AND indpred IS NOT NULL FROM pg_index WHERE indexrelid = 'public.location_contracts_one_current_idx'::regclass;",
+    ),
+    "t",
+    "location_contracts_one_current_idx must be a PARTIAL UNIQUE index",
+  );
+
+  // Money in integer cents on the new tables too. A NUMERIC or a float here is a P&L that
+  // disagrees with itself.
+  for (const [table, column] of [
+    ["location_contracts", "monthly_contract_cents"],
+    ["location_contracts", "target_minutes_per_month"],
+    ["material_requests", "cost_cents"],
+    ["material_requests", "quantity"],
+  ]) {
+    assert.equal(
+      query(
+        `SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.${table}'::regclass AND attname = '${column}';`,
+      ),
+      "integer",
+      `${table}.${column} must be INTEGER (cents/minutes/counts, never a float)`,
+    );
+  }
+
+  // Contract validity is a CALENDAR DATE, not an instant. A timestamptz here would put a
+  // price change an hour either side of midnight and move it between months twice a year.
+  for (const column of ["valid_from", "valid_to"]) {
+    assert.equal(
+      query(
+        `SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.location_contracts'::regclass AND attname = '${column}';`,
+      ),
+      "date",
+      `location_contracts.${column} must be DATE`,
+    );
+  }
+
+  // A zero-length period is legal (entered and cleared the same day); an inverted one is
+  // not, and would make revenue for those days negative or double-counted.
+  query(
+    "INSERT INTO location_contracts (location_id, monthly_contract_cents, valid_from, valid_to) " +
+      "SELECT id, 1000, DATE '2025-01-01', DATE '2025-01-01' FROM locations LIMIT 1;",
+  );
+  assert.throws(
+    () =>
+      query(
+        "INSERT INTO location_contracts (location_id, monthly_contract_cents, valid_from, valid_to) " +
+          "SELECT id, 1000, DATE '2025-02-01', DATE '2025-01-01' FROM locations LIMIT 1;",
+      ),
+    /location_contracts_period/,
+    "a contract that ends before it starts must be refused by the database",
+  );
+  query("DELETE FROM location_contracts;");
+
+  // The lifecycle is a closed set. A free-text status would let a panel bug invent one
+  // that no report knows how to treat.
+  assert.equal(
+    query(
+      "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.material_requests'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%status%';",
+    ),
+    "1",
+    "material_requests.status must be CHECK-constrained to the five lifecycle states",
+  );
+
   // Money as INTEGER cents, time as INTEGER minutes. A float or a numeric here means a
   // profitability report that disagrees with itself.
   for (const [table, column] of [
@@ -291,6 +368,43 @@ try {
   apply("003_clients_contracts_inventory.sql");
   apply("004_worker_enrolment_codes.sql");
 
+  // The live box's actual shape before 005: one building WITH a contract figure typed into
+  // the buildings form, and one WITHOUT. 005 has to backfill the first into contract
+  // history and leave the second alone — inventing a EUR 0 contract for an unpriced
+  // building would turn "nobody has told me" into "100% loss" on the P&L.
+  liveQuery(`INSERT INTO clients (name) VALUES ('Live Client');
+    INSERT INTO locations (slug, name, monthly_contract_cents, target_minutes_per_month, client_id, created_at)
+      SELECT 'pricedhaus', 'Pricedhaus', 250000, 900, c.id, TIMESTAMPTZ '2025-06-15 04:00:00+02' FROM clients c;`);
+
+  apply("005_v2_features.sql");
+
+  assert.equal(
+    liveQuery("SELECT count(*) FROM location_contracts;"),
+    "1",
+    "005 must backfill exactly the buildings that already carry a price",
+  );
+  assert.equal(
+    liveQuery(
+      "SELECT monthly_contract_cents || '/' || target_minutes_per_month || '/' || valid_from || '/' || coalesce(valid_to::text, 'current') FROM location_contracts;",
+    ),
+    "250000/900/2025-06-15/current",
+    "the backfilled row must carry the figures and open on the building's VIENNA creation date",
+  );
+  assert.equal(
+    liveQuery("SELECT count(*) FROM locations WHERE lat IS NULL AND geocoded_at IS NULL AND street_view_status IS NULL;"),
+    "2",
+    "geocoding columns must arrive NULLable — a live building cannot supply them",
+  );
+  // Re-running the backfill — a hand-applied fix, or a restored dump being caught up —
+  // must not double the history. The statement is EXTRACTED FROM THE MIGRATION rather than
+  // retyped here, so this cannot pass against a copy that has drifted from the real one.
+  const backfill = /INSERT INTO location_contracts[\s\S]*?;/.exec(
+    fs.readFileSync(path.join(__dirname, "migrations", "005_v2_features.sql"), "utf8"),
+  );
+  assert.ok(backfill, "005 must contain a location_contracts backfill");
+  liveQuery(backfill[0]);
+  assert.equal(liveQuery("SELECT count(*) FROM location_contracts;"), "1", "the backfill must be idempotent");
+
   assert.equal(liveQuery("SELECT count(*) FROM shifts;"), "2", "003 must not disturb existing shifts");
   // The live box has a worker enrolled via Sign in with Apple and no code. 004 must not
   // make that row invalid, or the one person using the product stops being able to work.
@@ -317,7 +431,7 @@ try {
 
   console.log(
     "OK check-migrate: migrations apply once, re-run is a no-op, seed is idempotent, " +
-      "003+004 apply on top of 001+002 with live data",
+      "003+004+005 apply on top of 001+002 with live data, and 005's contract backfill is idempotent",
   );
 } finally {
   for (const db of [DB_NAME, LIVE_DB_NAME]) {

@@ -170,6 +170,12 @@ struct APIFailure: Error {
             return "This location was removed. Ask your admin."
         case "unknown_shift":
             return "The server doesn't have this shift. Ask your admin."
+        case "unknown_request":
+            return "The server doesn't have this request any more. Ask your admin."
+        case "not_found":
+            // An unrouted path, i.e. this build is newer than the server. Never a
+            // rejection of what was sent - see MaterialStore.push, which keeps the row.
+            return "Not available on the server yet - saved and will be sent later."
         case "shift_already_open":
             return "Another shift is still running - finishing it first."
         case "end_before_start":

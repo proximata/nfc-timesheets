@@ -21,6 +21,7 @@
     <string name="sign_out">Sign out</string>
 
     <string name="tab_log">Log</string>
+    <string name="tab_material">Materials</string>
     <string name="tab_history">History</string>
     <string name="tab_settings">Settings</string>
 
@@ -93,9 +94,46 @@
     <string name="err_wrong_account">This shift was logged by a different account and can\'t be sent.</string>
     <string name="err_server">Server trouble — will retry.</string>
     <string name="err_rejected">Rejected by the server. Report this shift to your admin.</string>
+    <string name="err_unknown_request">The server doesn\'t have this request any more. Ask your admin.</string>
+    <string name="err_rejected_request">Rejected by the server. Report this request to your admin.</string>
+    <string name="err_wrong_account_request">This request was written by a different account and can\'t be sent.</string>
+    <string name="err_feature_unavailable">Not available on the server yet — saved and will be sent later.</string>
+
+    <string name="material_title">Materials</string>
+    <string name="material_ask_section">Ask for something</string>
+    <string name="material_input_label">What do you need?</string>
+    <string name="material_input_hint">In your own words, for example: two mops and a large bottle of glass cleaner.</string>
+    <string name="material_char_count">%1$d of %2$d characters</string>
+    <string name="material_for_site">For %1$s</string>
+    <string name="material_for_current_site">For the building you\'re clocked into now</string>
+    <string name="material_submit">Send request</string>
+    <string name="material_saved">Request saved. It will be sent as soon as you\'re online.</string>
+    <string name="material_no_push_note">The office reads these on the web. Open this tab to see when something arrives — your phone will not notify you.</string>
+    <string name="material_ready_section">Ready to collect</string>
+    <string name="material_ready">At the warehouse</string>
+    <string name="material_arrived_at">Arrived %1$s</string>
+    <string name="material_ack">Got it</string>
+    <string name="material_list_section">Your requests</string>
+    <string name="material_list_empty">Nothing asked for yet.</string>
+    <string name="material_unavailable_note">The office hasn\'t switched this on yet. Anything you write is saved and sent as soon as they do.</string>
+    <string name="material_admin_note">Note from the office: %1$s</string>
+    <string name="material_quantity_item">%1$d × %2$s</string>
+
+    <string name="material_status_submitted">Waiting for the office</string>
+    <string name="material_status_approved">Approved — not ordered yet</string>
+    <string name="material_status_ordered">Ordered</string>
+    <string name="material_status_arrived">At the warehouse</string>
+    <string name="material_status_collected">Collected</string>
+    <string name="material_status_rejected">Not approved</string>
+    <string name="material_status_unknown">Status unknown — ask your admin</string>
 
     <string name="a11y_tap_hint">Hold the phone to the NFC tag by the entrance to clock in or out.</string>
     <string name="a11y_shift_open">Shift in progress</string>
     <string name="a11y_needs_resolution">This shift needs a confirmed finish time</string>
+    <string name="a11y_material_ready">Ready to collect: %1$s</string>
+    <plurals name="a11y_material_badge">
+        <item quantity="one">%d material request has arrived</item>
+        <item quantity="other">%d material requests have arrived</item>
+    </plurals>
 
 </resources>

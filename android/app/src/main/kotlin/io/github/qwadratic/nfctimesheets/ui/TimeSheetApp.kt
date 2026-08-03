@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -45,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -61,6 +63,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
+import io.github.qwadratic.nfctimesheets.core.MaterialEntry
+import io.github.qwadratic.nfctimesheets.core.MaterialQueue
+import io.github.qwadratic.nfctimesheets.core.MaterialStatus
+import io.github.qwadratic.nfctimesheets.core.QueuedMaterialRequest
+import io.github.qwadratic.nfctimesheets.core.WireMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.data.LocalShift
 import io.github.qwadratic.nfctimesheets.nfc.NfcReadiness
@@ -118,7 +125,10 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?) {
     // red while you retype tells you nothing and looks broken.
     var attempted by rememberSaveable { mutableStateOf<String?>(null) }
     val busy by model.signingIn.collectAsStateWithLifecycle()
-    val showError = reasonKey != null && typed == attempted
+    // The refusal that is currently on screen, or null. Non-null exactly when there IS a
+    // reason AND the field still holds the string it was about.
+    val errorKey = reasonKey?.takeIf { typed == attempted }
+    val showError = errorKey != null
     val submit = {
         if (!busy) {
             attempted = typed
@@ -161,9 +171,9 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?) {
             // followed by what to do about it instead of by silence. Assertive because
             // the worker is looking at the keyboard, not at the field.
             supportingText = {
-                if (showError && reasonKey != null) {
+                if (errorKey != null) {
                     Text(
-                        stringResource(stringIdFor(reasonKey)),
+                        stringResource(stringIdFor(errorKey)),
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
                     )
                 } else {
@@ -227,15 +237,33 @@ private fun SignedInScaffold(
     openIntent: (Intent) -> Unit,
 ) {
     var tab by remember { mutableIntStateOf(0) }
+    val materials by model.materials.collectAsStateWithLifecycle()
+    val arrivals = materials.unseenArrivals.size
     Scaffold(
         bottomBar = {
             NavigationBar {
-                listOf(R.string.tab_log, R.string.tab_history, R.string.tab_settings)
+                listOf(R.string.tab_log, R.string.tab_material, R.string.tab_history, R.string.tab_settings)
                     .forEachIndexed { index, label ->
                         NavigationBarItem(
                             selected = tab == index,
                             onClick = { tab = index },
-                            icon = {},
+                            icon = {
+                                // The count of things sitting in the warehouse that
+                                // nobody has told this worker about. A NUMBER and not a
+                                // dot, and spoken rather than only coloured.
+                                //
+                                // It only ever moves while the app is open: there is no
+                                // push in this system (decision-23), and the material
+                                // screen says so in words.
+                                if (index == MATERIAL_TAB && arrivals > 0) {
+                                    val spoken = pluralStringResource(
+                                        R.plurals.a11y_material_badge, arrivals, arrivals,
+                                    )
+                                    Badge(
+                                        modifier = Modifier.semantics { contentDescription = spoken },
+                                    ) { Text("$arrivals") }
+                                }
+                            },
                             label = { Text(stringResource(label)) },
                         )
                     }
@@ -245,12 +273,16 @@ private fun SignedInScaffold(
         Column(Modifier.padding(padding)) {
             when (tab) {
                 0 -> LogScreen(model, nfcReadiness, openIntent)
-                1 -> HistoryScreen(model)
+                MATERIAL_TAB -> MaterialScreen(model)
+                2 -> HistoryScreen(model)
                 else -> SettingsScreen(model)
             }
         }
     }
 }
+
+/** Named because the badge and the `when` above must not drift apart. */
+private const val MATERIAL_TAB = 1
 
 @Composable
 private fun LogScreen(
@@ -553,6 +585,292 @@ private fun ResolveDialog(model: TimeSheetViewModel, shifts: List<WireShift>, on
             }
         }
     }
+}
+
+// -------------------------------------------------------------------------------------
+// Materials. "I need something", in the worker's own words.
+//
+// THIS SCREEN IS NOT THE PRODUCT. Clocking in is. Nothing here is on the tap path,
+// nothing here is awaited by the log screen, and every failure below ends as a sentence
+// on a row rather than as a blocked screen.
+// -------------------------------------------------------------------------------------
+@Composable
+private fun MaterialScreen(model: TimeSheetViewModel) {
+    val state by model.materials.collectAsStateWithLifecycle()
+    val log by model.log.collectAsStateWithLifecycle()
+    // rememberSaveable: a rotation, or Android tearing the activity down behind a
+    // notification, must not eat what has already been typed.
+    var typed by rememberSaveable { mutableStateOf("") }
+    var justSaved by rememberSaveable { mutableStateOf(false) }
+
+    // Adopt, read from disk, then push and pull. Keyed on Unit: entering the tab is the
+    // poll, and the screen says out loud that this is the only time it happens.
+    LaunchedEffect(Unit) { model.startMaterials() }
+
+    val contextLocationId = log.open?.locationId
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Text(
+                stringResource(R.string.material_title),
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.semantics { heading() },
+            )
+        }
+
+        // Arrived, and nobody has been told. The whole reason this screen polls.
+        if (state.unseenArrivals.isNotEmpty()) {
+            item { SectionHeading(R.string.material_ready_section) }
+            items(state.unseenArrivals, key = { "ready-${it.id}" }) { request ->
+                val what = request.itemName ?: request.body
+                Card(Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            stringResource(R.string.material_ready),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                        // Said as one sentence rather than as two fragments a screen
+                        // reader has to join up: "Zum Abholen bereit: Glasreiniger 5 l".
+                        val spokenRow = stringResource(R.string.a11y_material_ready, what)
+                        Text(what, modifier = Modifier.semantics { contentDescription = spokenRow })
+                        request.arrivedAt?.let {
+                            Text(
+                                stringResource(R.string.material_arrived_at, dateTime(it)),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Button(
+                            onClick = { model.markMaterialSeen(request) },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) { Text(stringResource(R.string.material_ack)) }
+                    }
+                }
+            }
+        }
+
+        // Ask.
+        item { SectionHeading(R.string.material_ask_section) }
+        item {
+            OutlinedTextField(
+                value = typed,
+                // Hard stop at the server's own limit rather than a 400 the worker cannot
+                // read. Truncating only when it is exceeded means the cursor is never
+                // moved under somebody who is still typing.
+                onValueChange = {
+                    typed = it.take(MaterialQueue.BODY_MAX)
+                    justSaved = false
+                },
+                label = { Text(stringResource(R.string.material_input_label)) },
+                supportingText = { Text(stringResource(R.string.material_input_hint)) },
+                // Multi-line and NOT singleLine: "zwei Mopps, Glasreiniger, 3 Sack
+                // Müllsäcke" is a list, and a one-line box says the wrong thing about
+                // how much detail is welcome. Autocorrect stays ON here, unlike the code
+                // field — this is prose in the worker's own language.
+                minLines = 3,
+                maxLines = 8,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Sentences,
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Default,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (typed.length > MaterialQueue.BODY_MAX - 200) {
+            item {
+                Text(
+                    stringResource(R.string.material_char_count, typed.length, MaterialQueue.BODY_MAX),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (contextLocationId != null) {
+            item {
+                // CONTEXT, never a cost split (decision-6). The building is recorded
+                // because it is the one thing the worker actually knows; the P&L divides
+                // materials pro-rata by labour hours and never by this field.
+                val name = model.siteName(contextLocationId)
+                Text(
+                    if (name != null) {
+                        stringResource(R.string.material_for_site, name)
+                    } else {
+                        stringResource(R.string.material_for_current_site)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            Button(
+                onClick = {
+                    if (model.submitMaterial(typed)) {
+                        typed = ""
+                        justSaved = true
+                    }
+                },
+                enabled = MaterialQueue.normalise(typed) != null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.material_submit)) }
+        }
+        if (justSaved) {
+            item {
+                Text(
+                    stringResource(R.string.material_saved),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
+        }
+        item {
+            // decision-23: the server's dependencies are pg + @sentry/node. There is no
+            // APNs certificate and no FCM project, so THERE IS NO PUSH. Promising a
+            // notification to somebody who then does not get one is the difference
+            // between a late delivery and a broken product.
+            Text(
+                stringResource(R.string.material_no_push_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        // Everything, newest first.
+        item { SectionHeading(R.string.material_list_section) }
+        if (state.featureUnavailable) {
+            item {
+                Text(
+                    stringResource(R.string.material_unavailable_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (state.entries.isEmpty()) {
+            item {
+                Text(
+                    stringResource(R.string.material_list_empty),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        items(state.entries, key = { it.key }) { entry ->
+            when (entry) {
+                is MaterialEntry.Queued -> QueuedMaterialRow(entry.row, model::siteName)
+                is MaterialEntry.Sent -> SentMaterialRow(entry.row)
+            }
+        }
+
+        item {
+            OutlinedButton(
+                onClick = model::syncMaterials,
+                enabled = !state.busy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.log_refresh)) }
+        }
+    }
+}
+
+/**
+ * Written, not yet acknowledged by the server. NEVER silently pretty: an unsent request
+ * says it is unsent, and a blocked one says a human has to act.
+ */
+@Composable
+private fun QueuedMaterialRow(row: QueuedMaterialRequest, siteName: (String) -> String?) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(row.body, style = MaterialTheme.typography.bodyLarge)
+        row.locationId?.let { id ->
+            siteName(id)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Text(
+            dateTime(row.createdAt),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            row.errorKey?.let { stringResource(stringIdFor(it)) } ?: stringResource(R.string.sync_sending),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (row.blocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        HorizontalDivider()
+    }
+}
+
+/**
+ * The server's copy. The status is ALWAYS rendered as words — the colour is a second
+ * signal, never the only one.
+ */
+@Composable
+private fun SentMaterialRow(row: WireMaterialRequest) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(row.body, style = MaterialTheme.typography.bodyLarge)
+        row.itemName?.let { item ->
+            Text(
+                row.quantity?.let { stringResource(R.string.material_quantity_item, it, item) } ?: item,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        row.locationName?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text(
+            stringResource(materialStatusRes(row)),
+            style = MaterialTheme.typography.bodyMedium,
+            color = when {
+                row.status == MaterialStatus.REJECTED -> MaterialTheme.colorScheme.error
+                row.isUnseenArrival -> MaterialTheme.colorScheme.tertiary
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        row.adminNote?.takeIf { it.isNotBlank() }?.let {
+            // The office's own words about this decision. It is the only explanation a
+            // refused worker gets, so it is shown rather than swallowed.
+            Text(
+                stringResource(R.string.material_admin_note, it),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            dateTime(row.createdAt),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        HorizontalDivider()
+    }
+}
+
+/**
+ * An unknown status is reported as unknown. Inventing "in progress" for a value this
+ * build has never seen would be a guess shown as a fact. An explicit `when` with no
+ * `else`, so a sixth status added to [MaterialStatus] fails to compile here.
+ */
+private fun materialStatusRes(row: WireMaterialRequest): Int = when (row.status) {
+    MaterialStatus.SUBMITTED -> R.string.material_status_submitted
+    MaterialStatus.APPROVED -> R.string.material_status_approved
+    MaterialStatus.ORDERED -> R.string.material_status_ordered
+    MaterialStatus.ARRIVED ->
+        if (row.seenAt == null) R.string.material_status_arrived else R.string.material_status_collected
+    MaterialStatus.REJECTED -> R.string.material_status_rejected
+    null -> R.string.material_status_unknown
 }
 
 @Composable

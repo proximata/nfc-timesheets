@@ -121,9 +121,51 @@ CREATE TABLE locations (
   client_id BIGINT REFERENCES clients(id),
   contact_id BIGINT REFERENCES contacts(id),
   monthly_contract_cents INTEGER CHECK (monthly_contract_cents >= 0),
-  target_minutes_per_month INTEGER CHECK (target_minutes_per_month >= 0)
+  target_minutes_per_month INTEGER CHECK (target_minutes_per_month >= 0),
+  geocoded_at TIMESTAMPTZ,
+  geocode_status TEXT,
+  street_view_status TEXT
 );
 CREATE INDEX locations_client_id_idx ON locations (client_id);
+CREATE TABLE location_contracts (
+  id BIGSERIAL PRIMARY KEY,
+  location_id UUID NOT NULL REFERENCES locations(id),
+  client_id BIGINT REFERENCES clients(id),
+  monthly_contract_cents INTEGER NOT NULL CHECK (monthly_contract_cents >= 0),
+  target_minutes_per_month INTEGER CHECK (target_minutes_per_month >= 0),
+  valid_from DATE NOT NULL,
+  valid_to DATE,
+  note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT location_contracts_period CHECK (valid_to IS NULL OR valid_to >= valid_from)
+);
+CREATE UNIQUE INDEX location_contracts_one_current_idx
+  ON location_contracts (location_id) WHERE valid_to IS NULL;
+CREATE INDEX location_contracts_period_idx ON location_contracts (location_id, valid_from);
+CREATE TABLE app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL CHECK (btrim(value) <> ''),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE material_requests (
+  id BIGSERIAL PRIMARY KEY,
+  worker_id BIGINT NOT NULL REFERENCES workers(id),
+  location_id UUID REFERENCES locations(id),
+  body TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'submitted'
+    CHECK (status IN ('submitted', 'approved', 'ordered', 'arrived', 'rejected')),
+  admin_note TEXT,
+  inventory_item_id BIGINT REFERENCES inventory_items(id),
+  quantity INTEGER CHECK (quantity > 0),
+  cost_cents INTEGER CHECK (cost_cents >= 0),
+  decided_by BIGINT REFERENCES admins(id) ON DELETE SET NULL,
+  decided_at TIMESTAMPTZ,
+  ordered_at TIMESTAMPTZ,
+  arrived_at TIMESTAMPTZ,
+  seen_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX material_requests_worker_idx ON material_requests (worker_id, created_at DESC);
 CREATE TABLE portal_grants (
   token_hash TEXT PRIMARY KEY,
   contact_id BIGINT NOT NULL REFERENCES contacts(id),
@@ -356,6 +398,74 @@ await test("the REAL SDK payload leaks nothing and lands as ONE trace", () => {
   );
   assert.ok(out.includes("check-telemetry-wire: PASS"), out);
 });
+
+// ---- decision-6 arithmetic (no database needed) ------------------------------------
+// The pro-rata split is the one piece of P&L arithmetic that can be wrong QUIETLY: the
+// naive `round(total * share)` per building loses a cent on almost every three-way split
+// and the columns simply never add up. Like the telemetry cases above, this runs before
+// the database check so it is asserted on any machine at all.
+{
+  const { splitProRata } = await import("./lib/prorata.js");
+  const sum = (m) => [...m.values()].reduce((a, b) => a + b, 0);
+
+  await test("a pro-rata split gives back EXACTLY the pot, at every awkward ratio (decision-6)", () => {
+    // 100 / 3 is the canonical loser: 33.33 each, three roundings, one cent gone.
+    const thirds = splitProRata(100, [
+      { key: "a", weight: 3600 },
+      { key: "b", weight: 3600 },
+      { key: "c", weight: 3600 },
+    ]);
+    assert.equal(sum(thirds), 100, "three equal buildings must still account for all 100 cents");
+    assert.deepEqual([...thirds.values()].sort(), [33, 33, 34], "largest remainder, not three 33s");
+
+    // Exhaustive over the shapes a real month produces: odd pots, lopsided hours, one
+    // building that did almost nothing, and a pot of zero.
+    const weightSets = [
+      [1, 1],
+      [1, 2, 3],
+      [3600, 1],
+      [3600, 3600, 3600, 3600, 3600, 3600, 3600],
+      [86_400, 3_600, 1_800, 900, 60],
+      [0, 3600, 0],
+    ];
+    for (const weights of weightSets) {
+      for (const pot of [0, 1, 2, 7, 99, 100, 101, 999_999, 1_234_567]) {
+        const entries = weights.map((weight, i) => ({ key: `l${i}`, weight }));
+        const split = splitProRata(pot, entries);
+        assert.equal(sum(split), pot, `pot ${pot} over ${weights} must sum back exactly`);
+        // A building with no hours consumed none of the period's supplies. Nothing may be
+        // handed to it by the remainder pass either.
+        for (const [i, weight] of weights.entries()) {
+          if (weight === 0) assert.equal(split.get(`l${i}`), 0, "zero hours must mean zero materials");
+        }
+      }
+    }
+  });
+
+  await test("nothing to split by is NULL, not a silent pile of zeroes", () => {
+    assert.equal(
+      splitProRata(5000, [{ key: "a", weight: 0 }, { key: "b", weight: 0 }]),
+      null,
+      "materials bought in a month nobody worked cannot be attributed; the caller must report that",
+    );
+    assert.equal(splitProRata(0, []), null, "no buildings at all is the same answer");
+  });
+
+  await test("the split is deterministic and refuses nonsense input", () => {
+    const entries = [
+      { key: "b", weight: 1 },
+      { key: "a", weight: 1 },
+      { key: "c", weight: 1 },
+    ];
+    // A report that moves a cent between two buildings on refresh contradicts yesterday's
+    // screenshot, which is how a director stops believing the whole screen.
+    const once = splitProRata(100, entries);
+    for (let i = 0; i < 5; i++) assert.deepEqual([...splitProRata(100, entries)], [...once]);
+    assert.throws(() => splitProRata(1.5, entries), TypeError, "cents are integers");
+    assert.throws(() => splitProRata(-1, entries), TypeError);
+    assert.throws(() => splitProRata(10, [{ key: "a", weight: -1 }]), TypeError);
+  });
+}
 
 let admin;
 try {
@@ -2372,6 +2482,733 @@ try {
 
     await admin.query("DELETE FROM shifts WHERE worker_id = $1", [rangeWorker]);
     await admin.query("DELETE FROM workers WHERE id = $1", [rangeWorker]);
+  }
+
+  // ---- 005: material requests, contracts, P&L, analytics, geocoding ----------------
+  //
+  // The period below is OCTOBER 2025 IN VIENNA and nothing else in this file touches it,
+  // so every aggregate asserted here is exact rather than "whatever the earlier cases left
+  // behind". Its two ends sit on opposite sides of the 26 October clock change: it starts
+  // at +02:00 and ends at +01:00, so it is 31 days AND one hour long. A period built with
+  // one fixed UTC offset is one day short, and that day is a day of contract revenue.
+  {
+    const { setGeocoderForTest } = await import("./lib/geocode.js");
+
+    const VIENNA_OCT_2025 = { from: "2025-09-30T22:00:00Z", to: "2025-10-31T23:00:00Z" }; // 31 days
+    const VIENNA_NOV_2025 = { from: "2025-10-31T23:00:00Z", to: "2025-11-30T23:00:00Z" }; // 30 days
+    const window = ({ from, to }) => `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+    // Read the body FIRST, then assert on the status with the body as the message. The
+    // obvious `assert.equal(res.status, 201, await res.text())` evaluates its message
+    // eagerly and leaves the stream consumed, so the following .json() throws "Body is
+    // unusable" and hides the real failure.
+    const expect = async (res, status) => {
+      const payload = await res.json();
+      assert.equal(res.status, status, JSON.stringify(payload));
+      return payload;
+    };
+    const pl = async (period) => (await asAdmin(`/admin/pl?${window(period)}`)).json();
+    const analytics = async (period, extra = "") =>
+      (await asAdmin(`/admin/analytics?${window(period)}${extra}`)).json();
+    const building = (payload, locationId) => payload.buildings.find((b) => b.location_id === locationId);
+
+    // EUR 3100/month against 31 October days and 30 November days is 10000 and 10333.33
+    // cents/day: one divides evenly, one does not, so both the exact and the rounded path
+    // are exercised.
+    const MONTHLY_CENTS = 310_000;
+
+    const plWorker = Number(
+      (
+        await admin.query(
+          "INSERT INTO workers (name, email, hourly_rate_cents) VALUES ('PL Worker', 'pl.worker@example.test', 1000) RETURNING id",
+        )
+      ).rows[0].id,
+    );
+
+    const newLocation = async (slug, name) =>
+      (await expect(await asAdmin("/admin/locations", { method: "POST", body: { slug, name } }), 201)).location.id;
+    const plA = await newLocation("pl-a", "PL Haus A");
+    const plB = await newLocation("pl-b", "PL Haus B");
+    const plC = await newLocation("pl-c", "PL Haus C");
+
+    // One payable hour at each building, mid-October, an hour apart. Equal hours on
+    // purpose: an even three-way split of an odd pot is where a cent goes missing.
+    for (const [i, locationId] of [plA, plB, plC].entries()) {
+      await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+         VALUES ($1, $2, $3::timestamptz, $3::timestamptz + interval '1 hour')`,
+        [plWorker, locationId, `2025-10-15T0${6 + i}:00:00Z`],
+      );
+    }
+
+    // The material pot: 100 cents ordered inside the period, plus one request the admin
+    // has NOT priced and one that was only ever approved. Neither may reach the pool.
+    const seedRequest = async (status, costCents, orderedAt) =>
+      Number(
+        (
+          await admin.query(
+            `INSERT INTO material_requests (worker_id, location_id, body, status, cost_cents, ordered_at)
+             VALUES ($1, $2, 'Wischmopp und Reiniger', $3, $4, $5) RETURNING id`,
+            [plWorker, plA, status, costCents, orderedAt],
+          )
+        ).rows[0].id,
+      );
+    await seedRequest("arrived", 100, "2025-10-10T09:00:00Z");
+    await seedRequest("ordered", null, "2025-10-11T09:00:00Z"); // unpriced
+    await seedRequest("approved", 9_999_999, null); // approved is not a spend
+    await seedRequest("arrived", 5_000_000, "2025-11-10T09:00:00Z"); // wrong period
+
+    await test("a P&L without a period is REFUSED, and garbage bounds are too", async () => {
+      for (const [qs, status] of [
+        ["", 400],
+        [`from=${VIENNA_OCT_2025.from}`, 400],
+        [`to=${VIENNA_OCT_2025.to}`, 400],
+        ["from=nonsense&to=2025-11-01T00:00:00Z", 400],
+        ["from=2025-10-01&to=2025-11-01", 400], // no zone: read in the server's zone
+        [`from=${VIENNA_OCT_2025.to}&to=${VIENNA_OCT_2025.from}`, 422], // inverted
+      ]) {
+        for (const route of ["/admin/pl", "/admin/analytics"]) {
+          const res = await asAdmin(`${route}?${qs}`);
+          assert.equal(res.status, status, `${route}?${qs} must be refused, got ${res.status}`);
+          assert.ok((await res.json()).error, "and must name the failure");
+        }
+      }
+    });
+
+    await test("the material split sums back to the pot with no cent lost (decision-6)", async () => {
+      const payload = await pl(VIENNA_OCT_2025);
+
+      assert.equal(payload.materials.pool_cents, 100, "only ordered/arrived requests inside the period");
+      assert.equal(payload.materials.unpriced_requests, 1, "and an unpriced one is COUNTED, not treated as free");
+      assert.equal(payload.materials.basis, "pro_rata_labour_hours");
+
+      // THE INVARIANT: every cent of the pot lands on exactly one building.
+      const allocated = payload.buildings.reduce((sum, b) => sum + b.material_cents, 0);
+      assert.equal(allocated, 100, "the per-building material column must add up to the pot");
+      assert.equal(payload.materials.allocated_cents, 100);
+      assert.equal(payload.materials.unallocated_cents, 0);
+
+      // Equal hours, an odd pot: 33.33 each. Largest remainder gives 34/33/33, never 33/33/33.
+      const shares = [plA, plB, plC].map((id) => building(payload, id).material_cents).sort();
+      assert.deepEqual(shares, [33, 33, 34], `equal-hours split was ${shares}`);
+
+      // A building nobody worked in October consumed none of October's supplies.
+      for (const b of payload.buildings) {
+        if (b.labour_seconds === 0) assert.equal(b.material_cents, 0, `${b.slug} got materials for zero hours`);
+      }
+    });
+
+    await test("materials bought in a month nobody worked are reported, not spread or dropped", async () => {
+      const payload = await pl(VIENNA_NOV_2025);
+      assert.equal(payload.materials.pool_cents, 5_000_000, "the November order belongs to November");
+      assert.equal(payload.materials.allocated_cents, 0);
+      assert.equal(payload.materials.unallocated_cents, 5_000_000);
+      assert.equal(payload.materials.unallocated_reason, "no_payable_labour_in_period");
+      assert.equal(
+        payload.buildings.reduce((sum, b) => sum + b.material_cents, 0),
+        0,
+        "with no hours anywhere there is nothing to split by; inventing an even spread would be a guess",
+      );
+    });
+
+    await test("a building with no contract says so instead of reporting a 100% loss", async () => {
+      const payload = await pl(VIENNA_OCT_2025);
+      const b = building(payload, plB);
+      assert.equal(b.revenue_cents, null, "NULL, never 0 — 0 would mean 'we clean it for free'");
+      assert.equal(b.revenue_unknown_reason, "no_contract");
+      assert.equal(b.profit_cents, null, "and profit cannot be computed from an unknown");
+      assert.equal(b.margin_bp, null);
+      assert.equal(b.below_baseline, null, "a building we cannot assess is not a building that passed");
+      assert.ok(b.labour_cents > 0, "the hours are still real and still shown");
+    });
+
+    await test("a Vienna period is priced by whole days, across the October clock change", async () => {
+      const created = await expect(
+        await asAdmin(`/admin/locations/${plA}/contracts`, {
+          method: "POST",
+          body: { monthly_contract_cents: MONTHLY_CENTS, target_minutes_per_month: 620, valid_from: "2025-01-01" },
+        }),
+        201,
+      );
+      // A DATE must survive the round trip as the day that was typed. pg's default parser
+      // turns it into a local-midnight Date, which JSON.stringify then ships as the day
+      // BEFORE in any positive-offset zone — every contract period silently one day early.
+      assert.equal(created.contract.valid_from, "2025-01-01");
+
+      const october = building(await pl(VIENNA_OCT_2025), plA);
+      assert.equal(october.period_days, 31, "October in Vienna is 31 days even though it is 31 days + 1 hour long");
+      assert.equal(october.revenue_days, 31, "and all 31 of them are contracted");
+      assert.equal(october.revenue_cents, MONTHLY_CENTS, "a full month must be worth exactly the monthly fee");
+
+      const november = building(await pl(VIENNA_NOV_2025), plA);
+      assert.equal(november.period_days, 30);
+      assert.equal(november.revenue_cents, MONTHLY_CENTS, "a 30-day month is also worth exactly one monthly fee");
+
+      // MARCH, the other clock change, and the one that breaks naive arithmetic. Vienna
+      // March 2026 is 31 days MINUS one hour, so `(to - from) / 86_400_000` is 30.96 and
+      // any day count derived by division floors to 30 — a day of revenue gone, every
+      // spring, silently. Counting Vienna midnights instead cannot get this wrong.
+      const MARCH_2026 = { from: "2026-02-28T23:00:00Z", to: "2026-03-31T22:00:00Z" };
+      assert.equal(
+        Math.floor((Date.parse(MARCH_2026.to) - Date.parse(MARCH_2026.from)) / 86_400_000),
+        30,
+        "the naive computation this defends against must really produce 30, or the case proves nothing",
+      );
+      const march = building(await pl(MARCH_2026), plA);
+      assert.equal(march.period_days, 31, "March in Vienna is 31 days even though it is 31 days minus an hour long");
+      assert.equal(march.revenue_cents, MONTHLY_CENTS);
+
+      // And the hour itself, on the labour side, where it really does move money: a shift
+      // at 23:30 Vienna on 31 October is CET (+01:00) and is only inside the month if the
+      // period end was built from the tz database rather than from July's offset.
+      const lateShift = Number(
+        (
+          await admin.query(
+            `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+             VALUES ($1, $2, '2025-10-31T22:30:00Z', '2025-10-31T22:30:00Z'::timestamptz + interval '30 minutes') RETURNING id`,
+            [plWorker, plA],
+          )
+        ).rows[0].id,
+      );
+      assert.equal(building(await pl(VIENNA_OCT_2025), plA).labour_cents, 1500, "23:30 on 31 October is October");
+      assert.equal(
+        building(await pl({ from: VIENNA_OCT_2025.from, to: "2025-10-31T22:00:00Z" }), plA).labour_cents,
+        1000,
+        "a period built with one fixed +02:00 offset must visibly lose that half hour, or this case proves nothing",
+      );
+      await admin.query("DELETE FROM shifts WHERE id = $1", [lateShift]);
+    });
+
+    await test("a price change is period-correct: March keeps the March price", async () => {
+      await expect(
+        await asAdmin(`/admin/locations/${plA}/contracts`, {
+          method: "POST",
+          body: { monthly_contract_cents: MONTHLY_CENTS * 2, valid_from: "2025-10-16", note: "Preiserhöhung" },
+        }),
+        201,
+      );
+
+      const october = building(await pl(VIENNA_OCT_2025), plA);
+      // 15 days at 10000/day + 16 days at 20000/day. NOT 31 days at today's price, which
+      // is what a single mutable locations.monthly_contract_cents would have produced.
+      assert.equal(october.revenue_cents, 15 * 10_000 + 16 * 20_000);
+      assert.notEqual(october.revenue_cents, MONTHLY_CENTS * 2, "the raise must not rewrite the first half of the month");
+
+      const history = await (await asAdmin(`/admin/locations/${plA}/contracts`)).json();
+      assert.equal(history.contracts.length, 2);
+      assert.equal(history.contracts[0].valid_to, null, "exactly one current contract");
+      assert.equal(history.contracts[1].valid_to, "2025-10-16", "and the old one closed where the new one starts");
+
+      // Overlapping periods would give "the price on 20 October" two answers and the P&L
+      // would count both.
+      for (const validFrom of ["2025-10-16", "2025-10-01", "2024-01-01"]) {
+        const clash = await asAdmin(`/admin/locations/${plA}/contracts`, {
+          method: "POST",
+          body: { monthly_contract_cents: 1, valid_from: validFrom },
+        });
+        assert.equal(clash.status, 409, `${validFrom} overlaps and must be refused`);
+        assert.equal((await clash.json()).error, "contract_overlap");
+      }
+    });
+
+    await test("locations.monthly_contract_cents stays a MIRROR of the current contract", async () => {
+      // Two sources of truth are only safe when one is derived and something fails loudly
+      // when it drifts. This is that something: /locations/, /reinigung/ and the shipped
+      // iOS build all still read the mirror.
+      const drift = async () =>
+        (
+          await admin.query(
+            `SELECT l.id FROM locations l
+               LEFT JOIN location_contracts c ON c.location_id = l.id AND c.valid_to IS NULL
+              WHERE l.monthly_contract_cents IS DISTINCT FROM c.monthly_contract_cents
+                 OR l.target_minutes_per_month IS DISTINCT FROM c.target_minutes_per_month`,
+          )
+        ).rows;
+
+      assert.deepEqual(await drift(), [], "after POST /admin/locations/:id/contracts");
+
+      // The buildings FORM is the other writer, and it must land in the same place.
+      const viaForm = await expect(
+        await asAdmin("/admin/locations", {
+          method: "POST",
+          body: { id: plB, slug: "pl-b", name: "PL Haus B", monthly_contract_cents: 50_000, target_minutes_per_month: 300 },
+        }),
+        200,
+      );
+      assert.equal(viaForm.location.monthly_contract_cents, 50_000);
+      assert.deepEqual(await drift(), [], "after POST /admin/locations");
+      const formHistory = await (await asAdmin(`/admin/locations/${plB}/contracts`)).json();
+      assert.equal(formHistory.contracts.length, 1, "the form edits the current period, it does not mint a new one");
+
+      // Undoing a contract entered by mistake reverts to the PREVIOUS price rather than
+      // dropping the building to "no contract on file".
+      const current = (await (await asAdmin(`/admin/locations/${plA}/contracts`)).json()).contracts[0];
+      await expect(await asAdmin(`/admin/contracts/${current.id}`, { method: "DELETE" }), 200);
+      assert.deepEqual(await drift(), [], "after DELETE /admin/contracts/:id");
+      assert.equal(building(await pl(VIENNA_OCT_2025), plA).revenue_cents, MONTHLY_CENTS, "the old price is back");
+
+      // A closed period has already valued a month somebody has seen a report for.
+      const closed = (await (await asAdmin(`/admin/locations/${plA}/contracts`)).json()).contracts.find(
+        (c) => c.valid_to !== null,
+      );
+      if (closed) {
+        const res = await asAdmin(`/admin/contracts/${closed.id}`, { method: "DELETE" });
+        assert.equal(res.status, 409);
+        assert.equal((await res.json()).error, "contract_not_current");
+      }
+    });
+
+    await test("an unresolved auto-closed shift is excluded from cost AND named (decision-10)", async () => {
+      const stub = Number(
+        (
+          await admin.query(
+            `INSERT INTO shifts (worker_id, location_id, start_time, end_time, auto_closed)
+             VALUES ($1, $2, '2025-10-20T05:00:00Z', '2025-10-20T13:00:00Z', true) RETURNING id`,
+            [plWorker, plA],
+          )
+        ).rows[0].id,
+      );
+
+      const flagged = await pl(VIENNA_OCT_2025);
+      const a = building(flagged, plA);
+      assert.equal(a.labour_cents, 1000, "a start+8h guess must not become money just because a period was named");
+      assert.equal(a.labour_seconds, 3600);
+      // Silence would be the real failure: a building whose cost is low because three
+      // shifts are stuck awaiting resolution is not a cheap building.
+      assert.equal(a.excluded_unresolved_shifts, 1, "and the exclusion must be VISIBLE on the report");
+      assert.equal(a.excluded_unresolved_seconds, 28_800);
+      assert.equal(
+        flagged.buildings.reduce((sum, b) => sum + b.material_cents, 0),
+        100,
+        "the material split must still account for every cent while a shift is excluded",
+      );
+
+      await admin.query("UPDATE shifts SET corrected_at = now() WHERE id = $1", [stub]);
+      const resolved = await pl(VIENNA_OCT_2025);
+      const b = building(resolved, plA);
+      assert.equal(b.labour_cents, 9000, "and must count once a human has confirmed the end time");
+      assert.equal(b.excluded_unresolved_shifts, 0);
+      assert.equal(
+        resolved.buildings.reduce((sum, x) => sum + x.material_cents, 0),
+        100,
+        "and still account for every cent after the weights change",
+      );
+      // The weights moved from 1h/1h/1h to 9h/1h/1h, so the split must move with them.
+      assert.equal(building(resolved, plA).material_cents, 82);
+
+      await admin.query("DELETE FROM shifts WHERE id = $1", [stub]);
+    });
+
+    await test("nothing is flagged until the operator says what the baseline is", async () => {
+      const unset = await pl(VIENNA_OCT_2025);
+      assert.equal(unset.baseline_margin_bp, null);
+      assert.equal(unset.baseline_set, false);
+      assert.ok(
+        unset.buildings.every((b) => b.below_baseline === null),
+        "with no baseline configured NOTHING may be flagged — this codebase does not know what margin a Viennese cleaning contract should make",
+      );
+      // The dishonesty that is NOT fixed, stated on the wire so the screen can carry it.
+      assert.equal(unset.labour.rate_basis, "current");
+
+      await expect(
+        await asAdmin("/admin/settings", { method: "POST", body: { key: "pl_margin_baseline_bp", value: 9990 } }),
+        200,
+      );
+
+      const flagged = await pl(VIENNA_OCT_2025);
+      assert.equal(flagged.baseline_margin_bp, 9990);
+      const a = building(flagged, plA);
+      assert.equal(a.margin_bp, Math.round(((a.revenue_cents - a.labour_cents - a.material_cents) * 10000) / a.revenue_cents));
+      assert.equal(a.below_baseline, a.margin_bp < 9990);
+      assert.equal(building(flagged, plB).below_baseline, null, "an unpriced building still cannot be assessed");
+
+      for (const bad of [
+        { key: "pl_margin_baseline_bp", value: "fifteen" },
+        { key: "pl_margin_baseline_bp", value: 1.5 },
+        { key: "pl_margin_baseline_bp", value: 99_999 },
+        // Not on the allowlist: it would be stored, do nothing forever, and leave the
+        // director wondering why no building is ever flagged.
+        { key: "pl_margin_baseline_bpp", value: 1500 },
+      ]) {
+        assert.equal((await asAdmin("/admin/settings", { method: "POST", body: bad })).status, 400, JSON.stringify(bad));
+      }
+
+      const cleared = await expect(await asAdmin("/admin/settings/pl_margin_baseline_bp", { method: "DELETE" }), 200);
+      assert.deepEqual(cleared.setting, { key: "pl_margin_baseline_bp", value: null });
+      assert.equal((await pl(VIENNA_OCT_2025)).baseline_set, false, "unsetting must be reachable");
+      // Idempotent: pressing it twice must not look like a failure.
+      assert.equal((await asAdmin("/admin/settings/pl_margin_baseline_bp", { method: "DELETE" })).status, 200);
+    });
+
+    await test("analytics reports actual vs target and refuses to call one month a trend", async () => {
+      const payload = await analytics(VIENNA_OCT_2025, "&months=3");
+      const a = payload.buildings.find((b) => b.location_id === plA);
+      assert.equal(a.actual_minutes, 60);
+      assert.equal(a.target_minutes, 620, "620 min/month over 31 October days is 620 minutes");
+      assert.equal(a.variance_minutes, 60 - 620);
+
+      const c = payload.buildings.find((b) => b.location_id === plC);
+      assert.equal(c.target_minutes, null, "a building with no contract has no target — not a target of zero");
+      assert.equal(c.variance_minutes, null);
+
+      // October is the only month with shifts, so there is exactly one data point.
+      assert.equal(a.trend.length, 3, "three buckets asked for, three buckets returned");
+      assert.equal(a.trend_reason, "insufficient_data");
+      assert.equal(a.trend_direction, null, "one month is not a flat line, it is one month");
+      assert.equal(a.trend_delta_minutes, null);
+      assert.deepEqual(
+        a.trend.map((t) => t.month),
+        ["2025-08", "2025-09", "2025-10"],
+        "buckets are Vienna calendar months ending with the month the period ends in",
+      );
+
+      // A second month makes it arithmetic rather than a guess.
+      await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+         VALUES ($1, $2, '2025-09-15T06:00:00Z', '2025-09-15T08:00:00Z')`,
+        [plWorker, plA],
+      );
+      const withTrend = (await analytics(VIENNA_OCT_2025, "&months=3")).buildings.find((b) => b.location_id === plA);
+      assert.equal(withTrend.trend_reason, null);
+      assert.equal(withTrend.trend_delta_minutes, 60 - 120, "October's 60 minutes against September's 120");
+      assert.equal(withTrend.trend_direction, "down");
+      // September's shift is outside the reported period and must not touch its totals.
+      assert.equal(withTrend.actual_minutes, 60);
+      await admin.query("DELETE FROM shifts WHERE worker_id = $1 AND start_time < '2025-10-01'", [plWorker]);
+    });
+
+    // ---- geocoding: a building you cannot save is worse than one with no pin ---------
+    await test("a geocoding failure NEVER stops a building being created", async () => {
+      assert.equal(process.env.GOOGLE_GEOCODING_KEY, undefined, "this case must run with no Maps key");
+
+      // 1. No key configured at all — the supported state of a fresh box.
+      const noKey = await expect(
+        await asAdmin("/admin/locations", {
+          method: "POST",
+          body: { slug: "geo-nokey", name: "Geo ohne Schlüssel", address: "Stephansplatz 1, 1010 Wien" },
+        }),
+        201,
+      );
+      assert.equal(noKey.location.lat, null);
+
+      assert.equal(noKey.location.geocode_status, "no_key", "and the panel is told WHY, not just shown an empty map");
+
+      // 2. The geocoder throws — network down, DNS gone, TLS refused.
+      setGeocoderForTest(async () => {
+        throw new Error("getaddrinfo ENOTFOUND maps.googleapis.com");
+      });
+      const thrown = await asAdmin("/admin/locations", {
+        method: "POST",
+        body: { slug: "geo-throws", name: "Geo mit Ausfall", address: "Kärntner Straße 1, 1010 Wien" },
+      });
+      const thrownLocation = (await thrown.json()).location;
+      assert.equal(thrown.status, 201, "a Google outage is not a reason to lose a building");
+      assert.equal(thrownLocation.lat, null);
+      assert.ok(thrownLocation.geocoded_at, "but we must record that we ASKED, or the panel cannot offer a retry");
+
+      // 3. Quota exhausted — a 200 from Google with no usable answer.
+      setGeocoderForTest(async () => ({ status: "OVER_QUERY_LIMIT", lat: null, lng: null, street_view_status: null }));
+      const empty = await expect(
+        await asAdmin("/admin/locations", {
+          method: "POST",
+          body: { slug: "geo-empty", name: "Geo ohne Treffer", address: "Nirgendwogasse 999, 1010 Wien" },
+        }),
+        201,
+      );
+      assert.equal(empty.location.lat, null);
+      assert.equal(empty.location.geocode_status, "OVER_QUERY_LIMIT", "'try again tomorrow' is not 'fix your address'");
+
+      // 4. It works. The retry button is the same code path as the backfill script.
+      setGeocoderForTest(async () => ({ status: "OK", lat: 48.2082, lng: 16.3738, street_view_status: "OK" }));
+      const pinned = (await expect(await asAdmin(`/admin/locations/${thrownLocation.id}/geocode`, { method: "POST" }), 200))
+        .location;
+      assert.equal(pinned.lat, 48.2082);
+      assert.equal(pinned.lng, 16.3738);
+      // Stored, not guessed from the image: the static Street View endpoint answers 200
+      // with a grey "no imagery" JPEG, so an onError handler alone ships a grey box.
+      assert.equal(pinned.street_view_status, "OK");
+
+      // A hand-placed pin is more authoritative than a geocoder and must not be overwritten.
+      setGeocoderForTest(async () => ({ status: "OK", lat: 0, lng: 0, street_view_status: "ZERO_RESULTS" }));
+      const manual = await asAdmin("/admin/locations", {
+        method: "POST",
+        body: { slug: "geo-manual", name: "Geo von Hand", address: "Praterstern 1, 1020 Wien", lat: 48.2185, lng: 16.3919 },
+      });
+      assert.equal((await manual.json()).location.lat, 48.2185);
+
+      const noAddress = await asAdmin(`/admin/locations/${plA}/geocode`, { method: "POST" });
+      assert.equal(noAddress.status, 422, "nothing to geocode is worth naming; the fix is to type an address");
+      assert.equal((await noAddress.json()).error, "location_has_no_address");
+
+      setGeocoderForTest(null);
+
+      const state = (await analytics(VIENNA_OCT_2025)).buildings;
+      const stateOf = (slug) => state.find((b) => b.slug === slug)?.geocode_state;
+      assert.equal(stateOf("geo-throws"), "pinned");
+      assert.equal(stateOf("geo-empty"), "failed", "'asked and got nothing' is not 'nobody has asked'");
+      assert.equal(stateOf("pl-a"), "never_attempted", "a building with no address was never asked about");
+    });
+
+    // MEASURED AGAINST THE LIVE KEY, and the reason this guard exists at all:
+    //   "Nirgendwogasse 99999, 1010 Wien" -> HTTP 200, status OK, partial_match: true,
+    //                                        types ['postal_code'], APPROXIMATE,
+    //                                        48.2082647 / 16.3739206
+    //   "Quatsch Quatsch Quatsch"         -> HTTP 200, status OK, partial_match: true,
+    //                                        types ['country'] — the middle of Austria
+    // Without the guard, a typo puts a confident marker on the map and nothing says it is
+    // a guess. This exercises the REAL parser, with Google's real response shape, offline.
+    await test("a fuzzy Google match never becomes a pin (a wrong pin is worse than none)", async () => {
+      const { geocodeAddress } = await import("./lib/geocode.js");
+      const realFetch = globalThis.fetch;
+      const reply = (payload) => {
+        globalThis.fetch = async () => new Response(JSON.stringify(payload), { status: 200 });
+      };
+      process.env.GOOGLE_GEOCODING_KEY = "not-a-real-key-and-never-sent-anywhere";
+      try {
+        // Verbatim shape of the live "Nirgendwogasse 99999" answer.
+        reply({
+          status: "OK",
+          results: [
+            {
+              partial_match: true,
+              types: ["postal_code"],
+              formatted_address: "1010 Vienna, Austria",
+              geometry: { location: { lat: 48.2082647, lng: 16.3739206 }, location_type: "APPROXIMATE" },
+            },
+          ],
+        });
+        const fuzzy = await geocodeAddress("Nirgendwogasse 99999, 1010 Wien");
+        assert.equal(fuzzy.lat, null, "the centre of the 1st district is not this building");
+        assert.equal(fuzzy.status, "PARTIAL_MATCH");
+
+        // Not flagged partial, but still only a district-level answer.
+        reply({
+          status: "OK",
+          results: [{ types: ["locality"], geometry: { location: { lat: 48.2, lng: 16.37 }, location_type: "APPROXIMATE" } }],
+        });
+        assert.equal((await geocodeAddress("Wien")).status, "APPROXIMATE_ONLY");
+
+        // A real building-level answer still gets through, or the guard is just an outage.
+        // The second call this makes is Street View metadata, which against the live key
+        // really does answer REQUEST_DENIED ("this API key is not authorized to use this
+        // service") until the Street View Static API is switched on in the Cloud Console.
+        // That reason must be PRESERVED: reported as null, every building would look like
+        // "Google has no photograph here" when the fix is a checkbox someone has to tick.
+        let call = 0;
+        globalThis.fetch = async () => {
+          call += 1;
+          return new Response(
+            JSON.stringify(
+              call === 1
+                ? {
+                    status: "OK",
+                    results: [
+                      {
+                        types: ["street_address"],
+                        geometry: { location: { lat: 48.2084609, lng: 16.3734547 }, location_type: "ROOFTOP" },
+                      },
+                    ],
+                  }
+                : { status: "REQUEST_DENIED", error_message: "This API key is not authorized to use this service or API." },
+            ),
+            { status: 200 },
+          );
+        };
+        const exact = await geocodeAddress("Stephansplatz 1, 1010 Wien");
+        assert.equal(exact.status, "OK");
+        assert.equal(exact.lat, 48.2084609);
+        assert.equal(exact.street_view_status, "REQUEST_DENIED", "a pin is still worth having without a photo");
+        assert.notEqual(exact.street_view_status, "OK", "and the UI must never be handed a false OK to render a grey tile from");
+
+        // ZERO_RESULTS and a network failure are both "no pin", with different reasons.
+        reply({ status: "ZERO_RESULTS", results: [] });
+        assert.equal((await geocodeAddress("x")).status, "ZERO_RESULTS");
+        globalThis.fetch = async () => {
+          throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } });
+        };
+        assert.equal((await geocodeAddress("x")).status, "network:ENOTFOUND");
+      } finally {
+        globalThis.fetch = realFetch;
+        delete process.env.GOOGLE_GEOCODING_KEY;
+      }
+    });
+
+    // The geocoding metadata describes lat/lng and must not outlive them. POST
+    // /admin/locations writes EVERY column, so a caller that omits lat/lng clears them;
+    // if `geocoded_at` and `geocode_status` survived that, the row would claim to be on
+    // the map with no coordinates AND would be invisible to both repair paths
+    // (`shouldGeocode` skips a row whose geocoded_at is set, and geocode-backfill.js
+    // selects `geocoded_at IS NULL`). The building would stay unpinned forever.
+    await test("clearing a building's pin also clears the status that described it", async () => {
+      const id = await newLocation("geo-consistency", "Geo Consistency");
+      const pinned = async () =>
+        (await admin.query("SELECT lat, lng, geocoded_at, geocode_status FROM locations WHERE id = $1", [id])).rows[0];
+
+      await admin.query(
+        `UPDATE locations SET lat = 48.2083, lng = 16.3739, geocoded_at = now(),
+                geocode_status = 'OK', street_view_status = 'OK' WHERE id = $1`,
+        [id],
+      );
+      // An edit that touches an unrelated field and does not carry the coordinates back.
+      await expect(
+        await asAdmin("/admin/locations", {
+          method: "POST",
+          body: { id, slug: "geo-consistency", name: "Geo Consistency umbenannt", active: true },
+        }),
+        200,
+      );
+      const after = await pinned();
+      assert.equal(after.lat, null, "the write-every-column contract still clears the pin");
+      assert.equal(after.geocode_status, null, "a building with no coordinates must not report 'OK'");
+      assert.equal(after.geocoded_at, null, "and it must become visible to the backfill again");
+
+      // The other half: a geocode that legitimately FAILED keeps its reason. lat is
+      // already NULL there, so nothing is being lost, and re-querying every such row on
+      // every unrelated save is how the quota that pins the NEXT building gets burnt.
+      await admin.query(
+        `UPDATE locations SET lat = NULL, lng = NULL, geocoded_at = now(),
+                geocode_status = 'ZERO_RESULTS' WHERE id = $1`,
+        [id],
+      );
+      await expect(
+        await asAdmin("/admin/locations", {
+          method: "POST",
+          body: { id, slug: "geo-consistency", name: "Geo Consistency nochmal", active: true },
+        }),
+        200,
+      );
+      assert.equal((await pinned()).geocode_status, "ZERO_RESULTS", "a named failure survives an unrelated edit");
+    });
+
+    // ---- material requests: the worker side (decision-22) ---------------------------
+    await test("a worker's material request takes its owner from the SESSION (decision-22)", async () => {
+      const request = (
+        await expect(
+          await asWorker("/material-requests", {
+            method: "POST",
+            // The body names somebody else. It must be ignored, exactly as on /shifts/open.
+            body: { body: "Brauche neue Wischmopps", location_uuid: plA, worker_id: otherWorkerId },
+          }),
+          201,
+        )
+      ).request;
+      assert.equal(request.worker_id, workerId, "the caller-supplied worker_id must not be read");
+      assert.equal(request.status, "submitted");
+      assert.equal(request.cost_cents, null, "a request nobody has priced is UNPRICED, not free");
+      assert.equal(request.inventory_item_id, null, "free text is never fuzzy-matched to a product");
+
+      for (const bad of [{}, { body: "" }, { body: "x".repeat(2001) }, { body: "ok", location_uuid: "not-a-uuid" }]) {
+        const rejected = await asWorker("/material-requests", { method: "POST", body: bad });
+        assert.ok(rejected.status >= 400, `${JSON.stringify(bad)} must be refused`);
+      }
+      // Unlocked tags mean an id off the wire is untrusted (decision-15): it is resolved
+      // against ACTIVE locations or refused, never inserted on trust.
+      const ghost = await asWorker("/material-requests", {
+        method: "POST",
+        body: { body: "ok", location_uuid: uuid(77) },
+      });
+      assert.equal(ghost.status, 422);
+      assert.equal((await ghost.json()).error, "unknown_location");
+    });
+
+    await test("worker A cannot read, or acknowledge, worker B's material requests", async () => {
+      const mine = await (await asWorker("/material-requests/mine")).json();
+      assert.ok(mine.requests.length > 0);
+      assert.ok(
+        mine.requests.every((r) => r.worker_id === workerId),
+        "GET /material-requests/mine must be scoped to the session and to nothing else",
+      );
+      const target = mine.requests[0].id;
+
+      // The other worker's view: ids are sequential, so "not guessable" is not a defence.
+      const theirs = await (await call("/material-requests/mine", { cookie: otherCookie })).json();
+      assert.ok(
+        !theirs.requests.some((r) => r.id === target),
+        "a colleague's request must not appear in another worker's list",
+      );
+      assert.ok(theirs.requests.every((r) => r.worker_id === otherWorkerId));
+
+      // Free text people write about their own workplace is not readable by walking ids.
+      await admin.query("UPDATE material_requests SET status = 'arrived' WHERE id = $1", [target]);
+      const stolen = await call(`/material-requests/${target}/seen`, { method: "POST", cookie: otherCookie });
+      assert.equal(stolen.status, 404, "404 and not 403: an existence oracle over a colleague's requests is not worth it");
+      assert.equal(
+        (await admin.query("SELECT seen_at FROM material_requests WHERE id = $1", [target])).rows[0].seen_at,
+        null,
+        "and nothing may be written by a rejected call",
+      );
+
+      const own = await asWorker(`/material-requests/${target}/seen`, { method: "POST" });
+      assert.equal(own.status, 200);
+      const seenAt = (await own.json()).request.seen_at;
+      assert.ok(seenAt, "the owner can acknowledge their own arrival");
+      const again = await asWorker(`/material-requests/${target}/seen`, { method: "POST" });
+      assert.equal((await again.json()).request.seen_at, seenAt, "idempotent: a double tap keeps the FIRST acknowledgement");
+
+      // A signed-in worker is required, not just the build's app key.
+      assert.equal((await call("/material-requests/mine")).status, 401);
+      assert.equal((await call("/material-requests", { method: "POST", body: { body: "x" } })).status, 401);
+    });
+
+    await test("the admin advances a request one legal step at a time", async () => {
+      const created = await asWorker("/material-requests", {
+        method: "POST",
+        body: { body: "Zwei Flaschen Glasreiniger" },
+      });
+      const id = (await created.json()).request.id;
+      const patch = (body) => asAdmin(`/admin/material-requests/${id}`, { method: "PATCH", body });
+
+      // Jumping the lifecycle would stamp ordered_at for a period in which nothing was
+      // ever ordered, and a cost would land in the wrong month's P&L.
+      for (const status of ["arrived", "ordered"]) {
+        const res = await patch({ status });
+        assert.equal(res.status, 409, `submitted -> ${status} must be refused`);
+        assert.equal((await res.json()).error, "invalid_transition");
+      }
+
+      const approved = await (await patch({ status: "approved", admin_note: "OK, wird bestellt" })).json();
+      assert.equal(approved.request.status, "approved");
+      assert.ok(approved.request.decided_at, "who decided and when is stamped by the server");
+      assert.equal(approved.request.ordered_at, null, "approving is not a spend");
+
+      const ordered = await (await patch({ status: "ordered", quantity: 2, cost_cents: 1234 })).json();
+      assert.ok(ordered.request.ordered_at, "ordering pins the period the cost belongs to");
+      assert.equal(ordered.request.cost_cents, 1234);
+
+      const arrived = await (await patch({ status: "arrived" })).json();
+      assert.ok(arrived.request.arrived_at);
+      assert.equal(arrived.request.ordered_at, ordered.request.ordered_at, "arriving must not move the spend");
+
+      // A late invoice correction changes the amount, never the period.
+      const corrected = await (await patch({ cost_cents: 1300 })).json();
+      assert.equal(corrected.request.cost_cents, 1300);
+      assert.equal(corrected.request.ordered_at, ordered.request.ordered_at);
+      assert.equal((await patch({ status: "approved" })).status, 409, "arrived is terminal");
+
+      for (const bad of [{ status: "eingekauft" }, { quantity: 0 }, { cost_cents: -1 }, { inventory_item_id: 999_999 }]) {
+        assert.ok((await patch(bad)).status >= 400, `${JSON.stringify(bad)} must be refused`);
+      }
+
+      const rejectedId = (await (await asWorker("/material-requests", { method: "POST", body: { body: "Ein Auto" } })).json())
+        .request.id;
+      const rejectRes = await asAdmin(`/admin/material-requests/${rejectedId}`, {
+        method: "PATCH",
+        body: { status: "rejected", admin_note: "Nicht im Budget" },
+      });
+      assert.equal((await rejectRes.json()).request.status, "rejected");
+      const reopen = await asAdmin(`/admin/material-requests/${rejectedId}`, { method: "PATCH", body: { cost_cents: 500 } });
+      assert.equal(reopen.status, 409, "money must not be attributed to something we declined to buy");
+
+      // And the admin panel gets the queue in the same round trip as everything else.
+      const data = await (await asAdmin("/admin/data")).json();
+      assert.ok(Array.isArray(data.material_requests));
+      assert.ok(data.material_requests.some((r) => r.id === id));
+      assert.ok(data.material_requests.every((r) => typeof r.worker_name === "string"));
+      assert.deepEqual(data.settings, {}, "no settings configured is the normal state, and it is an empty object");
+    });
+
+    await admin.query("DELETE FROM material_requests WHERE worker_id = $1", [plWorker]);
+    await admin.query("DELETE FROM shifts WHERE worker_id = $1", [plWorker]);
+    await admin.query("DELETE FROM workers WHERE id = $1", [plWorker]);
   }
 
   await test("unknown route returns a 404 code, not a stack trace", async () => {

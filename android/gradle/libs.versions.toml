@@ -1,11 +1,10 @@
 # Version catalog. Pinned EXACT, no ranges, no `+` — same rule as the npm side
 # (decision-9, AGENTS.md). "Latest stable minus one minor" where a choice existed.
 #
-# UNVERIFIED: no Gradle, no Android SDK and no network dependency resolution was
-# available on the machine that wrote this file. These coordinates were read from the
-# live maven-metadata.xml of each repository, so every version below EXISTS — but the
-# combination has never been resolved or compiled. Expect the first `Sync Project` in
-# Android Studio to be the first real test. See android/README.md § "What is unproven".
+# VERIFIED: this exact combination resolves and compiles. `./gradlew :app:assembleDebug`
+# and `:app:assembleRelease` (R8 + lintVital) both succeed with zero warnings on JDK 21
+# (Android Studio JBR) against compileSdk 36 / build-tools 36.0.0. Before changing a
+# version, read android/README.md § "First compile" — AGP 9 moved three defaults.
 #
 # Deliberately ABSENT and to be kept absent unless a decision record says otherwise:
 #   - OkHttp / Retrofit  — six endpoints; java.net.HttpURLConnection is the platform.
@@ -40,5 +39,8 @@ androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+# org.jetbrains.kotlin.android is deliberately ABSENT. AGP 9 has built-in Kotlin support and
+# applying that plugin on top of it is a HARD BUILD FAILURE, not a warning. Do not add it
+# back. See android/README.md § "First compile". `versions.kotlin` still exists because the
+# Compose compiler plugin below is versioned in lockstep with the Kotlin compiler.
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

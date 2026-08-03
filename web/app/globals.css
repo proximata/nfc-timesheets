@@ -730,6 +730,113 @@ a {
   margin-bottom: var(--space-6);
 }
 
+/* --- Material requests, P&L, contracts, analytics ------------------------------------- */
+
+/* Lifecycle stage, same construction as .shift-state: a bordered, LABELLED badge whose tint
+   is the last of three signals, after the word inside it and the sentence beneath. Greyscale
+   and a screen reader lose nothing. */
+.material-stage-decide {
+  background: #fdf0d5;
+  border-color: #8a5a00;
+  color: #6b4400;
+}
+
+.material-stage-order,
+.material-stage-deliver {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #14406f;
+}
+
+.material-stage-done {
+  background: var(--bg);
+  color: var(--ink-muted);
+}
+
+/* Refused is terminal and is not a warning: it is a decision that was made and recorded. */
+.material-stage-refused {
+  background: var(--bg);
+  color: var(--ink-muted);
+  text-decoration: line-through;
+}
+
+.field textarea {
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  resize: vertical;
+}
+
+/* The contract history and the building panel are page sections, not cards inside a table.
+   Focusable (tabIndex -1) so focus can be moved into them, and outlined when focus lands so
+   a keyboard user can see where they were sent. */
+.contract-panel:focus-visible,
+.building-panel:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 4px;
+}
+
+/* The map. A fixed HEIGHT and a fluid width: Google needs a laid-out box before `new Map`,
+   and a 0px-tall container renders a grey strip that looks exactly like a broken map. The
+   height is in `rem` so it grows with the reader's font size instead of squeezing. */
+.map-canvas {
+  height: 26rem;
+  width: 100%;
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+/* `hidden` is overridden by `display: block` on any element that also has a layout rule, so
+   it is restated here. Without it a failed map leaves an empty grey rectangle on the page. */
+.map-canvas[hidden] {
+  display: none;
+}
+
+.building-photo {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+/* Definition list as a two-column metric sheet. `auto` on the term column so a long German
+   label grows the column rather than wrapping every value. */
+.panel-metrics {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-4);
+  margin: 0 0 var(--space-4);
+  max-width: 70ch;
+}
+
+.panel-metrics dt {
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.panel-metrics dd {
+  margin: 0;
+}
+
+/* Decorative bar under a duration. aria-hidden in the markup: the number above it is the
+   fact, this is only a shape, and it must never be the only way to read the value. */
+.trend-bar {
+  display: block;
+  height: 4px;
+  margin-top: var(--space-1);
+  margin-left: auto;
+  min-width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
 /* --- The client link, shown exactly once ---------------------------------------------- */
 
 /* Wider than a plain .notice caveat: the URL underneath must be readable whole. A link that
