@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
+import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
 import io.github.qwadratic.nfctimesheets.core.TapInbox
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.core.WireWorker
@@ -19,16 +20,19 @@ import kotlinx.coroutines.withContext
 import java.time.Instant
 
 /**
- * The whole app is one of four screens, chosen by the SERVER's answer to "who is this?"
- * (decision-22). There is no path from [Ineligible] or [SignedOut] into the tabs, because
- * the tabs are not built at all in those states.
+ * The whole app is one of three screens, chosen by the SERVER's answer to "who is this?"
+ * (decision-22). There is no path from [SignedOut] into the tabs, because the tabs are
+ * not built at all in that state.
+ *
+ * There is no "authenticated but not a worker" state on Android and there cannot be one:
+ * the only way in is an enrolment code the admin issued FOR a named worker (decision-26),
+ * so a redeemed code is a worker by construction. That state exists on iOS because Apple
+ * will happily authenticate someone nobody hired.
  */
 sealed interface SessionState {
     data object Unknown : SessionState
-    /** @param reasonKey string resource name, or null after a plain cancel. */
+    /** @param reasonKey string resource name, or null before the first attempt. */
     data class SignedOut(val reasonKey: String? = null) : SessionState
-    /** Authenticated somewhere, but not a worker here. [email] is read out to the manager. */
-    data class Ineligible(val email: String?) : SessionState
     data class SignedIn(val worker: WireWorker) : SessionState
 }
 
@@ -82,12 +86,10 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
     private val _log = MutableStateFlow(LogState())
     val log: StateFlow<LogState> = _log.asStateFlow()
 
-    /**
-     * False until decision-26 is accepted and an [io.github.qwadratic.nfctimesheets.auth.AuthProvider]
-     * is wired in. The sign-in screen must SAY so rather than offering a button that
-     * cannot work — an unauthenticated build has to fail visibly, not pretend.
-     */
-    val isSignInConfigured: Boolean get() = app.auth.isConfigured
+    private val _signingIn = MutableStateFlow(false)
+
+    /** Drives the sign-in button's disabled/busy state. Not persisted: it is one call. */
+    val signingIn: StateFlow<Boolean> = _signingIn.asStateFlow()
 
     // ---- session -------------------------------------------------------------------
 
@@ -103,6 +105,15 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
      */
     fun restoreSession() {
         viewModelScope.launch {
+            // Never enrolled, or signed out. Ask nothing and say nothing: a fresh install
+            // that greets a new worker with "Sie wurden abgemeldet" above the code field
+            // is telling them something that did not happen, and the 401 it would take to
+            // find that out is a round trip we already know the answer to.
+            if (app.cookies.header() == null) {
+                _session.value = SessionState.SignedOut()
+                return@launch
+            }
+
             app.workers.read()?.let { _session.value = SessionState.SignedIn(it) }
 
             try {
@@ -110,10 +121,6 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             } catch (failure: ApiFailure) {
                 when (failure.status) {
                     401 -> dropToSignedOut()
-                    403 -> {
-                        app.workers.clear()
-                        _session.value = SessionState.Ineligible(failure.email)
-                    }
                     // Offline or 5xx: keep whatever we had. If that was nothing, the
                     // sign-in screen is correct — there is no identity to work with.
                     else -> if (_session.value is SessionState.Unknown) {
@@ -126,23 +133,47 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
     }
 
     /**
-     * The one entry point behind the sign-in seam. Whatever decision-26 picks, it ends
-     * here: a Set-Cookie landed, and the app then ASKS the server who that is. The client
-     * never names a worker.
+     * Enrolment (decision-26). The worker types the code the admin read them; the server
+     * hands back a Set-Cookie, and the app then ASKS the server who that is. The client
+     * never names a worker (decision-22) — note nothing here mentions a worker id.
+     *
+     * THE CODE IS NEVER LOGGED, stored, or attached to a failure. It lives as [typedCode]
+     * for the length of this call and as request bytes, and nowhere else. (This app has
+     * no logging at all; android/checks asserts that stays true.)
+     *
+     * @param typedCode raw keystrokes, in whatever case, with whatever spaces and dashes.
      */
-    fun signIn() {
+    fun signIn(typedCode: String) {
+        val code = EnrolmentCode.normalise(typedCode)
+        if (code == null) {
+            // Refused here, with the SAME message a wrong, expired or already-used code
+            // gets. Two reasons, both load-bearing: a code-shaped typo must not spend one
+            // of the handful of attempts before the rate limiter locks this phone out,
+            // and "that is the wrong length" is exactly the kind of hint the server goes
+            // out of its way never to give.
+            _session.value = SessionState.SignedOut("err_invalid_code")
+            return
+        }
         viewModelScope.launch {
+            _signingIn.value = true
             try {
-                app.auth.signIn()
+                app.api.enrol(code)
+                // Second call on purpose: it proves the cookie actually landed in the jar
+                // and will be sent again after the process is killed. Trusting the
+                // enrolment response alone would show a friendly screen over a phone that
+                // files nothing.
                 adopt(app.api.session())
                 refresh()
             } catch (failure: ApiFailure) {
                 app.workers.clear()
-                _session.value = if (failure.status == 403) {
-                    SessionState.Ineligible(failure.email)
-                } else {
-                    SessionState.SignedOut(failure.messageKey)
-                }
+                _session.value = SessionState.SignedOut(
+                    // A dead connection is not a bad code, and must not be described as
+                    // one — nor as "we'll send it later", because there is nothing queued
+                    // to send and they do have to type it again.
+                    if (failure.status == 0) "err_signin_offline" else failure.messageKey,
+                )
+            } finally {
+                _signingIn.value = false
             }
         }
     }
@@ -302,9 +333,9 @@ fun stringIdFor(key: String): Int = when (key) {
     "err_unauthorized" -> R.string.err_unauthorized
     "err_no_session" -> R.string.err_no_session
     "err_invalid_token" -> R.string.err_invalid_token
-    "err_not_eligible" -> R.string.err_not_eligible
+    "err_invalid_code" -> R.string.err_invalid_code
+    "err_signin_offline" -> R.string.err_signin_offline
     "err_too_many_attempts" -> R.string.err_too_many_attempts
-    "err_sign_in_unconfigured" -> R.string.err_sign_in_unconfigured
     "err_missing_location" -> R.string.err_missing_location
     "err_wrong_account" -> R.string.err_wrong_account
     "err_rejected" -> R.string.err_rejected

@@ -142,7 +142,7 @@
 
   "workers": {
     "heading": "Mitarbeiter",
-    "intro": "Alle Personen, die Stunden erfassen. Über die E-Mail-Adresse meldet sich ein Mitarbeiter in der App an – sie muss daher exakt stimmen. Die Telefonnummer dient nur der Erreichbarkeit.",
+    "intro": "Alle Personen, die Stunden erfassen. Über die E-Mail-Adresse meldet sich ein Mitarbeiter am iPhone an – sie muss daher exakt stimmen; auf jedem anderen Handy erfolgt die Anmeldung einmalig über einen Zugangscode, den Sie hier erstellen. Die Telefonnummer dient nur der Erreichbarkeit.",
     "createHeading": "Mitarbeiter anlegen",
     "editHeading": "Mitarbeiter bearbeiten",
     "fieldName": "Name",
@@ -181,7 +181,27 @@
     "edit": "Bearbeiten",
     "deactivate": "Deaktivieren",
     "activate": "Wieder aktivieren",
-    "forWorker": " von {name}"
+    "forWorker": " von {name}",
+    "colCode": "Zugangscode",
+    "codeStandingNote": "Ein Zugangscode wird nur ein einziges Mal angezeigt – im Moment, in dem Sie ihn erstellen – und kann danach nicht mehr nachgesehen werden. Bitte sofort notieren oder kopieren. Geht er verloren, einfach einen neuen erstellen. Der Zugangscode ist der zweite Weg in die App: Am iPhone meldet sich der Mitarbeiter weiterhin mit Apple über die E-Mail-Adresse oben an, auf jedem anderen Handy tippt er stattdessen einmalig diesen Code ein. Die E-Mail-Adresse wird daher weiterhin benötigt.",
+    "codeNone": "Kein Zugangscode",
+    "codeLive": "Gültig bis {expires}",
+    "codeExpired": "Am {expires} abgelaufen, nicht verwendet",
+    "codeRedeemed": "App eingerichtet am {date}",
+    "codeIssue": "Zugangscode erstellen",
+    "codeReissue": "Neuen Zugangscode erstellen",
+    "codeRevoke": "Zugangscode sperren",
+    "codeInactive": "Inaktiv – kein Zugangscode möglich",
+    "codeReadyHeading": "Zugangscode für {name}:",
+    "codeExplain": "{name} gibt diesen Code beim ersten Öffnen der App einmalig ein – danach ist das Handy angemeldet und es können Stunden erfasst werden.",
+    "codeValidUntil": "Gültig bis {expires}. Danach einfach einen neuen erstellen.",
+    "codeOnce": "Der Code wird nur dieses eine Mal angezeigt. Ist er bei der falschen Person gelandet, auf „Zugangscode sperren“ drücken – er funktioniert dann sofort nicht mehr.",
+    "codeCopy": "Zugangscode kopieren",
+    "codeCopied": "Zugangscode in die Zwischenablage kopiert.",
+    "codeCopyFailed": "Zugangscode konnte nicht kopiert werden. Den Code oben markieren und manuell kopieren.",
+    "codeIssueFailed": "Der Zugangscode konnte nicht erstellt werden. Bitte erneut versuchen.",
+    "codeRevoked": "Der Zugangscode von {name} wurde gesperrt und funktioniert nicht mehr.",
+    "codeRevokeFailed": "Der Zugangscode konnte nicht gesperrt werden. Bitte erneut versuchen."
   },
 
   "locations": {

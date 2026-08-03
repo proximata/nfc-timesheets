@@ -13,21 +13,32 @@
 //   - Every user is on an iPhone by definition, so they all already have an Apple ID.
 //   Google becomes relevant when an Android app exists. Not before.
 //
+// THE ANDROID APP HAS LANDED, AND THE ANSWER WAS STILL NOT GOOGLE (decision-26). Email is
+// the only join key between a provider and a workers row, and Apple hands back
+// privaterelay addresses — one human with an old iPhone and a new Android would become two
+// worker rows, two sets of shifts and two payslips. So Android enrols with an
+// admin-issued code (POST /auth/code below) and terminates in the SAME worker_sessions
+// row. Apple stays exactly as it is: it is live, in daily use, and not worth touching.
+//
 // LOGGING: never log the identity token, the Apple `sub`, or the email. The 403 body
 // carries the email because the WORKER has to be able to read it to their manager; that
 // is a response to the person who just authenticated as that address, not a log line.
 import { verifyIdentityToken } from "../lib/apple.js";
 import {
   WORKER_SESSION_COOKIE,
+  checkGlobalEnrolmentRate,
   checkLoginRate,
   clearLoginFailures,
   clearedSessionCookie,
   createWorkerSession,
   destroyWorkerSession,
+  hashToken,
   recordLoginFailure,
+  safeEqual,
   sessionCookie,
 } from "../lib/auth.js";
 import { one } from "../lib/db.js";
+import { DECOY_PRESENTED, DECOY_STORED, normaliseCode } from "../lib/enrolment.js";
 import { fail } from "../lib/http.js";
 
 /**
@@ -123,6 +134,101 @@ async function resolveWorker({ sub, email }) {
 }
 
 /**
+ * POST /auth/code {code} -> worker session cookie. IDENTICAL response to /auth/apple.
+ *
+ * decision-26. The admin issued this code for one named worker; typing it is how an
+ * Android phone (or any phone) gets the same worker_sessions row Apple sign-in mints.
+ * ONE session system, two enrolment mechanisms — everything downstream still takes
+ * worker_id from the session and never from a request body (decision-22).
+ *
+ * PUBLIC TRUST BOUNDARY. The only thing in front of it is the app key, which is baked
+ * into a shipped binary and is therefore not a secret. Treat every caller as hostile.
+ *
+ *   200 {worker: {id, name}, expires_at}  + Set-Cookie: ts_worker
+ *   401 {error: "invalid_code"}           EVERYTHING else
+ *   429 {error: "too_many_attempts"}
+ *
+ * ONE FAILURE RESPONSE, BYTE FOR BYTE. Unknown, wrong shape, expired, already redeemed,
+ * revoked, worker deactivated — same status, same body, no field, no message. In
+ * particular "merely expired" must not be distinguishable: that would confirm the code
+ * was real, which turns a guessing flood into an oracle that maps the live space, and it
+ * would tell whoever a code was misdirected to that they were one hour late rather than
+ * simply wrong.
+ *
+ * THE CODE IS NEVER WRITTEN DOWN. Not in a log line, not in an error body, not in the
+ * access log (path only, lib/scrub.js), not in a Sentry event (`event.request.data` is
+ * deleted outright and any `code` key is dropped, lib/scrub.js). It exists in this
+ * function as a local and reaches the database only as a SHA-256.
+ */
+async function codeAuth({ body, ip }) {
+  // Global ceiling FIRST and unconditionally: the search space is shared across every
+  // worker holding a live code, so an attacker rotating IPs is attacking all of them at
+  // once and the per-IP bucket would never notice (lib/enrolment.js has the arithmetic).
+  checkGlobalEnrolmentRate();
+  // Own bucket, so a stranger guessing codes cannot lock the director out of
+  // /admin/login from a shared office address — same idiom as routes/portal.js.
+  const bucket = `enrol:${ip}`;
+  checkLoginRate(bucket);
+
+  const code = normaliseCode(body.code); // folds case, strips separators, aliases O/I/L
+  const presented = code === null ? null : hashToken(code);
+
+  // Indexed lookup on the hash. This finds a CANDIDATE; it does not authorise anything.
+  const row =
+    presented === null ? null : (
+      await one(
+        `SELECT id, name, active, enrolment_code_hash AS stored,
+                (enrolment_code_expires_at > now()) AS live
+           FROM workers
+          WHERE enrolment_code_hash = $1`,
+        [presented],
+      )
+    );
+
+  // Exactly one constant-time comparison, on every path, hit or miss. The decoys are
+  // per-process random and mutually unequal, so a missing row and a malformed input cost
+  // the same as a real candidate and neither can compare equal by accident.
+  const matched = safeEqual(row?.stored ?? DECOY_STORED, presented ?? DECOY_PRESENTED);
+  if (!matched || row === null || row.live !== true || row.active !== true) {
+    recordLoginFailure(bucket);
+    fail(401, "invalid_code");
+  }
+
+  // SINGLE USE, DECIDED BY THE DATABASE. One statement: match, clear, stamp. Under READ
+  // COMMITTED the second of two racing redemptions blocks on the row lock, re-evaluates
+  // its WHERE against the committed row, finds enrolment_code_hash NULL and updates
+  // nothing. An `if (already_redeemed)` in this process could not do that — both racers
+  // would read "not redeemed" and both would mint a session.
+  //
+  // The predicate is repeated in full rather than trusting the SELECT above: between the
+  // two statements the code can expire, be revoked, or the worker can be deactivated.
+  const claimed = await one(
+    `UPDATE workers
+        SET enrolment_code_hash = NULL,
+            enrolment_code_expires_at = NULL,
+            enrolment_code_redeemed_at = now()
+      WHERE id = $1
+        AND enrolment_code_hash = $2
+        AND enrolment_code_expires_at > now()
+        AND active
+      RETURNING id, name`,
+    [row.id, presented],
+  );
+  if (!claimed) {
+    recordLoginFailure(bucket);
+    fail(401, "invalid_code"); // lost the race, or revoked underneath us. Same answer.
+  }
+
+  clearLoginFailures(bucket);
+  const { token, expiresAt } = await createWorkerSession(claimed.id);
+  return {
+    status: 200,
+    body: { worker: { id: claimed.id, name: claimed.name }, expires_at: expiresAt.toISOString() },
+    headers: { "set-cookie": sessionCookie(token, expiresAt, WORKER_SESSION_COOKIE) },
+  };
+}
+
+/**
  * POST /auth/logout -> revoke this worker's session.
  * A phone gets handed over, or someone signs in with the wrong Apple ID. Logout has to
  * actually delete the row, not just clear the cookie.
@@ -145,6 +251,9 @@ export const authRoutes = [
   // `auth: "app"` and not `null`: the X-App-Key gate stays in front of sign-in as
   // defence in depth, so this endpoint is not reachable from a browser or curl.
   { method: "POST", path: "/auth/apple", auth: "app", handler: appleAuth },
+  // Same coarse app-key gate as /auth/apple, and for the same reason: it is not identity,
+  // it just keeps the endpoint off the open web for a browser or a stray curl.
+  { method: "POST", path: "/auth/code", auth: "app", handler: codeAuth },
   { method: "POST", path: "/auth/logout", auth: "worker", handler: logout },
   { method: "GET", path: "/auth/session", auth: "worker", handler: whoami },
 ];

@@ -356,6 +356,27 @@ check('lib/period.ts: quarter and year are calendar periods in Vienna', () => {
   assert.deepEqual(periodRange('all', new Date()), { from: null, to: null })
 })
 
+// --- 5. enrolment code state (lib/enrolment.ts, decision-26) ----------------------------
+
+const { codeStateOf } = await import(pathToFileURL(join(ROOT, 'lib/enrolment.ts')).href)
+
+check('lib/enrolment.ts: a code that has run out is not reported as a live one', () => {
+  const now = Date.parse('2026-08-03T12:00:00Z')
+  const state = (expires, redeemed) =>
+    codeStateOf({ enrolment_code_expires_at: expires, enrolment_code_redeemed_at: redeemed }, now)
+
+  assert.equal(state(null, null), 'none', 'never issued, or issued and then revoked')
+  assert.equal(state('2026-08-03T12:30:00Z', null), 'live')
+  // THE ONE THAT MATTERS: codes live an hour, the director asks "did I already send Ivan
+  // one?", and an expiry read as live answers that question wrongly for 59 minutes.
+  assert.equal(state('2026-08-03T11:30:00Z', null), 'expired')
+  assert.equal(state('2026-08-03T12:00:00Z', null), 'expired', 'the deadline itself is past')
+  assert.equal(state(null, '2026-08-01T09:00:00Z'), 'redeemed')
+  // Issuing resets redeemed_at, so a live code never carries a redemption from an older
+  // one; if that pairing ever appears anyway, the LIVE code is what the director can act on.
+  assert.equal(state('2026-08-03T12:30:00Z', '2026-08-01T09:00:00Z'), 'live')
+})
+
 // --- report -----------------------------------------------------------------------------
 
 if (failures.length > 0) {

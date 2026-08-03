@@ -18,6 +18,7 @@ import {
   verifyPassword,
 } from "../lib/auth.js";
 import { all, one, query } from "../lib/db.js";
+import { CODE_TTL_MS, newEnrolmentCode } from "../lib/enrolment.js";
 import { fail } from "../lib/http.js";
 import * as v from "../lib/validate.js";
 import { newPortalToken, portalPath } from "./portal.js";
@@ -32,7 +33,15 @@ const SHIFT_PAGE_MAX = 2000;
 // admin can do nothing with it, and it has no business in a browser or a log.
 // `phone` was the second of the two fields asked for for a cleaner (name, phone). Like
 // email it is contact data, not a credential.
-const WORKER_COLS = "id, name, email, phone, hourly_rate_cents, active, created_at";
+//
+// The two enrolment_code_* timestamps are STATE, not the secret: "this worker has a live
+// code until 14:32" and "they enrolled on the 3rd". enrolment_code_hash is deliberately
+// absent, exactly like apple_sub — the panel can do nothing with it and it has no
+// business in a browser or a log. The code itself is returned once, by the route that
+// mints it, and is unrecoverable afterwards.
+const WORKER_COLS =
+  "id, name, email, phone, hourly_rate_cents, active, created_at, " +
+  "enrolment_code_expires_at, enrolment_code_redeemed_at";
 
 // The building, including the four contract facts added in 003. All four are NULLable:
 // buildings existed before the columns did and the director fills them in over weeks.
@@ -273,6 +282,88 @@ async function deleteWorker({ params }) {
   const row = await one("UPDATE workers SET active = false WHERE id = $1 RETURNING id, active", [workerId]);
   if (!row) fail(404, "unknown_worker");
   await destroyWorkerSessions(workerId);
+  return { status: 200, body: { worker: row } };
+}
+
+// ---- worker enrolment codes (decision-26) -----------------------------------------
+
+/**
+ * POST /admin/workers/:id/enrolment-code -> a short code the worker types once.
+ *
+ * THE PLAINTEXT IS RETURNED HERE AND NOWHERE ELSE, EVER. Only SHA-256(code) is stored
+ * (hashToken — one hash helper for every bearer token in this system), so this response
+ * cannot be reconstructed: not by GET /admin/data, not from a pg_dump, not by us. The UI
+ * must show it immediately. Losing it is not a problem — press the button again.
+ *
+ * Re-issuing REPLACES the worker's previous code, because the column IS the code: one
+ * person, one live code, no separate table (decision-26). redeemed_at is reset with it so
+ * the issued_at / issued_by / redeemed_at trio always describes ONE code.
+ *
+ * ACTIVE workers only. A live enrolment code for someone who has been let go is not a
+ * state worth being able to reach, and requireWorkerSession would refuse the session it
+ * produced anyway.
+ */
+async function issueEnrolmentCode({ params, session }) {
+  const worker = await one("SELECT id, name FROM workers WHERE id = $1 AND active", [v.id(params.id, "id")]);
+  if (!worker) fail(404, "unknown_worker");
+
+  const expiresAt = new Date(Date.now() + CODE_TTL_MS);
+  // workers.enrolment_code_hash is UNIQUE so a code can never name two workers. A
+  // collision is ~1 in 2^40 per issue; retrying is two lines and removes the case where
+  // the director's button answers 500 for a reason nobody could ever reproduce.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { code, display } = newEnrolmentCode();
+    try {
+      await query(
+        `UPDATE workers
+            SET enrolment_code_hash = $2,
+                enrolment_code_expires_at = $3,
+                enrolment_code_issued_at = now(),
+                enrolment_code_issued_by = $4,
+                enrolment_code_redeemed_at = NULL
+          WHERE id = $1`,
+        [worker.id, hashToken(code), expiresAt, session.adminId],
+      );
+      return {
+        status: 201,
+        body: {
+          worker: { id: worker.id, name: worker.name },
+          code: display,
+          expires_at: expiresAt.toISOString(),
+        },
+      };
+    } catch (err) {
+      if (err?.code !== "23505") throw err;
+    }
+  }
+  fail(503, "code_unavailable");
+}
+
+/**
+ * DELETE /admin/workers/:id/enrolment-code -> revoke. One click, immediate.
+ *
+ * decision-26: "a code read aloud over the phone to the wrong person is the expected
+ * failure mode". Clearing the hash is the revocation — the next redemption finds no row
+ * and gets the same 401 as a code that never existed.
+ *
+ * Idempotent, and 200 whether or not there was a code: the director pressing revoke twice
+ * must not see an error, and "was there a live code?" is answerable from the response.
+ * issued_at / issued_by survive, because "who handed this out" is the question worth
+ * asking after a code goes to the wrong person.
+ *
+ * Existing SESSIONS are untouched on purpose. Revoking a code means "this code may no
+ * longer be exchanged", not "log everyone out"; the button for the latter is
+ * DELETE /admin/workers/:id, which deactivates and kills the sessions.
+ */
+async function revokeEnrolmentCode({ params }) {
+  const row = await one(
+    `UPDATE workers
+        SET enrolment_code_hash = NULL, enrolment_code_expires_at = NULL
+      WHERE id = $1
+      RETURNING ${WORKER_COLS}`,
+    [v.id(params.id, "id")],
+  );
+  if (!row) fail(404, "unknown_worker");
   return { status: 200, body: { worker: row } };
 }
 
@@ -687,6 +778,8 @@ export const adminRoutes = [
   { method: "GET", path: "/admin/data", auth: "admin", handler: adminData },
   { method: "POST", path: "/admin/workers", auth: "admin", handler: upsertWorker },
   { method: "DELETE", path: "/admin/workers/:id", auth: "admin", handler: deleteWorker },
+  { method: "POST", path: "/admin/workers/:id/enrolment-code", auth: "admin", handler: issueEnrolmentCode },
+  { method: "DELETE", path: "/admin/workers/:id/enrolment-code", auth: "admin", handler: revokeEnrolmentCode },
   { method: "POST", path: "/admin/locations", auth: "admin", handler: upsertLocation },
   { method: "DELETE", path: "/admin/locations/:id", auth: "admin", handler: deleteLocation },
   { method: "POST", path: "/admin/clients", auth: "admin", handler: upsertClient },

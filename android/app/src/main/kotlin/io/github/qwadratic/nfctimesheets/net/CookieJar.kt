@@ -1,14 +1,21 @@
 package io.github.qwadratic.nfctimesheets.net
 
 import android.content.Context
+import io.github.qwadratic.nfctimesheets.core.SessionCookie
 
 /**
  * The worker session cookie, and only that cookie.
  *
  * The server sets `ts_worker=<token>; Path=/; Max-Age=<90d>; HttpOnly; Secure;
  * SameSite=Strict` (server/lib/auth.js). It is the ONLY statement of who the caller is
- * (decision-22), so it has to survive process death — a worker signs in about once a
- * quarter, not once per shift.
+ * (decision-22), so it has to survive process death — a worker enrols once (decision-26)
+ * and then the phone is killed and restarted by the OS all day, including on the tap
+ * that launches the app from the stopped state.
+ *
+ * SharedPreferences is written to disk, so it survives that; a field would not, and
+ * would turn every low-memory kill into a re-enrolment phone call. What the cookie MEANS
+ * is decided in core/SessionCookie.kt, which android/checks can run; this class is only
+ * the two lines of storage under it.
  *
  * ponytail: a two-value store rather than java.net.CookieManager + a custom CookieStore.
  * We have exactly one cookie, from exactly one host, over https only. CEILING: a second
@@ -37,28 +44,25 @@ class PrefsCookieJar(context: Context) : CookieJar {
     private val prefs = context.applicationContext
         .getSharedPreferences("session", Context.MODE_PRIVATE)
 
-    override fun header(): String? =
-        prefs.getString(KEY, null)?.takeIf { it.isNotEmpty() }?.let { "$NAME=$it" }
+    override fun header(): String? = SessionCookie.header(prefs.getString(KEY, null))
 
     override fun absorb(setCookieHeaders: List<String>) {
-        for (raw in setCookieHeaders) {
-            val first = raw.substringBefore(';').trim()
-            if (!first.startsWith("$NAME=")) continue
-            val value = first.removePrefix("$NAME=")
-            // Max-Age=0 is the server clearing the cookie (logout, or a rejected session).
-            val cleared = value.isEmpty() || Regex("""(?i)max-age=0\b""").containsMatchIn(raw)
-            prefs.edit().apply {
-                if (cleared) remove(KEY) else putString(KEY, value)
-            }.apply()
+        when (val update = SessionCookie.read(setCookieHeaders)) {
+            // commit(), not apply(): a session that only exists in an in-flight async
+            // write is lost if the process dies before it lands, and the next launch
+            // asks the worker for a code they no longer have. This runs on the IO
+            // dispatcher inside Api.send() and writes one short string.
+            is SessionCookie.Update.Store -> prefs.edit().putString(KEY, update.value).commit()
+            SessionCookie.Update.Clear -> clear()
+            SessionCookie.Update.Ignore -> Unit
         }
     }
 
     override fun clear() {
-        prefs.edit().remove(KEY).apply()
+        prefs.edit().remove(KEY).commit()
     }
 
     private companion object {
-        const val NAME = "ts_worker"
-        const val KEY = "ts_worker"
+        const val KEY = SessionCookie.NAME
     }
 }

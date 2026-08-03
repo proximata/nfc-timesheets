@@ -11,7 +11,6 @@ none was made.
         core/                 pure Kotlin, no Android imports — this is what checks/ runs
         data/                 SQLite queue + roster cache
         net/                  HttpURLConnection + the ts_worker cookie
-        auth/                 the sign-in SEAM (decision-26 is still PROPOSED)
         ui/                   Compose
       checks/run.sh           runnable without a device, an emulator or an Android SDK
 
@@ -30,12 +29,19 @@ Proven here (see § Checks):
 - retry classification and the offline-queue ordering
 - the cold-launch tap ordering
 - German/English string parity and manifest wiring
+- enrolment-code normalisation, **cross-checked against `server/lib/enrolment.js` and
+  `server/routes/auth.js` read as source** — the alphabet, the length and the input cap
+  are lifted out of the server, not copied into the check
+- what each `Set-Cookie` means to the stored session, including the case that matters:
+  a response that says nothing must not be read as a logout
 
 **Not proven, and only a physical Android phone can settle it:**
 
 1. That the Gradle build resolves at all. `gradle/libs.versions.toml` pins versions that
    exist, but the combination has never been synced. Expect the first
-   **File → Sync Project with Gradle Files** to be the first real test.
+   **File → Sync Project with Gradle Files** to be the first real test. In particular
+   `KeyboardOptions(autoCorrectEnabled = …)` on the sign-in field is a Compose Foundation
+   1.7+ parameter name; if the BOM resolves to something older it is `autoCorrect`.
 2. That `gradle/wrapper/gradle-wrapper.jar` is present — **it is not committed**, because
    it is a binary that cannot be produced without Gradle. Android Studio regenerates it on
    first open, or run `gradle wrapper` once with a system Gradle.
@@ -63,19 +69,54 @@ App-Link → parse → clock-in path:
 
 ---
 
-## Sign-in is deliberately not implemented
+## Sign-in: the admin-issued enrolment code (decision-26)
 
-The Android worker-identity mechanism is **decision-26**, which is **proposed, not
-accepted**. It is the owner's call, not a build agent's.
+The admin issues an 8-character code **for one named worker** in the web panel and reads
+it down the phone. The worker types it once, on first launch, into the only field on the
+screen. `POST /auth/code` exchanges it for **the same `worker_sessions` row Sign in with
+Apple mints on iOS** — one session system, two enrolment mechanisms. Everything
+downstream is unchanged: `worker_id` comes from the session cookie and never from a
+request body (decision-22).
 
-So the app ships with `UnconfiguredAuthProvider`, and it **fails visibly**: the sign-in
-screen states that no sign-in method has been configured and offers no button. Everything
-else is already built and is identical under all three costed options — the `ts_worker`
-cookie, `GET /auth/session` on launch, 401 → signed out, `POST /auth/logout`. Whichever
-option wins adds **one** implementation of `auth/AuthProvider.kt` and nothing else.
+The `auth/` package and `AuthProvider` are **gone**. They were a seam for an undecided
+choice; the choice is made, so an interface with one implementation and one call site is
+just indirection. `POST /auth/code` is an endpoint and lives with the other five in
+`net/Api.kt`.
 
-An app that looked friendly while filing nothing would be unpaid work nobody notices for a
-month. That is why there is no placeholder button.
+What the client does, and why:
+
+- **`core/EnrolmentCode.kt` normalises before sending** — case folded, spaces/dashes/
+  newlines stripped, `O→0` and `I`/`L→1`. This is a *mirror* of `server/lib/enrolment.js`
+  and buys exactly one thing: a code-shaped typo does not spend one of the five attempts
+  before the rate limiter locks the phone out for up to 15 minutes. The server normalises
+  again; nothing here is a security control. `checks/` fails if the two drift.
+- **One message for every refusal.** The server answers unknown / malformed / expired /
+  already redeemed / revoked / deactivated-worker with a byte-identical `401
+  invalid_code`, so that they cannot be told apart. The app must not invent a
+  distinction, and a locally-malformed code gets that same string.
+- **A dead connection is not a bad code** and gets its own message, because
+  “we'll send it when you're online” would be a lie — there is nothing queued and they do
+  have to type it again.
+- **The code is never logged.** This app has no logging at all, which is the cheapest way
+  to guarantee that; `checks/` asserts `android.util.Log`, `println` and `System.out`
+  stay absent from `app/src/main/kotlin`.
+- **`POST /auth/code` is the one route marked `sessionBearing = false`.** Its 401 means
+  “that is not a code”, not “your session died”, and letting it latch the session-rejected
+  flag would sign the worker straight back out on the first *successful* enrolment.
+- **Enrolment is two calls, on purpose**: redeem, then `GET /auth/session`. The second one
+  proves the cookie actually reached the jar and will be sent again after the process is
+  killed. Trusting the enrolment response alone is how you get a friendly screen over a
+  phone that files nothing.
+- **There is no “not a worker” dead-end screen on Android.** It cannot happen: a code is
+  issued *for* a worker, so redeeming one makes you that worker by construction. That
+  screen exists on iOS because Apple will authenticate someone nobody hired.
+
+Session persistence is `SharedPreferences`, written with `commit()` and not `apply()` —
+process death is normal on Android and is *exactly* when a stopped-state tap arrives, so
+a session that only exists in an in-flight async write is a re-enrolment phone call.
+
+Signing out therefore costs a phone call: codes are single-use. The settings screen says
+so before the button.
 
 ---
 
@@ -87,9 +128,15 @@ Needs `kotlinc` and a JDK 17+ — the toolchain the operator already has, not a 
 dependency. Fetches one jar (`org.json`, which on-device comes from `android.jar`) into
 `checks/.lib/` on first run.
 
-Everything it covers is deliberately free of Android imports. That constraint is why
-`core/` exists as a separate package: `data/`, `net/` and `ui/` are **not** covered and
-cannot be, without a device.
+Everything it *runs* is deliberately free of Android imports. That constraint is why
+`core/` exists as a separate package: `data/`, `net/` and `ui/` cannot be compiled here.
+Where a rule lives in one of those — `commit()` on the session write, `sessionBearing =
+false` on `/auth/code`, cache-before-server on launch, every `stringIdFor` arm — the check
+reads the file as **text** and asserts the line is present. That is weaker than running
+it and it is stated as such; it is still enough to catch the edit that quietly removes it.
+
+It also reads `../server/lib/enrolment.js` and `../server/routes/auth.js`. Run it from a
+full checkout, not from `android/` alone.
 
 ---
 
@@ -170,8 +217,13 @@ Until step 4 lands, **every Android tap opens Chrome**.
 
 ## Worker rollout checklist
 
+- [ ] Admin issues the enrolment code for that worker in the web panel and reads it to
+      them. It is shown **once**, lasts **an hour**, and works **once**. Reissuing is one
+      click; a code read to the wrong person is revoked in one click.
 - [ ] Install from Play, then **open the app once**. Android delivers no NFC intents to an
       app in the stopped state (Android 17+).
+- [ ] Type the code. Case, spaces and dashes do not matter; `O`/`0` and `I`/`l`/`1` are
+      interchangeable. The screen must land on “Zeiterfassung”.
 - [ ] NFC on.
 - [ ] On the first tap Android 16+ shows a "Launch via NFC" notification — **allow it**.
       If it was dismissed wrong, the app shows a fix-it button on the log screen.

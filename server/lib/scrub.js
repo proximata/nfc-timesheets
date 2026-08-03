@@ -17,6 +17,8 @@
 //   email                         - PII, and under Hide My Email still an identifier
 //   hourly_rate_cents             - pay data, admin-only even inside the product
 //   /portal/<token>               - the token IS the credential (routes/portal.js)
+//   enrolment code (`code`)       - a live bearer credential; redeeming one mints a
+//                                   session for a named worker (decision-26)
 //
 // `redactUrl` was previously a private helper in server.js used for the 500 log line.
 // It lives here now so the access log, the 500 line and the Sentry hooks share ONE
@@ -25,8 +27,15 @@
 // Key names whose VALUE is never allowed out, wherever they appear in a payload.
 // Matched case-insensitively against the key, on purpose: `identity_token`,
 // `identityToken`, `X-App-Key`, `set-cookie` and `password_hash` all have to hit.
+//
+// `^code$` is ANCHORED, and that is the whole design of that entry. An enrolment code
+// arrives as `{"code": "K7QF-3MZ2"}` (routes/auth.js), so the bare key has to go. An
+// unanchored /code/ would also delete `http.response.status_code`, `err.code` and the
+// `error` codes this server answers with — i.e. it would delete the only fields that make
+// a 4xx diagnosable, to hide a value that is not in them. `enrol{1,2}ment` catches both
+// spellings wherever a future caller decides to nest it.
 const SECRET_KEY_RE =
-  /(token|cookie|passwd|password|secret|authorization|hash|app[-_]?key|apple[-_]?sub|nonce|e-?mail|hourly|rate_cents)/i;
+  /(token|cookie|passwd|password|secret|authorization|hash|app[-_]?key|apple[-_]?sub|nonce|e-?mail|hourly|rate_cents|^code$|enrol{1,2}ment[-_]?code)/i;
 
 // Keys whose value is a URL and therefore gets the full URL treatment (query dropped).
 const URL_KEY_RE = /(^|\.)(url|href|target|full|path|uri)$/i;

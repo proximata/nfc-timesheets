@@ -170,3 +170,18 @@ data class CloseShiftRequest(
 data class ResolveShiftRequest(val endTime: Instant) {
     fun toJson(): String = Wire.obj("end_time" to Wire.string(endTime))
 }
+
+/**
+ * POST /auth/code — the enrolment code, and NOTHING ELSE (decision-26).
+ *
+ * One field, because one field is all the server reads (server/routes/auth.js codeAuth).
+ * No worker id, no name, no email, no device id: the code IS the claim, and who it
+ * belongs to was decided by the admin when they issued it. Sending an id alongside it
+ * would be decision-22's hole reopened in a new endpoint.
+ *
+ * The value here is the canonical form from EnrolmentCode.normalise(), never the raw
+ * keystrokes, so the bytes are the same whichever way it was typed.
+ */
+data class EnrolmentRequest(val code: String) {
+    fun toJson(): String = Wire.obj("code" to code)
+}

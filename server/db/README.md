@@ -9,6 +9,7 @@ migrations/001_init.sql   canonical schema — workers, admins, sessions, locati
 migrations/002_worker_identity.sql   apple_sub/email + worker_sessions (decision-22)
 migrations/003_clients_contracts_inventory.sql   clients, contacts, inventory_items,
                           portal_grants, workers.phone, locations contract columns
+migrations/004_worker_enrolment_codes.sql   workers.enrolment_code_* (decision-26)
 migrate.js                runner: applies migrations/*.sql once each, in lexical order
 seed.sql                  DEV ONLY sample data
 check-migrate.js          runnable check (see bottom)

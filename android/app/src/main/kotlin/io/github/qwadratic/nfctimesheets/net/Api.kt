@@ -3,6 +3,7 @@ package io.github.qwadratic.nfctimesheets.net
 import io.github.qwadratic.nfctimesheets.BuildConfig
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.CloseShiftRequest
+import io.github.qwadratic.nfctimesheets.core.EnrolmentRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
 import io.github.qwadratic.nfctimesheets.core.Wire
@@ -43,6 +44,31 @@ class Api(
 
     /** GET /auth/session — is this cookie still a worker? 401 when it is not. */
     suspend fun session(): WireWorker = Wire.worker(get("/auth/session").getJSONObject("worker"))
+
+    /**
+     * POST /auth/code — redeem an admin-issued enrolment code (decision-26). The only
+     * way an Android phone gets a session, and it mints the SAME worker_sessions row
+     * Sign in with Apple mints on iOS.
+     *
+     *   200 -> Set-Cookie: ts_worker, absorbed by the choke point below like any other
+     *   401 {"error":"invalid_code"} for unknown, malformed, expired, already redeemed,
+     *       revoked, or a deactivated worker — byte-identical, deliberately. Do not add
+     *       a client-side guess at which one it was.
+     *   429 {"error":"too_many_attempts"}
+     *
+     * The return value is discarded on purpose. The server does echo {worker, expires_at},
+     * but the app asks GET /auth/session immediately afterwards instead: that proves the
+     * cookie actually reached the jar and will be sent on the next request. Believing
+     * this response and skipping that check is how a worker gets a friendly screen and
+     * files nothing.
+     *
+     * @param code CANONICAL form from EnrolmentCode.normalise(). Never logged, never
+     *        stored, never put in an error — it exists as an argument and as request
+     *        bytes and nowhere else.
+     */
+    suspend fun enrol(code: String) {
+        post("/auth/code", EnrolmentRequest(code).toJson(), sessionBearing = false)
+    }
 
     /** POST /auth/logout — revokes the session server-side, not just locally. */
     suspend fun logout() {
@@ -99,10 +125,24 @@ class Api(
 
     private suspend fun get(path: String): JSONObject = send("GET", path, null)
 
-    private suspend fun post(path: String, body: String): JSONObject = send("POST", path, body)
+    private suspend fun post(path: String, body: String, sessionBearing: Boolean = true): JSONObject =
+        send("POST", path, body, sessionBearing)
 
-    /** Single choke point: every response is classified before anything else sees it. */
-    private suspend fun send(method: String, path: String, body: String?): JSONObject =
+    /**
+     * Single choke point: every response is classified before anything else sees it.
+     *
+     * @param sessionBearing false for the ONE route that carries no session by
+     *        definition, /auth/code. Its 401 means "that is not a valid code", not "your
+     *        session died", and firing [onSessionRejected] for it would latch a flag that
+     *        signs the worker straight back out on the very next refresh after they
+     *        finally type the code correctly.
+     */
+    private suspend fun send(
+        method: String,
+        path: String,
+        body: String?,
+        sessionBearing: Boolean = true,
+    ): JSONObject =
         withContext(Dispatchers.IO) {
             val connection = (URL(base + path).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
@@ -139,14 +179,13 @@ class Api(
             }
 
             if (status !in 200..299) {
-                // Server error bodies are {"error":"code"} (+ optional "field" / "email").
+                // Server error bodies are {"error":"code"} (+ an optional "field").
                 val parsed = runCatching { JSONObject(payload) }.getOrNull()
-                if (status == HttpURLConnection.HTTP_UNAUTHORIZED) onSessionRejected()
+                if (status == HttpURLConnection.HTTP_UNAUTHORIZED && sessionBearing) onSessionRejected()
                 throw ApiFailure(
                     status = status,
                     code = parsed?.optString("error").orEmpty().ifEmpty { "http_$status" },
                     field = parsed?.optString("field")?.takeIf { it.isNotEmpty() },
-                    email = parsed?.optString("email")?.takeIf { it.isNotEmpty() },
                 )
             }
 

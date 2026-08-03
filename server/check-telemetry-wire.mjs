@@ -31,6 +31,7 @@ const SECRETS = {
   identityToken: "eyJraWQiOiJXNldjT0tCIn0.eyJzdWIiOiIwMDEyMzQifQ.SIGNATURE",
   email: "ivan.kotelnikov@example.test",
   portalToken: "Zm9vYmFyTElWRUNSRURFTlRJQUxfNDNjaGFyc19hYWFh",
+  enrolmentCode: "K7QF-3MZ2", // decision-26: redeeming one mints a worker session
 };
 
 const IOS_TRACE_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -87,6 +88,24 @@ await fetch(`${base}/shifts/open`, {
     baggage: `sentry-trace_id=${IOS_TRACE_ID},sentry-public_key=abc123,sentry-sample_rate=1`,
   },
   body: JSON.stringify({ identity_token: SECRETS.identityToken, email: SECRETS.email }),
+});
+
+// A rejected enrolment. The code is in the BODY, which is exactly where the SDK's
+// requestDataIntegration goes looking. 401 with no app key, so it needs no database.
+//
+// CARRIES THE TRACE HEADERS like every other request here, and not as decoration: the
+// continuation case below asserts over EVERY payload, so a request sent without them
+// starts its own trace and fails it. Which is correct — the phone sends them on enrolment
+// too, and a first launch that lands as two unconnected traces is exactly the split view
+// decision-23 exists to prevent, on the one request a worker only ever makes once.
+await fetch(`${base}/auth/code`, {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    "sentry-trace": `${IOS_TRACE_ID}-${IOS_SPAN_ID}-1`,
+    baggage: `sentry-trace_id=${IOS_TRACE_ID},sentry-public_key=abc123,sentry-sample_rate=1`,
+  },
+  body: JSON.stringify({ code: SECRETS.enrolmentCode }),
 });
 
 await Sentry.flush(5000); // deterministic: assert on a settled queue, never on a sleep

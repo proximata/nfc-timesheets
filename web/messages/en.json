@@ -142,7 +142,7 @@
 
   "workers": {
     "heading": "Workers",
-    "intro": "Everyone who records hours. The email address is what lets a worker sign in to the app, so it has to be exactly right. The phone number is only for reaching them.",
+    "intro": "Everyone who records hours. The email address is what lets a worker sign in on an iPhone, so it has to be exactly right; on any other phone they sign in once with an enrolment code you create here. The phone number is only for reaching them.",
     "createHeading": "Add a worker",
     "editHeading": "Edit worker",
     "fieldName": "Name",
@@ -181,7 +181,27 @@
     "edit": "Edit",
     "deactivate": "Deactivate",
     "activate": "Reactivate",
-    "forWorker": " for {name}"
+    "forWorker": " for {name}",
+    "colCode": "Enrolment code",
+    "codeStandingNote": "An enrolment code is shown once only, at the moment you create it, and can never be looked up again — write it down or copy it straight away. If it gets lost, simply create a new one. The code is the second way into the app: on an iPhone the worker still signs in with Apple using the email address above, on any other phone they type this code once instead. The email address is therefore still needed.",
+    "codeNone": "No enrolment code",
+    "codeLive": "Valid until {expires}",
+    "codeExpired": "Ran out {expires}, unused",
+    "codeRedeemed": "App set up on {date}",
+    "codeIssue": "Create enrolment code",
+    "codeReissue": "New enrolment code",
+    "codeRevoke": "Block enrolment code",
+    "codeInactive": "Inactive — no enrolment code possible",
+    "codeReadyHeading": "Enrolment code for {name}:",
+    "codeExplain": "{name} types this code into the app once, the first time they open it — after that their phone is signed in and they can record hours.",
+    "codeValidUntil": "Valid until {expires}. After that create a new one.",
+    "codeOnce": "This is the only time the code is shown. If it reaches the wrong person, press “Block enrolment code” — it stops working immediately.",
+    "codeCopy": "Copy enrolment code",
+    "codeCopied": "Enrolment code copied to the clipboard.",
+    "codeCopyFailed": "Could not copy the enrolment code. Select it above and copy it manually.",
+    "codeIssueFailed": "The enrolment code could not be created. Please try again.",
+    "codeRevoked": "{name}’s enrolment code has been blocked and no longer works.",
+    "codeRevokeFailed": "The enrolment code could not be blocked. Please try again."
   },
 
   "locations": {

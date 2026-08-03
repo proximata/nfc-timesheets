@@ -1,8 +1,6 @@
 package io.github.qwadratic.nfctimesheets
 
 import android.app.Application
-import io.github.qwadratic.nfctimesheets.auth.AuthProvider
-import io.github.qwadratic.nfctimesheets.auth.UnconfiguredAuthProvider
 import io.github.qwadratic.nfctimesheets.core.TagLink
 import io.github.qwadratic.nfctimesheets.data.ShiftStore
 import io.github.qwadratic.nfctimesheets.data.ShiftSync
@@ -41,10 +39,4 @@ class TimeSheetsApplication : Application() {
     val api: Api by lazy { Api(cookies) { sessionRejected = true } }
 
     val sync: ShiftSync by lazy { ShiftSync(api, store) }
-
-    /**
-     * decision-26 is PROPOSED. Until the owner picks a mechanism this is the honest
-     * failure, not a stub that pretends. See auth/AuthProvider.kt.
-     */
-    val auth: AuthProvider = UnconfiguredAuthProvider
 }

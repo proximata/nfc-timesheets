@@ -3,20 +3,38 @@
 import { useRouter } from 'next/navigation'
 import { useFormatter, useTranslations } from 'next-intl'
 import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from 'react'
-import { ApiError, fetchWorkers, saveWorker, type Worker } from '@/lib/api'
+import {
+  ApiError,
+  type FreshEnrolmentCode,
+  fetchWorkers,
+  issueEnrolmentCode,
+  revokeEnrolmentCode,
+  saveWorker,
+  type Worker,
+} from '@/lib/api'
+import { codeStateOf } from '@/lib/enrolment'
 import type { ErrorKey } from '@/lib/locale'
 import { centsToPlainEuros, parseEuroToCents } from '@/lib/money'
 import { LOGIN_PATH } from '@/lib/nav'
+import { BUSINESS_TIME_ZONE } from '@/lib/shifts'
 
 /**
  * Workers screen — create, edit and lock out the people who file hours.
  *
  * The email column is not a contact detail. Sign in with Apple hands the server an email
  * address and the server only lets a worker in if an ACTIVE row already carries it
- * (decision-22), so this form is the entire enrolment path and `active` is the lockout
- * switch. Everything here is one client component with `useState` and `fetch` because the
- * bundle is a static export (decision-16): no server component may fetch this data.
+ * (decision-22), so on an iPhone this form is the whole enrolment path and `active` is the
+ * lockout switch. Everything here is one client component with `useState` and `fetch`
+ * because the bundle is a static export (decision-16): no server component may fetch this.
+ *
+ * The second enrolment path is the code column (decision-26): the director creates a short
+ * code FOR A PERSON, reads it out, and the worker types it once on a phone that has no
+ * Apple ID. It is an alternative to Sign in with Apple, NOT a replacement — the email
+ * address is still what gets an iPhone in, which is why nothing here calls it optional.
  */
+
+/** How often the code column re-checks the clock. Codes live an hour; 30s is plenty. */
+const CODE_TICK_MS = 30_000
 
 /** Shape check only, mirroring server/lib/validate.js. Deliverability is not knowable here. */
 const EMAIL_RE = /^[^\s@,]+@[^\s@,.]+(\.[^\s@,.]+)+$/
@@ -86,7 +104,11 @@ export default function WorkersPage() {
   const errorId = useId()
   const statusId = useId()
   const formHeadingId = useId()
+  const codeHeadingId = useId()
+  const codeValueId = useId()
+  const codeOnceId = useId()
   const nameRef = useRef<HTMLInputElement>(null)
+  const codePanelRef = useRef<HTMLElement>(null)
 
   // null = still loading. [] = loaded and genuinely empty, which is the first-run state.
   const [workers, setWorkers] = useState<Worker[] | null>(null)
@@ -96,6 +118,24 @@ export default function WorkersPage() {
   const [formError, setFormError] = useState<ErrorMessage | null>(null)
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
+  /** The code just created, shown once. Unrecoverable afterwards — see `issueEnrolmentCode`. */
+  const [freshCode, setFreshCode] = useState<FreshEnrolmentCode | null>(null)
+  /** Result of the last copy / revoke action, announced in a permanent live region. */
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
+  /** Ticks so an expiry that has passed stops being reported as a live code. */
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), CODE_TICK_MS)
+    return () => clearInterval(timer)
+  }, [])
+
+  // A code appearing is the whole point of the click, and it renders ABOVE the row that
+  // was clicked. Focus follows it, so a keyboard or screen-reader user lands on the code
+  // and its copy button instead of hunting for something that silently scrolled into view.
+  useEffect(() => {
+    if (freshCode !== null) codePanelRef.current?.focus()
+  }, [freshCode])
 
   /** A dead session must not render an empty table that looks like "no workers yet". */
   const handleAuthLoss = useCallback(
@@ -207,6 +247,55 @@ export default function WorkersPage() {
   }
 
   /**
+   * Clipboard access fails on an insecure origin and can be refused by the browser. Not
+   * fatal: the code is on screen in full, so the fallback is to say so rather than leave
+   * the director believing a copy happened and pasting something else into a message.
+   */
+  async function copyCode(code: string) {
+    try {
+      await navigator.clipboard.writeText(code)
+      setNotice({ ok: true, text: t('codeCopied') })
+    } catch {
+      setNotice({ ok: false, text: t('codeCopyFailed') })
+    }
+  }
+
+  /** Create a code for this person, replacing whatever they had. Shown once, right here. */
+  async function issueCode(worker: Worker) {
+    if (busy) return
+    setBusy(true)
+    setNotice(null)
+    setFreshCode(null)
+    try {
+      setFreshCode(await issueEnrolmentCode(worker.id))
+      await load()
+    } catch (cause) {
+      if (!handleAuthLoss(cause)) setNotice({ ok: false, text: t('codeIssueFailed') })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** The control for a code that reached the wrong person. Immediate, and idempotent. */
+  async function revokeCode(worker: Worker) {
+    if (busy) return
+    setBusy(true)
+    setNotice(null)
+    // Only this worker's panel: another worker's code is still valid and is still the one
+    // and only sighting of it, so wiping it off the screen would destroy it for nothing.
+    if (freshCode?.worker.id === worker.id) setFreshCode(null)
+    try {
+      await revokeEnrolmentCode(worker.id)
+      setNotice({ ok: true, text: t('codeRevoked', { name: worker.name }) })
+      await load()
+    } catch (cause) {
+      if (!handleAuthLoss(cause)) setNotice({ ok: false, text: t('codeRevokeFailed') })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
    * Soft delete / undo. Row buttons stay enabled and re-entry is guarded instead, so a
    * click never yanks focus out from under the keyboard user mid-request.
    */
@@ -236,6 +325,30 @@ export default function WorkersPage() {
 
   const editing = draft.id !== undefined
   const formErrorText = formError === null ? '' : t(formError)
+
+  // Vienna, explicitly — not the browser's zone. A code expiring "at 15:32" has to mean the
+  // same 15:32 the director would say on the phone.
+  const dayTime = (iso: string) =>
+    format.dateTime(new Date(iso), {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone: BUSINESS_TIME_ZONE,
+    })
+
+  /** Words, never a colour: this has to survive greyscale and a screen reader. */
+  function codeStatusText(worker: Worker): string {
+    switch (codeStateOf(worker, now)) {
+      case 'live':
+        // Non-null by construction: `live` is only reachable with an expiry set.
+        return t('codeLive', { expires: dayTime(worker.enrolment_code_expires_at ?? '') })
+      case 'expired':
+        return t('codeExpired', { expires: dayTime(worker.enrolment_code_expires_at ?? '') })
+      case 'redeemed':
+        return t('codeRedeemed', { date: dayTime(worker.enrolment_code_redeemed_at ?? '') })
+      default:
+        return t('codeNone')
+    }
+  }
 
   return (
     <>
@@ -372,6 +485,52 @@ export default function WorkersPage() {
           </p>
         ) : null}
 
+        {/* THE WARNING COMES FIRST. "Shown only once" is useless underneath a code that has
+            already scrolled past, so it stands here permanently, above the buttons that
+            create one. It also says what a code is FOR, because the same paragraph has to
+            stop a director concluding that the email address is now optional. */}
+        <p className="notice">{t('codeStandingNote')}</p>
+
+        {/* Permanent live region for copy / revoke results, outside the table so that
+            re-rendering a row never destroys and recreates it. */}
+        <p className={notice?.ok === false ? 'form-error' : 'form-status'} role="status">
+          {notice === null ? '' : notice.text}
+        </p>
+
+        {/* The one and only sighting of the code. Not a dialog: the director reads it out
+            over the phone, and a modal that hid the row it belongs to would be in the way.
+            Focused on appearance (above), so it is not announced twice by also being a
+            live region. */}
+        {freshCode === null ? null : (
+          <section
+            className="notice share-panel"
+            ref={codePanelRef}
+            tabIndex={-1}
+            aria-labelledby={codeHeadingId}
+            aria-describedby={codeOnceId}
+          >
+            <p id={codeHeadingId}>
+              <strong>{t('codeReadyHeading', { name: freshCode.worker.name })}</strong>
+            </p>
+            <code className="code-block" id={codeValueId}>
+              {freshCode.code}
+            </code>
+            <p className="form-actions">
+              <button
+                type="button"
+                className="button-primary"
+                aria-describedby={codeValueId}
+                onClick={() => copyCode(freshCode.code)}
+              >
+                {t('codeCopy')}
+              </button>
+            </p>
+            <p>{t('codeExplain', { name: freshCode.worker.name })}</p>
+            <p>{t('codeValidUntil', { expires: dayTime(freshCode.expires_at) })}</p>
+            <p id={codeOnceId}>{t('codeOnce')}</p>
+          </section>
+        )}
+
         {workers === null ? (
           <p role="status">{t('loading')}</p>
         ) : workers.length === 0 ? (
@@ -386,6 +545,7 @@ export default function WorkersPage() {
                 <th scope="col">{t('colPhone')}</th>
                 <th scope="col">{t('colRate')}</th>
                 <th scope="col">{t('colStatus')}</th>
+                <th scope="col">{t('colCode')}</th>
                 <th scope="col">{t('colActions')}</th>
               </tr>
             </thead>
@@ -416,6 +576,40 @@ export default function WorkersPage() {
                   </td>
                   {/* Text, not a colour: the status has to survive greyscale and a screen reader. */}
                   <td>{worker.active ? t('statusActive') : t('statusInactive')}</td>
+                  {/* Revoke sits in the open next to create, at the same weight. It is the
+                      control used when a code went to the wrong person, and burying it in a
+                      menu would cost seconds exactly when they matter. */}
+                  <td>
+                    <p className="cell-code">{codeStatusText(worker)}</p>
+                    <div className="cell-actions">
+                      {worker.active ? (
+                        <button
+                          type="button"
+                          className="button-secondary"
+                          onClick={() => issueCode(worker)}
+                        >
+                          {codeStateOf(worker, now) === 'live' ? t('codeReissue') : t('codeIssue')}
+                          <span className="visually-hidden">
+                            {t('forWorker', { name: worker.name })}
+                          </span>
+                        </button>
+                      ) : (
+                        <span className="cell-muted">{t('codeInactive')}</span>
+                      )}
+                      {codeStateOf(worker, now) === 'live' ? (
+                        <button
+                          type="button"
+                          className="button-secondary"
+                          onClick={() => revokeCode(worker)}
+                        >
+                          {t('codeRevoke')}
+                          <span className="visually-hidden">
+                            {t('forWorker', { name: worker.name })}
+                          </span>
+                        </button>
+                      ) : null}
+                    </div>
+                  </td>
                   <td className="cell-actions">
                     <button
                       type="button"

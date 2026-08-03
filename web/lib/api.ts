@@ -120,6 +120,17 @@ export type Worker = {
   hourly_rate_cents: number
   active: boolean
   created_at: string
+  /**
+   * When the worker's current enrolment code stops working, ISO-8601. Null = there is no
+   * outstanding code, either because none was issued, because it was used, or because it
+   * was revoked. A value in the PAST means the code ran out unused (decision-26).
+   *
+   * The code itself is NOT here and can never be: the server keeps only a digest of it and
+   * hands the plaintext back exactly once, from `issueEnrolmentCode`.
+   */
+  enrolment_code_expires_at: string | null
+  /** When a code was last exchanged for an app sign-in, ISO-8601. Null = never. */
+  enrolment_code_redeemed_at: string | null
 }
 
 /** Create (no `id`) or update (`id`). Same route either way. */
@@ -248,6 +259,48 @@ export function saveWorker(input: WorkerInput, signal?: AbortSignal): Promise<Wo
     body: input,
     signal,
   }).then((data) => data.worker)
+}
+
+/**
+ * The one and only sighting of an enrolment code (decision-26).
+ *
+ * `code` is in THIS RESPONSE AND NOWHERE ELSE, EVER — `/admin/data` returns the two state
+ * timestamps above and never the secret, so the screen must show it immediately. Losing it
+ * is survivable: issuing again replaces it, so a worker always has at most one live code.
+ *
+ * `expires_at` is the server's own deadline, not a client-side guess. Show it.
+ */
+export type FreshEnrolmentCode = {
+  worker: { id: number; name: string }
+  /** Grouped for reading out over the phone, e.g. `K7QF-3MZ2`. */
+  code: string
+  expires_at: string
+}
+
+/**
+ * Issues a code for ONE worker and replaces whatever they had. 404 = unknown worker, or a
+ * deactivated one: the server refuses to issue for somebody who may not sign in anyway.
+ */
+export function issueEnrolmentCode(
+  workerId: number,
+  signal?: AbortSignal,
+): Promise<FreshEnrolmentCode> {
+  return apiFetch<FreshEnrolmentCode>(`/admin/workers/${workerId}/enrolment-code`, {
+    method: 'POST',
+    signal,
+  })
+}
+
+/**
+ * Revoke, immediately and idempotently — the control for a code read aloud to the wrong
+ * person. It does NOT sign anybody out; a worker already enrolled keeps their session, and
+ * the button for ending that is `Deactivate` (DELETE /admin/workers/:id).
+ */
+export function revokeEnrolmentCode(workerId: number, signal?: AbortSignal): Promise<void> {
+  return apiFetch<void>(`/admin/workers/${workerId}/enrolment-code`, {
+    method: 'DELETE',
+    signal,
+  })
 }
 
 /**

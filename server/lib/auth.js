@@ -277,7 +277,45 @@ export function clearLoginFailures(ip) {
   attempts.delete(ip);
 }
 
+// ---- global enrolment ceiling (decision-26) ---------------------------------------
+// The per-IP limiter above does NOTHING against an attacker rotating source addresses,
+// and rotation is cheap. That is tolerable for /admin/login, where each guess is one
+// account's password. It is NOT tolerable for POST /auth/code, where the search space is
+// SHARED: every live enrolment code in the system is a valid answer, so one flood is
+// attacking every worker at once (the arithmetic is in lib/enrolment.js).
+//
+// So this counts ATTEMPTS — not failures, and regardless of who is asking — in a fixed
+// one-minute window, and is the hard bound on how fast the shared space can be walked.
+// 30/min is roughly three orders of magnitude above real use: about twenty workers enrol
+// once each, ever. A legitimate worker cannot reach it; a flood hits it in two seconds.
+//
+// ponytail: fixed window, in memory, per process — same ceiling and the same upgrade
+//   path as the per-IP limiter above. A window boundary allows a 2x burst across two
+//   adjacent windows (60 guesses in one second), which changes the figures in
+//   lib/enrolment.js by one bit and nothing else. A token bucket would smooth it and is
+//   not worth the code.
+const GLOBAL_LIMIT = 30;
+const GLOBAL_WINDOW_MS = 60_000;
+let globalWindowStart = 0;
+let globalCount = 0;
+
+/** Throws 429 once the whole process has spent its per-minute enrolment budget. */
+export function checkGlobalEnrolmentRate() {
+  const now = Date.now();
+  if (now - globalWindowStart >= GLOBAL_WINDOW_MS) {
+    globalWindowStart = now;
+    globalCount = 0;
+  }
+  globalCount += 1;
+  if (globalCount > GLOBAL_LIMIT) {
+    const retryAfter = Math.ceil((globalWindowStart + GLOBAL_WINDOW_MS - now) / 1000);
+    fail(429, "too_many_attempts", undefined, { "retry-after": String(Math.max(1, retryAfter)) });
+  }
+}
+
 /** Test seam only — check-api.js resets between cases. */
 export function resetLoginRate() {
   attempts.clear();
+  globalWindowStart = 0;
+  globalCount = 0;
 }

@@ -45,9 +45,9 @@ const DB_NAME = `timesheets_migcheck_${process.pid}`;
 const DATABASE_URL = `postgres:///${DB_NAME}`;
 const MIGRATE = path.join(__dirname, "migrate.js");
 
-// Second throwaway database: proves 003 applies to a box that is already at 002 AND HAS
-// LIVE DATA IN IT. 001 and 002 are applied in production, so "the whole file set builds a
-// fresh database" is not the property that matters any more.
+// Second throwaway database: proves the newest migrations apply to a box that is already
+// at 002 AND HAS LIVE DATA IN IT. 001-003 are applied in production, so "the whole file
+// set builds a fresh database" is not the property that matters any more.
 const LIVE_DB_NAME = `timesheets_livecheck_${process.pid}`;
 const LIVE_URL = `postgres:///${LIVE_DB_NAME}`;
 
@@ -162,6 +162,64 @@ try {
   assert.equal(afterSecondSeed, afterFirstSeed, "seed.sql must be idempotent");
   assert.equal(afterFirstSeed, "3/3", "seed.sql must create 3 workers and 3 locations");
 
+  // --- 004 spot-checks: enrolment codes (decision-26) ------------------------
+  // Columns on workers, NOT a codes table: one worker, one live code, replacement is an
+  // UPDATE. A second table would allow two live codes for one person.
+  assert.equal(
+    query("SELECT count(*) FROM pg_class WHERE relname IN ('enrolment_codes', 'enrollment_codes');"),
+    "0",
+    "enrolment codes must live on workers — a table would allow two live codes per person",
+  );
+  for (const col of [
+    "enrolment_code_hash",
+    "enrolment_code_expires_at",
+    "enrolment_code_issued_at",
+    "enrolment_code_issued_by",
+    "enrolment_code_redeemed_at",
+  ]) {
+    assert.equal(
+      query(
+        `SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.workers'::regclass AND attname = '${col}' AND NOT attisdropped;`,
+      ),
+      "1",
+      `workers.${col} missing (decision-26)`,
+    );
+    // NULLable is what makes 004 applicable over the live rows that predate it.
+    assert.equal(
+      query(
+        `SELECT attnotnull FROM pg_attribute WHERE attrelid = 'public.workers'::regclass AND attname = '${col}';`,
+      ),
+      "f",
+      `workers.${col} must be NULLable — rows that predate the column cannot supply a value`,
+    );
+  }
+  // A code that could name two workers is an ambiguous credential.
+  assert.equal(
+    query(`SELECT count(*) FROM pg_constraint c
+           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+           WHERE c.conrelid = 'public.workers'::regclass AND c.contype = 'u' AND a.attname = 'enrolment_code_hash';`),
+    "1",
+    "workers.enrolment_code_hash must be UNIQUE — one code must never name two workers",
+  );
+  // A hash with no expiry is a permanent bearer credential. decision-26 made expiry part
+  // of the feature, so the database refuses the state rather than trusting the route.
+  assert.equal(
+    query(
+      "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.workers'::regclass AND conname = 'workers_enrolment_code_pair';",
+    ),
+    "1",
+    "workers_enrolment_code_pair CHECK missing — an enrolment code must always carry an expiry",
+  );
+  query(
+    "INSERT INTO workers (name, enrolment_code_hash, enrolment_code_expires_at) VALUES ('Coded', 'deadbeef', now() + interval '1 hour');",
+  );
+  assert.throws(
+    () => query("UPDATE workers SET enrolment_code_expires_at = NULL WHERE name = 'Coded';"),
+    /workers_enrolment_code_pair/,
+    "the CHECK must actually reject a code with no expiry",
+  );
+  query("DELETE FROM workers WHERE name = 'Coded';");
+
   // --- 003 spot-checks: the director's vocabulary ----------------------------
   for (const table of ["clients", "contacts", "inventory_items", "portal_grants"]) {
     assert.equal(query(`SELECT to_regclass('public.${table}') IS NOT NULL;`), "t", `${table} table missing`);
@@ -207,7 +265,7 @@ try {
     "products/equipment must NOT be separate tables — that would be two admin screens",
   );
 
-  // --- 003 on top of an ALREADY MIGRATED database that holds real rows -------
+  // --- 003 + 004 on top of an ALREADY MIGRATED database that holds real rows -
   try {
     run("createdb", [LIVE_DB_NAME]);
   } catch (e) {
@@ -231,8 +289,18 @@ try {
   // THE ASSERTION THAT MATTERS: a migration demanding values for rows that predate its
   // columns cannot run. This must not throw.
   apply("003_clients_contracts_inventory.sql");
+  apply("004_worker_enrolment_codes.sql");
 
   assert.equal(liveQuery("SELECT count(*) FROM shifts;"), "2", "003 must not disturb existing shifts");
+  // The live box has a worker enrolled via Sign in with Apple and no code. 004 must not
+  // make that row invalid, or the one person using the product stops being able to work.
+  assert.equal(
+    liveQuery(
+      "SELECT count(*) FROM workers WHERE enrolment_code_hash IS NULL AND enrolment_code_expires_at IS NULL;",
+    ),
+    "1",
+    "a worker that predates enrolment codes must survive 004 with no code present",
+  );
   assert.equal(
     liveQuery(
       "SELECT count(*) FROM locations WHERE client_id IS NULL AND monthly_contract_cents IS NULL AND target_minutes_per_month IS NULL;",
@@ -249,7 +317,7 @@ try {
 
   console.log(
     "OK check-migrate: migrations apply once, re-run is a no-op, seed is idempotent, " +
-      "003 applies on top of 001+002 with live data",
+      "003+004 apply on top of 001+002 with live data",
   );
 } finally {
   for (const db of [DB_NAME, LIVE_DB_NAME]) {

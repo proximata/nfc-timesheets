@@ -55,7 +55,14 @@ CREATE TABLE workers (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   apple_sub TEXT UNIQUE,
   email TEXT UNIQUE CHECK (email = lower(email)),
-  phone TEXT
+  phone TEXT,
+  enrolment_code_hash TEXT UNIQUE,
+  enrolment_code_expires_at TIMESTAMPTZ,
+  enrolment_code_issued_at TIMESTAMPTZ,
+  enrolment_code_issued_by BIGINT,
+  enrolment_code_redeemed_at TIMESTAMPTZ,
+  CONSTRAINT workers_enrolment_code_pair
+    CHECK ((enrolment_code_hash IS NULL) = (enrolment_code_expires_at IS NULL))
 );
 CREATE TABLE clients (
   id BIGSERIAL PRIMARY KEY,
@@ -182,6 +189,9 @@ const SECRETS = {
   rateCents: 1850,
   portalToken: "pT".repeat(20) + "abc", // 43 base64url chars, as routes/portal.js mints
   nonce: "a-raw-nonce-from-the-phone",
+  // decision-26. A live bearer credential: redeeming one mints a worker session. It
+  // arrives as {"code": "..."} in a request body, so the bare `code` key has to go.
+  enrolmentCode: "K7QF-3MZ2",
 };
 
 await test("the scrubber strips every forbidden field out of an event (decision-23)", () => {
@@ -226,7 +236,15 @@ await test("the scrubber strips every forbidden field out of an event (decision-
     breadcrumbs: {
       values: [{ type: "http", data: { url: `https://x/portal/${SECRETS.portalToken}` } }],
     },
-    extra: { password_hash: SECRETS.passwordHash, apple_sub: SECRETS.appleSub },
+    extra: {
+      password_hash: SECRETS.passwordHash,
+      apple_sub: SECRETS.appleSub,
+      // Three places an enrolment code could plausibly be attached by hand or by a future
+      // SDK field: a bare `code` key, a nested one, and the spelled-out column name.
+      code: SECRETS.enrolmentCode,
+      body: { code: SECRETS.enrolmentCode },
+      enrolment_code: SECRETS.enrolmentCode,
+    },
   };
 
   // Assert on the SERIALISED event: a value that survived in a nested span attribute is
@@ -245,6 +263,23 @@ await test("the scrubber strips every forbidden field out of an event (decision-
   assert.ok(out.includes("CFNetwork"), "scrubbing must not empty the event out entirely");
 });
 
+// The `^code$` rule is anchored so it cannot eat the fields that make a 4xx diagnosable.
+// Over-broad redaction is not "safe": it deletes the only evidence of what went wrong,
+// and someone eventually turns it off.
+await test("the code rule is anchored - status codes and error codes still survive", () => {
+  const out = JSON.stringify(
+    scrubEvent({
+      contexts: { trace: { data: { "http.response.status_code": 401 } } },
+      extra: { status_code: 429, error_code: "invalid_code", code: SECRETS.enrolmentCode },
+    }),
+  );
+  assert.ok(!out.includes(SECRETS.enrolmentCode), `the enrolment code survived: ${out}`);
+  const parsed = JSON.parse(out);
+  assert.equal(parsed.contexts.trace.data["http.response.status_code"], 401);
+  assert.equal(parsed.extra.status_code, 429);
+  assert.equal(parsed.extra.error_code, "invalid_code", "the error CODE is diagnostics, not a secret");
+});
+
 await test("the scrubber strips log attributes and drops portal breadcrumbs", () => {
   const attrs = scrubLogAttributes({
     "ts.shift.client_uuid": uuid(1),
@@ -256,6 +291,8 @@ await test("the scrubber strips log attributes and drops portal breadcrumbs", ()
     "x-app-key": SECRETS.appKey,
     cookie: `ts_worker=${SECRETS.workerCookieValue}`,
     note: `see /portal/${SECRETS.portalToken}`,
+    code: SECRETS.enrolmentCode,
+    "ts.enrolment_code": SECRETS.enrolmentCode,
   });
   const out = JSON.stringify(attrs);
   for (const [name, value] of Object.entries(SECRETS)) {
@@ -812,6 +849,342 @@ try {
     assert.ok(!body.includes(ADMIN_PASSWORD), "password must never come back");
     assert.ok(!body.includes("password_hash"), "hash must never come back");
   });
+
+  // ---- enrolment codes (decision-26) ----------------------------------------------
+  // A code is a low-entropy bearer credential spoken over the phone. Everything below is
+  // a property that makes 40 bits safe; none of them is optional.
+  {
+    const { rows: enrolSeed } = await admin.query(
+      "INSERT INTO workers (name, hourly_rate_cents) VALUES ('Enrol Worker', 1400) RETURNING id",
+    );
+    const enrolWorkerId = Number(enrolSeed[0].id);
+
+    // Tee stdout/stderr for the whole section. The last case asserts that not one code
+    // minted here reached a line — the access log, the 500 line, anything. Nothing is
+    // suppressed: the real streams still get everything, so a failure is still readable.
+    const logged = [];
+    const realLog = console.log;
+    const realError = console.error;
+    console.log = (...args) => {
+      logged.push(args.map(String).join(" "));
+      realLog(...args);
+    };
+    console.error = (...args) => {
+      logged.push(args.map(String).join(" "));
+      realError(...args);
+    };
+
+    const minted = []; // every plaintext this section has ever seen, canonical + display
+
+    const issueCode = (workerId) =>
+      call(`/admin/workers/${workerId}/enrolment-code`, { method: "POST", key: null, cookie: adminCookie });
+    const revokeCode = (workerId) =>
+      call(`/admin/workers/${workerId}/enrolment-code`, { method: "DELETE", key: null, cookie: adminCookie });
+    const redeem = (code, ip) => call("/auth/code", { method: "POST", body: { code }, ip });
+
+    const freshCode = async (workerId = enrolWorkerId) => {
+      const res = await issueCode(workerId);
+      assert.equal(res.status, 201, `issue should return 201, got ${res.status}`);
+      const code = (await res.json()).code;
+      minted.push(code, code.replace("-", ""));
+      return code;
+    };
+
+    const codeRowState = async (workerId = enrolWorkerId) =>
+      (
+        await admin.query(
+          `SELECT enrolment_code_hash IS NOT NULL AS has_code, enrolment_code_expires_at,
+                  enrolment_code_issued_at, enrolment_code_issued_by, enrolment_code_redeemed_at
+             FROM workers WHERE id = $1`,
+          [workerId],
+        )
+      ).rows[0];
+
+    // Crockford base32 minus I, L, O, U — the misread pairs, plus the letter that spells
+    // things nobody wants to read down a phone line.
+    const CODE_SHAPE = /^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
+
+    await test("an issued code has an unambiguous alphabet, an expiry, and an audit trail", async () => {
+      const before = Date.now();
+      const res = await issueCode(enrolWorkerId);
+      assert.equal(res.status, 201);
+      const body = await res.json();
+      minted.push(body.code, body.code.replace("-", ""));
+
+      assert.match(body.code, CODE_SHAPE, `0/O and 1/I/L are a support-call generator: ${body.code}`);
+      assert.equal(body.worker.id, enrolWorkerId);
+
+      const ttl = new Date(body.expires_at).getTime() - before;
+      assert.ok(ttl > 55 * 60_000 && ttl <= 61 * 60_000, `expected a ~60 min TTL, got ${ttl}ms`);
+
+      const row = await codeRowState();
+      assert.equal(row.has_code, true, "the hash must be stored");
+      assert.ok(row.enrolment_code_issued_at, "who/when is the audit trail decision-26 asked for");
+      assert.ok(row.enrolment_code_issued_by, "the issuing admin must be recorded");
+      assert.equal(row.enrolment_code_redeemed_at, null, "a fresh code has not been redeemed");
+
+      // The stored value is a hash, never the code. A pg_dump must not replay.
+      const stored = (
+        await admin.query("SELECT enrolment_code_hash FROM workers WHERE id = $1", [enrolWorkerId])
+      ).rows[0].enrolment_code_hash;
+      assert.match(stored, /^[0-9a-f]{64}$/, "only SHA-256(code) may be stored");
+      assert.equal(stored, hashToken(body.code.replace("-", "")), "stored hash must be of the canonical form");
+    });
+
+    await test("the plaintext is shown EXACTLY once - /admin/data can never hand it back", async () => {
+      const code = await freshCode();
+      const raw = await (await call("/admin/data", { key: null, cookie: adminCookie })).text();
+      assert.ok(!raw.includes(code), "the code came back from /admin/data");
+      assert.ok(!raw.includes(code.replace("-", "")), "the canonical form came back from /admin/data");
+      assert.ok(!raw.includes("enrolment_code_hash"), "the hash is not the panel's business either");
+
+      const worker = JSON.parse(raw).workers.find((w) => w.id === enrolWorkerId);
+      assert.ok(worker.enrolment_code_expires_at, "but the panel must be able to say a code is live");
+    });
+
+    let enrolCookie = null;
+
+    await test("a valid code mints the SAME session Sign in with Apple mints", async () => {
+      resetLoginRate();
+      const code = await freshCode();
+      const before = await sessionRows();
+
+      const res = await redeem(code, "10.5.1.1");
+      // Read the body ONCE: a template literal in an assert message is evaluated eagerly,
+      // so `got ${await res.text()}` would consume it before res.json() ever runs.
+      const raw200 = await res.text();
+      assert.equal(res.status, 200, `redemption should succeed, got ${raw200}`);
+      const body = JSON.parse(raw200);
+      assert.deepEqual(
+        Object.keys(body).sort(),
+        ["expires_at", "worker"],
+        "one session system: the body must match /auth/apple exactly",
+      );
+      assert.equal(body.worker.id, enrolWorkerId);
+      assert.equal(body.worker.name, "Enrol Worker");
+
+      const raw = res.headers.getSetCookie?.()[0] ?? res.headers.get("set-cookie");
+      assert.match(raw, /^ts_worker=/, "the same cookie name Apple sign-in sets");
+      assert.ok(/HttpOnly/i.test(raw) && /Secure/i.test(raw) && /SameSite=Strict/i.test(raw), raw);
+      assert.ok(!raw.includes(code.replace("-", "")), "the cookie is a session token, not the code");
+
+      assert.equal(await sessionRows(), before + 1, "exactly one worker_sessions row");
+      enrolCookie = cookieFrom(res);
+
+      // The point of the whole mechanism: this session is a worker identity downstream.
+      const roster = await call("/roster", { cookie: enrolCookie });
+      assert.equal(roster.status, 200);
+      assert.equal((await roster.json()).worker.id, enrolWorkerId);
+
+      const row = await codeRowState();
+      assert.equal(row.has_code, false, "redeeming must CLEAR the code");
+      assert.equal(row.enrolment_code_expires_at, null, "and its expiry with it");
+      assert.ok(row.enrolment_code_redeemed_at, "and record when it was used");
+    });
+
+    await test("whatever a tired cleaner types is normalised - O/0 and I/L/1, case, spaces", async () => {
+      resetLoginRate();
+      const code = await freshCode();
+      const typed = code
+        .toLowerCase()
+        .replace(/0/g, "o")
+        .replace(/1/g, "l")
+        .replace("-", " - ");
+      const res = await redeem(typed, "10.5.1.2");
+      assert.equal(res.status, 200, `"${typed}" must be accepted, got ${res.status}`);
+    });
+
+    await test("a code is SINGLE USE - the second attempt fails and mints nothing", async () => {
+      resetLoginRate();
+      const code = await freshCode();
+      assert.equal((await redeem(code, "10.5.1.3")).status, 200);
+
+      const before = await sessionRows();
+      const again = await redeem(code, "10.5.1.4");
+      assert.equal(again.status, 401);
+      assert.equal(cookieFrom(again), null, "a spent code must not mint a cookie");
+      assert.equal(await sessionRows(), before, "...nor a session row");
+    });
+
+    await test("issuing a new code REPLACES the previous one (one worker, one live code)", async () => {
+      resetLoginRate();
+      const first = await freshCode();
+      const second = await freshCode();
+      assert.notEqual(first, second);
+      assert.equal((await redeem(first, "10.5.1.5")).status, 401, "the replaced code must be dead");
+      assert.equal((await redeem(second, "10.5.1.6")).status, 200);
+    });
+
+    await test("revoke is immediate, idempotent, and does not need the plaintext", async () => {
+      resetLoginRate();
+      const code = await freshCode();
+      const res = await revokeCode(enrolWorkerId);
+      assert.equal(res.status, 200);
+      assert.equal((await res.json()).worker.enrolment_code_expires_at, null);
+      assert.equal((await codeRowState()).has_code, false);
+      assert.equal((await redeem(code, "10.5.1.7")).status, 401);
+
+      assert.equal((await revokeCode(enrolWorkerId)).status, 200, "revoking twice must not be an error");
+      // The audit trail outlives the secret - that is what it is for.
+      assert.ok((await codeRowState()).enrolment_code_issued_at, "who issued it must survive revocation");
+      assert.equal((await revokeCode(999_999)).status, 404);
+    });
+
+    await test("EVERY rejection is byte-identical - expired must not be distinguishable", async () => {
+      resetLoginRate();
+      const outcomes = {};
+
+      // unknown: correctly shaped, never issued
+      outcomes.unknown = await redeem("ZZZZ-ZZZZ", "10.5.2.1");
+      // malformed: not even the right shape
+      outcomes.malformed = await redeem("nope!!", "10.5.2.2");
+      // missing: no field at all
+      outcomes.missing = await call("/auth/code", { method: "POST", body: {}, ip: "10.5.2.3" });
+
+      // expired: real code, one minute past its expiry
+      const expired = await freshCode();
+      await admin.query(
+        "UPDATE workers SET enrolment_code_expires_at = now() - interval '1 minute' WHERE id = $1",
+        [enrolWorkerId],
+      );
+      outcomes.expired = await redeem(expired, "10.5.2.4");
+
+      // already redeemed
+      const spent = await freshCode();
+      assert.equal((await redeem(spent, "10.5.2.5")).status, 200);
+      outcomes.redeemed = await redeem(spent, "10.5.2.6");
+
+      // revoked by the admin
+      const revoked = await freshCode();
+      await revokeCode(enrolWorkerId);
+      outcomes.revoked = await redeem(revoked, "10.5.2.7");
+
+      // live code, worker deactivated underneath it
+      const orphaned = await freshCode();
+      await admin.query("UPDATE workers SET active = false WHERE id = $1", [enrolWorkerId]);
+      outcomes.inactive = await redeem(orphaned, "10.5.2.8");
+      await admin.query("UPDATE workers SET active = true WHERE id = $1", [enrolWorkerId]);
+
+      const seen = [];
+      for (const [name, res] of Object.entries(outcomes)) {
+        seen.push(`${name}=${res.status}:${await res.text()}`);
+        assert.equal(cookieFrom(res), null, `${name} must not mint a cookie`);
+      }
+      const shapes = new Set(seen.map((s) => s.split("=")[1]));
+      assert.equal(
+        shapes.size,
+        1,
+        `every rejection must be identical in status AND body, got ${[...shapes].join(" | ")}`,
+      );
+      assert.equal([...shapes][0], '401:{"error":"invalid_code"}');
+    });
+
+    await test("redemption is rate limited per IP - a shared secret needs a hard floor", async () => {
+      resetLoginRate();
+      const ip = "10.5.3.1";
+      const codes = [];
+      for (let i = 0; i < 7; i++) codes.push((await redeem("ZZZZ-ZZZY", ip)).status);
+      assert.ok(codes.slice(0, 5).every((c) => c === 401), `first 5 should be 401, got ${codes}`);
+      assert.ok(codes.includes(429), `an unthrottled code endpoint is a guessing oracle, got ${codes}`);
+
+      // The lockout must apply to a GOOD code too, or it is not a lockout.
+      const good = await freshCode();
+      const locked = await redeem(good, ip);
+      assert.equal(locked.status, 429);
+      assert.ok(Number(locked.headers.get("retry-after")) > 0, "429 must say when to come back");
+      // ...and must not spill onto an unrelated caller.
+      assert.equal((await redeem(good, "10.5.3.2")).status, 200);
+      resetLoginRate();
+    });
+
+    await test("a GLOBAL ceiling bounds the SHARED search space, not just one address", async () => {
+      // The per-IP limiter does nothing against IP rotation, and every live code in the
+      // system is a valid answer to a guess - so an attacker walks one shared space, not
+      // one worker's. This is the bound that makes the arithmetic in lib/enrolment.js hold.
+      resetLoginRate();
+      const statuses = [];
+      for (let i = 0; i < 40; i++) statuses.push((await redeem("ZZZZ-ZZZX", `10.5.4.${i}`)).status);
+      const firstThrottled = statuses.indexOf(429);
+      assert.ok(firstThrottled >= 0, `40 guesses from 40 addresses must be throttled, got ${statuses}`);
+      assert.ok(
+        firstThrottled <= 30,
+        `the global ceiling must bite by the 31st attempt, first 429 at ${firstThrottled}`,
+      );
+      assert.equal((await (await redeem("ZZZZ-ZZZX", "10.5.4.99")).json()).error, "too_many_attempts");
+      resetLoginRate();
+    });
+
+    await test("two racing redemptions of one code yield EXACTLY one session", async () => {
+      resetLoginRate();
+      const code = await freshCode();
+      const before = await sessionRows();
+
+      // Distinct addresses so the per-IP limiter cannot be what makes this pass - the
+      // database has to be what decides it.
+      const results = await Promise.all(
+        Array.from({ length: 8 }, (_, i) => redeem(code, `10.5.5.${i}`)),
+      );
+      const won = results.filter((r) => r.status === 200);
+      const lost = results.filter((r) => r.status === 401);
+      assert.equal(won.length, 1, `exactly one racer may win, got ${results.map((r) => r.status)}`);
+      assert.equal(lost.length, 7, `the rest must lose with 401, got ${results.map((r) => r.status)}`);
+      assert.equal(await sessionRows(), before + 1, "a race must not mint two sessions");
+      assert.equal((await codeRowState()).has_code, false);
+    });
+
+    await test("issuing needs an admin session, and never for a deactivated worker", async () => {
+      assert.equal((await call(`/admin/workers/${enrolWorkerId}/enrolment-code`, { method: "POST" })).status, 401);
+      assert.equal(
+        (await call(`/admin/workers/${enrolWorkerId}/enrolment-code`, { method: "DELETE" })).status,
+        401,
+        "the app key must not authorise revocation either",
+      );
+      assert.equal((await issueCode(inactiveWorkerId)).status, 404, "a live code for someone let go");
+      assert.equal((await issueCode(999_999)).status, 404);
+      assert.equal(
+        (await call("/auth/code", { method: "POST", key: null, body: { code: "ZZZZ-ZZZZ" } })).status,
+        401,
+        "/auth/code keeps the coarse app-key gate in front of it",
+      );
+    });
+
+    await test("NO code this section minted reached a log line or a telemetry payload", async () => {
+      console.log = realLog;
+      console.error = realError;
+
+      assert.ok(minted.length >= 20, `this case is vacuous without codes to look for (${minted.length})`);
+      assert.ok(
+        logged.some((line) => line.includes("[req] POST /auth/code")),
+        "the access log must actually have logged these requests, or this proves nothing",
+      );
+
+      const haystack = logged.join("\n");
+      for (const code of minted) {
+        assert.ok(!haystack.includes(code), `an enrolment code reached a log line: ${code.slice(0, 2)}\u2026`);
+      }
+
+      // ...and the same values through the telemetry boundary, in the shape they arrive in.
+      const event = scrubEvent({
+        transaction: "POST /auth/code",
+        request: { data: { code: minted[0] }, url: "https://timesheets.exe.xyz/auth/code" },
+        extra: { body: { code: minted[0] }, enrolment_code: minted[1] },
+      });
+      const wire = JSON.stringify(event);
+      for (const code of minted) {
+        assert.ok(!wire.includes(code), "an enrolment code reached a Sentry payload");
+      }
+      const attrs = JSON.stringify(scrubLogAttributes({ code: minted[0], "ts.enrolment_code": minted[1] }));
+      for (const code of minted) assert.ok(!attrs.includes(code), "an enrolment code reached a log attribute");
+    });
+
+    // Belt and braces: restore even if the case above never ran.
+    console.log = realLog;
+    console.error = realError;
+
+    await admin.query("DELETE FROM worker_sessions WHERE worker_id = $1", [enrolWorkerId]);
+    await admin.query("DELETE FROM workers WHERE id = $1", [enrolWorkerId]);
+    resetLoginRate();
+  }
 
   // ---- clock-in / clock-out (decision-19) -----------------------------------------
   const openBody = {

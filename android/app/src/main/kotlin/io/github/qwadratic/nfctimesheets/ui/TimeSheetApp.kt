@@ -26,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -38,23 +39,28 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.qwadratic.nfctimesheets.R
+import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.data.LocalShift
 import io.github.qwadratic.nfctimesheets.nfc.NfcReadiness
@@ -68,9 +74,9 @@ import java.time.temporal.WeekFields
 import java.util.Locale
 
 /**
- * The whole app is one of four screens, chosen by the SERVER's answer to "who is this?"
- * (decision-22). There is no path from the ineligible or unconfigured screen into the
- * tabs — not a button, not a swipe — because the tabs are not composed at all.
+ * The whole app is one of three screens, chosen by the SERVER's answer to "who is this?"
+ * (decision-22). There is no path from the sign-in screen into the tabs — not a button,
+ * not a swipe — because the tabs are not composed at all.
  */
 @Composable
 fun TimeSheetApp(
@@ -87,7 +93,6 @@ fun TimeSheetApp(
                     Text(stringResource(R.string.loading_session))
                 }
                 is SessionState.SignedOut -> SignInScreen(model, state.reasonKey)
-                is SessionState.Ineligible -> IneligibleScreen(model, state.email)
                 is SessionState.SignedIn -> SignedInScaffold(model, nfcReadiness, openIntent)
             }
         }
@@ -95,18 +100,37 @@ fun TimeSheetApp(
 }
 
 // -------------------------------------------------------------------------------------
-// Signed out. The sign-in mechanism is decision-26 and is still PROPOSED, so this build
-// has none. It says so. It does NOT show a button that cannot work: a worker who taps a
-// tag and sees a friendly screen while nothing is filed is unpaid work nobody notices.
+// Signed out. ONE FIELD, and nothing else (decision-26).
+//
+// The worker has just been read an 8-character code down the phone by the admin, who
+// issued it for them by name. They type it once, ever. So this screen has no account
+// creation, no provider buttons, no password, no "forgot" link and no second field --
+// every one of those would be a thing to get wrong while standing in a stairwell.
 // -------------------------------------------------------------------------------------
 @Composable
 private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?) {
-    val configured = remember { model.isSignInConfigured }
+    // rememberSaveable: a rotation, or Android tearing the activity down behind a
+    // notification, must not eat the characters already typed. It is deliberately NOT in
+    // the ViewModel and NOT on disk -- a bearer credential does not get persisted by us.
+    var typed by rememberSaveable { mutableStateOf("") }
+    // What was in the field when the last refusal came back. The message belongs to THAT
+    // string, so it disappears the moment they start correcting it — a field that stays
+    // red while you retype tells you nothing and looks broken.
+    var attempted by rememberSaveable { mutableStateOf<String?>(null) }
+    val busy by model.signingIn.collectAsStateWithLifecycle()
+    val showError = reasonKey != null && typed == attempted
+    val submit = {
+        if (!busy) {
+            attempted = typed
+            model.signIn(typed)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(rememberScrollState()) // taller than the screen at 200% font
             .padding(28.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -115,36 +139,73 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?) {
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.semantics { heading() },
         )
-        Text(stringResource(R.string.signin_subtitle), style = MaterialTheme.typography.bodyLarge)
+        Text(stringResource(R.string.signin_code_intro), style = MaterialTheme.typography.bodyLarge)
 
-        if (!configured) {
-            Text(
-                stringResource(R.string.signin_unconfigured_title),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.semantics { heading() },
-            )
-            Text(stringResource(R.string.signin_unconfigured_body))
-            Text(
-                stringResource(R.string.signin_unconfigured_detail),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Button(
-                onClick = model::signIn,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp), // touch target floor
-            ) { Text(stringResource(R.string.signin_subtitle)) }
+        OutlinedTextField(
+            value = typed,
+            // Capped at the same length the server will even look at. Everything else is
+            // accepted as typed and sorted out by EnrolmentCode.normalise() on submit:
+            // rewriting the text under the cursor is how input fields fight their user.
+            onValueChange = { typed = it.take(EnrolmentCode.MAX_INPUT) },
+            singleLine = true,
+            isError = showError,
+            label = { Text(stringResource(R.string.signin_code_label)) },
+            // ONE message for every refusal. Unknown, malformed, expired, already used,
+            // revoked, worker deactivated -- the server makes all six byte-identical on
+            // purpose (decision-26) and this screen must not invent a distinction it
+            // does not have. Only "no connection" is separate, because that one is not
+            // about the code at all.
+            //
+            // It goes IN the supporting text, not next to the field: that is what
+            // associates it with the input for TalkBack, so "Anmeldecode, ungültig" is
+            // followed by what to do about it instead of by silence. Assertive because
+            // the worker is looking at the keyboard, not at the field.
+            supportingText = {
+                if (showError && reasonKey != null) {
+                    Text(
+                        stringResource(stringIdFor(reasonKey)),
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                    )
+                } else {
+                    Text(stringResource(R.string.signin_code_hint))
+                }
+            },
+            keyboardOptions = KeyboardOptions(
+                // Upper case because that is how the code was written down and read out,
+                // so what is on screen matches what is on the admin's screen. It is only
+                // cosmetic -- normalise() folds case anyway, so the shift key cannot
+                // cost anyone an attempt.
+                capitalization = KeyboardCapitalization.Characters,
+                // The one thing that MUST be off. Autocorrect on an 8-character
+                // non-word will happily replace it with a German noun mid-typing, and
+                // the worker would have no idea why a correct code keeps failing.
+                autoCorrectEnabled = false,
+                keyboardType = KeyboardType.Text,
+                imeAction = ImeAction.Go,
+            ),
+            keyboardActions = KeyboardActions(onGo = { submit() }),
+            // Plain text, NOT a password field: the whole point is that they can check
+            // what they typed against what was said to them.
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 56.dp),
+        )
+
+        Button(
+            onClick = submit,
+            enabled = !busy,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp), // touch target floor
+        ) {
+            Text(stringResource(if (busy) R.string.signin_submitting else R.string.signin_submit))
         }
 
-        if (reasonKey != null) {
-            Text(
-                stringResource(stringIdFor(reasonKey)),
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-            )
-        }
+        Text(
+            stringResource(R.string.signin_code_help),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         // Trap 2. Nothing in the app can fix a stopped-state install from inside the app,
         // so the only useful thing is to tell the person holding the phone.
@@ -154,63 +215,6 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-}
-
-/**
- * A DEAD END, deliberately. The only way forward is a human one: the worker reads the
- * address to their manager, who puts it in the worker record. With Apple's Hide My Email
- * that address is a per-app relay nobody could have registered in advance, which is
- * exactly why it has to be on screen and why there is no approval queue to build.
- */
-@Composable
-private fun IneligibleScreen(model: TimeSheetViewModel, email: String?) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-            .verticalScroll(rememberScrollState()) // taller than the screen at large font sizes
-            .padding(28.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Text(
-            stringResource(R.string.ineligible_title),
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.semantics { heading() },
-        )
-        Text(stringResource(R.string.ineligible_body))
-
-        if (email != null) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        stringResource(R.string.ineligible_email_label),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        email,
-                        style = MaterialTheme.typography.bodyLarge,
-                        // Read as one item and SPELLED OUT: "j7k2p" said as a word is
-                        // useless to someone dictating it down a phone line.
-                        modifier = Modifier.clearAndSetSemantics {
-                            contentDescription = spelledOut(email)
-                        },
-                    )
-                }
-            }
-        }
-
-        OutlinedButton(onClick = model::signOut, modifier = Modifier.heightIn(min = 48.dp)) {
-            Text(stringResource(R.string.sign_out))
-        }
-    }
-}
-
-/** Local part letter by letter, domain as words. A relay address is noise before the @. */
-private fun spelledOut(email: String): String {
-    val at = email.indexOf('@')
-    if (at < 0) return email.toCharArray().joinToString(" ")
-    return email.substring(0, at).toCharArray().joinToString(" ") + " at " + email.substring(at + 1)
 }
 
 // -------------------------------------------------------------------------------------

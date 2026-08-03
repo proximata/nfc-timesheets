@@ -426,8 +426,16 @@ a {
   white-space: nowrap;
 }
 
-.cell-actions > button + button {
+.cell-actions > button + button,
+.cell-actions > span + button {
   margin-left: var(--space-2);
+}
+
+/* The enrolment code column states in words what a worker's code is doing, above the two
+   buttons that change it. A sentence, not a badge: it has to be readable in greyscale and
+   by a screen reader, and "until 15:32" is not something a colour can say. */
+.cell-code {
+  margin: 0 0 var(--space-2);
 }
 
 /* --- Identifiers (slug, UUID, tag URI) ------------------------------------------------ */

@@ -19,19 +19,18 @@
 
     <!-- Launch / session -->
     <string name="loading_session">Anmeldung wird geprüft …</string>
-    <string name="signin_subtitle">Melden Sie sich an, um Ihre Stunden zu erfassen.</string>
 
-    <!-- Sign-in seam. The identity mechanism for Android is decision-26 and is still
-         PROPOSED. Until it is decided the app says so, plainly, instead of showing a
-         button that cannot work. -->
-    <string name="signin_unconfigured_title">Anmeldung ist noch nicht eingerichtet</string>
-    <string name="signin_unconfigured_body">Für diese Version wurde noch kein Anmeldeverfahren festgelegt. Ohne Anmeldung kann keine Schicht erfasst werden – der Server weiß sonst nicht, wer stempelt.</string>
-    <string name="signin_unconfigured_detail">Bitte wenden Sie sich an Ihre Verwaltung. Es fehlt nichts an Ihrem Telefon.</string>
-    <string name="signin_failed">Die Anmeldung ist fehlgeschlagen.</string>
+    <!-- Anmeldung mit Anmeldecode (decision-26). Der Code wird der Person am Telefon
+         vorgelesen, gilt eine Stunde und genau einmal. Kein Grund für eine Ablehnung
+         wird genannt – der Server unterscheidet falsch / abgelaufen / schon benutzt
+         bewusst nicht, und diese Texte dürfen es auch nicht. -->
+    <string name="signin_code_intro">Geben Sie den Anmeldecode ein, den Sie von Ihrer Verwaltung bekommen haben.</string>
+    <string name="signin_code_label">Anmeldecode</string>
+    <string name="signin_code_hint">8 Zeichen. Groß- und Kleinschreibung, Leerzeichen und Bindestriche sind egal.</string>
+    <string name="signin_code_help">Der Code gilt eine Stunde und kann nur einmal verwendet werden. Wenn er nicht mehr geht, fordern Sie bei Ihrer Verwaltung einen neuen an – das dauert einen Klick.</string>
+    <string name="signin_submit">Anmelden</string>
+    <string name="signin_submitting">Anmeldung läuft …</string>
 
-    <string name="ineligible_title">Sie stehen nicht auf der Mitarbeiterliste</string>
-    <string name="ineligible_body">Dieses Konto ist nicht als Mitarbeiter hinterlegt. Bitte die Verwaltung bitten, Sie einzutragen, und danach erneut anmelden.</string>
-    <string name="ineligible_email_label">Ihre Anmeldeadresse</string>
     <string name="sign_out">Abmelden</string>
 
     <!-- Tabs -->
@@ -86,7 +85,7 @@
     <string name="settings_signed_in_as">Angemeldet als</string>
     <string name="settings_name">Name</string>
     <string name="settings_admin_note">Stunden, Objekte und Lohnabrechnung verwaltet Ihre Verwaltung im Web.</string>
-    <string name="settings_sign_out_note">Bereits gesendete Schichten bleiben auf dem Server. Was noch nicht gesendet wurde, bleibt liegen, bis Sie sich wieder anmelden.</string>
+    <string name="settings_sign_out_note">Bereits gesendete Schichten bleiben auf dem Server. Was noch nicht gesendet wurde, bleibt liegen, bis Sie sich wieder anmelden. Zum erneuten Anmelden brauchen Sie einen neuen Anmeldecode von Ihrer Verwaltung – der alte gilt nicht mehr.</string>
 
     <!-- NFC. Jede dieser Meldungen steht für einen Weg, auf dem das Stempeln
          still aufhört zu funktionieren. -->
@@ -112,9 +111,13 @@
     <string name="err_unauthorized">Diese App-Version wurde vom Server abgelehnt. Bitte aktualisieren.</string>
     <string name="err_no_session">Sie wurden abgemeldet. Bitte erneut anmelden.</string>
     <string name="err_invalid_token">Die Anmeldung wurde nicht akzeptiert. Bitte erneut versuchen.</string>
-    <string name="err_not_eligible">Dieses Konto ist nicht als Mitarbeiter hinterlegt.</string>
+    <!-- Deckt SECHS Fälle ab, die der Server absichtlich nicht unterscheidet: unbekannt,
+         falsch getippt, abgelaufen, schon benutzt, zurückgezogen, Mitarbeiter inaktiv.
+         Der Text darf daher nichts über den Code behaupten, sondern nur sagen, was zu
+         tun ist. -->
+    <string name="err_invalid_code">Dieser Code wird nicht angenommen. Bitte noch einmal eingeben – wenn es dann immer noch nicht geht, bei Ihrer Verwaltung einen neuen Code anfordern.</string>
+    <string name="err_signin_offline">Keine Verbindung. Für die Anmeldung braucht das Telefon einmal Internet – bitte danach erneut versuchen. Der Code bleibt gültig.</string>
     <string name="err_too_many_attempts">Zu viele Versuche – bitte in Kürze erneut versuchen.</string>
-    <string name="err_sign_in_unconfigured">Für diese Version wurde noch kein Anmeldeverfahren festgelegt.</string>
     <string name="err_missing_location">Zu dieser Schicht fehlt das Objekt, sie kann nicht gesendet werden.</string>
     <string name="err_wrong_account">Diese Schicht wurde mit einem anderen Konto erfasst und kann nicht gesendet werden.</string>
     <string name="err_server">Serverproblem – wird erneut versucht.</string>

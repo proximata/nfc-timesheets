@@ -10,16 +10,14 @@
 <resources>
 
     <string name="loading_session">Checking your sign-in …</string>
-    <string name="signin_subtitle">Sign in to log your hours.</string>
 
-    <string name="signin_unconfigured_title">Sign-in is not set up yet</string>
-    <string name="signin_unconfigured_body">No sign-in method has been chosen for this build. Without one no shift can be logged — the server would not know who is clocking in.</string>
-    <string name="signin_unconfigured_detail">Please contact your admin. There is nothing wrong with your phone.</string>
-    <string name="signin_failed">Sign-in failed.</string>
+    <string name="signin_code_intro">Enter the sign-in code your admin gave you.</string>
+    <string name="signin_code_label">Sign-in code</string>
+    <string name="signin_code_hint">8 characters. Upper or lower case, spaces and dashes all fine.</string>
+    <string name="signin_code_help">The code lasts an hour and works once. If it stops working, ask your admin for a new one — it is one click for them.</string>
+    <string name="signin_submit">Sign in</string>
+    <string name="signin_submitting">Signing in …</string>
 
-    <string name="ineligible_title">You\'re not on the worker list</string>
-    <string name="ineligible_body">This account isn\'t registered as a worker. Ask your admin to add you, then sign in again.</string>
-    <string name="ineligible_email_label">Your sign-in address</string>
     <string name="sign_out">Sign out</string>
 
     <string name="tab_log">Log</string>
@@ -66,7 +64,7 @@
     <string name="settings_signed_in_as">Signed in as</string>
     <string name="settings_name">Name</string>
     <string name="settings_admin_note">Hours, locations and payroll are managed by your admin on the web.</string>
-    <string name="settings_sign_out_note">Shifts already sent stay on the server. Anything still waiting to send will be blocked until you sign back in.</string>
+    <string name="settings_sign_out_note">Shifts already sent stay on the server. Anything still waiting to send will be blocked until you sign back in. Signing back in needs a NEW code from your admin — the old one no longer works.</string>
 
     <string name="nfc_missing_title">This phone has no NFC</string>
     <string name="nfc_missing_body">Without NFC you can\'t clock in at the tags. Tell your admin.</string>
@@ -88,9 +86,9 @@
     <string name="err_unauthorized">This app version was rejected by the server. Update it.</string>
     <string name="err_no_session">You were signed out. Sign in again.</string>
     <string name="err_invalid_token">Sign-in was not accepted. Try again.</string>
-    <string name="err_not_eligible">This account isn\'t registered as a worker.</string>
+    <string name="err_invalid_code">That code wasn\'t accepted. Type it again — if it still doesn\'t work, ask your admin for a new one.</string>
+    <string name="err_signin_offline">No connection. Signing in needs the internet once — try again when you have it. Your code is still valid.</string>
     <string name="err_too_many_attempts">Too many attempts — try again shortly.</string>
-    <string name="err_sign_in_unconfigured">No sign-in method has been chosen for this build.</string>
     <string name="err_missing_location">This shift is missing its location and can\'t be sent.</string>
     <string name="err_wrong_account">This shift was logged by a different account and can\'t be sent.</string>
     <string name="err_server">Server trouble — will retry.</string>

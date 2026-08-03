@@ -14,13 +14,6 @@ data class ApiFailure(
     val status: Int,
     val code: String,
     val field: String? = null,
-    /**
-     * Only ever set by 403 not_eligible: the address the identity provider actually
-     * handed the server. With Apple's Hide My Email that is a relay address the admin
-     * could not have known in advance, so it has to survive the error path and reach
-     * the screen — the worker reads it to their manager.
-     */
-    val email: String? = null,
 ) : Exception("$status $code") {
 
     /**
@@ -55,9 +48,12 @@ data class ApiFailure(
             "unauthorized" -> "err_unauthorized"
             "no_session" -> "err_no_session"
             "invalid_token" -> "err_invalid_token"
-            "not_eligible" -> "err_not_eligible"
+            // decision-26. The server answers this to SIX different situations — unknown,
+            // malformed, expired, already redeemed, revoked, worker deactivated — with
+            // one byte-identical body, so that distinguishing them is impossible. One
+            // code in, one string out, and the string must not guess either.
+            "invalid_code" -> "err_invalid_code"
             "too_many_attempts" -> "err_too_many_attempts"
-            "sign_in_unconfigured" -> "err_sign_in_unconfigured"
             "missing_location" -> "err_missing_location"
             "wrong_account" -> "err_wrong_account"
             else -> if (status >= 500 || status == 0) "err_server" else "err_rejected"
