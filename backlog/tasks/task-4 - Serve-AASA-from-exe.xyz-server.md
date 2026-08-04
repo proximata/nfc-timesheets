@@ -1,10 +1,10 @@
 ---
 id: TASK-4
 title: Serve AASA from exe.xyz server
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-07-28 13:48'
-updated_date: '2026-07-28 14:45'
+updated_date: '2026-08-04 16:46'
 labels:
   - infra
   - ios
@@ -23,38 +23,34 @@ Server responds to GET /.well-known/apple-app-site-association with correct JSON
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 curl -I returns 200 + application/json for AASA
-- [ ] #2 AASA JSON contains correct appIDs with team 6Y842FE8Q4
-- [ ] #3 /t returns HTML landing page
-- [ ] #4 iOS entitlements file updated
+- [x] #1 curl -I returns 200 + application/json for AASA
+- [x] #2 AASA JSON contains correct appIDs with team 6Y842FE8Q4
+- [x] #3 /t returns HTML landing page
+- [x] #4 iOS entitlements file updated
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-SCOPE ADDITION (decision-16, Android research): serve BOTH association files from this server.
+TRIAGE 2026-08-04 — DONE, verified by curl against production.
 
-1. /.well-known/apple-app-site-association
-   - Content-Type: application/json  (NOT application/pkcs7-mime, NOT text/plain)
-   - NO redirect. NO .json extension on the path.
-   - appID: 6Y842FE8Q4.io.github.qwadratic.NFCTimeSheets
-   - paths: ["/t*"]   (decision confirmed /t, NOT /hello)
+AC1 + AC2:
+  $ curl -sSi https://timesheets.exe.xyz/.well-known/apple-app-site-association
+  HTTP/2 200 ; content-type: application/json ; no 3xx hop
+  {"applinks":{"details":[{"appID":"6Y842FE8Q4.io.github.qwadratic.NFCTimeSheets","paths":["/t*"]}]}}
 
-2. /.well-known/assetlinks.json   <- NEW, for future Android (research/android-path.md)
-   - Content-Type: application/json, no redirect
-   - ~5 lines while already in this file. Skipping it means reopening the worker later.
-   - package_name io.github.qwadratic.NFCTimeSheets, sha256_cert_fingerprints [] until an
-     Android signing key exists - ship the file with an empty fingerprint array now.
+Scope addition also live:
+  $ curl -sSi https://timesheets.exe.xyz/.well-known/assetlinks.json
+  HTTP/2 200 ; content-type: application/json
+  package_name io.github.qwadratic.NFCTimeSheets, sha256_cert_fingerprints [] (empty on purpose
+  until an Android signing key exists — see the Play release task).
 
-3. GET /t  -> landing page. Only ever hit when the app is NOT installed (iOS intercepts
-   otherwise). Keep it a static page telling the worker to install the app.
+AC3: `GET /t?l=<uuid>` -> 200 text/html, the install-the-app landing page, no JS, no external
+assets.
 
-VERIFY (must pass before TASK-6 writes any tag):
-  curl -sI https://timesheets.exe.xyz/.well-known/apple-app-site-association | grep -i content-type
-  curl -sI https://timesheets.exe.xyz/.well-known/assetlinks.json | grep -i content-type
-  # both must be application/json, both must be HTTP 200 with no 3xx hop
+AC4: NFCTimeSheets/NFCTimeSheets/NFCTimeSheets.entitlements carries `applinks:timesheets.exe.xyz`
+as a checked-in literal, deliberately not templated (decision-24).
 
-decision-4 CONFIRMED unchanged by the research cycle - the brief only wanted to move AASA to
-Cloudflare because it assumed a company-owned domain, which decision-15 declined. Cloudflare
-Workers cannot serve exe.xyz (not our zone). See backlog/docs/BLOCKER-aasa-host-vs-cloudflare.md
+Both files are now GENERATED from ops/branding.json by ops/gen-wellknown.mjs and gated by
+`node ops/check-branding.mjs` (ran it: `check-branding: OK`, exit 0).
 <!-- SECTION:NOTES:END -->

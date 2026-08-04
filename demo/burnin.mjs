@@ -16,6 +16,14 @@
 //      goes negative, ffmpeg exits 0, and the iOS clip shipped a first cut reading
 //      "...expiry and nonce for rea". So the width is MEASURED and the size brought down
 //      until it fits — see fitFontSize.
+//   4. The caption window is HALF-OPEN, `[at, until)`. ffmpeg's `between(t,a,b)` is
+//      inclusive at BOTH ends, and one caption's `until` IS the next one's `at`, so a
+//      frame landing exactly on a boundary satisfied both and drew both strings on top of
+//      each other. It shipped: admin-walkthrough at t=103.0s and both-devices at
+//      t=26.083s were each one frame of illegible overprint. Only frames whose time hits
+//      the boundary exactly are affected, which is why it survived review - it is a
+//      single frame, invisible at speed and obvious when tiled. demo/check-captions.mjs
+//      is the regression test.
 //
 // An apostrophe cannot be escaped inside a single-quoted `text=` at all — `\'` closes the
 // string and the rest of the caption is parsed as a filter name — so it is replaced with
@@ -98,12 +106,19 @@ export function captionFilter(captions, total, { width, fps = 12, fontSize = 20,
     const until = captions[i + 1]?.at ?? total;
     const size = fitFontSize(text, fontSize, fits);
     if (size < fontSize) console.log(`  caption shrunk ${fontSize}->${size}pt to fit: ${text}`);
+    // Half-open: `gte(t,at) * lt(t,until)`, never `between`, which includes both ends and
+    // therefore double-draws the frame that lands on a boundary (note 4 above). The last
+    // caption has no successor to collide with and simply runs to the end of the clip.
+    const isLast = i === captions.length - 1;
+    const enable = isLast
+      ? `gte(t,${at.toFixed(3)})`
+      : `gte(t,${at.toFixed(3)})*lt(t,${until.toFixed(3)})`;
     return [
       `drawtext=fontfile=${FONT}:expansion=none:`,
       `text='${esc(text)}':`,
       `fontcolor=white:fontsize=${size}:`,
       `x=(w-text_w)/2:y=h-${Math.round(bottom / 2 + fontSize / 2)}:`,
-      `enable='between(t,${at.toFixed(2)},${until.toFixed(2)})'`,
+      `enable='${enable}'`,
     ].join("");
   });
 

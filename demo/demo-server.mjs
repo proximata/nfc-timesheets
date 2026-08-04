@@ -25,6 +25,7 @@
 // Deps: whatever server/ already has. No new ones (decision-16, decision-23).
 import { createHash, generateKeyPairSync, sign as rsaSign } from "node:crypto";
 import { writeFileSync } from "node:fs";
+import { assertDemoDatabase } from "./db-guard.mjs";
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -39,23 +40,10 @@ const refuse = (why) => {
 
 // ---- the guard ---------------------------------------------------------------------
 // Same shape as demo/seed.sql and demo/make-admin.mjs: the database has to be called
-// nfc_demo, spelled out, or nothing happens at all.
-const databaseUrl = process.env.DATABASE_URL ?? "";
-if (databaseUrl === "") refuse("DATABASE_URL is not set — refusing to guess.");
-
-let dbUrl;
-try {
-  dbUrl = new URL(databaseUrl);
-} catch {
-  refuse(`DATABASE_URL "${databaseUrl}" is not a URL — refusing.`);
-}
-const dbName = decodeURIComponent(dbUrl.pathname.replace(/^\//, ""));
-if (dbName !== "nfc_demo") {
-  refuse(`refusing database "${dbName}" — this server forges Apple tokens, so nfc_demo only.`);
-}
-if (!LOOPBACK.includes(dbUrl.hostname)) {
-  refuse(`refusing a database on "${dbUrl.hostname}" — loopback only.`);
-}
+// nfc_demo, spelled out, or nothing happens at all. demo/db-guard.mjs also covers the
+// two ways the DRIVER's host can differ from the URL's host (a `?host=` query parameter
+// and $PGHOST), both of which reached the live database before it existed.
+const dbName = assertDemoDatabase(process.env.DATABASE_URL ?? "", refuse);
 
 const host = arg("host", "127.0.0.1");
 if (!LOOPBACK.includes(host)) {

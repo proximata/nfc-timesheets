@@ -11,6 +11,46 @@ conclude something is broken.
 
 ---
 
+## Re-record: the exact command for every artefact
+
+One row per file in `docs/media/`. Every command assumes §1 has been done once on this
+machine and is run **from the repo root**. `«stack»` is the two commands in §1 that start
+the demo API — reproduced here so no row is a fragment:
+
+```sh
+# «stack» — needed by every row except demo-write-tag.mp4
+psql -q -d nfc_demo -f demo/seed.sql
+DATABASE_URL=postgres:///nfc_demo node demo/make-admin.mjs
+cd server && DATABASE_URL=postgres:///nfc_demo \
+  APP_KEY=tsk_9880d49f83794967790deb8a2c8f3dd46633cc78104c2f65 \
+  PORT=8082 PUBLIC_DIR=../web/out node server.js &
+cd ..
+```
+
+| Artefact | Exact command | Needs | Time |
+|---|---|---|---|
+| `admin-walkthrough.mp4` + the 11 `admin-*.png` | «stack» then `node demo/record-admin.mjs` | Chrome | ~3 min |
+| `ios-journey.mp4` + `ios-signin/shift/badge/closed.png` | «stack» then `sh demo/ios-setup.sh` then `node demo/record-ios.mjs` | Xcode, booted simulator | ~2 min |
+| `android-journey.mp4` + `android-signin/shift/notification/closed.png` | «stack» then `node demo/tls-front.mjs &` then `sh demo/android-setup.sh` then `node demo/record-android.mjs` | `JAVA_HOME`, `ANDROID_HOME`, running emulator | ~3 min |
+| `both-devices.mp4` + `before-ios-shift.png` | «stack» then `node demo/record-ios.mjs && node demo/record-android.mjs && node demo/compose-devices.mjs` | both of the above | ~6 min |
+| `before-android-shift.png` | *not re-recordable* — the 3 August build, kept as a historical "before". Re-shooting it against today's build would produce an "after" and destroy the comparison. | — | — |
+| `demo-write-tag.mp4` | *not re-recordable by script* — a real phone writing a real tag with NFC Tools, filmed by hand. Re-shoot only with a redaction pass over the URL field. | a real phone + blank tag | — |
+
+**`compose-devices.mjs` re-cuts without re-recording.** It reads `/tmp/ts-demo/ios-raw.mov`,
+`android-raw.mp4` and the two `*-stages.json`. If those survive from the last run — they are
+not deleted on exit — a caption or layout fix costs ~16 s and no device time. Only if they
+are gone do you need the two recorders again.
+
+The Android toolchain wants both of these exported, and `~/Library/Android/sdk` is *not* the
+right answer on this machine:
+
+```sh
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+```
+
+---
+
 ## The rules these scripts enforce, so you do not have to remember them
 
 - **Never the live server.** `record-admin.mjs`, `record-android.mjs` and `tls-front.mjs`
@@ -463,17 +503,36 @@ two recorders refuse to.
 ## Check
 
 ```sh
-sh demo/check-guards.sh
+sh demo/check-guards.sh      # 16 checks, ~3 s
+node demo/check-captions.mjs # caption band, ~1 s
 ```
 
-Twelve checks, about two seconds. Runs every refusal for real — the seed and the admin-maker
-against a throwaway database
-that is *not* `nfc_demo`, and the two recorders plus the TLS front against
-`https://timesheets.exe.xyz`. A guard nobody exercises is a comment. Skips with exit 0 when
-no Postgres is reachable, like every other check in this repo.
+`check-guards.sh` runs every refusal for real — the seed and the admin-maker against a
+throwaway database that is *not* `nfc_demo`, and the two recorders plus the TLS front
+against `https://timesheets.exe.xyz`. A guard nobody exercises is a comment. Skips with
+exit 0 when no Postgres is reachable, like every other check in this repo.
 
 It was falsified before being trusted: with the seed's guard replaced by `IF false`, it
 reports `2 FAIL` — the truncation *and* the rows written after it.
+
+**Four of the sixteen exist because the URL host is not the only way to choose a server.**
+`postgres:///nfc_demo?host=timesheets.exe.xyz` and a bare `PGHOST=timesheets.exe.xyz` both
+reached the live host past a guard that only inspected the URL's hostname: libpq honours a
+`host` query parameter *over* the URL host, and `pg` falls back to `$PGHOST` when the URL
+names none. `demo/db-guard.mjs` is now the single place that decides, and it checks the
+query parameters and the environment as well as the URL.
+
+Those four cases assert on the **wording** of the refusal, not merely a non-zero exit. With
+the guard removed, `make-admin.mjs` still exited non-zero — because it dialled the live host
+and the connection failed. A test that reads exit codes alone passed that, for the wrong
+reason, and would have kept passing while the hole was open.
+
+`check-captions.mjs` renders six seconds of grey through the real `captionFilter` with the
+caption boundaries deliberately landed on frame times, then counts ink in the band: more
+than one caption on any frame is a failure. It exists because `between(t,a,b)` in ffmpeg is
+inclusive at **both** ends, so a caption whose `until` equalled the next caption's `at` drew
+both on the boundary frame — two overprinted lines, once in `both-devices.mp4` and once in
+`admin-walkthrough.mp4`. `burnin.mjs` now emits half-open `gte(t,at)*lt(t,until)`.
 
 ---
 
@@ -481,8 +540,9 @@ reports `2 FAIL` — the truncation *and* the rows written after it.
 
 | File | What |
 |---|---|
-| `demo/seed.sql` | invented demo data; refuses any database not named `nfc_demo` |
-| `demo/make-admin.mjs` | the published demo login; same guard |
+| `demo/seed.sql` | invented demo data; refuses any database not named `nfc_demo`, and any server that is not loopback |
+| `demo/db-guard.mjs` | the one place that decides whether a `DATABASE_URL` is the local demo DB — name, `?host=`/`?hostaddr=`, URL host, and `$PGHOST`/`$PGHOSTADDR` |
+| `demo/make-admin.mjs` | the published demo login; same guard, applied before the first query |
 | `demo/cdp.mjs` | Chrome DevTools Protocol client, no dependencies |
 | `demo/png.mjs` | one screenshot writer (128-colour palette, halves the file) |
 | `demo/burnin.mjs` | the caption band, shared by all four recorders; measures each line and shrinks it rather than letting `drawtext` clip it |
@@ -495,4 +555,5 @@ reports `2 FAIL` — the truncation *and* the rows written after it.
 | `demo/ios-setup.sh` | builds with `TS_TAG_HOST` overridden, trusts the demo CA, proves Release is clean |
 | `demo/record-ios.mjs` | the iOS journey, with captions burned in |
 | `demo/compose-devices.mjs` | the two clips side by side, plus the before / after cards |
-| `demo/check-guards.sh` | proves every refusal still refuses |
+| `demo/check-guards.sh` | proves every refusal still refuses — 16 cases, matched on wording |
+| `demo/check-captions.mjs` | proves no frame carries two captions |

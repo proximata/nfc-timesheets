@@ -34,6 +34,17 @@ BEGIN
       'demo/seed.sql refuses to run on database "%": it TRUNCATEs. Expected nfc_demo.',
       current_database();
   END IF;
+  -- ...and on THIS machine. The name alone is not enough: psql honours a `host=` query
+  -- parameter and $PGHOST, so `postgres:///nfc_demo?host=<live>` reaches a REMOTE server
+  -- and every check above still passes if a database there is also called nfc_demo.
+  -- inet_server_addr() is answered by the server, so it cannot be talked out of it:
+  -- NULL means a unix socket (necessarily this machine), otherwise it must be loopback.
+  IF inet_server_addr() IS NOT NULL AND NOT (inet_server_addr() <<= inet '127.0.0.0/8'
+                                         OR inet_server_addr() = inet '::1') THEN
+    RAISE EXCEPTION
+      'demo/seed.sql refuses to run on REMOTE server %: it TRUNCATEs. Loopback only.',
+      inet_server_addr();
+  END IF;
 END
 $$;
 

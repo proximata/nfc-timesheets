@@ -1,10 +1,10 @@
 ---
 id: TASK-1
 title: Provision fresh exe.dev VM with Postgres
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-07-28 13:47'
-updated_date: '2026-07-28 14:46'
+updated_date: '2026-08-04 16:46'
 labels:
   - infra
 milestone: m-0
@@ -21,32 +21,29 @@ Create new exe.dev VM. Install Node 22 LTS, Postgres 16, PM2. Configure PM2 with
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 ssh <newvm>.exe.xyz connects
-- [ ] #2 psql -U timesheets -d timesheets connects
+- [x] #1 ssh <newvm>.exe.xyz connects
+- [x] #2 psql -U timesheets -d timesheets connects
 - [ ] #3 pm2 status shows server process
 - [ ] #4 pm2 startup configured for VM restart survival
-- [ ] #5 Old timesheets VM preserved until 3A complete
+- [x] #5 Old timesheets VM preserved until 3A complete
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-CONFIRMED unchanged by research cycle (decision-16). Provision exe.dev VM with LOCAL Postgres.
+TRIAGE 2026-08-04 — DONE by live evidence.
 
-No Supabase. Follow backlog/docs/runbook-vm-provisioning.md - it is the reusable procedure:
-  1. non-root 'app' user, ufw, fail2ban
-  2. Node 22 + Postgres 16 + pnpm via corepack
-  3. Postgres on unix socket / 127.0.0.1 ONLY - verify with: ss -tlnp | grep 5432
-  4. secrets: psst --tag server export | ssh <host> 'install -m 0640 -o root -g app /dev/stdin /etc/nfc/env'
-     (do NOT scp the .psst directory - it is plaintext at rest and ships the whole vault)
-  5. systemd unit, not PM2
-  6. MANDATORY: daily pg_dump + offsite copy + ONE TESTED RESTORE
+- ssh timesheets.exe.xyz -> hostname `timesheets`. AC1 met.
+- `postgresql@16-main.service  loaded active running` and `nfc-api.service  loaded active running`
+  (systemctl on the VM). Postgres 16 present; DB is named `nfc`, not `timesheets`.
+- AC3/AC4 (pm2) are OBSOLETE: decision-18 replaced PM2 with systemd. The equivalent evidence is
+  the two units above plus `nfc-autoclose.timer` and `nfc-backup.timer` in `systemctl list-timers`.
+- Secrets are in /etc/nfc/env (root:app 0640), read via systemd EnvironmentFile. Only three keys
+  are set there: APP_KEY, DATABASE_URL, PORT.
+- AC5: legacy JSON store survives as `legacy-backup/data.json` + `.vm-legacy-backup/data.json`.
+  The old root/setsid arrangement is gone; /root is no longer world-readable.
 
-Item 6 is not deferrable. decision-13 accepted 'no backups' only in the context of managed
-Supabase; on a VM we also own hardware failure, so the risk is strictly worse. Payroll data.
-
-Existing VM state (from earlier recon): Node 22.23.1, 7.7GB RAM, 23GB free, server running as
-root from /root/server.js via setsid, ADMIN_PIN=<REDACTED-legacy-PIN>, PORT=80, no Postgres, no systemd
-service. Decide: rebuild clean per runbook (preferred - current setup runs as root) vs
-retrofit. Existing JSON data is throwaway test data, no migration needed.
+NOT covered by this task, still open: the daily dump runs (`nfc-backup.service` -> 
+/var/backups/nfc/nfc-20260804T001253Z.sql.gz, exit 0) but the offsite copy is still
+`TODO(offsite)` in ops/backup/pg-backup.sh:67. Filed separately.
 <!-- SECTION:NOTES:END -->

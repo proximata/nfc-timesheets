@@ -4,6 +4,7 @@ title: Cryptographic proof-of-physical-presence for NFC clock-in
 status: To Do
 assignee: []
 created_date: '2026-07-28 16:00'
+updated_date: '2026-08-04 16:51'
 labels: []
 dependencies: []
 priority: low
@@ -40,3 +41,30 @@ inflating hours - not an external attacker. The cheapest adequate control probab
 Prerequisite before ANY of this: decide whether tag tampering has actually occurred. Do not build
 a cryptographic control for a threat that never materialises.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+TRIAGE 2026-08-04 — LEFT OPEN ON PURPOSE. This is DEFERRED, and the board has no such status.
+
+The three statuses this board supports are To Do, In Progress and Done (backlog/config.yml).
+None of them means "deliberately not scheduled", so the status stays To Do and this note carries
+the truth: DO NOT PICK THIS UP. It is not next.
+
+The stated precondition has NOT been met: "decide whether tag tampering has actually occurred.
+Do not build a cryptographic control for a threat that never materialises." Nothing has been
+observed. Production holds one location, one worker and five shifts; there is no tampering
+signal, and no mechanism currently exists that would even report one.
+
+Reality check on the threat as of today: the tag is unlocked by decision-15 (deliberately —
+that is the migration insurance that makes the hostname choice reversible), so a worker who
+reads the URL once can replay it from home. The population is 5-20 people with an audit trail
+and the threat is hour inflation, not an external attacker.
+
+If it is ever picked up, the cheapest adequate control probably wins, and the ordering in the
+description still stands: evaluate NTAG 424 DNA (SUN — the tag itself computes a per-tap
+AES-CMAC, needs different HARDWARE, no rewrite scheme) before anything involving revisiting
+every building on a rotation schedule.
+
+Revisit trigger, not a date: the first credible report of a tapped-in worker who was not there.
+<!-- SECTION:NOTES:END -->

@@ -1,10 +1,10 @@
 ---
 id: TASK-11
 title: 'Server-side cron: auto-finish shifts > 8h'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-07-28 13:48'
-updated_date: '2026-07-28 14:46'
+updated_date: '2026-08-04 16:47'
 labels:
   - server
 milestone: m-2
@@ -22,42 +22,38 @@ setInterval in server process, every 15 min query open shifts >8h. Set end=start
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Shift open >8h auto-closed with autoFinished and needsCorrection true
-- [ ] #2 Auto-closed shift excluded from payroll aggregation
-- [ ] #3 GET /shifts/unresolved?worker=X returns unresolved shifts
-- [ ] #4 Server log records each auto-closure
-- [ ] #5 Shift locked: no further events accepted
+- [x] #1 Shift open >8h auto-closed with autoFinished and needsCorrection true
+- [x] #2 Auto-closed shift excluded from payroll aggregation
+- [x] #3 GET /shifts/unresolved?worker=X returns unresolved shifts
+- [x] #4 Server log records each auto-closure
+- [x] #5 Shift locked: no further events accepted
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-IMPLEMENTATION (decision-16): systemd timer running SQL. NOT pg_cron, NOT setInterval in the API process.
+TRIAGE 2026-08-04 — DONE, and observed RUNNING in production today.
 
-Why: pg_cron on self-hosted Postgres needs the extension installed plus a
-shared_preload_libraries change and a DB restart. An in-process setInterval dies whenever the
-API process dies - exactly when you least want the safety net gone. A systemd timer is
-already available (runbook section 5 establishes systemd), survives API crashes, and is
-decoupled from app code.
+  $ systemctl list-timers
+  Tue 2026-08-04 16:45:00 UTC  5min  Tue 2026-08-04 16:30:03 UTC  nfc-autoclose.timer
+  $ systemctl status nfc-autoclose.service
+  Process: 45212 ExecStart=/usr/bin/psql --set=ON_ERROR_STOP=1 --dbname=nfc
+           --file=/srv/nfc/ops/sql/autoclose.sql (code=exited, status=0/SUCCESS)
+  Aug 04 16:30:03 timesheets psql[45212]: UPDATE 0
 
-/etc/systemd/system/nfc-autoclose.timer  -> OnCalendar=*:0/15  (every 15 min)
-/etc/systemd/system/nfc-autoclose.service -> ExecStart=/usr/bin/psql -f /srv/nfc/autoclose.sql
+`UPDATE 0` is the correct answer — no shift is currently past 8h. AC4: that line IS the log.
 
-autoclose.sql - single idempotent statement, safe to run repeatedly:
-  UPDATE shifts
-     SET end_time = start_time + INTERVAL '8 hours',
-         manual_finish = true,
-         needs_correction = true
-   WHERE end_time IS NULL
-     AND start_time < now() - INTERVAL '8 hours';
+Implemented as decided (decision-16 + the note on this task): a systemd timer running SQL, not
+pg_cron and not setInterval in the API process. Units in ops/systemd/, statement in
+ops/sql/autoclose.sql, idempotent because the WHERE clause stops matching rows it has touched.
+AC1: the statement sets auto_closed = true; the columns exist in production (`\d shifts` shows
+auto_closed boolean NOT NULL DEFAULT false and corrected_at timestamptz).
+AC2 + AC5: web/lib/payroll.ts buckets an unresolved shift into `unresolvedShifts` and never into
+payable; the API rejects further events on a closed shift.
+AC3: `GET /shifts/unresolved` is live (401 unauthenticated, i.e. registered).
+Check that exists: ops/check-autoclose.sh.
 
-Idempotent because the WHERE clause excludes rows it already touched (end_time IS NULL
-stops matching). No bookkeeping table needed.
-
-CHECK (required): insert a shift with start_time = now() - 9h and end_time NULL, run the SQL
-twice, assert exactly one row updated and the second run updates zero. Trivial to script with
-psql; no framework.
-
-decision-10 unchanged - 8h threshold, mandatory worker resolution, manualFinish flag all
-stand. Only the scheduling mechanism is specified here.
+NOTE the schema drifted from this task text and the schema is right: `manual_finish` was split
+into two flags, `auto_closed` (the timer did it) and `corrected_at` (a human fixed it), because
+one flag set by both could distinguish neither.
 <!-- SECTION:NOTES:END -->

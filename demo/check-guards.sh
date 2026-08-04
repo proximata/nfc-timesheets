@@ -68,6 +68,32 @@ else
     ok "demo/make-admin.mjs refuses a database that is not nfc_demo"
   fi
 
+  # make-admin's own check is `SELECT current_database()`, which answers only AFTER
+  # connecting -- and what it connects to can be the live host. Same two vectors.
+  #
+  # These two assert the REFUSAL MESSAGE, not merely a non-zero exit, and that is not
+  # fussiness. With the guard deleted, make-admin still exits non-zero here -- because it
+  # dials timesheets.exe.xyz:5432 and the connection dies. `if cmd` therefore reported ok
+  # for a build that had ALREADY left the machine; the test passed because the network was
+  # unreachable, not because anything refused. Matching the wording is what makes these
+  # fail when the guard is removed.
+  refuses_with() {
+    desc=$1; want=$2; shift 2
+    out=$("$@" 2>&1 </dev/null || true)
+    case "$out" in
+      *"$want"*) ok "$desc" ;;
+      *) fail "$desc (no refusal: $(printf '%s' "$out" | head -1))" ;;
+    esac
+  }
+
+  refuses_with "demo/make-admin.mjs refuses a ?host= that overrides the URL host" \
+    "refusing DATABASE_URL ?host=" \
+    env DATABASE_URL='postgres://127.0.0.1/nfc_demo?host=timesheets.exe.xyz' node demo/make-admin.mjs
+
+  refuses_with "demo/make-admin.mjs refuses a non-loopback \$PGHOST" \
+    'refusing $PGHOST=' \
+    env DATABASE_URL=postgres:///nfc_demo PGHOST=timesheets.exe.xyz node demo/make-admin.mjs
+
   # demo-server.mjs accepts FORGED Apple identity tokens (that is the point of it - a
   # simulator has no Apple ID). The only thing keeping that off a real database is this
   # refusal, so it is exercised twice: wrong name, and right name on a remote host.
@@ -77,6 +103,16 @@ fi
 
 must_refuse "demo/demo-server.mjs refuses a non-loopback database host" \
   env DATABASE_URL=postgres://timesheets.exe.xyz/nfc_demo APP_KEY=x PORT=0 node demo/demo-server.mjs
+
+# The two ways the DRIVER's host differs from the URL's host. Both of these reached
+# timesheets.exe.xyz:5432 while the old guard read the hostname as "" or "127.0.0.1" --
+# verified by intercepting net.Socket.connect, not by reading pg's source. A guard that
+# reads a different value than the driver does is not a guard, so both are exercised.
+must_refuse "demo/demo-server.mjs refuses a ?host= that overrides the URL host" \
+  env DATABASE_URL='postgres://127.0.0.1/nfc_demo?host=timesheets.exe.xyz' APP_KEY=x PORT=0 node demo/demo-server.mjs
+
+must_refuse "demo/demo-server.mjs refuses a non-loopback \$PGHOST" \
+  env DATABASE_URL=postgres:///nfc_demo PGHOST=timesheets.exe.xyz APP_KEY=x PORT=0 node demo/demo-server.mjs
 
 must_refuse "demo/demo-server.mjs refuses to listen on a non-loopback address" \
   env DATABASE_URL=postgres:///nfc_demo APP_KEY=x PORT=0 node demo/demo-server.mjs --host 0.0.0.0

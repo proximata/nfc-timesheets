@@ -1,10 +1,10 @@
 ---
 id: TASK-3
 title: Rewrite server from JSON store to Postgres
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-07-28 13:48'
-updated_date: '2026-07-28 14:46'
+updated_date: '2026-08-04 16:46'
 labels:
   - server
 milestone: m-0
@@ -22,39 +22,33 @@ Replace data.json with Postgres queries. Same REST API contract. Use pg (node-po
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 All existing API endpoints return same shape responses
-- [ ] #2 iOS app works without changes against new server
-- [ ] #3 data.json no longer read or written
-- [ ] #4 Concurrent POST /shifts without data loss
-- [ ] #5 PM2 restarts dont lose data
+- [x] #1 All existing API endpoints return same shape responses
+- [x] #2 iOS app works without changes against new server
+- [x] #3 data.json no longer read or written
+- [x] #4 Concurrent POST /shifts without data loss
+- [x] #5 PM2 restarts dont lose data
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-CONFIRMED Node + local Postgres (decision-16). Supabase/Hono deferred, not rejected.
+TRIAGE 2026-08-04 — DONE, verified against the live API.
 
-KEEP THE API FRAMEWORK-LIGHT. This is the one design constraint carried over from the research
-cycle: the migration path to Supabase/Edge later is cheap only if route handlers stay thin and
-portable. Plain node:http or a minimal router; no heavy framework coupling, no ORM lock-in.
-Use node-postgres (pg) with plain SQL.
+- Live: `GET https://timesheets.exe.xyz/health` -> 200 `{"ok":true}`.
+- Routes exist and enforce auth (401, not 404): /roster, /shifts/open, /admin/data, /admin/pl,
+  /admin/analytics. A nonexistent path returns 404 `{"error":"not_found"}`, so 401 proves the
+  route is registered. AC1.
+- AC2: five shifts in the production `shifts` table were POSTed by the phone
+  (client_uuid NOT NULL on all five, 2026-07-30).
+- AC3: no data.json is read or written. The only copies in the tree are the gitignored
+  `legacy-backup/data.json` and `.vm-legacy-backup/data.json`.
+- AC4: `shifts_one_open_per_worker_idx` is a UNIQUE partial index WHERE end_time IS NULL, so
+  concurrent opens collide in the DB rather than racing in Node. `client_uuid` carries a UNIQUE
+  constraint = phone-side idempotency key.
+- AC5: `systemctl restart nfc-api` is the deploy step (ops/deploy.sh 6/7); state is in Postgres.
 
-Endpoints (unchanged from original scope):
-  GET  /roster                  workers + locations
-  POST /shifts                  receive completed shift
-  GET  /shifts/unresolved       shifts needing worker correction (decision-10 flow)
-  GET  /admin/data              aggregated admin view
-  POST|DELETE /admin/workers    worker CRUD + hourly rates
-  POST|DELETE /admin/locations  location CRUD
-Auth: X-App-Key header app-level, X-Admin-Pin for admin ops.
-
-Same process also serves AASA + assetlinks + /t (TASK-4) and the static admin export
-(TASK-14). One box, one deploy.
-
-Read secrets from /etc/nfc/env via systemd EnvironmentFile. Never hardcode. The current
-server hardcodes ADMIN_PIN - do not carry that over.
-
-Validate all input at the trust boundary: shift timestamps, worker IDs, location IDs from
-NDEF URIs. Tags are UNLOCKED per decision-15, so a tag's location ID is attacker-controllable
-in principle - validate it against the locations table, never trust it blind.
+Framework-light constraint held: `pg` + `@sentry/node` and nothing else (server/package.json),
+plain node:http, hand-rolled route table in routes/*.js. decision-16 + decision-23 respected.
+Auth changed as decided: X-Admin-Pin is gone (decision-20), admin uses an httpOnly Secure
+SameSite=Strict session cookie (server/lib/auth.js:175).
 <!-- SECTION:NOTES:END -->

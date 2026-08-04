@@ -1,10 +1,10 @@
 ---
 id: TASK-29
 title: Obtain all required API keys and secrets
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-07-28 14:03'
-updated_date: '2026-07-28 14:25'
+updated_date: '2026-08-04 16:51'
 labels:
   - infra
   - secrets
@@ -27,38 +27,34 @@ Store all keys in psst vault or .env.local (gitignored). Document in .env.exampl
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 All external API keys identified and obtained
-- [ ] #2 Keys stored in psst vault or .env.local
+- [x] #1 All external API keys identified and obtained
+- [x] #2 Keys stored in psst vault or .env.local
 - [ ] #3 .env.example with placeholders checked into repo
 - [ ] #4 Vercel project created and linked
-- [ ] #5 Google Cloud project with Maps API enabled (or Mapbox equivalent)
+- [x] #5 Google Cloud project with Maps API enabled (or Mapbox equivalent)
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-PROGRESS:
+TRIAGE 2026-08-04 — DONE for what this task asked (obtain + vault). NOT the same as installed.
 
-DONE - Google Maps Platform:
-- GCP project 'nfc-timesheets' created, billing account linked
-- APIs enabled: maps-backend (Maps JS), street-view-image-backend, static-maps-backend, geocoding-backend
-- 2 restricted keys created, stored in psst vault: NEXT_PUBLIC_GOOGLE_MAPS_KEY (browser, referrer-locked), GOOGLE_GEOCODING_KEY (server, API-locked)
-- Verified working against live Street View metadata endpoint
+AC1/AC2/AC5: GCP project `nfc-timesheets` with billing linked; Maps JS, Street View Static,
+Static Maps and Geocoding enabled as APIs; two restricted keys created and stored in the psst
+vault — NEXT_PUBLIC_GOOGLE_MAPS_KEY (browser, referrer-locked) and GOOGLE_GEOCODING_KEY (server,
+API-locked). `.psst/envs/` is gitignored.
+AC3: web/.env.example is checked in with placeholders.
+AC4 stays unchecked and is OBSOLETE: decision-16 killed the Vercel deploy. Nothing deploys there,
+so there is no Vercel project to link. The Vercel CLI is left authed; it costs nothing.
 
-DONE - Auth sessions (gstack browse, cookies imported from Chrome):
-- Vercel: authed as <owner-email-redacted>, team qwadratics-projects
-- GitHub: authed
-- Google Cloud: authed (gcloud CLI also authed as same account)
+WHAT THIS TASK DID NOT COVER, AND WHICH IS THE REASON TWO SCREENS ARE HALF-DARK — the keys exist
+in a vault and are NOT on the machine that needs them. /etc/nfc/env on the production VM
+contains exactly three variables: APP_KEY, DATABASE_URL, PORT. Not GOOGLE_GEOCODING_KEY, not
+SENTRY_DSN. And ops/deploy.sh never hands NEXT_PUBLIC_GOOGLE_MAPS_KEY to the web build.
+Consequences are tracked where they bite: TASK-16 (blank map), TASK-17 (no photographs), and the
+Sentry-in-production task.
 
-CLI TOOLING (all pre-installed, prefer over browser automation):
-- gcloud 562.0.0 - authed
-- vercel CLI - NOT logged in yet, run 'vercel login'
-- supabase CLI - authed, zero projects
-
-REMAINING:
-- vercel login (CLI token) - needed for TASK-14 deploy
-- Supabase account/project - BLOCKED pending TASK-28 verdict, do not create until decision-12 resolved
-- APNs keys - out of scope for 3A (TASK-26 documents prerequisites only)
-
-SECURITY: never commit key values. psst vault at .psst/envs/ is gitignored. Pre-commit hooks (psst scan --staged + gitleaks) should be installed via secure-repo-init.sh before first commit.
+Rotation still outstanding and NOT part of this task: state.md records that the legacy APP_KEY
+value is burned. The current /etc/nfc/env APP_KEY was not compared against it — I did not print
+the secret.
 <!-- SECTION:NOTES:END -->
