@@ -4,8 +4,10 @@ Every clip and screenshot in `docs/media/` is produced by the scripts in `demo/`
 **local** database seeded with invented data. Run the commands below and you get the same
 files. Change a screen, re-run the one script, commit the new file.
 
-**Written 2026-08-03.** What was and was not produced, and why, is at the bottom under
-*What could not be recorded here* — read that before you conclude something is broken.
+**Written 2026-08-03, rewritten 2026-08-04** when the iOS journey turned out to be perfectly
+recordable after all. §4 has what each of the three supposed blockers actually was, measured.
+§5 is the side-by-side. What genuinely cannot be filmed is at the bottom — read that before you
+conclude something is broken.
 
 ---
 
@@ -101,7 +103,13 @@ building ran at 40–70 %, which nobody in this trade would believe.
 node demo/record-admin.mjs
 ```
 
-Writes `docs/media/admin-walkthrough.mp4` and eight PNGs. About two minutes.
+Writes `docs/media/admin-walkthrough.mp4` and eleven PNGs. About three minutes.
+
+**It covers every screen in the sidebar and the run FAILS if it does not.** The list is not
+kept in anybody's head: the recorder reads `PRIMARY_NAV` out of `web/lib/nav.ts` and refuses to
+finish if the walkthrough never opened one of those paths. The cut before this one silently
+skipped `/payroll/`, `/clients/` and `/inventory/` — payroll being, on a product that exists to
+pay people, the screen that matters most.
 
 **Re-seed first if you want the same video.** The walkthrough types `12` into *Zielmarge*
 and approves one material request, so a second run without a re-seed opens on a screen that
@@ -236,9 +244,20 @@ wait; `demo/android-setup.sh` waits for the package service rather than for
 node demo/record-android.mjs
 ```
 
-Writes `docs/media/android-journey.mp4` and three PNGs. About 90 seconds. It mints its own
-enrolment code through `POST /admin/workers/:id/enrolment-code`, clears the app so it is a
-first launch, and burns the captions in with timings it measured rather than guessed.
+Writes `docs/media/android-journey.mp4` and four PNGs. About two and a half minutes. It mints
+its own enrolment code through `POST /admin/workers/:id/enrolment-code`, clears the app so it is
+a first launch, and burns the captions in with timings it measured rather than guessed.
+
+**The emulator must be German, not just the app.** `demo/android-setup.sh` sets the app locale,
+but the runtime notification permission alert is drawn by the *system* permission controller in
+the *system* locale: on an `en-US` emulator its button says "Allow", the German tap missed, the
+alert stayed up covering the app, and the next stage failed with `Material vanished` — a true
+statement about a screen that was not the app. Set it once and reboot:
+
+```sh
+adb root && adb shell setprop persist.sys.locale de-AT && adb reboot
+#   ... then re-run demo/android-setup.sh, because nothing it mounts survives a reboot
+```
 
 **The NFC tap is mocked and the video says so, twice, in white on black.** No emulator has
 NFC hardware: `pm list features` lists no `android.hardware.nfc`, `NfcAdapter.getDefault
@@ -254,90 +273,176 @@ because no signing key exists yet, so on a real handset a tag opens Chrome. See
 
 ---
 
-## What could not be recorded here, and exactly what it needs
+## 4. iOS
 
-### iOS: the journey could not be produced. Three separate blockers.
+**The verdict in the first draft of this file — "the journey could not be produced, three
+blockers" — was wrong on two counts of three, and the third has a clean way round.** All of
+it is now scripted. What follows is what each blocker actually was, measured.
 
-The iPhone app **builds and runs** — that much was checked, not assumed:
-
-```sh
-cd NFCTimeSheets
-xcrun simctl boot "iPhone 17"
-xcodebuild -project NFCTimeSheets.xcodeproj -scheme NFCTimeSheets \
-  -configuration Debug -sdk iphonesimulator \
-  -destination 'platform=iOS Simulator,name=iPhone 17' \
-  -derivedDataPath /tmp/ts-demo/ddata TS_TAG_HOST=demo.invalid build
-xcrun simctl install booted /tmp/ts-demo/ddata/Build/Products/Debug-iphonesimulator/NFCTimeSheets.app
-xcrun simctl launch booted io.github.qwadratic.NFCTimeSheets
-```
-
-`** BUILD SUCCEEDED **`, the app launches and the Sign in with Apple screen renders.
-`TS_TAG_HOST=demo.invalid` on the command line reaches Swift through the `TSTagHost`
-Info.plist key, which was confirmed in the built bundle — so the app could not have reached
-the live server even by accident. **`project.pbxproj` and `Branding.xcconfig` were not
-touched**; the override is a command-line build setting.
-
-Past that point, three things stop a recording, and each needs something an agent cannot
-supply:
-
-**1. The API must answer on port 443 under the name `timesheets.exe.xyz`.** `API.base` is
-`https://\(TagLink.host)` with no port, so unlike Android there is no `adb reverse` to lean
-on, and macOS refuses a non-root process port 443 (`EACCES`, measured). **You** can do it:
+### 4.1 Setup, once per simulator
 
 ```sh
-sudo sh -c 'printf "\n127.0.0.1 timesheets.exe.xyz\n" >> /etc/hosts'
-sudo node demo/tls-front.mjs --port 443 --upstream 127.0.0.1:8082
-xcrun simctl keychain booted add-root-cert /tmp/ts-demo/tls/ca.pem
+sh demo/ios-setup.sh                       # CA, boot, trust, build, install  (~15 s)
+sh demo/ios-setup.sh --allow-notifications <location-uuid>   # once; needs Simulator.app
+sh demo/ios-setup.sh --prove-release       # no demo hook survives in Release
 ```
 
-Build **without** the `TS_TAG_HOST` override for this, so the app uses the real host.
-Remember to take the `/etc/hosts` line out afterwards, or your browser cannot reach the real
-site either.
+`--allow-notifications` is the one step that is not headless. The app-icon badge is the
+out-of-app signal iOS delivers today, a badge needs notification authorization, and
+`xcrun simctl privacy` has no `notifications` service — so the alert is answered through
+Accessibility, by button description rather than by coordinates. The grant lives in
+SpringBoard, not in the app container, so `demo/record-ios.mjs` wiping the container leaves
+it intact and every recording after that one is headless.
 
-**2. Sign in with Apple needs a real Apple ID signed into the simulator.** There is no
-enrolment-code path on iOS (decision-26 is Android-only, deliberately, while the iPhone
-pilot runs). So the simulator has to be signed in under *Settings → Sign in to your iPhone*,
-and the demo worker row has to carry that Apple ID's address:
+### 4.2 Port 443: real, and irrelevant
+
+`node -e 'require("net").createServer().listen(443,"127.0.0.1")'` really does fail with
+`EACCES`, and a simulator has no `adb reverse` to lean on. But `API.base` is
+`https://\(TagLink.host)`, `TagLink.host` is `Branding.tagHost`, and that reads the
+`TSTagHost` Info.plist key — which Xcode substitutes from the `TS_TAG_HOST` **build
+setting**. A build setting can be given on the xcodebuild command line, and **the value can
+carry a port**:
 
 ```sh
-psql -d nfc_demo -c "UPDATE workers SET email='<your apple id>' WHERE name='Marta Nowak'"
+xcodebuild ... -sdk iphonesimulator TS_TAG_HOST=127.0.0.1:8443 CODE_SIGNING_ALLOWED=NO build
+/usr/libexec/PlistBuddy -c 'Print :TSTagHost' .../NFCTimeSheets.app/Info.plist
+#   -> 127.0.0.1:8443          while Branding.xcconfig still says timesheets.exe.xyz
 ```
 
-That address is yours, it stays in your local `nfc_demo`, and it is the one exception to
-"no real person in the demo data". Note it, and do not commit a dump of that database.
+`Branding.xcconfig`, `Info.plist`, `project.pbxproj` and the entitlements are all untouched —
+`git status` is clean after `ios-setup.sh`, and the script re-reads the built `Info.plist` and
+refuses to install if the override did not land. No `sudo`, no `/etc/hosts` edit.
 
-**3. `simctl openurl` does NOT hand a universal link to the app. Verified, twice.**
+One consequence, stated because it is load-bearing: `TagLink.locationId` compares
+`URLComponents.host` (no port) against `Branding.tagHost` (with port), so a build configured
+this way **cannot parse a universal link at all**. That costs nothing, because of 4.4.
 
-This one was expected to work and does not, so do not lose an hour to it:
+### 4.3 Sign in with Apple, with no Apple ID
+
+`demo/demo-server.mjs` is `server/server.js` with exactly one thing swapped: where Apple's
+public keys come from. It generates an RSA key per process, mints a real RS256 identity token
+for an invented address in the seed, and hands its own JWKS to `setKeyFetcherForTest` — the
+seam `server/check-api.js` already uses.
+
+**Nothing in `server/lib/apple.js` changes**, and it was falsified rather than assumed:
+
+| token | result |
+|---|---|
+| valid | `200` `{"worker":{"name":"Marta Nowak"}}` |
+| tampered signature | `401 invalid_token` |
+| replayed with the wrong nonce | `401 invalid_token` |
+| `alg=none` downgrade | `401 invalid_token` |
+
+A token minted here is worthless to the live server, which fetches Apple's real keys. The
+process refuses to start unless the database is literally named `nfc_demo` and every host in
+play is loopback.
+
+### 4.4 The universal link: genuinely impossible, and what is done instead
+
+This one is real, and it was established three ways rather than by trying twice:
+
+```
+xcodebuild -showBuildSettings   ->  ENTITLEMENTS_ALLOWED = NO  (iphonesimulator)
+                                    ENTITLEMENTS_ALLOWED = YES (iphoneos)
+forcing ENTITLEMENTS_ALLOWED=YES -> codesign -d --entitlements emits an EMPTY dict
+swcutil dump, inside the sim     -> 0 applinks registrations
+both apps terminated, openurl    -> MobileSafari woke. The app did not.
+```
+
+No entitlements means no `com.apple.developer.associated-domains`, which means iOS never
+claims the link for this app. **That is a property of the simulator SDK, not of this app** —
+the same tap works on a device and is what workers use daily.
+
+So `NFCTimeSheets/DemoHooks.swift` injects the location id at the point the URL parse would
+have produced it: through `TagLink.normalizedUUID`, the trust boundary that keeps anything not
+UUID-shaped off the wire, into the same `TapInbox` that `onOpenURL` and
+`onContinueUserActivity` feed. Every line after the parse is the shipping code.
+
+**The whole file is inside `#if DEBUG`**, it arms only when the launch argument is present
+**and** `API.base` is loopback, and it pins a yellow *"DEMO BUILD · NFC is MOCKED"* band to the
+top of the window for as long as it is armed. `sh demo/ios-setup.sh --prove-release` proves a
+Release build carries none of it:
+
+```
+RELEASE bundle: 8 files,  0 demo markers, no dylib
+DEBUG   bundle: 10 files, 4 markers — all inside NFCTimeSheets.debug.dylib
+```
+
+That last line is why the check greps **every file** in the `.app`. Grepping only the main
+executable returns 0 on the Debug build too, which is a false pass.
+
+### 4.5 Record
 
 ```sh
-xcrun simctl openurl booted "https://timesheets.exe.xyz/t?l=<uuid>"
-# -> opens Safari on the /t landing page. The app is not launched.
+node demo/record-ios.mjs
 ```
 
-It was tried with an ad-hoc build and again with `DEVELOPMENT_TEAM=6Y842FE8Q4` and
-`-allowProvisioningUpdates`. The second build's simulated entitlements are correct —
+Writes `docs/media/ios-journey.mp4` and four PNGs. About two minutes. It wipes the app's data
+container rather than uninstalling — the notification grant belongs to SpringBoard and an
+uninstall would throw it away and put a permission alert in the middle of the take.
 
+Two things it does that are not obvious:
+
+- **It launches with `-AppleLanguages "(de-AT)"`.** The product ships German (decision-8) and
+  the emulator is forced to German too. Without it the iOS pane read *Log / Materials /
+  History / Settings* under a shared caption promising *"Verlauf is gone from the tab bar"* —
+  a side-by-side whose two halves were not the same product.
+- **It refuses to start if the demo worker already has an open shift.** The server is
+  authoritative for open shifts (decision-19), so a leftover from a run that died mid-journey
+  turns the first tap of the next run into a clock-*out*, and the takeover screen the clip
+  exists to show never appears. That cost a take on the Android side before the check existed.
+
+### 4.6 One bug this recording found, which is not a demo bug
+
+On a **fresh install** the app shows *"Your session ended. Sign in again."* in red.
+`Session.restore()` calls `GET /auth/session` unconditionally; with no cookie that is a 401;
+the `.sessionRejected` observer sets `signedOut(reason:)` on a state that was `.unknown` a
+moment earlier (`Auth.swift:240`). It is reachable on a real phone, and the string is hardcoded
+English in a German-default product. **The recording shows it and says so on screen** rather
+than editing around it.
+
+---
+
+## 5. Both devices, side by side
+
+```sh
+node demo/record-ios.mjs && node demo/record-android.mjs && node demo/compose-devices.mjs
 ```
-application-identifier = 6Y842FE8Q4.io.github.qwadratic.NFCTimeSheets
-com.apple.developer.associated-domains = [applinks:timesheets.exe.xyz]
-```
 
-— and they match the AASA Apple's CDN serves for the host
-(`{"applinks":{"details":[{"appID":"6Y842FE8Q4.io.github.qwadratic.NFCTimeSheets","paths":["/t*"]}]}}`).
-Safari opened anyway, both times.
+Writes `docs/media/both-devices.mp4`. Both recorders walk the **same stages** from
+`demo/journey.mjs`, in the same order, with the same minimum durations, and each writes the
+boundaries it actually hit to `/tmp/ts-demo/<platform>-stages.json`. The composer aligns on
+those boundaries.
 
-**This is a simulator limitation, not a product defect.** The tap works on real hardware —
-that is what is in daily use. If you want the handoff on a simulator, the route to try is
-`applinks:timesheets.exe.xyz?mode=developer` in the entitlement plus a locally served AASA,
-which means editing `NFCTimeSheets.entitlements` — the file decision-24 requires to stay a
-checked literal. **Do not leave that edit in a build that reaches TestFlight.**
+**The only edit, stated:** where one device finished a stage sooner, its last frame is held
+(`tpad=stop_mode=clone`) until the other catches up. Nothing is sped up, slowed down, cut or
+reordered, and a held frame is visible as a still picture.
 
-Fixing 1 and 2 alone gets you the app talking to the demo server. Recording *"the tag URL
-opens the app"* on a simulator additionally needs 3, or a real iPhone and
-`xcrun devicectl` / QuickTime screen recording from the device.
+Side by side rather than sequential because the differences are the interesting part — Sign in
+with Apple against an admin-issued enrolment code (decision-26), an icon badge against a
+lock-screen notification. Sequentially those are two minutes apart and nobody holds them in
+their head. Judged by looking at the output at 100%: at 400 px per device the German labels,
+the running clock and both tab bars are legible.
 
-### Things nothing here can do at all
+### The before / after cards
+
+The film opens on two cards, each two real screenshots of two real builds in the same two
+panes as the journey. The Android "before" is `docs/media/before-android-shift.png`, produced
+by this same recorder against this same seed on 3 August.
+
+The iOS "before" is `docs/media/app-shift.png` **as it stood at commit 33e66b2** — the build of
+30 July, and the only honest photograph of the iPhone app before the takeover shipped. That
+file was deleted from the tree because every row in it is labelled with the operator's **real
+client**. `demo/compose-devices.mjs` recovers it from the object store, paints the four name
+rows out, and then **decodes the written PNG back to grey and refuses to continue unless every
+box is a single flat value**. A mask that is trusted rather than checked is how a name ships.
+
+> **The deletion did not remove that name from this repository.** The blob is still reachable
+> at `git show 33e66b2:docs/media/app-shift.png` and will stay reachable to anyone who clones,
+> until somebody rewrites history and force-pushes. That is the owner's call to make; it is
+> recorded here so it is not forgotten.
+
+## What nothing here can do at all
 
 - **A real NFC tap, on either platform.** Physics. `docs/media/demo-write-tag.mp4` shows a
   blank tag being provisioned with NFC Tools on a real phone; the tap itself is not filmed
@@ -361,7 +466,8 @@ two recorders refuse to.
 sh demo/check-guards.sh
 ```
 
-Runs all four refusals for real — the seed and the admin-maker against a throwaway database
+Twelve checks, about two seconds. Runs every refusal for real — the seed and the admin-maker
+against a throwaway database
 that is *not* `nfc_demo`, and the two recorders plus the TLS front against
 `https://timesheets.exe.xyz`. A guard nobody exercises is a comment. Skips with exit 0 when
 no Postgres is reachable, like every other check in this repo.
@@ -379,8 +485,14 @@ reports `2 FAIL` — the truncation *and* the rows written after it.
 | `demo/make-admin.mjs` | the published demo login; same guard |
 | `demo/cdp.mjs` | Chrome DevTools Protocol client, no dependencies |
 | `demo/png.mjs` | one screenshot writer (128-colour palette, halves the file) |
-| `demo/record-admin.mjs` | the admin walkthrough and its stills |
-| `demo/tls-front.mjs` | throwaway HTTPS in front of the demo API, for the phone |
+| `demo/burnin.mjs` | the caption band, shared by all four recorders; measures each line and shrinks it rather than letting `drawtext` clip it |
+| `demo/journey.mjs` | the one worker journey, as stages, so the two device clips are the same story told twice |
+| `demo/record-admin.mjs` | the admin walkthrough and its stills; asserts it covered every sidebar screen |
+| `demo/tls-front.mjs` | throwaway HTTPS in front of the demo API, for the phone. Loopback on both sides |
 | `demo/android-setup.sh` | points the emulator at the demo server; touches nothing on the Mac |
 | `demo/record-android.mjs` | the Android journey, with captions burned in |
-| `demo/check-guards.sh` | proves all four refusals still refuse |
+| `demo/demo-server.mjs` | the demo API: `server.js` with Apple's JWKS swapped, and nothing else |
+| `demo/ios-setup.sh` | builds with `TS_TAG_HOST` overridden, trusts the demo CA, proves Release is clean |
+| `demo/record-ios.mjs` | the iOS journey, with captions burned in |
+| `demo/compose-devices.mjs` | the two clips side by side, plus the before / after cards |
+| `demo/check-guards.sh` | proves every refusal still refuses |

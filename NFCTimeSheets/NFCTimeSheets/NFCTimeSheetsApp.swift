@@ -128,6 +128,14 @@ struct NFCTimeSheetsApp: App {
                     purgeLegacyIdentityDefaults()
                     await DataMigrations.runPending(context: container.mainContext)
                     await session.restore()
+                    #if DEBUG
+                    // The two values a simulator cannot produce: an Apple identity token
+                    // and a universal-link tap. Injected from the command line, into the
+                    // same Session.exchange and the same TapInbox the real paths use, and
+                    // only when the API base is loopback. Compiled out of Release entirely
+                    // — see the header of DemoHooks.swift.
+                    await DemoHooks.run(session: session, inbox: inbox)
+                    #endif
                 }
                 // Universal link off the tag: https://timesheets.exe.xyz/t?l=<uuid>.
                 // Anything that is not a well-formed tag link is dropped on the floor -
@@ -154,6 +162,11 @@ struct NFCTimeSheetsApp: App {
                           let id = TagLink.locationId(from: url) else { return }
                     inbox.accept(id)
                 }
+                // Says "DEMO BUILD · NFC is MOCKED" while the demo hooks are armed, and
+                // renders literally nothing otherwise. Release builds do not contain it.
+                #if DEBUG
+                .demoBanner()
+                #endif
         }
         .modelContainer(container)
     }

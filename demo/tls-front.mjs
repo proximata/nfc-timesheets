@@ -24,10 +24,23 @@ const arg = (name, fallback) => {
 
 const certDir = arg("cert", "/tmp/ts-demo/tls");
 const port = Number(arg("port", "8443"));
+const host = arg("host", "127.0.0.1");
 const [upHost, upPort] = arg("upstream", "127.0.0.1:8082").split(":");
 
-if (!["127.0.0.1", "localhost", "::1"].includes(upHost)) {
+const LOOPBACK = ["127.0.0.1", "localhost", "::1"];
+if (!LOOPBACK.includes(upHost)) {
   console.error(`tls-front: refusing to proxy to "${upHost}" — loopback only.`);
+  process.exit(1);
+}
+// The LISTEN side is guarded too, and that is not paranoia. Behind this port sits
+// demo/demo-server.mjs, which mints Apple identity tokens it will then accept. Binding
+// 0.0.0.0 — which this did — published a token-forging server on the LAN: another machine
+// on the same wifi reached `https://<mac-lan-ip>:8443/` and got a 200.
+//
+// Nothing needs a wider bind. The emulator reaches the Mac through `adb reverse tcp:443
+// tcp:8443`, and adbd on the MAC makes that connection, so it arrives on 127.0.0.1.
+if (!LOOPBACK.includes(host)) {
+  console.error(`tls-front: refusing to listen on "${host}" — loopback only.`);
   process.exit(1);
 }
 
@@ -56,6 +69,6 @@ const server = createServer(
   },
 );
 
-server.listen(port, "0.0.0.0", () => {
-  console.log(`tls-front: https on :${port} -> http://${upHost}:${upPort}`);
+server.listen(port, host, () => {
+  console.log(`tls-front: https on ${host}:${port} -> http://${upHost}:${upPort}`);
 });

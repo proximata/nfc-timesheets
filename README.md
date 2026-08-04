@@ -13,20 +13,42 @@ Everything below runs against a **local** database of invented workers, invented
 buildings and invented prices. No live data, no real person. `backlog/docs/DEMO.md` has the
 exact commands to reproduce any of it.
 
+### Both phones, one shift
+
+▶ [`docs/media/both-devices.mp4`](docs/media/both-devices.mp4) — **144 s.** The same worker
+journey on an iPhone simulator and an Android emulator, side by side: sign in, tap in, the
+in-shift takeover, the signal each OS gives outside the app, tap out, everything cleared. It
+opens on a **before / after** card built from four real screenshots of four real builds.
+
+| Before | After |
+|:--:|:--:|
+| ![Before, iOS](docs/media/before-ios-shift.png) ![Before, Android](docs/media/before-android-shift.png) | ![After, iOS](docs/media/ios-shift.png) ![After, Android](docs/media/android-shift.png) |
+| A running shift was one small pill, or the word *„Läuft“*, on one row of a list. Pocket the phone and nothing mentioned it again. | The shift takes the app over: building named, state in words, a clock that runs, and *Verlauf* gone from the bar until it ends. |
+
+The two clips are stage-aligned, never sped up: where one device finished a step sooner its
+**last frame is held**, which is visible as a still picture. The iPhone still on the left is a
+real capture from 30 July 2026 recovered from this repo's own history, with the client name
+painted out and the paint verified pixel by pixel before it is used.
+
+The two panes do not look alike, and that is the product: `ui/Theme.kt` takes
+`dynamicLightColorScheme` from the wallpaper on Android 12+, so the takeover screen is whatever
+colour that worker's phone is.
+
 ### The worker's phone — Android
 
-▶ [`docs/media/android-journey.mp4`](docs/media/android-journey.mp4) — **71 s.** First launch,
-enrolment-code sign-in, a tag URL opening a shift, the same URL ending it, history, materials.
+▶ [`docs/media/android-journey.mp4`](docs/media/android-journey.mp4) — **136 s.** First launch,
+enrolment-code sign-in, a tag URL opening a shift, the takeover, the ongoing lock-screen
+notification, the same URL ending it, history.
 
 > **The NFC tap in that clip is mocked, and the clip says so on screen.** No emulator has NFC
 > hardware, so the tag URL is delivered as the same `VIEW` intent the OS sends after the radio
 > reads a tag. Everything downstream of that is the real code path; the radio is not exercised.
 > The app's own screen also says *„Dieses Telefon hat kein NFC“*.
 
-| Sign in | Shift running | Materials |
+| Sign in | Shift running | Outside the app |
 |:--:|:--:|:--:|
-| ![Enrolment code](docs/media/android-signin.png) | ![Shift open](docs/media/android-shift.png) | ![Material requests](docs/media/android-materials.png) |
-| One code, one worker, one hour, single use (decision-26) | Opened by the tag URL. The worker's identity came from the session, never the request (decision-22) | Ask for supplies in your own words. There is no push, and the screen says so |
+| ![Enrolment code](docs/media/android-signin.png) | ![Shift open](docs/media/android-shift.png) | ![Ongoing notification](docs/media/android-notification.png) |
+| One code, one worker, one hour, single use (decision-26) | Opened by the tag URL. The worker's identity came from the session, never the request (decision-22) | An ongoing notification with a clock Android draws itself, so it has no 8-hour ceiling |
 
 That APK is the shipping debug build with **no edits** — `branding.properties` untouched, so the
 URL in the recording is the real tag URL. It reaches the demo server through `adb reverse` and a
@@ -34,16 +56,25 @@ hosts file inside the emulator.
 
 ### The worker's phone — iOS
 
-| Shift in progress | History |
-|:--:|:--:|
-| ![Shift in progress](docs/media/app-shift.png) | ![History](docs/media/app-history.png) |
+▶ [`docs/media/ios-journey.mp4`](docs/media/ios-journey.mp4) — **120 s.** Sign in with Apple, a
+tap that opens a shift, the takeover with its running clock and its shortened tab bar, the
+app-icon badge, and the tap that closes it again.
 
-**These two are old, and they are the only iOS media here.** They were shot on the live system,
-so the building name in them is a real client's. A clean iOS capture could not be produced:
-port 443 under the tag hostname needs root, and Sign in with Apple needs a real Apple ID in the
-simulator. `backlog/docs/DEMO.md` has both blockers with the exact commands to clear them, plus
-one verified surprise — `simctl openurl` does **not** hand a universal link to the app on a
-simulator, tried twice, with correct entitlements.
+> **Two things are mocked on a simulator, and the clip says so on every frame.** There is no NFC
+> radio, and there are no entitlements — `-sdk iphonesimulator` sets `ENTITLEMENTS_ALLOWED = NO`,
+> so `simctl openurl` hands the tag URL to Safari rather than to the app. The demo injects the
+> location id where the URL parse would have produced it, through the same `TagLink` validation
+> into the same `TapInbox`, so every line after the parse is the shipping code. The hook is
+> `#if DEBUG` and `demo/ios-setup.sh --prove-release` greps every file of a Release build for it.
+>
+> There is **no Apple ID** in a simulator either, so `demo/demo-server.mjs` mints a real RS256
+> identity token and tells itself the key is Apple's. Signature, issuer, audience, expiry and
+> nonce are all still verified by `server/lib/apple.js`; the live server rejects that token.
+
+| Sign in | Shift running | Outside the app |
+|:--:|:--:|:--:|
+| ![Sign in with Apple](docs/media/ios-signin.png) | ![Shift open](docs/media/ios-shift.png) | ![App icon badge](docs/media/ios-badge.png) |
+| Sign in with Apple and nothing else (decision-22). The red line is a real bug, not a demo artefact — a fresh install has no session to end | The takeover, and *Verlauf* gone from the tab bar until the shift is closed | The app-icon badge, which survives a restart. **No Live Activity** — the widget extension target does not exist yet, so that code ships inert |
 
 ▶ [`docs/media/demo-write-tag.mp4`](docs/media/demo-write-tag.mp4) — provisioning a blank tag with
 NFC Tools on a real phone (30 s). Real hardware, no app of ours in it.
@@ -52,9 +83,22 @@ NFC Tools on a real phone (30 s). Real hardware, no app of ours in it.
 
 Desktop-first, German by default, built for one non-technical director.
 
-▶ [`docs/media/admin-walkthrough.mp4`](docs/media/admin-walkthrough.mp4) — **38 s.** Sign in,
-the day's exceptions, the material queue, contract history, the P&L before and after a target
-margin is set, building analytics, payroll. Real speed, nothing cut or annotated.
+▶ [`docs/media/admin-walkthrough.mp4`](docs/media/admin-walkthrough.mp4) — **161 s.** **Every
+screen in the sidebar, with none left out**: the day's exceptions, the shift log, workers,
+buildings and the tag URL, clients, the product catalogue, the material queue walked one real
+click at a time from *eingereicht* to *geliefert*, **payroll**, the P&L before and after a target
+margin is typed in, contract history, building analytics — and the read-only client portal,
+opened with a link minted on camera three minutes earlier. Real speed, nothing cut or annotated.
+
+That completeness is asserted, not remembered: the recorder reads `PRIMARY_NAV` out of
+`web/lib/nav.ts` and **fails the run** if the walkthrough never opened one of the screens. The
+previous cut silently skipped `/payroll/`, `/clients/` and `/inventory/`.
+
+| ![Payroll](docs/media/admin-payroll.png) | ![Clients](docs/media/admin-clients.png) |
+|:--:|:--:|
+| **Lohnabrechnung.** Hours and pay per worker for one pay period, and the two 8-hour auto-closed shifts that are excluded from it — counted, named and linked rather than quietly dropped (decision-10). | **Kunden.** The companies under contract and the people reported to, each of whom can be given a read-only link to their own buildings and nothing else. |
+| ![Inventory](docs/media/admin-inventory.png) | ![Client portal](docs/media/admin-material-requests.png) |
+| **Produkte & Geräte.** The catalogue with a unit cost per line. Nothing a worker asks for is auto-matched to a row here — a guess would put a wrong price into the P&L. | **Materialanforderungen, the far end.** *Geliefert* by the admin and *gesehen* by the worker are two different events, and the panel names both: there is no push, the app polls. |
 
 | ![Dashboard](docs/media/admin-dashboard.png) | ![Profit and loss](docs/media/admin-pl.png) |
 |:--:|:--:|

@@ -195,6 +195,21 @@ final class Session {
         }
     }
 
+    #if DEBUG
+    /// DEMO ONLY, and compiled out of every Release build. See DemoHooks.swift.
+    ///
+    /// An iOS Simulator has no Apple ID, so `SignInWithAppleButton` cannot be driven from
+    /// a script. This hands an identity token straight to `exchange` — the SAME method the
+    /// real button's completion handler reaches — so /auth/apple, the RS256 signature
+    /// check, the audience check and the nonce check all run for real. It verifies nothing
+    /// itself and it cannot: the server decides, here as everywhere (decision-22).
+    func demoSignIn(identityToken: String, nonce: String) async {
+        busy = true
+        defer { busy = false }
+        await exchange(identityToken: identityToken, nonce: nonce, name: nil, appleEmail: nil)
+    }
+    #endif
+
     /// Apple hands over the name on the FIRST authorization only - never again, on any
     /// device, for the life of the app. It is a hint for the admin, not an identity:
     /// the worker's real name is whatever is in the workers row they were matched to.
