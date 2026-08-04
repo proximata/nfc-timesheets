@@ -156,46 +156,49 @@ struct APIFailure: Error {
 
     /// Shown to the worker. Deliberately says what to DO, not what broke.
     ///
-    /// ponytail: English literals. CEILING: decision-8 wants every user-visible string
-    /// externalised, but 3A does the i18n work on the web admin only and the rest of
-    /// this app is hardcoded English too. UPGRADE PATH: move the whole app to a
-    /// String Catalog (Localizable.xcstrings) in one pass rather than half of it now.
+    /// LOCALISED, via Localizable.xcstrings. The default language is German (decision-8)
+    /// and the crew reading these sentences at a door in Vienna is German-speaking; the
+    /// English literals below are the KEYS, not the output.
+    ///
+    /// It is still a `switch` over the server's own error codes and not a lookup by
+    /// generated key: a code this build has never seen falls into `default` and says so,
+    /// rather than rendering an empty string at a door in the dark.
     var workerMessage: String {
         switch code {
         case "network":
-            return "No connection - will send when you're back online."
+            return String(localized: "No connection - will send when you're back online.")
         case "unknown_worker":
-            return "Your name is no longer on the roster. Ask your admin."
+            return String(localized: "Your name is no longer on the roster. Ask your admin.")
         case "unknown_location":
-            return "This location was removed. Ask your admin."
+            return String(localized: "This location was removed. Ask your admin.")
         case "unknown_shift":
-            return "The server doesn't have this shift. Ask your admin."
+            return String(localized: "The server doesn't have this shift. Ask your admin.")
         case "unknown_request":
-            return "The server doesn't have this request any more. Ask your admin."
+            return String(localized: "The server doesn't have this request any more. Ask your admin.")
         case "not_found":
             // An unrouted path, i.e. this build is newer than the server. Never a
             // rejection of what was sent - see MaterialStore.push, which keeps the row.
-            return "Not available on the server yet - saved and will be sent later."
+            return String(localized: "Not available on the server yet - saved and will be sent later.")
         case "shift_already_open":
-            return "Another shift is still running - finishing it first."
+            return String(localized: "Another shift is still running - finishing it first.")
         case "end_before_start":
-            return "Finish time is before the start time."
+            return String(localized: "Finish time is before the start time.")
         case "timestamp_in_future", "timestamp_out_of_range":
-            return "This phone's clock looks wrong. Check Date & Time in Settings."
+            return String(localized: "This phone's clock looks wrong. Check Date & Time in Settings.")
         case "unauthorized":
-            return "This app version was rejected by the server. Update it."
+            return String(localized: "This app version was rejected by the server. Update it.")
         case "no_session":
-            return "You were signed out. Sign in again."
+            return String(localized: "You were signed out. Sign in again.")
         case "invalid_token":
-            return "Apple sign-in failed. Try again."
+            return String(localized: "Apple sign-in failed. Try again.")
         case "not_eligible":
-            return "This Apple ID isn't registered as a worker."
+            return String(localized: "This Apple ID isn't registered as a worker.")
         case "too_many_attempts":
-            return "Too many attempts - try again shortly."
+            return String(localized: "Too many attempts - try again shortly.")
         default:
             return status >= 500 || status == 0
-                ? "Server trouble - will retry."
-                : "Rejected by the server (\(code)). Ask your admin."
+                ? String(localized: "Server trouble - will retry.")
+                : String(localized: "Rejected by the server (\(code)). Ask your admin.")
         }
     }
 }

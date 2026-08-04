@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Notification small icon. A status-bar icon is drawn as a SILHOUETTE: the system keeps the
+  alpha channel and throws the colour away, so this is deliberately a solid white shape on
+  transparent rather than a copy of the launcher icon (whose strokes would come out as a
+  grey smear at 24dp).
+
+  Three NFC waves, the same mark as the launcher, redrawn as filled wedges so it survives
+  being scaled down to the status bar.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7.5,8.4 A6,6 0 0 1 7.5,15.6 L6.2,14.1 A4,4 0 0 0 6.2,9.9 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M11.6,5.6 A10,10 0 0 1 11.6,18.4 L10.3,16.9 A8,8 0 0 0 10.3,7.1 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M15.7,2.8 A14,14 0 0 1 15.7,21.2 L14.4,19.7 A12,12 0 0 0 14.4,4.3 Z" />
+</vector>

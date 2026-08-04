@@ -4,6 +4,7 @@
 // Runs against a throwaway Postgres schema; it never touches the real tables.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createHash, generateKeyPairSync, sign as rsaSign } from "node:crypto";
 import pg from "pg";
 import { redactUrl, scrubBreadcrumb, scrubEvent, scrubLogAttributes } from "./lib/scrub.js";
@@ -1582,6 +1583,146 @@ try {
     });
     assert.equal(res.status, 409);
   });
+
+  // ---- the recovery wire: GET /shifts/open + /shifts/unresolved --------------------
+  //
+  // Both clients are growing a shift screen that takes the app over while a shift runs,
+  // plus a signal OUTSIDE the app (Android ongoing notification, iOS Live Activity and
+  // icon badge). After a reinstall, a new phone, or a signal the OS dropped, the phone's
+  // own copy of "a shift is running" is gone and these two routes are the only thing left
+  // that knows (decision-19). Nothing was added for them - no route, no field, no
+  // migration 006. This section exists to FREEZE what they already answer, so the next
+  // refactor cannot quietly drop a key the shipped iOS build in daily use decodes.
+
+  // The payload is a contract with a build that is on workers' phones RIGHT NOW. Adding a
+  // key is a deliberate act (old clients ignore unknown JSON, so it is safe); removing or
+  // renaming one breaks the lock screen, the adopt path, or the ability to clock out at all.
+  const OPEN_SHIFT_KEYS = [
+    "auto_closed", //   \ decision-10: "needs confirming" is derived from exactly these
+    "client_uuid", //   the idempotency key - without it an ADOPTED shift can never be CLOSED
+    "corrected_at", //  /
+    "end_time",
+    "id",
+    "location_id", //   "is the next tap the same building, or a switch?"
+    "location_name", // the lock screen names the building with no second round trip
+    "location_slug", // display and log lines only, never back into a tag URI (decision-21)
+    "start_time", //    the ticking clock, AND the locally computed start+8h flip
+    "worker_id",
+  ];
+
+  const lockStart = new Date(Date.now() - 3600_000).toISOString();
+  const lockOpen = { client_uuid: uuid(20), location_uuid: locationUuid, start_time: lockStart };
+
+  await test("GET /shifts/open carries everything a reinstalled phone needs to re-arm the signal", async () => {
+    assert.equal((await asWorker("/shifts/open", { method: "POST", body: lockOpen })).status, 201);
+
+    const res = await asWorker("/shifts/open");
+    assert.equal(res.status, 200);
+    const { shift } = await res.json();
+    assert.deepEqual(
+      Object.keys(shift).sort(),
+      OPEN_SHIFT_KEYS,
+      "this payload is a contract with the LIVE iOS build - a removed key is a broken clock-out",
+    );
+    assert.equal(shift.client_uuid, uuid(20), "adopt must be able to close the shift it adopted");
+    assert.equal(new Date(shift.start_time).toISOString(), lockStart, "the clock ticks from this");
+    assert.equal(shift.location_name, "Checkhaus", "the lock screen names the building from this");
+    assert.equal(shift.location_id, locationUuid);
+    assert.equal(shift.end_time, null);
+    assert.equal(shift.auto_closed, false);
+    assert.equal(shift.corrected_at, null);
+  });
+
+  await test("not being clocked in is 200 {shift:null}, never a 4xx - a miss is not a rejection", async () => {
+    // A thrown call means "unknown, keep what I have". If the ordinary not-clocked-in case
+    // errored, every worker between shifts would keep a stale lock screen and a stale
+    // notification. The same bug class already cost this project a dead tag tap.
+    const res = await asOther("/shifts/open");
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).shift, null);
+  });
+
+  await test("two workers clocked in at once each see ONLY their own running shift", async () => {
+    const theirs = { client_uuid: uuid(21), location_uuid: locationUuid, start_time: lockStart };
+    assert.equal((await asOther("/shifts/open", { method: "POST", body: theirs })).status, 201);
+
+    const mine = (await (await asWorker("/shifts/open")).json()).shift;
+    const other = (await (await asOther("/shifts/open")).json()).shift;
+    assert.equal(mine.client_uuid, uuid(20));
+    assert.equal(mine.worker_id, workerId);
+    assert.equal(other.client_uuid, uuid(21), "and the positive direction too: they see THEIRS");
+    assert.equal(other.worker_id, otherWorkerId);
+    assert.notEqual(mine.id, other.id, "one worker's lock screen must never show another's shift");
+  });
+
+  await test("the REAL 8h timer flips the wire from 'running' to 'needs confirming'", async () => {
+    // ops/sql/autoclose.sql itself, not a paraphrase of it: this check is worthless if it
+    // asserts against a copy that has drifted from what nfc-autoclose.timer actually runs.
+    const autocloseSql = readFileSync(new URL("../ops/sql/autoclose.sql", import.meta.url), "utf8");
+    // Mine started 9h ago -> stale. Theirs is 1h old and must be left alone.
+    await admin.query("UPDATE shifts SET start_time = now() - interval '9 hours' WHERE client_uuid = $1", [uuid(20)]);
+    await admin.query("UPDATE shifts SET start_time = now() - interval '1 hour' WHERE client_uuid = $1", [uuid(21)]);
+    const fired = await admin.query(autocloseSql);
+    assert.equal(fired.rowCount, 1, "exactly the stale shift, and only it");
+
+    // Running -> nothing running. The client MUST NOT keep a ticking clock here.
+    assert.equal((await (await asWorker("/shifts/open")).json()).shift, null);
+
+    const { shifts } = await (await asWorker("/shifts/unresolved")).json();
+    assert.equal(shifts.length, 1, "it has to reappear as something the worker must confirm");
+    const flipped = shifts[0];
+    assert.equal(flipped.client_uuid, uuid(20));
+    assert.equal(flipped.auto_closed, true);
+    assert.equal(flipped.corrected_at, null);
+    assert.equal(flipped.location_name, "Checkhaus", "the flipped screen still has to name the building");
+    assert.equal(
+      new Date(flipped.end_time) - new Date(flipped.start_time),
+      8 * 3600_000,
+      "the timer closes at start+8h - this is the boundary both clients compute locally",
+    );
+
+    // The fresh shift is untouched and its worker's signal stays armed.
+    const stillRunning = (await (await asOther("/shifts/open")).json()).shift;
+    assert.equal(stillRunning.client_uuid, uuid(21));
+    assert.equal(stillRunning.end_time, null);
+
+    // ...and nobody else's lock screen is told about it.
+    assert.equal((await (await asOther("/shifts/unresolved")).json()).shifts.length, 0);
+  });
+
+  await test("the LIVE iOS build's exact request shapes still work, unchanged", async () => {
+    // Byte-for-byte the bodies API.swift sends today: no auto_closed on close, no field
+    // this server has not always accepted. If this ever fails, a phone in daily use has
+    // stopped being able to clock out.
+    const legacy = uuid(22);
+    const start = new Date(Date.now() - 1800_000).toISOString();
+    const end = new Date().toISOString();
+
+    await asOther("/shifts/close", { method: "POST", body: { client_uuid: uuid(21), end_time: end } });
+
+    const opened = await asWorker("/shifts/open", {
+      method: "POST",
+      body: { client_uuid: legacy, location_uuid: locationUuid, start_time: start },
+    });
+    assert.equal(opened.status, 201);
+    const closed = await asWorker("/shifts/close", { method: "POST", body: { client_uuid: legacy, end_time: end } });
+    assert.equal(closed.status, 200);
+    assert.equal((await closed.json()).shift.auto_closed, false, "an omitted auto_closed still means false");
+
+    // And forwards: a NEWER client sending a field this server does not know must be
+    // served, not refused - otherwise shipping an app update requires a server deploy
+    // first, which is not a sequence anyone can guarantee on TestFlight.
+    const forward = await asWorker("/shifts/open", {
+      method: "POST",
+      body: { client_uuid: uuid(23), location_uuid: locationUuid, start_time: start, signal_armed: true },
+    });
+    assert.equal(forward.status, 201, "an unknown extra field is ignored, never a 400");
+    await asWorker("/shifts/close", { method: "POST", body: { client_uuid: uuid(23), end_time: end } });
+  });
+
+  // Leave the schema as this section found it: no open shifts (POST /admin/shifts asserts
+  // overlap against them) and no unresolved rows (the payroll aggregate asserts on those).
+  await admin.query("DELETE FROM shifts WHERE client_uuid = ANY($1)", [[uuid(20), uuid(21), uuid(22), uuid(23)]]);
 
   // ---- admin CRUD -------------------------------------------------------------------
   await test("admin data reports aggregates and excludes unresolved hours", async () => {

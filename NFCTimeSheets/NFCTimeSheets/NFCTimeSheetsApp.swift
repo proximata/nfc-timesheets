@@ -111,6 +111,12 @@ struct NFCTimeSheetsApp: App {
             ContentView()
                 .environment(inbox)
                 .environment(session)
+                // The badge, the reminder ladder and the Live Activity. One instance for
+                // the life of the process, because the OS surfaces it drives are
+                // process-wide. It is armed from exactly two places (LogView.handleTap
+                // and LogView.refresh) and it can never block a tap - see the header of
+                // ShiftSignalCenter.swift.
+                .environment(ShiftSignalCenter.shared)
                 // Cached worker first, server's verdict second. A worker deactivated in
                 // the admin panel is signed out here, on their next launch.
                 //

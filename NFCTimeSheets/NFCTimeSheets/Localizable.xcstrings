@@ -1,0 +1,1174 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "%@ – %@  ·  %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ – %2$@  ·  %3$@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ – %2$@  ·  %3$@"
+          }
+        }
+      }
+    },
+    "%lld h at %@. Hold your phone to the tag to finish.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld h at %2$@. Hold your phone to the tag to finish."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld Std. bei %2$@. Halten Sie Ihr Telefon an den Tag, um zu beenden."
+          }
+        }
+      }
+    },
+    "%lld of %lld characters": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld of %2$lld characters"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld von %2$lld Zeichen"
+          }
+        }
+      }
+    },
+    "%lld of %lld confirmed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld of %2$lld confirmed"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld von %2$lld bestätigt"
+          }
+        }
+      }
+    },
+    "%lld old shift%@ need your admin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld old shift%2$@ need your admin"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld alte Schicht%2$@ braucht Ihre Verwaltung"
+          }
+        }
+      }
+    },
+    "%lld unfinished shift(s) need a finish time": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld nicht abgeschlossene Schicht(en) brauchen eine Endzeit"
+          }
+        }
+      }
+    },
+    "%lld unfinished shift(s) need a finish time before they can be paid.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld nicht abgeschlossene Schicht(en) brauchen eine Endzeit, bevor sie bezahlt werden können."
+          }
+        }
+      }
+    },
+    "8:00:00+": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "8:00:00+"
+          }
+        }
+      }
+    },
+    "Another shift is still running - finishing it first.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eine andere Schicht läuft noch – sie wird zuerst beendet."
+          }
+        }
+      }
+    },
+    "App update": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App-Aktualisierung"
+          }
+        }
+      }
+    },
+    "Apple sign-in failed. Try again.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmeldung mit Apple fehlgeschlagen. Bitte erneut versuchen."
+          }
+        }
+      }
+    },
+    "Arrived %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eingetroffen %@"
+          }
+        }
+      }
+    },
+    "Ask for something": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Etwas anfordern"
+          }
+        }
+      }
+    },
+    "At the warehouse": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Im Lager eingetroffen"
+          }
+        }
+      }
+    },
+    "Checking your sign-in": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmeldung wird geprüft"
+          }
+        }
+      }
+    },
+    "Clocked in": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eingestempelt"
+          }
+        }
+      }
+    },
+    "Confirm finish times": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Endzeiten bestätigen"
+          }
+        }
+      }
+    },
+    "Dismiss": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ausblenden"
+          }
+        }
+      }
+    },
+    "Done": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fertig"
+          }
+        }
+      }
+    },
+    "Finish time is before the start time.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Endzeit liegt vor der Startzeit."
+          }
+        }
+      }
+    },
+    "Finished": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beendet"
+          }
+        }
+      }
+    },
+    "Finished your open shift at %@ and started at %@. Confirm when you actually left %@ — it will not count until you do.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finished your open shift at %1$@ and started at %2$@. Confirm when you actually left %3$@ — it will not count until you do."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihre offene Schicht bei %1$@ wurde beendet und bei %2$@ wurde eine neue begonnen. Bitte bestätigen Sie, wann Sie %3$@ wirklich verlassen haben – bis dahin zählt die Schicht nicht."
+          }
+        }
+      }
+    },
+    "For %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Für %@"
+          }
+        }
+      }
+    },
+    "For the building you're in now": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Für das Objekt, in dem Sie gerade sind"
+          }
+        }
+      }
+    },
+    "Got it": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verstanden"
+          }
+        }
+      }
+    },
+    "History": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verlauf"
+          }
+        }
+      }
+    },
+    "Hold your phone to the tag again to finish.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Halten Sie Ihr Telefon erneut an den Tag, um zu beenden."
+          }
+        }
+      }
+    },
+    "Hold your phone to the tag by the entrance to start.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Halten Sie Ihr Telefon an den Tag beim Eingang, um zu beginnen."
+          }
+        }
+      }
+    },
+    "Hours, locations and payroll are managed by your admin on the web.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stunden, Objekte und Abrechnung werden von Ihrer Verwaltung im Web verwaltet."
+          }
+        }
+      }
+    },
+    "Later": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Später"
+          }
+        }
+      }
+    },
+    "Log": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erfassen"
+          }
+        }
+      }
+    },
+    "Materials": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Material"
+          }
+        }
+      }
+    },
+    "Migration history": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verlauf der Umstellungen"
+          }
+        }
+      }
+    },
+    "NFC TimeSheets": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NFC TimeSheets"
+          }
+        }
+      }
+    },
+    "Name": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Name"
+          }
+        }
+      }
+    },
+    "No completed shifts yet.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Noch keine abgeschlossenen Schichten."
+          }
+        }
+      }
+    },
+    "No connection - will send when you're back online.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine Verbindung – wird gesendet, sobald Sie wieder online sind."
+          }
+        }
+      }
+    },
+    "No shifts yet.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Noch keine Schichten."
+          }
+        }
+      }
+    },
+    "Not available on the server yet - saved and will be sent later.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Am Server noch nicht verfügbar – gespeichert und wird später gesendet."
+          }
+        }
+      }
+    },
+    "Note from the office: %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmerkung der Verwaltung: %@"
+          }
+        }
+      }
+    },
+    "Nothing asked for yet.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Noch nichts angefordert."
+          }
+        }
+      }
+    },
+    "Nothing has been archived on this phone.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auf diesem Telefon wurde nichts archiviert."
+          }
+        }
+      }
+    },
+    "Notifications are off, so this phone cannot remind you to clock out. Everything else still works.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Benachrichtigungen sind aus. Dieses Telefon kann Sie deshalb nicht daran erinnern, auszustempeln. Alles andere funktioniert weiter."
+          }
+        }
+      }
+    },
+    "Open Settings": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einstellungen öffnen"
+          }
+        }
+      }
+    },
+    "Over 8 hours": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Über 8 Stunden"
+          }
+        }
+      }
+    },
+    "Ready to collect": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zum Abholen bereit"
+          }
+        }
+      }
+    },
+    "Ready to collect: %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zum Abholen bereit: %@"
+          }
+        }
+      }
+    },
+    "Recent": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zuletzt"
+          }
+        }
+      }
+    },
+    "Records an app update archived or flagged on this phone.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zeigt, was eine App-Aktualisierung auf diesem Telefon archiviert oder markiert hat."
+          }
+        }
+      }
+    },
+    "Rejected by the server (%@). Ask your admin.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vom Server abgelehnt (%@). Bitte bei Ihrer Verwaltung nachfragen."
+          }
+        }
+      }
+    },
+    "Removes this from the ready-to-collect list": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entfernt den Eintrag aus der Liste „Zum Abholen bereit“"
+          }
+        }
+      }
+    },
+    "Returns to the sign-in screen so you can use a different Apple ID": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zurück zur Anmeldung, um eine andere Apple-ID zu verwenden"
+          }
+        }
+      }
+    },
+    "Running": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Läuft"
+          }
+        }
+      }
+    },
+    "Save finish time": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Endzeit speichern"
+          }
+        }
+      }
+    },
+    "Send request": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anfrage senden"
+          }
+        }
+      }
+    },
+    "Sending…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird gesendet …"
+          }
+        }
+      }
+    },
+    "Sent": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gesendet"
+          }
+        }
+      }
+    },
+    "Sent with the building you're clocked into now, so the office knows where you are. Open this tab to see when something arrives - your phone will not notify you.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird mit dem Objekt gesendet, in dem Sie gerade eingestempelt sind, damit die Verwaltung weiß, wo Sie sind. Öffnen Sie diesen Reiter, um zu sehen, wann etwas eingetroffen ist – Ihr Telefon meldet sich nicht von selbst."
+          }
+        }
+      }
+    },
+    "Server trouble - will retry.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serverproblem – wird erneut versucht."
+          }
+        }
+      }
+    },
+    "Settings": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einstellungen"
+          }
+        }
+      }
+    },
+    "Shift at %@ passed 8 hours and was closed automatically. Confirm when you finished.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schicht bei %@ hat 8 Stunden überschritten und wurde automatisch beendet. Bitte bestätigen Sie, wann Sie fertig waren."
+          }
+        }
+      }
+    },
+    "Shift closed automatically": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schicht automatisch beendet"
+          }
+        }
+      }
+    },
+    "Shift running": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schicht läuft"
+          }
+        }
+      }
+    },
+    "Shift running for %lld hours %lld minutes at %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shift running for %1$lld hours %2$lld minutes at %3$@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schicht läuft seit %1$lld Stunden %2$lld Minuten bei %3$@"
+          }
+        }
+      }
+    },
+    "Shifts": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schichten"
+          }
+        }
+      }
+    },
+    "Shifts already sent stay on the server. Anything still waiting to send will be blocked until you sign back in.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bereits gesendete Schichten bleiben am Server. Alles, was noch nicht gesendet wurde, bleibt blockiert, bis Sie sich wieder anmelden."
+          }
+        }
+      }
+    },
+    "Sign in to log your hours.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Melden Sie sich an, um Ihre Stunden zu erfassen."
+          }
+        }
+      }
+    },
+    "Sign out": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abmelden"
+          }
+        }
+      }
+    },
+    "Signed in as": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Angemeldet als"
+          }
+        }
+      }
+    },
+    "Signed in as %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Angemeldet als %@"
+          }
+        }
+      }
+    },
+    "Some older requests on this phone couldn't be read. Anything already sent is safe on the server.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einige ältere Anfragen auf diesem Telefon konnten nicht gelesen werden. Alles bereits Gesendete liegt sicher am Server."
+          }
+        }
+      }
+    },
+    "Something wrong? Ask what to do — hours, locations and payroll are managed by your admin on the web. You can still request material and sign out from the tabs below.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Etwas stimmt nicht? Fragen Sie Ihre Verwaltung – Stunden, Objekte und Abrechnung werden im Web verwaltet. Material anfordern und Abmelden erreichen Sie weiterhin über die Reiter unten."
+          }
+        }
+      }
+    },
+    "Started": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Begonnen"
+          }
+        }
+      }
+    },
+    "Started %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Begonnen um %@"
+          }
+        }
+      }
+    },
+    "Still clocked in": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Noch eingestempelt"
+          }
+        }
+      }
+    },
+    "Summary": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Übersicht"
+          }
+        }
+      }
+    },
+    "The office hasn't switched this on yet. Anything you write is saved and sent as soon as they do.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Verwaltung hat das noch nicht freigeschaltet. Was Sie schreiben, wird gespeichert und gesendet, sobald es so weit ist."
+          }
+        }
+      }
+    },
+    "The office reads these on the web. Open this tab to see when something arrives - your phone will not notify you.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Verwaltung liest die Anfragen im Web. Öffnen Sie diesen Reiter, um zu sehen, wann etwas eingetroffen ist – Ihr Telefon meldet sich nicht von selbst."
+          }
+        }
+      }
+    },
+    "The server doesn't have this request any more. Ask your admin.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Server kennt diese Anfrage nicht mehr. Bitte bei Ihrer Verwaltung nachfragen."
+          }
+        }
+      }
+    },
+    "The server doesn't have this shift. Ask your admin.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Server kennt diese Schicht nicht. Bitte bei Ihrer Verwaltung nachfragen."
+          }
+        }
+      }
+    },
+    "These came from an older version of the app. They had no building and no hours, so they could not be sent and could not be paid. A copy is kept on this phone.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese stammen aus einer älteren Version der App. Sie hatten kein Objekt und keine Stunden, konnten also weder gesendet noch bezahlt werden. Eine Kopie bleibt auf diesem Telefon."
+          }
+        }
+      }
+    },
+    "These have hours but no building, so nobody can send them without knowing where they were worked. Your admin has to enter them - they have not been lost.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese haben Stunden, aber kein Objekt – ohne zu wissen, wo gearbeitet wurde, kann sie niemand senden. Ihre Verwaltung muss sie eintragen; verloren sind sie nicht."
+          }
+        }
+      }
+    },
+    "These shifts were closed automatically after 8 hours. Enter when you actually finished.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Schichten wurden nach 8 Stunden automatisch beendet. Bitte eintragen, wann Sie tatsächlich fertig waren."
+          }
+        }
+      }
+    },
+    "This Apple ID isn't registered as a worker yet. Read the address below to your manager and ask them to add it to your worker record, then sign in again.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Apple-ID ist noch nicht als Mitarbeiter registriert. Lesen Sie die Adresse unten Ihrer Verwaltung vor und lassen Sie sie in Ihrem Mitarbeiterdatensatz eintragen, dann melden Sie sich erneut an."
+          }
+        }
+      }
+    },
+    "This Apple ID isn't registered as a worker.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Apple-ID ist nicht als Mitarbeiter registriert."
+          }
+        }
+      }
+    },
+    "This Apple ID isn't registered as a worker. Ask your manager to add you, then sign in again.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Apple-ID ist nicht als Mitarbeiter registriert. Bitten Sie Ihre Verwaltung, Sie einzutragen, und melden Sie sich dann erneut an."
+          }
+        }
+      }
+    },
+    "This app has no push. Everything you see here updates when you open it.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese App hat kein Push. Alles hier wird aktualisiert, wenn Sie die App öffnen."
+          }
+        }
+      }
+    },
+    "This app version was rejected by the server. Update it.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese App-Version wurde vom Server abgelehnt. Bitte aktualisieren."
+          }
+        }
+      }
+    },
+    "This location was removed. Ask your admin.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses Objekt wurde entfernt. Bitte bei Ihrer Verwaltung nachfragen."
+          }
+        }
+      }
+    },
+    "This phone's clock looks wrong. Check Date & Time in Settings.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Uhr dieses Telefons scheint falsch zu gehen. Bitte Datum & Uhrzeit in den Einstellungen prüfen."
+          }
+        }
+      }
+    },
+    "This request was written by a different account and can't be sent.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Anfrage wurde von einem anderen Konto geschrieben und kann nicht gesendet werden."
+          }
+        }
+      }
+    },
+    "This shift is missing its location and can't be sent.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Schicht fehlt das Objekt, sie kann nicht gesendet werden."
+          }
+        }
+      }
+    },
+    "This shift is missing its location. Your admin has to enter it - it has not been lost.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Schicht fehlt das Objekt. Ihre Verwaltung muss es eintragen – verloren ist sie nicht."
+          }
+        }
+      }
+    },
+    "This shift passed 8 hours and was closed automatically. It will not be paid until you confirm when you actually finished.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Schicht hat 8 Stunden überschritten und wurde automatisch beendet. Sie wird erst bezahlt, wenn Sie bestätigen, wann Sie tatsächlich fertig waren."
+          }
+        }
+      }
+    },
+    "This shift was logged by a different account and can't be sent.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Schicht wurde von einem anderen Konto erfasst und kann nicht gesendet werden."
+          }
+        }
+      }
+    },
+    "This week": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Woche"
+          }
+        }
+      }
+    },
+    "TimeSheet": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zeiterfassung"
+          }
+        }
+      }
+    },
+    "Too many attempts - try again shortly.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Versuche – bitte in Kürze erneut versuchen."
+          }
+        }
+      }
+    },
+    "Total": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gesamt"
+          }
+        }
+      }
+    },
+    "Unfinished shifts": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht abgeschlossene Schichten"
+          }
+        }
+      }
+    },
+    "Unknown location": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unbekanntes Objekt"
+          }
+        }
+      }
+    },
+    "We checked your old records": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wir haben Ihre alten Einträge geprüft"
+          }
+        }
+      }
+    },
+    "We cleaned up %lld old record%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "We cleaned up %1$lld old record%2$@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wir haben %1$lld alte%2$@ Eintrag/Einträge bereinigt"
+          }
+        }
+      }
+    },
+    "What do you need?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Was brauchen Sie?"
+          }
+        }
+      }
+    },
+    "Write it in your own words, for example: two mops and a large bottle of glass cleaner": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schreiben Sie es in Ihren eigenen Worten, zum Beispiel: zwei Mopps und eine große Flasche Glasreiniger"
+          }
+        }
+      }
+    },
+    "You were signed out. Sign in again.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie wurden abgemeldet. Bitte melden Sie sich erneut an."
+          }
+        }
+      }
+    },
+    "You're not on the worker list": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie stehen nicht auf der Mitarbeiterliste"
+          }
+        }
+      }
+    },
+    "Your name is no longer on the roster. Ask your admin.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihr Name steht nicht mehr auf der Liste. Bitte bei Ihrer Verwaltung nachfragen."
+          }
+        }
+      }
+    },
+    "Your requests": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihre Anfragen"
+          }
+        }
+      }
+    },
+    "Your shift at %@ hit 8 hours and was closed automatically. Open the app and confirm when you actually finished, or it will not be paid.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihre Schicht bei %@ hat 8 Stunden erreicht und wurde automatisch beendet. Öffnen Sie die App und bestätigen Sie, wann Sie tatsächlich fertig waren – sonst wird sie nicht bezahlt."
+          }
+        }
+      }
+    },
+    "Your sign-in address": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihre Anmeldeadresse"
+          }
+        }
+      }
+    },
+    "Your sign-in address: %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihre Anmeldeadresse: %@"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

@@ -33,6 +33,17 @@
     <string name="log_hint_stop">Hold your phone to the tag again to finish.</string>
     <string name="log_refresh">Refresh</string>
     <string name="unknown_location">Unknown location</string>
+    <string name="dismiss">Dismiss</string>
+    <string name="log_no_push_note">This app has no push. Everything you see here updates when you open it.</string>
+
+    <string name="shift_running_heading">Clocked in</string>
+    <string name="shift_running_label">Running</string>
+    <string name="shift_overdue_heading">Over 8 hours</string>
+    <string name="shift_overdue_body">This shift passed 8 hours and was closed automatically. It will not be paid until you confirm when you actually finished.</string>
+    <string name="shift_started_at">Started %1$s</string>
+    <string name="shift_notifications_off">Notifications are off, so this phone cannot remind you to clock out. Everything else still works.</string>
+    <string name="shift_notifications_settings">Open settings</string>
+    <string name="shift_help">Something wrong? Ask your admin — hours, locations and payroll are managed on the web. You can still request material and sign out from the tabs below.</string>
     <string name="status_running">In progress</string>
     <string name="status_auto_closed">Auto-closed</string>
     <string name="status_corrected">Corrected</string>
@@ -51,6 +62,10 @@
     <string name="resolve_save">Save finish time</string>
     <string name="resolve_saving">Saving …</string>
     <string name="resolve_later">Later</string>
+    <string name="resolve_progress">Shift %1$d of %2$d</string>
+    <string name="resolve_date">Date: %1$s</string>
+    <string name="resolve_date_done">Done</string>
+    <string name="resolve_end_preview">Finished: %1$s</string>
 
     <string name="history_title">History</string>
     <string name="history_summary">Summary</string>
@@ -135,5 +150,18 @@
         <item quantity="one">%d material request has arrived</item>
         <item quantity="other">%d material requests have arrived</item>
     </plurals>
+    <string name="a11y_shift_elapsed">Shift running for %1$d hours %2$d minutes at %3$s</string>
+    <string name="a11y_shift_overdue">Shift at %1$s passed 8 hours and was closed automatically. Confirm when you finished.</string>
+
+    <string name="notify_channel_name">Running shift</string>
+    <string name="notify_channel_description">Shows that you are clocked in, and reminds you to clock out.</string>
+    <string name="notify_running_title">Clocked in: %1$s</string>
+    <string name="notify_running_body">Hold your phone to the tag to finish.</string>
+    <string name="notify_overdue_title">Confirm your shift: %1$s</string>
+    <string name="notify_overdue_body">Over 8 hours — closed automatically. Open the app and confirm when you finished, or it will not be paid.</string>
+    <string name="notify_reminder_title">Still clocked in</string>
+    <string name="notify_reminder_body">%1$d h at %2$s. Hold your phone to the tag to finish.</string>
+    <string name="notify_autoclose_title">Shift closed automatically</string>
+    <string name="notify_autoclose_body">Your shift at %1$s hit 8 hours and was closed automatically. Confirm in the app when you actually finished, or it will not be paid.</string>
 
 </resources>

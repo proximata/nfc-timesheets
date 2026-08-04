@@ -86,7 +86,7 @@ private func pushOpen(_ shift: Shift, as workerId: Int) async -> Bool {
         // A row from before this version, or a tag that never parsed. It can never be
         // posted, so say so once and stop retrying it forever.
         shift.syncBlocked = true
-        shift.syncError = "This shift is missing its location and can't be sent."
+        shift.syncError = String(localized: "This shift is missing its location and can't be sent.")
         return false
     }
     guard shift.workerId == workerId else {
@@ -95,7 +95,7 @@ private func pushOpen(_ shift: Shift, as workerId: Int) async -> Bool {
         // now, so it is blocked LOUDLY instead - a wrong name on a payslip is worse than
         // a visible failure.
         shift.syncBlocked = true
-        shift.syncError = "This shift was logged by a different account and can't be sent."
+        shift.syncError = String(localized: "This shift was logged by a different account and can't be sent.")
         return false
     }
     do {

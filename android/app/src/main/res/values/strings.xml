@@ -48,6 +48,22 @@
     <string name="log_hint_stop">Halten Sie Ihr Telefon erneut an den Tag, um zu beenden.</string>
     <string name="log_refresh">Aktualisieren</string>
     <string name="unknown_location">Unbekanntes Objekt</string>
+    <string name="dismiss">Ausblenden</string>
+    <!-- decision-23: es gibt kein Push. Wer eine Benachrichtigung verspricht, die nie
+         kommt, hat kein spätes Paket, sondern ein kaputtes Produkt. -->
+    <string name="log_no_push_note">Diese App hat kein Push. Alles hier wird aktualisiert, wenn Sie die App öffnen.</string>
+
+    <!-- Der Schicht-Bildschirm: was die App zeigt, solange eine Schicht läuft.
+         Zustand steht immer im TEXT, nie nur in der Farbe. -->
+    <string name="shift_running_heading">Eingestempelt</string>
+    <string name="shift_running_label">Läuft</string>
+    <string name="shift_overdue_heading">Über 8 Stunden</string>
+    <string name="shift_overdue_body">Diese Schicht hat 8 Stunden überschritten und wurde automatisch beendet. Sie wird erst bezahlt, wenn Sie bestätigen, wann Sie tatsächlich fertig waren.</string>
+    <!-- %1$s = Uhrzeit -->
+    <string name="shift_started_at">Begonnen um %1$s</string>
+    <string name="shift_notifications_off">Benachrichtigungen sind aus. Dieses Telefon kann Sie deshalb nicht daran erinnern, auszustempeln. Alles andere funktioniert weiter.</string>
+    <string name="shift_notifications_settings">Einstellungen öffnen</string>
+    <string name="shift_help">Etwas stimmt nicht? Fragen Sie Ihre Verwaltung – Stunden, Objekte und Abrechnung werden im Web verwaltet. Material anfordern und Abmelden erreichen Sie weiterhin über die Reiter unten.</string>
     <string name="status_running">Läuft</string>
     <string name="status_auto_closed">Automatisch beendet</string>
     <string name="status_corrected">Korrigiert</string>
@@ -68,6 +84,13 @@
     <string name="resolve_save">Endzeit speichern</string>
     <string name="resolve_saving">Wird gespeichert …</string>
     <string name="resolve_later">Später</string>
+    <!-- %1$d = laufende Nummer, %2$d = Anzahl gesamt -->
+    <string name="resolve_progress">Schicht %1$d von %2$d</string>
+    <!-- %1$s = gewähltes Datum -->
+    <string name="resolve_date">Datum: %1$s</string>
+    <string name="resolve_date_done">Fertig</string>
+    <!-- %1$s = Datum und Uhrzeit des gewählten Endes -->
+    <string name="resolve_end_preview">Ende: %1$s</string>
 
     <!-- Verlauf -->
     <string name="history_title">Verlauf</string>
@@ -181,5 +204,29 @@
         <item quantity="one">%d Materialanfrage ist eingetroffen</item>
         <item quantity="other">%d Materialanfragen sind eingetroffen</item>
     </plurals>
+    <!-- Die EINE gesprochene Fassung der laufenden Uhr. Die tickenden Ziffern selbst sind
+         für TalkBack ausgeblendet: eine Ansage pro Sekunde macht den Bildschirm
+         unbenutzbar. %1$d = Stunden, %2$d = Minuten, %3$s = Objekt -->
+    <string name="a11y_shift_elapsed">Schicht läuft seit %1$d Stunden %2$d Minuten bei %3$s</string>
+    <!-- %1$s = Objekt -->
+    <string name="a11y_shift_overdue">Schicht bei %1$s hat 8 Stunden überschritten und wurde automatisch beendet. Bitte bestätigen Sie, wann Sie fertig waren.</string>
+
+    <!-- Benachrichtigungen. Die dauerhafte läuft mit der System-Stoppuhr; die Erinnerungen
+         werden von AlarmManager gestellt. Kein Vordergrunddienst – siehe
+         notify/ShiftSignals.kt und AndroidManifest.xml. -->
+    <string name="notify_channel_name">Laufende Schicht</string>
+    <string name="notify_channel_description">Zeigt an, dass Sie eingestempelt sind, und erinnert Sie ans Ausstempeln.</string>
+    <!-- %1$s = Objekt -->
+    <string name="notify_running_title">Eingestempelt: %1$s</string>
+    <string name="notify_running_body">Halten Sie Ihr Telefon an den Tag, um zu beenden.</string>
+    <!-- %1$s = Objekt -->
+    <string name="notify_overdue_title">Schicht bestätigen: %1$s</string>
+    <string name="notify_overdue_body">Über 8 Stunden – automatisch beendet. Öffnen Sie die App und bestätigen Sie, wann Sie fertig waren, sonst wird die Schicht nicht bezahlt.</string>
+    <string name="notify_reminder_title">Noch eingestempelt</string>
+    <!-- %1$d = Stunden seit Beginn, %2$s = Objekt -->
+    <string name="notify_reminder_body">%1$d Std. bei %2$s. Halten Sie Ihr Telefon an den Tag, um zu beenden.</string>
+    <string name="notify_autoclose_title">Schicht automatisch beendet</string>
+    <!-- %1$s = Objekt -->
+    <string name="notify_autoclose_body">Ihre Schicht bei %1$s hat 8 Stunden erreicht und wurde automatisch beendet. Bitte bestätigen Sie in der App, wann Sie tatsächlich fertig waren – sonst wird sie nicht bezahlt.</string>
 
 </resources>

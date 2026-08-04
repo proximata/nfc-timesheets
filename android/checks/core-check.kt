@@ -28,7 +28,9 @@ import io.github.qwadratic.nfctimesheets.core.MaterialStatus
 import io.github.qwadratic.nfctimesheets.core.QueuedMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
+import io.github.qwadratic.nfctimesheets.core.RunningShift
 import io.github.qwadratic.nfctimesheets.core.SessionCookie
+import io.github.qwadratic.nfctimesheets.core.ShiftSignal
 import io.github.qwadratic.nfctimesheets.core.SyncPlan
 import io.github.qwadratic.nfctimesheets.core.SyncPlan.QueuedShift
 import io.github.qwadratic.nfctimesheets.core.TagLink
@@ -79,6 +81,7 @@ fun main() {
     enrolmentAgainstServer()
     sessionPersistence()
     materialRequests()
+    shiftSignal()
 
     if (failed) exitProcess(1)
     println("core-check: OK")
@@ -1061,5 +1064,237 @@ private fun materialRequests() {
     check(
         !Regex("""fun submitMaterial\([^)]*worker""").containsMatchIn(model),
         "and there is no worker parameter to pass a different one in",
+    )
+}
+
+// ---------------------------------------------------------------------------------
+// 13. THE IN-SHIFT STATE MACHINE, the lock, and the out-of-app signal.
+//
+// A shift opens -> locked screen + notification + ladder. It closes -> every one of
+// them off. An auto-closed shift leaves NO stuck lock and NO orphaned notification.
+//
+// Mirrors NFCTimeSheets/checks/shift-signal-check.swift assertion for assertion. The
+// two platforms are supposed to behave the same; if one of these files changes alone,
+// that has stopped being true, and the constant-parity block at the end says so.
+// ---------------------------------------------------------------------------------
+private fun shiftSignal() {
+    val start = Instant.parse("2024-11-14T22:13:20Z")   // fixed; nothing depends on "now"
+    fun at(hours: Double) = start.plusMillis((hours * 3_600_000).toLong())
+
+    val shift = RunningShift(locationId = UUID_A, locationName = "Westbahnhof", startTime = start)
+
+    // ---- the state machine -------------------------------------------------------
+    val opened = ShiftSignal.plan(shift, at(0.01))
+    check(opened.lockScreen, "an open shift puts the app into the locked shift screen")
+    check(opened.ongoingNotification, "an open shift posts the ongoing notification")
+    check(opened.remindersScheduled, "an open shift schedules the reminder ladder")
+    check(opened.phase == ShiftSignal.Phase.RUNNING, "and it is running")
+
+    val closed = ShiftSignal.plan(null, at(3.0))
+    check(closed == ShiftSignal.SignalPlan.IDLE, "no open shift means the idle plan and nothing else")
+    check(!closed.lockScreen, "a closed shift unlocks the app")
+    check(!closed.ongoingNotification, "a closed shift cancels the ongoing notification")
+    check(!closed.remindersScheduled, "a closed shift cancels the ladder")
+    check(closed.phase == null, "a closed shift has no phase")
+
+    // The 8h boundary, computed LOCALLY. ops/sql/autoclose.sql closes at start+8h and the
+    // client must reach the same conclusion with no server round trip, because a clock-in
+    // works offline and a server-supplied deadline would be a second, unreliable source.
+    check(ShiftSignal.AUTO_CLOSE_AFTER.toHours() == 8L, "the auto-close boundary is 8 hours (decision-10)")
+    check(
+        ShiftSignal.phase(start, at(7.99), false) == ShiftSignal.Phase.RUNNING,
+        "7h59 is still running",
+    )
+    check(
+        ShiftSignal.phase(start, at(8.0), false) == ShiftSignal.Phase.OVERDUE,
+        "exactly 8h is overdue - the server's timer has fired by then",
+    )
+    check(
+        ShiftSignal.phase(start, at(8.01), false) == ShiftSignal.Phase.OVERDUE,
+        "8h01 is overdue",
+    )
+    check(ShiftSignal.autoCloseDeadline(start) == at(8.0), "the deadline is start + 8h")
+
+    val overdue = ShiftSignal.plan(shift, at(9.0))
+    check(overdue.phase == ShiftSignal.Phase.OVERDUE, "past 8h the phase flips")
+    check(overdue.lockScreen, "...the screen stays - the worker still has to act")
+    check(overdue.ongoingNotification, "...and so does the notification, with different words")
+    check(!overdue.remindersScheduled, "...but nothing new is scheduled: every rung has fired")
+
+    // THE AUTO-CLOSED SHIFT MUST NOT LEAVE A STUCK LOCK. Two halves, both needed.
+    val serverClosed = shift.copy(serverAutoClosed = true)
+    check(
+        ShiftSignal.phase(serverClosed, at(0.5)) == ShiftSignal.Phase.OVERDUE,
+        "a server-flagged auto-close is overdue after 30 minutes, not after 8 hours",
+    )
+    check(
+        !ShiftSignal.plan(serverClosed, at(0.5)).remindersScheduled,
+        "a shift the server has closed never schedules another reminder",
+    )
+    check(
+        ShiftSignal.plan(null, at(9.0)) == ShiftSignal.SignalPlan.IDLE,
+        "resolving an auto-closed shift leaves no lock and no notification",
+    )
+
+    // ---- the lock never traps anybody --------------------------------------------
+    for (running in listOf(true, false)) {
+        val tabs = ShiftSignal.visibleTabs(running)
+        check(ShiftSignal.Tab.LOG in tabs, "the log tab exists whether or not a shift runs ($running)")
+        check(
+            ShiftSignal.Tab.MATERIALS in tabs,
+            "material is reachable while a shift runs - that is exactly when it is needed ($running)",
+        )
+        check(
+            ShiftSignal.Tab.SETTINGS in tabs,
+            "settings, and therefore ABMELDEN, is reachable in every state (decision-26) ($running)",
+        )
+    }
+    check(
+        ShiftSignal.Tab.HISTORY !in ShiftSignal.visibleTabs(true),
+        "Verlauf is the one thing the lock hides - nothing in it is time-critical",
+    )
+    check(
+        ShiftSignal.visibleTabs(false) == ShiftSignal.Tab.entries.toList(),
+        "with no shift running the app is exactly as it was",
+    )
+
+    // ---- the permission moment ---------------------------------------------------
+    check(
+        !ShiftSignal.shouldAskForNotifications(33, hasClockedIn = false, alreadyAsked = false),
+        "NEVER ask before the first clock-in: that means asking at a door at 06:02 with gloves on",
+    )
+    check(
+        !ShiftSignal.shouldAskForNotifications(32, hasClockedIn = true, alreadyAsked = false),
+        "below API 33 there is no runtime permission to ask for",
+    )
+    check(
+        ShiftSignal.shouldAskForNotifications(33, hasClockedIn = true, alreadyAsked = false),
+        "ask once, afterwards, from the shift screen",
+    )
+    check(
+        !ShiftSignal.shouldAskForNotifications(36, hasClockedIn = true, alreadyAsked = true),
+        "and never again - a refusal is one sentence, not a nag",
+    )
+
+    // ---- the ladder --------------------------------------------------------------
+    check(ShiftSignal.REMINDER_HOURS == listOf(1, 2, 3, 4, 5, 6, 7, 8), "eight rungs, one an hour")
+    check(!ShiftSignal.isAutoCloseWarning(7), "the 7h rung is a nudge")
+    check(ShiftSignal.isAutoCloseWarning(8), "the 8h rung is the auto-close itself")
+    check(
+        ShiftSignal.REMINDER_HOURS.all { it * 3600L <= ShiftSignal.AUTO_CLOSE_AFTER.seconds },
+        "no rung fires after the server has closed the shift",
+    )
+
+    // ---- spoken duration: one label, not a per-second live region -----------------
+    val spoken = ShiftSignal.elapsed(start, at(3.0).plusSeconds(14 * 60 + 30))
+    check(spoken == 3 to 14, "3h14m30s is spoken as 3 hours 14 minutes: the seconds are not in it")
+    check(
+        spoken == ShiftSignal.elapsed(start, at(3.0).plusSeconds(14 * 60 + 59)),
+        "the spoken label does not change within a minute, so TalkBack is not spammed",
+    )
+    check(
+        ShiftSignal.elapsed(start, start.minusSeconds(60)) == 0 to 0,
+        "a phone whose clock jumped backwards reads 0h 0m, never a negative duration",
+    )
+
+    // ---- THE TAP IS NEVER BLOCKED, read as text ----------------------------------
+    // The ordering lives in the ViewModel, which imports Android. Deleting it would make
+    // a failed signal able to cost somebody a clock-in, which is the one thing this
+    // feature is not allowed to do.
+    val model = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetViewModel.kt").readText()
+    val tap = model.substringAfter("fun handleTap(").substringBefore("\n    /**")
+    val write = tap.indexOf("writeTap(worker.id, locationId)")
+    val arm = tap.indexOf("armSignals()")
+    check(write >= 0, "handleTap still writes the local row")
+    check(arm >= 0, "handleTap arms the signal")
+    check(
+        write < arm,
+        "THE LOCAL ROW IS WRITTEN BEFORE ANY SIGNAL WORK. A tap in a basement counts even " +
+            "if every signal fails; the reverse would lose paid time.",
+    )
+    check(
+        !tap.contains("Manifest.permission") && !tap.contains("launch(Manifest"),
+        "the notification prompt is NEVER on the tap path",
+    )
+    // The recovery half of the same wire: a reinstalled or rebooted phone must re-arm from
+    // the shift the SERVER knows about, through the same function a fresh tap uses.
+    val refresh = model.substringAfter("fun refresh() {").substringBefore("\n    /**")
+    check(refresh.contains("adoptServerOpenShift"), "refresh still adopts the server's open shift")
+    check(refresh.contains("armSignals()"), "...and re-arms from it")
+    // Signing out must not leave somebody else's phone claiming a shift is running.
+    check(
+        model.substringAfter("fun signOut()").substringBefore("\n    private")
+            .contains("ShiftSignals.arm(app, null)"),
+        "signing out tears every signal down",
+    )
+
+    // ---- NO FOREGROUND SERVICE (audit R5) ----------------------------------------
+    val manifestRaw = File("app/src/main/AndroidManifest.xml").readText()
+    val manifestLive = manifestRaw.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+    check(
+        !manifestLive.contains("FOREGROUND_SERVICE"),
+        "NO foreground service: it buys ZERO extra visibility (FGS notifications are inside " +
+            "the same POST_NOTIFICATIONS gate) and costs a Play declaration, a demo video and " +
+            "review on a personal account (decision-27). This is a review-gate BLOCK.",
+    )
+    check(
+        manifestRaw.contains("FOREGROUND_SERVICE"),
+        "...but the reasoning must stay written down in the manifest where somebody would add one",
+    )
+    check(
+        !manifestLive.contains("SCHEDULE_EXACT_ALARM") && !manifestLive.contains("USE_EXACT_ALARM"),
+        "the ladder uses inexact alarms; exact ones are policed by Play and nothing here needs them",
+    )
+    check(
+        manifestLive.contains("android.permission.POST_NOTIFICATIONS"),
+        "the ongoing notification needs POST_NOTIFICATIONS on API 33+",
+    )
+    check(
+        manifestLive.contains("android.permission.RECEIVE_BOOT_COMPLETED") &&
+            manifestLive.contains("android.intent.action.BOOT_COMPLETED"),
+        "a reboot clears every notification; the boot receiver is what brings it back",
+    )
+    check(
+        !manifestLive.contains("LOCKED_BOOT_COMPLETED"),
+        "LOCKED_BOOT_COMPLETED is only delivered to directBootAware components, which cannot " +
+            "read timesheets.db - declaring it would describe a recovery that never happens",
+    )
+    val signals = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/notify/ShiftSignals.kt").readText()
+    check(
+        signals.contains("setUsesChronometer(true)"),
+        "the SYSTEM ticks the elapsed time in the notification - no service, no wakelock, no battery",
+    )
+    check(signals.contains("setOngoing(true)"), "the notification is ongoing while the shift is")
+    // Tearing down must take back the DELIVERED reminder too, not only the pending alarms.
+    // A shift that closed at 07:40 leaving the 07:00 "noch eingestempelt" banner on the
+    // lock screen is worse than no signal: it tells somebody who has finished that they
+    // have not. iOS matches this with removeDeliveredNotifications.
+    val teardown = signals.substringAfter("if (running == null || !plan.ongoingNotification)")
+        .substringBefore("return")
+    check(
+        teardown.contains("cancel(ONGOING_ID)") && teardown.contains("cancel(REMINDER_ID)") &&
+            teardown.contains("cancelLadder(app)"),
+        "tearing down cancels the ongoing notification, the DELIVERED reminder and the alarms",
+    )
+    check(
+        !signals.contains("startForeground"),
+        "nothing here starts a foreground service",
+    )
+
+    // ---- CONSTANT PARITY WITH iOS ------------------------------------------------
+    // Two files, one state machine. These are the numbers a worker's pay depends on, and
+    // a platform that quietly disagrees about them is worse than one that has no signal.
+    val swift = File("../NFCTimeSheets/NFCTimeSheets/ShiftSignal.swift").readText()
+    check(
+        swift.contains("autoCloseAfter: TimeInterval = 8 * 3600"),
+        "iOS computes the same 8h boundary locally",
+    )
+    check(
+        swift.contains("reminderHours: [Int] = [1, 2, 3, 4, 5, 6, 7, 8]"),
+        "iOS climbs the same ladder",
+    )
+    check(
+        swift.contains("shiftRunning ? [.log, .materials, .settings] : AppTab.allCases"),
+        "iOS hides the same one tab and keeps the same two escapes",
     )
 }

@@ -26,6 +26,11 @@ struct ContentView: View {
     /// observable object over a JSON file - it does NOT touch the SwiftData store that
     /// holds unpushed shifts. See the header of Materials.swift.
     @State private var materials = MaterialStore()
+    /// The lock reads this and nothing else. A separate @Query rather than a value passed
+    /// up from LogView: the TAB BAR is what changes, and it is built here.
+    @Query private var shifts: [Shift]
+
+    private var shiftRunning: Bool { shifts.contains(where: \.isOpen) }
 
     var body: some View {
         switch session.state {
@@ -38,17 +43,39 @@ struct ContentView: View {
         case .ineligible(let email):
             IneligibleView(email: email)
         case .eligible(let worker):
+            // THE LOCK. While a shift runs the tab bar is shorter: History goes, because
+            // nothing in it is time-critical. Materials and Settings never go, because a
+            // worker standing in a building needs to ask for supplies and a handed-over
+            // phone must be signable-out (decision-22). The resolver is not a tab - it is
+            // a banner on the Log tab, present in every state (decision-10).
+            //
+            // This is WORK DISCIPLINE and not a security boundary: the rule lives in the
+            // pure ShiftSignal.visibleTabs, which checks/shift-signal-check.swift asserts
+            // can never return a set without Materials and Settings in it.
             TabView {
-                LogView(worker: worker).tabItem { Label("Log", systemImage: "wave.3.right") }
-                // The badge counts requests the warehouse has and the worker has not been
-                // told about. There is no push in this system (decision-23: the server's
-                // dependencies are pg + @sentry/node), so this number only moves when the
-                // app is opened, and the screen says so in words.
-                MaterialsView(worker: worker)
-                    .tabItem { Label("Materials", systemImage: "shippingbox") }
-                    .badge(materials.unseenArrivalCount)
-                HistoryView().tabItem { Label("History", systemImage: "list.bullet") }
-                SettingsView(worker: worker).tabItem { Label("Settings", systemImage: "gear") }
+                ForEach(ShiftSignal.visibleTabs(shiftRunning: shiftRunning), id: \.self) { tab in
+                    switch tab {
+                    case .log:
+                        LogView(worker: worker).tabItem { Label("Log", systemImage: "wave.3.right") }
+                    case .materials:
+                        // The badge counts requests the warehouse has and the worker has
+                        // not been told about. There is no push in this system
+                        // (decision-23: the server's dependencies are pg + @sentry/node),
+                        // so this number only moves when the app is opened, and the
+                        // screen says so in words.
+                        //
+                        // This is the TAB badge. The APP-ICON badge is a different
+                        // surface and belongs to the open shift alone - see
+                        // ShiftSignalCenter.arm.
+                        MaterialsView(worker: worker)
+                            .tabItem { Label("Materials", systemImage: "shippingbox") }
+                            .badge(materials.unseenArrivalCount)
+                    case .history:
+                        HistoryView().tabItem { Label("History", systemImage: "list.bullet") }
+                    case .settings:
+                        SettingsView(worker: worker).tabItem { Label("Settings", systemImage: "gear") }
+                    }
+                }
             }
             .environment(materials)
             // At LAUNCH, not when the Materials tab is opened: the badge is the only
@@ -135,8 +162,8 @@ struct IneligibleView: View {
 
     private var message: String {
         email == nil
-            ? "This Apple ID isn't registered as a worker. Ask your manager to add you, then sign in again."
-            : "This Apple ID isn't registered as a worker yet. Read the address below to your manager and ask them to add it to your worker record, then sign in again."
+            ? String(localized: "This Apple ID isn't registered as a worker. Ask your manager to add you, then sign in again.")
+            : String(localized: "This Apple ID isn't registered as a worker yet. Read the address below to your manager and ask them to add it to your worker record, then sign in again.")
     }
 
     var body: some View {
@@ -217,41 +244,71 @@ struct LogView: View {
     let worker: WireWorker
     @Query(sort: \Shift.startTime, order: .reverse) private var shifts: [Shift]
     @Query private var sites: [Site]
-    @State private var alertMsg: String?
+    @Environment(ShiftSignalCenter.self) private var signals
+    @Environment(\.scenePhase) private var scenePhase
+    /// "Your open shift at A was finished and one at B was started." A CARD, not an
+    /// alert: SwiftUI silently drops one of an alert and a sheet presented together, so
+    /// the old alert could eat the decision-10 resolver on exactly the tap that created
+    /// an auto-closed shift. Android has always shown this as a card; this is iOS
+    /// catching up (parity row 9).
+    @State private var switchNotice: String?
     @State private var unresolved: [WireShift] = []
     @State private var showResolver = false
 
     private var open: [Shift] { shifts.filter(\.isOpen) }
     private var recent: [Shift] { Array(shifts.filter { !$0.isOpen }.prefix(5)) }
+
+    /// The ONE value the shift screen and every out-of-app signal are derived from
+    /// (ShiftSignal.swift). Built from the LOCAL row, because a tap in a basement has one
+    /// and a server response may never arrive.
+    private var running: RunningShift? {
+        open.first.map(asRunning)
+    }
+
+    /// The same value, read straight out of the context instead of out of `@Query`.
+    ///
+    /// This is what the SIGNAL is armed from, and the distinction matters: `@Query`
+    /// republishes on SwiftData's own schedule, so reading it in the same turn as the
+    /// `context.save()` that just wrote a row can hand back the state from BEFORE the tap.
+    /// A fetch cannot. Rendering may lag a frame; a badge that says "clocked in" after a
+    /// clock-out may not.
+    private func currentRunning() -> RunningShift? {
+        let all = (try? context.fetch(FetchDescriptor<Shift>(sortBy: [SortDescriptor(\Shift.startTime, order: .reverse)]))) ?? []
+        return all.first(where: \.isOpen).map(asRunning)
+    }
+
+    private func asRunning(_ shift: Shift) -> RunningShift {
+        RunningShift(locationId: shift.locationId,
+                     locationName: siteName(shift.locationId),
+                     startTime: shift.startTime,
+                     // decision-10: the server flagged it and no human has fixed it. The
+                     // screen must then stop showing a running clock.
+                     serverAutoClosed: shift.autoClosed && shift.correctedAt == nil)
+    }
     /// "Unknown location" until the roster arrives, and that is fine: a missing name is
     /// cosmetic, a missing shift is unpaid work. Nothing branches on this string.
     private func siteName(_ id: String) -> String {
-        sites.first { $0.locationId == id }?.name ?? "Unknown location"
+        sites.first { $0.locationId == id }?.name ?? String(localized: "Unknown location")
     }
 
     var body: some View {
         NavigationStack {
-            List {
-                if !unresolved.isEmpty {
-                    Section {
-                        Button { showResolver = true } label: {
-                            Label("\(unresolved.count) unfinished shift(s) need a finish time",
-                                  systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                }
-                if !open.isEmpty {
-                    Section("In progress") {
-                        ForEach(open) { ShiftRow(shift: $0, name: siteName($0.locationId)) }
-                    }
-                }
-                Section("Recent") {
-                    if recent.isEmpty { Text("No completed shifts yet.").foregroundStyle(.secondary) }
-                    ForEach(recent) { ShiftRow(shift: $0, name: siteName($0.locationId)) }
+            // TWO SHAPES, and which one is on screen is the entire point of this work.
+            // Idle: a list of recent shifts with a hint at the bottom. Running: a
+            // full-bleed screen with a ticking clock, which is unmistakable from across
+            // a room. The old build's whole in-shift signal was an orange pill on a row.
+            Group {
+                if let running {
+                    ShiftScreen(running: running,
+                                unresolvedCount: unresolved.count,
+                                onResolve: { showResolver = true },
+                                notice: switchNotice,
+                                onDismissNotice: { switchNotice = nil })
+                } else {
+                    idleList
                 }
             }
-            .navigationTitle("TimeSheet")
+            .navigationTitle(running == nil ? "TimeSheet" : "Shift running")
             .refreshable { await refresh() }
             // There is no in-app scan button. Clocking in happens by holding the phone to
             // the tag while the app is closed: iOS reads the tag itself and opens the
@@ -265,38 +322,72 @@ struct LogView: View {
             // always meant to be deleted once background tap worked, it is gone.
             // Ceiling: if background tap proves unreliable on real hardware, the fallback is
             // NFCTagReaderSession + `TAG` in the entitlement, NOT the old NDEF session.
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 6) {
-                    Image(systemName: "wave.3.right")
-                        .font(.title2)
-                        .foregroundStyle(.tint)
-                        .accessibilityHidden(true)
-                    Text(open.isEmpty
-                         ? "Hold your phone to the tag by the entrance to start."
-                         : "Hold your phone to the tag again to finish.")
-                        .font(.callout)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(.bar)
-                .accessibilityElement(children: .combine)
-            }
             .onChange(of: inbox.pendingLocationId) { _, id in
                 guard id != nil, let tapped = inbox.take() else { return }
                 handleTap(tapped)
             }
             .task {
                 if let pending = inbox.take() { handleTap(pending) }  // tap that launched the app
+                await signals.refreshAuthorization()
                 await refresh()
             }
-            .sheet(isPresented: $showResolver) {
+            // onDismiss, not just on present: confirming an auto-closed shift is the one
+            // path that can end a shift WITHOUT a tag tap, and a lock screen or a badge
+            // left standing after it would be exactly the "stuck lock / orphaned
+            // notification" this work exists to prevent.
+            .sheet(isPresented: $showResolver, onDismiss: { signals.arm(for: currentRunning()) }) {
                 ResolveSheet(shifts: $unresolved, siteName: siteName)
             }
-            .alert("Can't log", isPresented: .constant(alertMsg != nil)) {
-                Button("OK") { alertMsg = nil }
-            } message: { Text(alertMsg ?? "") }
+            // Coming back from the background is the only chance to re-arm a Live Activity
+            // the worker dismissed by hand, or to notice that notifications were switched
+            // on (or off) in Settings while the app was not running.
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                signals.arm(for: currentRunning())
+                Task { await signals.refreshAuthorization() }
+            }
+        }
+    }
+
+    /// The app with no shift running: unchanged from before this screen split.
+    private var idleList: some View {
+        List {
+            if !unresolved.isEmpty {
+                Section {
+                    Button { showResolver = true } label: {
+                        Label("\(unresolved.count) unfinished shift(s) need a finish time",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+            Section("Recent") {
+                if recent.isEmpty { Text("No completed shifts yet.").foregroundStyle(.secondary) }
+                ForEach(recent) { ShiftRow(shift: $0, name: siteName($0.locationId)) }
+            }
+            Section {
+                VStack(spacing: 6) {
+                    Image(systemName: "wave.3.right")
+                        .font(.title2)
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                    Text("Hold your phone to the tag by the entrance to start.")
+                        .font(.callout)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .accessibilityElement(children: .combine)
+            }
+            Section {
+                // Android has said this out loud since day one and iOS only had it as a
+                // code comment (parity row 20). Promising a notification to somebody who
+                // then does not get one is the difference between a late delivery and a
+                // broken product.
+                Text("This app has no push. Everything you see here updates when you open it.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -305,6 +396,13 @@ struct LogView: View {
         await adoptServerOpenShift(context: context)
         await syncPending(context: context, workerId: worker.id)
         unresolved = await fetchUnresolved()
+        // THE RECOVERY HALF OF THE ONE WIRE (audit §4). adoptServerOpenShift may have just
+        // learned about a shift this phone had never heard of - reinstall, new device, or
+        // a tap that opened the shift before the local row landed - and the badge, the
+        // ladder and the Live Activity have to come back from exactly the same call the
+        // tap path uses. `running` is recomputed from the store, so a shift the server
+        // closed in the meantime arms nothing at all.
+        signals.arm(for: currentRunning())
     }
 
     /// One tap = one toggle. The row is written locally first (so a tap in a basement
@@ -358,7 +456,7 @@ struct LogView: View {
                 // (decision-10), which keeps the invariant that no shift reaches payroll
                 // with an unconfirmed end time. A normal tap-out stays unflagged.
                 running.autoClosed = true
-                alertMsg = "Finished your open shift at \(siteName(running.locationId)) and started at \(siteName(locationId)). Confirm when you actually left \(siteName(running.locationId)) — it will not count until you do."
+                switchNotice = String(localized: "Finished your open shift at \(siteName(running.locationId)) and started at \(siteName(locationId)). Confirm when you actually left \(siteName(running.locationId)) — it will not count until you do.")
                 touched = startShift(at: locationId)
                 action = "switch"
             } else {
@@ -370,6 +468,14 @@ struct LogView: View {
             action = "open"
         }
         try? context.save()
+
+        // AFTER the save and never before it. Everything below this line is a signal, and
+        // a signal may never delay, throw into, or fail a clock-in (audit R2): arm(for:)
+        // is synchronous, non-throwing, and hands every OS call to a detached Task. A
+        // denied permission, Live Activities switched off and a dead network are all
+        // "arm nothing" - never "reject the tap". checks/shift-signal-check.swift pins
+        // this ordering by reading this function as text.
+        signals.arm(for: currentRunning())
 
         write.data("ts.shift.action", action)
         write.data("ts.shift.client_uuid", touched.clientUuidString)
@@ -387,11 +493,10 @@ struct LogView: View {
             "ts.tap.unresolved_pending": mustResolve,
         ])
 
-        // A location switch already claims the screen with an alert, and SwiftUI will not
-        // show an alert and a sheet at once - one of the two would be silently dropped.
-        // The persistent orange warning row at the top of the List is the fallback in that
-        // case, so no information is lost either way.
-        if mustResolve && alertMsg == nil { showResolver = true }
+        // The switch notice is a card now, not an alert, so it cannot collide with this
+        // sheet and the old `alertMsg == nil` guard is gone with it: an unresolved shift
+        // ALWAYS opens the resolver, including on the tap that just created one.
+        if mustResolve { showResolver = true }
 
         Task {
             // Wraps the await rather than being started after it: a span that covers the
@@ -482,11 +587,18 @@ struct ResolveSheet: View {
     @State private var picked: [Int: Date] = [:]
     @State private var error: String?
     @State private var busy = false
+    /// How many there were when this sheet opened, so the worker can watch the queue
+    /// shrink. decision-10 point 3 asked for this and neither platform had it.
+    @State private var total = 0
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
+                    if total > 1 {
+                        Text("\(total - shifts.count + 1) of \(total) confirmed")
+                            .font(.footnote.weight(.semibold))
+                    }
                     Text("These shifts were closed automatically after 8 hours. Enter when you actually finished.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
@@ -507,6 +619,7 @@ struct ResolveSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Later") { dismiss() } }
             }
+            .task { if total == 0 { total = shifts.count } }
         }
     }
 
@@ -543,7 +656,7 @@ struct HistoryView: View {
     @Query(sort: \Shift.startTime, order: .reverse) private var shifts: [Shift]
     @Query private var sites: [Site]
     private func siteName(_ id: String) -> String {
-        sites.first { $0.locationId == id }?.name ?? "Unknown location"
+        sites.first { $0.locationId == id }?.name ?? String(localized: "Unknown location")
     }
 
     private var completed: [Shift] { shifts.filter { !$0.isOpen } }

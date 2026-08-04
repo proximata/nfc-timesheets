@@ -30,5 +30,19 @@
 	     project.pbxproj edit. -->
 	<key>TSTagHost</key>
 	<string>$(TS_TAG_HOST)</string>
+
+	<!-- Live Activities: the running shift on the Lock Screen and in the Dynamic Island,
+	     with a timer the SYSTEM ticks. Apple requires this key in the APP target's
+	     Info.plist; this file is already wired via INFOPLIST_FILE, so it needs no
+	     project.pbxproj edit.
+
+	     It is switched on ahead of the widget extension ON PURPOSE, and doing so is inert:
+	     the extension is what RENDERS a Live Activity, so until the owner adds that target
+	     (docs/LIVE-ACTIVITY-SETUP.md) Activity.request simply throws, LiveActivityController
+	     swallows it, and the app behaves exactly as it did before. The alternative -
+	     shipping the code and forgetting the key - is a build where the owner does all the
+	     Xcode work and still sees nothing. -->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 </dict>
 </plist>

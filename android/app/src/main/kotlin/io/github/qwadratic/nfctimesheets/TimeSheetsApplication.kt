@@ -10,6 +10,7 @@ import io.github.qwadratic.nfctimesheets.data.WorkerCache
 import io.github.qwadratic.nfctimesheets.net.Api
 import io.github.qwadratic.nfctimesheets.net.CookieJar
 import io.github.qwadratic.nfctimesheets.net.PrefsCookieJar
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * Object graph. Eight objects, constructed by hand.
@@ -32,14 +33,18 @@ class TimeSheetsApplication : Application() {
     val workers: WorkerCache by lazy { WorkerCache(this) }
 
     /**
-     * Set from the choke point in Api on any 401 and read by the ViewModel, which drops
-     * the UI to signed-out. A plain flag rather than a broadcast: there is exactly one
-     * reader and it checks on every operation anyway.
+     * Set from the choke point in Api on ANY 401 and observed by the ViewModel, which
+     * drops the UI to signed-out immediately.
+     *
+     * A flow and not a plain flag (parity row 4): the flag version was only ever READ at
+     * the end of refresh(), so a 401 arriving from the material sync, a resolve or a
+     * logout sat there unnoticed until the next refresh - the worker kept using an app
+     * whose session the server had already thrown away. iOS has always posted this
+     * immediately from its single send() choke point; this is Android catching up.
      */
-    @Volatile
-    var sessionRejected: Boolean = false
+    val sessionRejected = MutableStateFlow(false)
 
-    val api: Api by lazy { Api(cookies) { sessionRejected = true } }
+    val api: Api by lazy { Api(cookies) { sessionRejected.value = true } }
 
     val sync: ShiftSync by lazy { ShiftSync(api, store) }
 

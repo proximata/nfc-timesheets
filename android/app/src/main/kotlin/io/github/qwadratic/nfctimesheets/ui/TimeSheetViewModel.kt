@@ -9,11 +9,14 @@ import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
 import io.github.qwadratic.nfctimesheets.core.MaterialEntry
 import io.github.qwadratic.nfctimesheets.core.MaterialQueue
+import io.github.qwadratic.nfctimesheets.core.RunningShift
+import io.github.qwadratic.nfctimesheets.core.ShiftSignal
 import io.github.qwadratic.nfctimesheets.core.TapInbox
 import io.github.qwadratic.nfctimesheets.core.WireMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.core.WireWorker
 import io.github.qwadratic.nfctimesheets.data.LocalShift
+import io.github.qwadratic.nfctimesheets.notify.ShiftSignals
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +75,14 @@ data class MaterialState(
 )
 
 class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
+
+    init {
+        // A 401 from ANY path, not only from refresh() (parity row 4). One collector, one
+        // choke point, immediate — the same shape iOS's API.send() has always had.
+        viewModelScope.launch {
+            app.sessionRejected.collect { rejected -> if (rejected) dropToSignedOut() }
+        }
+    }
 
     /** One mailbox for every way a tap can arrive. See core/TapInbox.kt. */
     private val inbox = TapInbox()
@@ -226,6 +237,7 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             app.workers.clear()
             _session.value = SessionState.SignedOut()
             _log.value = LogState()
+            ShiftSignals.arm(app, null)
             // Not the STORE, only the screen. Queued material requests belong to the
             // worker who wrote them; MaterialStore.adopt() deletes them when a DIFFERENT
             // worker signs in, and the same worker signing back in still has them.
@@ -259,9 +271,53 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 unresolved = unresolved,
                 busy = false,
             )
-            if (app.sessionRejected) dropToSignedOut()
+            // THE RECOVERY HALF OF THE ONE WIRE. adoptServerOpenShift may have just learned
+            // about a shift this phone had never heard of - reinstall, new device, or a tap
+            // that opened the shift before the row landed - and the notification and the
+            // ladder have to come back from exactly the same call the tap path uses. A
+            // shift the server closed in the meantime arms nothing at all.
+            armSignals()
         }
     }
+
+    /**
+     * THE ONE WIRE (audit §4). Called from exactly two places, the tap path and the
+     * recovery path, and it is the only thing that touches the OS surfaces.
+     *
+     * Never awaited, never throwing, and always AFTER the local row is on disk.
+     */
+    private fun armSignals() {
+        val running = _log.value.open?.let {
+            RunningShift(
+                locationId = it.locationId,
+                locationName = siteName(it.locationId),
+                startTime = it.startTime,
+                // decision-10: the server flagged it and no human has fixed it. The screen
+                // and the notification must then stop showing a running clock.
+                serverAutoClosed = it.needsResolution,
+            )
+        }
+        if (running != null) ShiftSignals.markClockedIn(app)
+        ShiftSignals.arm(app, running)
+    }
+
+    /**
+     * Re-state the world when the app comes back to the foreground: a notification the
+     * worker swiped away comes back, and a permission flipped in Settings is noticed.
+     */
+    fun onForeground() = armSignals()
+
+    /** The prompt has been shown once; never ask again from inside the app. */
+    fun markNotificationsAsked() = ShiftSignals.markAsked(app)
+
+    fun shouldAskForNotifications(sdkInt: Int): Boolean = ShiftSignal.shouldAskForNotifications(
+        sdkInt = sdkInt,
+        hasClockedIn = ShiftSignals.hasClockedIn(app),
+        alreadyAsked = ShiftSignals.wasAsked(app),
+    )
+
+    /** True when the OS will show nothing outside the app. Said ONCE, as a sentence. */
+    fun outOfAppSignalsSilenced(): Boolean = ShiftSignals.outOfAppSignalsSilenced(app)
 
     /** SQLite off the main thread. Small table, but a lock on the UI thread is an ANR. */
     private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
@@ -283,6 +339,11 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
         viewModelScope.launch {
             val notice = io { writeTap(worker.id, locationId) }
             _log.value = _log.value.copy(shifts = io { app.store.all() }, switchNotice = notice)
+            // AFTER the row is written and read back, and never before it. Everything in
+            // armSignals is a signal, and a signal may never delay, throw into or fail a
+            // clock-in: a denied permission and a dead network are both "arm nothing",
+            // never "reject the tap". core-check.kt pins this ordering.
+            armSignals()
             refresh()
         }
     }
@@ -328,6 +389,10 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                     shifts = io { app.store.all() },
                     unresolved = _log.value.unresolved.filterNot { it.id == shift.id },
                 )
+                // Confirming an auto-closed shift is the one path that ends a shift WITHOUT
+                // a tag tap. A notification left standing after it is exactly the "stuck
+                // lock / orphaned notification" this work exists to prevent.
+                armSignals()
             } catch (failure: ApiFailure) {
                 onError(failure.messageKey)
             }
@@ -416,8 +481,10 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
     /** A 401 came back from somewhere: expired, revoked, or the worker was deactivated. */
     private fun dropToSignedOut() {
-        app.sessionRejected = false
+        app.sessionRejected.value = false
         app.cookies.clear()
+        // A signed-out phone must not keep telling somebody they are clocked in.
+        ShiftSignals.arm(app, null)
         app.workers.clear()
         _session.value = SessionState.SignedOut(ApiFailure(401, "no_session").messageKey)
     }

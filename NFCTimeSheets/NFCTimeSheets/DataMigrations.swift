@@ -136,8 +136,9 @@ enum DataMigrations {
 
 // MARK: - Version 1: legacy shift reconciliation
 
-private let legacyBlockedMessage =
-    "This shift is missing its location. Your admin has to enter it - it has not been lost."
+private var legacyBlockedMessage: String {
+    String(localized: "This shift is missing its location. Your admin has to enter it - it has not been lost.")
+}
 
 extension DataMigrations {
     /// The one beta migration. Reconciles pre-rewrite rows against the server instead of

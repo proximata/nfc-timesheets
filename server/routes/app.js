@@ -242,6 +242,27 @@ async function closeShift({ body, session }) {
  * The phone asks the server rather than trusting local state (decision-19): an app
  * reinstall, a second device or a background NFC tap must not lose a running shift.
  * The `?worker=` parameter is gone — it let any app-key holder watch any worker.
+ *
+ * THIS IS THE RECOVERY WIRE FOR THE IN-SHIFT LOCK, and it needed nothing added to it.
+ * Both clients now take over the whole app while a shift runs and put a signal outside
+ * the app (Android ongoing notification, iOS Live Activity + icon badge). All of those
+ * are re-armed from THIS payload whenever the phone's own copy is gone — reinstall, new
+ * phone, a signal the OS dropped. Every field the arming path needs is already here:
+ *   start_time    the ticking clock, and the locally computed start+8h flip
+ *   location_name the lock screen names the building with no second round trip
+ *   location_id   "is the next tap the same building?"
+ *   client_uuid   the idempotency key — without it an adopted shift can never be CLOSED
+ *   auto_closed + corrected_at   decision-10's two facts, and nothing else
+ * There is deliberately NO `auto_close_at` on the wire. A clock-in works offline, so the
+ * client must be able to compute the 8h boundary from `start_time` with no response at
+ * all; a server field would be a SECOND mechanism the client could never rely on. One
+ * client-side constant beats two disagreeing sources. The window itself lives in
+ * ops/sql/autoclose.sql and check-api.js runs that exact file against this route.
+ *
+ * NO OPEN SHIFT IS 200 {shift: null}, NEVER A 4xx. The clients treat a thrown call as
+ * "unknown, keep what I have"; answering an error for the ordinary not-clocked-in case
+ * would leave a stale lock screen and a stale notification on every worker between
+ * shifts. A miss is an answer here, not a rejection.
  */
 async function currentOpenShift({ session }) {
   const shift = await one(
@@ -258,6 +279,12 @@ async function currentOpenShift({ session }) {
  * GET /shifts/unresolved -> shifts I must correct (decision-10).
  * "Unresolved" is derived, not stored: the timer closed it AND no human has fixed it.
  * Scoped to the session, so this can no longer be used to read another worker's history.
+ *
+ * The other half of the recovery wire. When the 8h timer fires while the phone is offline
+ * the shift stops being open, so GET /shifts/open goes null and the clients must flip the
+ * lock screen from a running timer to "needs confirming" — a running clock on a shift the
+ * server already closed is a lie. `location_name` is joined in for the same reason as
+ * above: the flipped screen still has to name the building.
  */
 async function unresolvedShifts({ session }) {
   const shifts = await all(

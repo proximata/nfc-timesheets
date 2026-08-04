@@ -5,6 +5,45 @@
     <uses-permission android:name="android.permission.NFC" />
 
     <!--
+      The ongoing "you are clocked in" notification and the reminder ladder.
+
+      Runtime-requested on API 33+ ONLY, AFTER the first successful clock-in, from the
+      shift screen (core/ShiftSignal.shouldAskForNotifications, which core-check pins).
+      NEVER at launch and NEVER on the tap path: a worker asked at a door at 06:02 with
+      gloves on says no once, permanently. A refusal is a weaker signal and one sentence,
+      never a blocked tap.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      A reboot clears every notification. This is a NORMAL, install-time permission: no
+      dialog, nothing to deny, nothing on the clock-in path. BootReceiver reads the open
+      shift out of SQLite and reposts. See notify/Receivers.kt.
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!--
+      THERE IS NO FOREGROUND SERVICE HERE AND THERE MUST NOT BE ONE.
+
+      An FGS keeps a PROCESS alive; nothing in this app needs one. setUsesChronometer(true)
+      makes the SYSTEM tick the elapsed time, and the shift's truth is on the server. The
+      notification is owned by NotificationManager, so it already survives a task-swipe and
+      process death - strictly better than an FGS, which OEM battery managers kill.
+
+      And it would buy ZERO extra visibility: Google's own docs put non-exempt FGS
+      notifications inside the same POST_NOTIFICATIONS gate. In exchange it costs a
+      `specialUse` subtype property, a Play App-content declaration with a demonstration
+      video, and review - on a personal Play account (decision-27).
+
+      Adding any FOREGROUND_SERVICE* permission is a review-gate BLOCK. The reasoning is
+      in notify/ShiftSignals.kt; core-check.kt asserts this manifest stays clean.
+
+      Not requested either: SCHEDULE_EXACT_ALARM / USE_EXACT_ALARM. The reminder ladder
+      uses AlarmManager.setWindow, because nobody cares whether the 5-hour nudge lands at
+      11:02 or 11:14, and Play polices exact alarms.
+    -->
+
+    <!--
       required="true": this app is a tag reader and nothing else. A phone without NFC
       cannot clock anyone in, so Play should not offer it. NfcReadiness.UNSUPPORTED still
       exists because a sideloaded install bypasses this filter.
@@ -112,5 +151,35 @@
                 <data android:scheme="https" android:host="${tagHost}" android:path="/t/" />
             </intent-filter>
         </activity>
+
+        <!--
+          A rung of the reminder ladder fired. exported="false": only AlarmManager, acting
+          on a PendingIntent we created, ever reaches it. Nothing outside the app may post
+          a notification claiming a worker is still clocked in.
+        -->
+        <receiver
+            android:name=".notify.ShiftReminderReceiver"
+            android:exported="false" />
+
+        <!--
+          Reboot recovery. exported must be TRUE for a system broadcast to be delivered,
+          and the receiver checks the action itself before touching anything.
+
+          BOOT_COMPLETED only, and NOT LOCKED_BOOT_COMPLETED: that one is delivered solely
+          to directBootAware components, and a direct-boot component cannot read
+          timesheets.db, which lives in credential-encrypted storage. Declaring it would be
+          a filter that never fires, describing a recovery that never happens. So the
+          notification comes back at first unlock, not at power-on.
+
+          NOT delivered to a force-stopped app. Named here because it is the one recovery
+          gap that cannot be closed from inside the app.
+        -->
+        <receiver
+            android:name=".notify.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

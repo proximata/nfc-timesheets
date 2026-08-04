@@ -142,7 +142,7 @@ final class MaterialStore {
 
         for id in plan.wrongAccount {
             // A wrong name against somebody's words is worse than a visible failure.
-            mark(id, error: "This request was written by a different account and can't be sent.",
+            mark(id, error: String(localized: "This request was written by a different account and can't be sent."),
                  blocked: true)
         }
 

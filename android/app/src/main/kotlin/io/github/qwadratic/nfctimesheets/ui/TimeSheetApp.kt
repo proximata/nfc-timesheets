@@ -1,6 +1,12 @@
 package io.github.qwadratic.nfctimesheets.ui
 
+import android.Manifest
 import android.content.Intent
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,6 +27,8 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -37,15 +45,18 @@ import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -60,13 +71,17 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
 import io.github.qwadratic.nfctimesheets.core.MaterialEntry
 import io.github.qwadratic.nfctimesheets.core.MaterialQueue
 import io.github.qwadratic.nfctimesheets.core.MaterialStatus
 import io.github.qwadratic.nfctimesheets.core.QueuedMaterialRequest
+import io.github.qwadratic.nfctimesheets.core.RunningShift
+import io.github.qwadratic.nfctimesheets.core.ShiftSignal
 import io.github.qwadratic.nfctimesheets.core.WireMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.data.LocalShift
@@ -75,6 +90,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.time.temporal.WeekFields
@@ -236,53 +252,83 @@ private fun SignedInScaffold(
     nfcReadiness: () -> NfcReadiness,
     openIntent: (Intent) -> Unit,
 ) {
-    var tab by remember { mutableIntStateOf(0) }
+    val log by model.log.collectAsStateWithLifecycle()
     val materials by model.materials.collectAsStateWithLifecycle()
     val arrivals = materials.unseenArrivals.size
+
+    // THE LOCK. While a shift runs the navigation bar is shorter: Verlauf goes, because
+    // nothing in it is time-critical. Material and Einstellungen NEVER go, because a
+    // worker standing in a building needs to ask for supplies and a handed-over phone must
+    // be signable-out (decision-26). The resolver is not a tab: it is a card on the log
+    // screen, shown in every state (decision-10).
+    //
+    // This is WORK DISCIPLINE and not a security boundary. The rule lives in the pure
+    // ShiftSignal.visibleTabs, which core-check asserts can never return a set without
+    // MATERIALS and SETTINGS in it.
+    val tabs = ShiftSignal.visibleTabs(shiftRunning = log.open != null)
+
+    // Saved by NAME, not by index: the index of a tab changes when the lock removes one,
+    // and a saved index would silently reopen a different screen after a rotation.
+    var selectedName by rememberSaveable { mutableStateOf(ShiftSignal.Tab.LOG.name) }
+    // The worker was on Verlauf when the shift started. Falling back to the log screen is
+    // the whole point - they are not left staring at a tab that no longer exists.
+    val current = tabs.firstOrNull { it.name == selectedName } ?: ShiftSignal.Tab.LOG
+
+    // Coming back from the background: repost a notification the worker swiped away and
+    // notice a permission that was flipped in Settings while the app was not running.
+    LifecycleResumeEffect(Unit) {
+        model.onForeground()
+        onPauseOrDispose { }
+    }
+
     Scaffold(
         bottomBar = {
             NavigationBar {
-                listOf(R.string.tab_log, R.string.tab_material, R.string.tab_history, R.string.tab_settings)
-                    .forEachIndexed { index, label ->
-                        NavigationBarItem(
-                            selected = tab == index,
-                            onClick = { tab = index },
-                            icon = {
-                                // The count of things sitting in the warehouse that
-                                // nobody has told this worker about. A NUMBER and not a
-                                // dot, and spoken rather than only coloured.
-                                //
-                                // It only ever moves while the app is open: there is no
-                                // push in this system (decision-23), and the material
-                                // screen says so in words.
-                                if (index == MATERIAL_TAB && arrivals > 0) {
-                                    val spoken = pluralStringResource(
-                                        R.plurals.a11y_material_badge, arrivals, arrivals,
-                                    )
-                                    Badge(
-                                        modifier = Modifier.semantics { contentDescription = spoken },
-                                    ) { Text("$arrivals") }
-                                }
-                            },
-                            label = { Text(stringResource(label)) },
-                        )
-                    }
+                tabs.forEach { tab ->
+                    NavigationBarItem(
+                        selected = current == tab,
+                        onClick = { selectedName = tab.name },
+                        icon = {
+                            // The count of things sitting in the warehouse that nobody has
+                            // told this worker about. A NUMBER and not a dot, and spoken
+                            // rather than only coloured.
+                            //
+                            // It only ever moves while the app is open: there is no push in
+                            // this system (decision-23), and the material screen says so.
+                            if (tab == ShiftSignal.Tab.MATERIALS && arrivals > 0) {
+                                val spoken = pluralStringResource(
+                                    R.plurals.a11y_material_badge, arrivals, arrivals,
+                                )
+                                Badge(
+                                    modifier = Modifier.semantics { contentDescription = spoken },
+                                ) { Text("$arrivals") }
+                            }
+                        },
+                        label = { Text(stringResource(tabLabel(tab))) },
+                    )
+                }
             }
         },
     ) { padding ->
         Column(Modifier.padding(padding)) {
-            when (tab) {
-                0 -> LogScreen(model, nfcReadiness, openIntent)
-                MATERIAL_TAB -> MaterialScreen(model)
-                2 -> HistoryScreen(model)
-                else -> SettingsScreen(model)
+            // Explicit and exhaustive, no `else`: a fifth tab added to ShiftSignal.Tab
+            // fails to compile here rather than silently rendering Einstellungen.
+            when (current) {
+                ShiftSignal.Tab.LOG -> LogScreen(model, nfcReadiness, openIntent)
+                ShiftSignal.Tab.MATERIALS -> MaterialScreen(model)
+                ShiftSignal.Tab.HISTORY -> HistoryScreen(model)
+                ShiftSignal.Tab.SETTINGS -> SettingsScreen(model)
             }
         }
     }
 }
 
-/** Named because the badge and the `when` above must not drift apart. */
-private const val MATERIAL_TAB = 1
+private fun tabLabel(tab: ShiftSignal.Tab): Int = when (tab) {
+    ShiftSignal.Tab.LOG -> R.string.tab_log
+    ShiftSignal.Tab.MATERIALS -> R.string.tab_material
+    ShiftSignal.Tab.HISTORY -> R.string.tab_history
+    ShiftSignal.Tab.SETTINGS -> R.string.tab_settings
+}
 
 @Composable
 private fun LogScreen(
@@ -306,6 +352,33 @@ private fun LogScreen(
     // Checked on every resume, not once at onboarding: a worker can revoke the tag-intent
     // permission from a notification at any time and every tap then silently does nothing.
     val readiness = remember(log) { nfcReadiness() }
+
+    // TWO SHAPES, and which one is on screen is the entire point of this work. Idle: a
+    // list of recent shifts. Running: a full-bleed screen with a ticking clock, which is
+    // unmistakable from across a room. The old build's whole in-shift signal was the word
+    // "Läuft" on a row.
+    val open = log.open
+    if (open != null) {
+        ShiftRunningScreen(
+            model = model,
+            running = RunningShift(
+                locationId = open.locationId,
+                locationName = model.siteName(open.locationId),
+                startTime = open.startTime,
+                serverAutoClosed = open.needsResolution,
+            ),
+            unresolvedCount = log.unresolved.size,
+            onResolve = { showResolver = true },
+            notice = log.switchNotice,
+            onDismissNotice = model::dismissSwitchNotice,
+            readiness = readiness,
+            openIntent = openIntent,
+        )
+        if (showResolver) {
+            ResolveDialog(model, log.unresolved) { showResolver = false }
+        }
+        return
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -347,29 +420,6 @@ private fun LogScreen(
             }
         }
 
-        log.switchNotice?.let { (from, to) ->
-            item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val unknown = stringResource(R.string.unknown_location)
-                        Text(
-                            stringResource(R.string.switch_notice, from ?: unknown, to ?: unknown),
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
-                        )
-                        TextButton(
-                            onClick = model::dismissSwitchNotice,
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        ) { Text(stringResource(R.string.resolve_later)) }
-                    }
-                }
-            }
-        }
-
-        log.open?.let { open ->
-            item { SectionHeading(R.string.log_open_section) }
-            item { ShiftRow(open, model.siteName(open.locationId)) }
-        }
-
         item { SectionHeading(R.string.log_recent_section) }
         if (log.recent.isEmpty()) {
             item { Text(stringResource(R.string.log_recent_empty), color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -381,12 +431,24 @@ private fun LogScreen(
             // happens by holding the phone to the tag: Android reads it and opens the App
             // Link. A button would be a second, divergent path to the same row.
             Text(
-                stringResource(if (log.open == null) R.string.log_hint_start else R.string.log_hint_stop),
+                stringResource(R.string.log_hint_start),
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 24.dp),
+            )
+        }
+
+        item {
+            // decision-23: there is no push in this system. Promising a notification to
+            // somebody who then does not get one is the difference between a late delivery
+            // and a broken product. The material screen has said this since day one; the
+            // log screen now does too, and so does iOS.
+            Text(
+                stringResource(R.string.log_no_push_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
@@ -405,6 +467,253 @@ private fun LogScreen(
         ResolveDialog(model, log.unresolved) { showResolver = false }
     }
 }
+
+// -------------------------------------------------------------------------------------
+// THE SHIFT SCREEN. Not a label on a row - THE screen.
+//
+// The failure this exists to prevent: a worker taps in at 06:02, pockets the phone, goes
+// home, and nothing on that phone ever mentions the shift again. At 14:02 the server
+// closes it, it leaves payroll (decision-10), and the office pays for a manual correction.
+// So while a shift runs the app is unmistakable from across a room and has one subject.
+//
+// THE LOCK IS WORK DISCIPLINE, NOT SECURITY, and it never traps anybody: the resolver, the
+// material tab, Abmelden and the help text are reachable at every moment, as labelled
+// controls rather than gestures. Only Verlauf goes away. See ShiftSignal.visibleTabs.
+// -------------------------------------------------------------------------------------
+@Composable
+private fun ShiftRunningScreen(
+    model: TimeSheetViewModel,
+    running: RunningShift,
+    unresolvedCount: Int,
+    onResolve: () -> Unit,
+    notice: Pair<String?, String?>?,
+    onDismissNotice: () -> Unit,
+    readiness: NfcReadiness,
+    openIntent: (Intent) -> Unit,
+) {
+    val context = LocalContext.current
+
+    // One tick a second, and nothing else in the app depends on it. `produceState` so the
+    // loop dies with the composable rather than outliving the screen.
+    val now by produceState(initialValue = Instant.now(), running) {
+        while (true) {
+            value = Instant.now()
+            delay(1_000)
+        }
+    }
+    val phase = ShiftSignal.phase(running, now)
+    val overdue = phase == ShiftSignal.Phase.OVERDUE
+    val (hours, minutes) = ShiftSignal.elapsed(running.startTime, now)
+
+    // Colour is the SECOND signal, never the only one: the state is spelled out in words
+    // directly under the clock. Theme colours, so this is legible in dark mode and under
+    // the system's high-contrast settings instead of being two hardcoded hex values.
+    val container = if (overdue) {
+        MaterialTheme.colorScheme.errorContainer
+    } else {
+        MaterialTheme.colorScheme.tertiaryContainer
+    }
+    val onContainer = if (overdue) {
+        MaterialTheme.colorScheme.onErrorContainer
+    } else {
+        MaterialTheme.colorScheme.onTertiaryContainer
+    }
+
+    // THE PERMISSION MOMENT. After the first successful clock-in, from the screen that is
+    // already explaining what the reminder buys - never at launch and never on the tap
+    // path. The gate is the pure ShiftSignal.shouldAskForNotifications and core-check pins
+    // it. Nothing here can fail a tap: this composable only exists because one succeeded.
+    var silenced by remember { mutableStateOf(model.outOfAppSignalsSilenced()) }
+    val permission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        silenced = !granted
+        if (granted) model.onForeground() // re-post now that we are allowed to
+    }
+    LaunchedEffect(Unit) {
+        if (model.shouldAskForNotifications(Build.VERSION.SDK_INT)) {
+            // Marked BEFORE launching: a worker who dismisses the dialog by tapping outside
+            // it must not be asked again on the next shift.
+            model.markNotificationsAsked()
+            permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+    // The "notifications are off" card has a button that leaves the app. Re-reading the
+    // answer on resume is what makes the card disappear when they come back having turned
+    // them on - otherwise it keeps telling somebody who just fixed it that it is broken.
+    LifecycleResumeEffect(Unit) {
+        silenced = model.outOfAppSignalsSilenced()
+        onPauseOrDispose { }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(container)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            // At 200% font scale this content is far taller than the screen, and a locked
+            // screen that clips its own instructions is worse than no lock at all.
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            stringResource(if (overdue) R.string.shift_overdue_heading else R.string.shift_running_heading),
+            style = MaterialTheme.typography.titleMedium,
+            color = onContainer,
+            modifier = Modifier.semantics { heading() },
+        )
+        Text(
+            running.locationName ?: stringResource(R.string.unknown_location),
+            style = MaterialTheme.typography.headlineLarge,
+            color = onContainer,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            stringResource(R.string.shift_started_at, timeOfDay(running.startTime)),
+            style = MaterialTheme.typography.bodyMedium,
+            color = onContainer,
+        )
+
+        // The dominant element, and the whole reason this screen exists.
+        //
+        // The digits are `clearAndSetSemantics {}`: a per-second change under TalkBack is
+        // unusable, and a screen whose only content is a timer is precisely where that bug
+        // would be worst. The ONE spoken element is the card, whose label is recomputed
+        // from (hours, minutes) and therefore changes once a minute. Changing a label is
+        // not an announcement, so nothing is interrupted.
+        val spoken = if (overdue) {
+            stringResource(R.string.a11y_shift_overdue, running.locationName ?: stringResource(R.string.unknown_location))
+        } else {
+            stringResource(
+                R.string.a11y_shift_elapsed,
+                hours, minutes,
+                running.locationName ?: stringResource(R.string.unknown_location),
+            )
+        }
+        Card(
+            Modifier
+                .fillMaxWidth()
+                .semantics(mergeDescendants = true) { contentDescription = spoken },
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 28.dp, horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    // No running clock on a shift the 8h timer has closed: it would be a
+                    // lie about a row that is already out of payroll until a human fixes it.
+                    if (overdue) OVERDUE_CLOCK else clock(running.startTime, now),
+                    style = MaterialTheme.typography.displayLarge,
+                    modifier = Modifier.clearAndSetSemantics { },
+                )
+                Text(
+                    stringResource(if (overdue) R.string.shift_overdue_body else R.string.shift_running_label),
+                    style = MaterialTheme.typography.titleSmall,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+
+        // The single obvious way to end the shift. There is no in-app button and there must
+        // not be one: clocking out is a tag tap, and a second path to the same row is how
+        // two mechanisms start disagreeing about somebody's hours.
+        Text(
+            stringResource(R.string.log_hint_stop),
+            style = MaterialTheme.typography.titleMedium,
+            color = onContainer,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        // A tap that cannot be delivered is worth saying even here - especially here,
+        // because this is the screen the worker is on when they try to clock out.
+        if (readiness != NfcReadiness.READY) {
+            NfcBanner(readiness, openIntent)
+        }
+
+        notice?.let { (from, to) ->
+            val unknown = stringResource(R.string.unknown_location)
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        stringResource(R.string.switch_notice, from ?: unknown, to ?: unknown),
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                    )
+                    TextButton(
+                        onClick = onDismissNotice,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) { Text(stringResource(R.string.dismiss)) }
+                }
+            }
+        }
+
+        // decision-10 may NEVER be hidden by the lock.
+        if (unresolvedCount > 0) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        pluralStringResource(R.plurals.resolve_banner, unresolvedCount, unresolvedCount),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Button(
+                        onClick = onResolve,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                    ) { Text(stringResource(R.string.resolve_title)) }
+                }
+            }
+        }
+
+        // Said ONCE, as a sentence, never as a modal and never as a nag. A denied
+        // permission is a weaker signal, not a broken app - the screen you are reading is
+        // the floor and it is unaffected.
+        if (silenced) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        stringResource(R.string.shift_notifications_off),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    OutlinedButton(
+                        onClick = { openIntent(appNotificationSettings(context.packageName)) },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) { Text(stringResource(R.string.shift_notifications_settings)) }
+                }
+            }
+        }
+
+        // The escape that is not a gesture. Abmelden lives one tab away in Einstellungen
+        // and the material tab is next to it; this says so out loud, because a worker who
+        // believes they are stuck is the failure this screen is not allowed to cause.
+        Text(
+            stringResource(R.string.shift_help),
+            style = MaterialTheme.typography.bodySmall,
+            color = onContainer,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/** What the clock reads once the 8h boundary has passed. Not a running number. */
+private const val OVERDUE_CLOCK = "8:00:00+"
+
+/** H:MM:SS, ticked once a second by the caller. Locale-independent on purpose: these are
+ *  digits, not prose, and Austria and every other locale read 3:07:22 the same way. */
+private fun clock(start: Instant, now: Instant): String {
+    val seconds = maxOf(0L, java.time.Duration.between(start, now).seconds)
+    return String.format(Locale.ROOT, "%d:%02d:%02d", seconds / 3600, (seconds % 3600) / 60, seconds % 60)
+}
+
+private fun appNotificationSettings(packageName: String): Intent =
+    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
 @Composable
 private fun NfcBanner(readiness: NfcReadiness, openIntent: (Intent) -> Unit) {
@@ -513,6 +822,9 @@ private fun ShiftRow(shift: LocalShift, siteName: String?) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ResolveDialog(model: TimeSheetViewModel, shifts: List<WireShift>, onClose: () -> Unit) {
+    // How many there were when this opened, so the worker can see the queue shrink.
+    // decision-10 point 3 asked for this and neither platform had it (parity row 15).
+    val total = rememberSaveable { shifts.size }
     val shift = shifts.firstOrNull() ?: run { onClose(); return }
     val zone = ZoneId.systemDefault()
     val startLocal = shift.startTime.atZone(zone)
@@ -522,8 +834,28 @@ private fun ResolveDialog(model: TimeSheetViewModel, shifts: List<WireShift>, on
         initialMinute = suggested.minute,
         is24Hour = true, // Austria writes 14:30, not 2:30 PM
     )
+    // A DATE, not only a time of day (parity row 14). The old dialog anchored the pick to
+    // the shift's start date and rolled forward one day when the time was earlier, which
+    // made any finish more than one calendar day after the start UNREPRESENTABLE - and
+    // silently, because the roll looked like it had worked. The roll survives as the
+    // SUGGESTION; the worker can now overrule it. iOS has always had date + time here.
+    val datePicker = rememberDatePickerState(
+        initialSelectedDateMillis = suggested.toLocalDate()
+            .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
+    )
+    var showDatePicker by rememberSaveable { mutableStateOf(false) }
     var errorKey by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
+
+    // The date the pickers currently agree on, as an Instant. UTC midnight in, local date
+    // out: DatePicker hands back UTC-midnight millis, and reading them in a local zone
+    // east of Greenwich lands on the previous day.
+    fun chosenEnd(): Instant {
+        val date = datePicker.selectedDateMillis
+            ?.let { Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() }
+            ?: LocalDate.from(startLocal)
+        return date.atTime(LocalTime.of(picker.hour, picker.minute)).atZone(zone).toInstant()
+    }
 
     Dialog(
         onDismissRequest = onClose,
@@ -543,11 +875,52 @@ private fun ResolveDialog(model: TimeSheetViewModel, shifts: List<WireShift>, on
                     style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.semantics { heading() },
                 )
+                if (total > 1) {
+                    Text(
+                        stringResource(R.string.resolve_progress, total - shifts.size + 1, total),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(stringResource(R.string.resolve_intro))
                 Text(shift.locationName ?: stringResource(R.string.unknown_location))
                 Text("${stringResource(R.string.resolve_started)}: ${dateTime(shift.startTime)}")
                 Text(stringResource(R.string.resolve_finished))
+                OutlinedButton(
+                    onClick = { showDatePicker = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.resolve_date, dateOnly(chosenEnd()))) }
                 TimePicker(state = picker)
+                // The result, in words, before anything is sent. A picker that quietly
+                // means something other than what it shows is how a night shift ends up
+                // filed on the wrong day.
+                Text(
+                    stringResource(R.string.resolve_end_preview, dateTime(chosenEnd())),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+
+                if (showDatePicker) {
+                    Dialog(onDismissRequest = { showDatePicker = false }) {
+                        Surface(shape = MaterialTheme.shapes.large) {
+                            Column(
+                                Modifier
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(8.dp),
+                            ) {
+                                DatePicker(state = datePicker)
+                                TextButton(
+                                    onClick = { showDatePicker = false },
+                                    modifier = Modifier
+                                        .align(Alignment.End)
+                                        .heightIn(min = 48.dp),
+                                ) { Text(stringResource(R.string.resolve_date_done)) }
+                            }
+                        }
+                    }
+                }
 
                 errorKey?.let {
                     Text(
@@ -564,15 +937,7 @@ private fun ResolveDialog(model: TimeSheetViewModel, shifts: List<WireShift>, on
                         .heightIn(min = 48.dp),
                     onClick = {
                         saving = true
-                        // The picker gives a time of day, not a date. Anchor it to the
-                        // shift's own start date, and roll to the next day when the pick
-                        // is earlier — a shift that starts at 22:00 and ends at 02:00 is
-                        // a real night shift, and 422 end_before_start would be nonsense.
-                        var end = LocalDate.from(startLocal)
-                            .atTime(LocalTime.of(picker.hour, picker.minute))
-                            .atZone(zone)
-                        if (!end.toInstant().isAfter(shift.startTime)) end = end.plusDays(1)
-                        model.resolve(shift, end.toInstant()) { key ->
+                        model.resolve(shift, chosenEnd()) { key ->
                             errorKey = key
                             saving = false
                         }
@@ -979,6 +1344,16 @@ private fun Centered(content: @Composable () -> Unit) {
 private val dateTimeFormat: DateTimeFormatter =
     DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault())
 
+private val dateFormat: DateTimeFormatter =
+    DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withZone(ZoneId.systemDefault())
+
+private val timeFormat: DateTimeFormatter =
+    DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault())
+
 private fun dateTime(instant: Instant): String = dateTimeFormat.format(instant)
+
+private fun dateOnly(instant: Instant): String = dateFormat.format(instant)
+
+private fun timeOfDay(instant: Instant): String = timeFormat.format(instant)
 
 private fun hours(seconds: Long): String = String.format(Locale.getDefault(), "%.1f", seconds / 3600.0)
