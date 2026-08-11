@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
+import android.os.Build
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -175,7 +176,7 @@ object ShiftSignals {
      * reboot schedules 5h, 6h, 7h and 8h and nothing else.
      */
     private fun scheduleLadder(context: Context, running: RunningShift) {
-        val alarms = context.getSystemService(AlarmManager::class.java) ?: return
+        val alarms = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
         val now = System.currentTimeMillis()
         val where = running.locationName ?: context.getString(R.string.unknown_location)
         for (hour in ShiftSignal.REMINDER_HOURS) {
@@ -192,7 +193,7 @@ object ShiftSignals {
     }
 
     private fun cancelLadder(context: Context) {
-        val alarms = context.getSystemService(AlarmManager::class.java) ?: return
+        val alarms = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
         for (hour in ShiftSignal.REMINDER_HOURS) {
             alarms.cancel(rungIntent(context, hour, where = ""))
         }
@@ -215,7 +216,7 @@ object ShiftSignals {
             Intent(context, ShiftReminderReceiver::class.java)
                 .putExtra(EXTRA_HOUR, hour)
                 .putExtra(EXTRA_LOCATION, where),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            PendingIntent.FLAG_UPDATE_CURRENT or immutableFlag,
         )
 
     /** Posted by [ShiftReminderReceiver] when a rung fires. */
@@ -252,7 +253,7 @@ object ShiftSignals {
             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         return PendingIntent.getActivity(
             context, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            PendingIntent.FLAG_UPDATE_CURRENT or immutableFlag,
         )
     }
 
@@ -264,7 +265,11 @@ object ShiftSignals {
      * somebody reorders Application.onCreate.
      */
     private fun ensureChannel(context: Context) {
-        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        // API 26+ only. Before Oreo there are no channels at all: importance came from the
+        // notification itself, so there is nothing to create and nothing to fail. Returning
+        // early is the whole compatibility story here.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = notificationManager(context) ?: return
         val channel = NotificationChannel(
             CHANNEL_ID,
             context.getString(R.string.notify_channel_name),
@@ -275,4 +280,21 @@ object ShiftSignals {
         }
         manager.createNotificationChannel(channel)
     }
+
+    /**
+     * getSystemService(Class) is API 23. The string-keyed overload works on every level we
+     * support, so it is used unconditionally rather than branching — one path is one thing
+     * that can break.
+     */
+    private fun notificationManager(context: Context): NotificationManager? =
+        context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+
+    /**
+     * FLAG_IMMUTABLE is API 23, and API 31+ *requires* one of immutable/mutable. Below 23
+     * the flag does not exist and the PendingIntent is mutable — acceptable here only
+     * because these intents carry no extras, so there is nothing for a malicious filler to
+     * fill. Do not add extras to them without revisiting this.
+     */
+    private val immutableFlag: Int
+        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
 }

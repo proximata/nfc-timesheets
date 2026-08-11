@@ -59,6 +59,24 @@ class TagLink(host: String) {
         return normalizedUuid(queryValue(uri.rawQuery, "l"))
     }
 
+    /**
+     * The tag link this build would write for a location — the inverse of [locationId].
+     *
+     * Only for ADOPTED tags (see nfc/KnownTags), which carry no URL of their own and so
+     * need one synthesised before they can rejoin the ordinary ACTION_VIEW path. Returns
+     * null for anything that is not a well-formed UUID, so a bad table entry cannot inject
+     * a URL: round-tripping through [locationId] must give the same value back, and if it
+     * would not, this returns nothing at all.
+     */
+    fun uriFor(locationId: String?): URI? {
+        val id = normalizedUuid(locationId) ?: return null
+        return try {
+            URI("https://$host$PATH?l=$id")
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /** First `name=` value in a raw query string, percent-decoded. */
     private fun queryValue(rawQuery: String?, name: String): String? {
         if (rawQuery.isNullOrEmpty()) return null

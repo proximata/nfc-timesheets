@@ -181,5 +181,16 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!--
+          Explicit scan, the fallback for phones where the OS never dispatches the tag.
+          exported="false": nothing outside this app has any business starting it, and it
+          is reached only from a button inside the signed-in log screen.
+        -->
+        <activity
+            android:name=".nfc.ScanActivity"
+            android:exported="false"
+            android:label="@string/scan_title" />
+
     </application>
 </manifest>

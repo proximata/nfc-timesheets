@@ -51,7 +51,17 @@ android {
         // IMMUTABLE once uploaded to Play, and it is what
         // server/wellknown/assetlinks.json already publishes. Do not "tidy" the case.
         applicationId = brand("ts.applicationId")
-        minSdk = 26
+        // 21 = Android 5.0. Lowered from 26 to reach older phones already in cleaners'
+        // hands. The cost is three compatibility shims in ShiftSignals.kt (notification
+        // channels are 26+, FLAG_IMMUTABLE and getSystemService(Class) are 23+), each
+        // guarded and commented at its site. Compose itself supports 21.
+        //
+        // CEILING: below API 26 there are no notification channels, so the worker cannot
+        // silence the shift reminder per-category — only for the whole app. Below 23 the
+        // PendingIntent is mutable, which is acceptable only because it carries no extras.
+        // If either becomes a real problem, raise this to 23 or 26 rather than working
+        // around it further.
+        minSdk = 23
         targetSdk = 36
         versionCode = brand("ts.versionCode").toInt()
         versionName = brand("ts.versionName")

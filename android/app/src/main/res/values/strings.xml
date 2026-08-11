@@ -229,4 +229,15 @@
     <!-- %1$s = Objekt -->
     <string name="notify_autoclose_body">Ihre Schicht bei %1$s hat 8 Stunden erreicht und wurde automatisch beendet. Bitte bestätigen Sie in der App, wann Sie tatsächlich fertig waren – sonst wird sie nicht bezahlt.</string>
 
+    <string name="scan_title">Tag scannen</string>
+    <string name="scan_hint">Halte das Telefon an den Tag beim Eingang. Dieser Bildschirm liest den Tag direkt aus, auch wenn das Telefon ihn sonst nicht erkennt.</string>
+    <string name="scan_waiting">Warte auf Tag …</string>
+    <string name="scan_accepted">Tag erkannt. Schicht wird gebucht …</string>
+    <string name="scan_unsupported">Dieses Telefon hat kein NFC.</string>
+    <string name="scan_disabled">NFC ist ausgeschaltet. Bitte in den Einstellungen aktivieren.</string>
+    <string name="scan_no_uri">Tag gelesen, aber ohne Web-Adresse.\n\nTechnologien: %1$s\nUID: %2$s</string>
+    <string name="scan_wrong_uri">Tag gehört nicht zu dieser App.\n\nGelesen: %1$s\nErwartet: %2$s\nTechnologien: %3$s\nUID: %4$s</string>
+    <string name="scan_open">Tag manuell scannen</string>
+    <string name="scan_close">Fertig</string>
+    <string name="scan_accepted_serial">Tag über Seriennummer erkannt. Schicht wird gebucht …</string>
 </resources>

@@ -86,6 +86,7 @@ import io.github.qwadratic.nfctimesheets.core.WireMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.data.LocalShift
 import io.github.qwadratic.nfctimesheets.nfc.NfcReadiness
+import io.github.qwadratic.nfctimesheets.nfc.ScanActivity
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -351,7 +352,19 @@ private fun LogScreen(
 
     // Checked on every resume, not once at onboarding: a worker can revoke the tag-intent
     // permission from a notification at any time and every tap then silently does nothing.
-    val readiness = remember(log) { nfcReadiness() }
+    //
+    // THIS USED TO SAY "every resume" AND NOT DO IT. It was remember(log), so the reading
+    // was cached until the shift list happened to change. The worker saw "NFC is switched
+    // off", went to Settings, switched NFC ON, came back — and the banner was still there,
+    // still telling them it was off, with the app now lying. The only way out was to kill
+    // and relaunch the app, which nobody guesses. Re-read on ON_RESUME, which is exactly
+    // the moment they come back from Settings.
+    var readiness by remember { mutableStateOf(nfcReadiness()) }
+    LifecycleResumeEffect(Unit) {
+        readiness = nfcReadiness()
+        onPauseOrDispose { }
+    }
+    val logContext = LocalContext.current
 
     // TWO SHAPES, and which one is on screen is the entire point of this work. Idle: a
     // list of recent shifts. Running: a full-bleed screen with a ticking clock, which is
@@ -397,6 +410,23 @@ private fun LogScreen(
 
         if (readiness != NfcReadiness.READY) {
             item { NfcBanner(readiness, openIntent) }
+        }
+
+        // MANUAL FALLBACK, deliberately secondary. The product is the passive tap: hold the
+        // phone to the wall with the app closed. But that depends on the OS dispatching the
+        // tag, and on some phones it never does - silently, with nothing to debug. This
+        // button removes the OS from the path by reading the tag in the foreground, and it
+        // reports what it saw when a tag does not work. Hidden when there is no NFC chip at
+        // all, because then there is nothing to offer.
+        if (readiness != NfcReadiness.UNSUPPORTED) {
+            item {
+                OutlinedButton(
+                    onClick = { openIntent(Intent(logContext, ScanActivity::class.java)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.scan_open)) }
+            }
         }
 
         if (log.unresolved.isNotEmpty()) {

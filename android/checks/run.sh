@@ -58,3 +58,11 @@ STDLIB="$KOTLIN_HOME/lib/kotlin-stdlib.jar"
 [ -f "$STDLIB" ] || STDLIB="$(find "$KOTLIN_HOME" -name 'kotlin-stdlib*.jar' | head -1)"
 
 "$JAVA_BIN" -cp "$OUT:$JSON_JAR:$STDLIB" io.github.qwadratic.nfctimesheets.checks.CoreCheck
+
+# Adopted third-party tags (nfc/KnownTags). Compiled separately because it lives outside
+# core/ — it is still Android-free, which is the only reason this can run off-device.
+NFC=app/src/main/kotlin/io/github/qwadratic/nfctimesheets/nfc
+"$KOTLINC" -nowarn -cp "$JSON_JAR" -d "$OUT" \
+  "$CORE"/TagLink.kt "$NFC"/KnownTags.kt checks/known-tags-check.kt
+
+"$JAVA_BIN" -cp "$OUT:$JSON_JAR:$STDLIB" io.github.qwadratic.nfctimesheets.checks.KnownTagsCheck

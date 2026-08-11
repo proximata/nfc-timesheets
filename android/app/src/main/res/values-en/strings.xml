@@ -164,4 +164,15 @@
     <string name="notify_autoclose_title">Shift closed automatically</string>
     <string name="notify_autoclose_body">Your shift at %1$s hit 8 hours and was closed automatically. Confirm in the app when you actually finished, or it will not be paid.</string>
 
+    <string name="scan_title">Scan tag</string>
+    <string name="scan_hint">Hold the phone to the tag by the entrance. This screen reads the tag directly, even when the phone does not pick it up on its own.</string>
+    <string name="scan_waiting">Waiting for a tag …</string>
+    <string name="scan_accepted">Tag recognised. Recording the shift …</string>
+    <string name="scan_unsupported">This phone has no NFC.</string>
+    <string name="scan_disabled">NFC is switched off. Please enable it in Settings.</string>
+    <string name="scan_no_uri">Tag read, but it carries no web address.\n\nTechnologies: %1$s\nUID: %2$s</string>
+    <string name="scan_wrong_uri">This tag does not belong to this app.\n\nRead: %1$s\nExpected: %2$s\nTechnologies: %3$s\nUID: %4$s</string>
+    <string name="scan_open">Scan a tag manually</string>
+    <string name="scan_close">Done</string>
+    <string name="scan_accepted_serial">Tag recognised by serial number. Recording the shift …</string>
 </resources>
