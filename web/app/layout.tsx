@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import { createTranslator } from 'next-intl'
 import type { ReactNode } from 'react'
 import { AppShell } from '@/components/AppShell'
-import { DesktopOnlyGuard } from '@/components/DesktopOnlyGuard'
 import { IntlProvider } from '@/components/IntlProvider'
+import { ResponsiveTableLabels } from '@/components/ResponsiveTableLabels'
 import { DEFAULT_LOCALE, htmlLang, MESSAGES } from '@/lib/locale'
 import './globals.css'
 
@@ -26,9 +26,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang={htmlLang(DEFAULT_LOCALE)}>
       <body>
         <IntlProvider>
-          <DesktopOnlyGuard>
-            <AppShell>{children}</AppShell>
-          </DesktopOnlyGuard>
+          {/* decision-28: the panel works on a phone; there is no desktop-only blocker. */}
+          <ResponsiveTableLabels />
+          <AppShell>{children}</AppShell>
         </IntlProvider>
       </body>
     </html>

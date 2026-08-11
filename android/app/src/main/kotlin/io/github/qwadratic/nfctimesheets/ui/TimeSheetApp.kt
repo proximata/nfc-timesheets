@@ -649,9 +649,9 @@ private fun ShiftRunningScreen(
             }
         }
 
-        // The single obvious way to end the shift. There is no in-app button and there must
-        // not be one: clocking out is a tag tap, and a second path to the same row is how
-        // two mechanisms start disagreeing about somebody's hours.
+        // The single obvious way to end the shift. There is still no button that CLOSES a
+        // shift, and there must not be one: clocking out is a tag tap, and a second path to
+        // the same row is how two mechanisms start disagreeing about somebody's hours.
         Text(
             stringResource(R.string.log_hint_stop),
             style = MaterialTheme.typography.titleMedium,
@@ -659,6 +659,26 @@ private fun ShiftRunningScreen(
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
+
+        // Manual scan is NOT that second path. It still requires the worker to be at the
+        // tag with the phone against it - it only moves the tag read from the OS into the
+        // app, which is the whole point for an adopted tag that carries no URL and so can
+        // never launch anything by itself.
+        //
+        // THIS BEING ABSENT WAS A REAL, SHIPPED BUG. v1.2 put the scan button on the idle
+        // screen only, and this screen returns before ever reaching it - so a worker on an
+        // adopted tag could START a shift and then had no way on earth to END it. It
+        // happened to the first real Android tester within minutes, and the shift had to be
+        // closed by hand in the admin panel. A clock-in you cannot reverse is worse than no
+        // clock-in at all.
+        if (readiness != NfcReadiness.UNSUPPORTED) {
+            OutlinedButton(
+                onClick = { openIntent(Intent(context, ScanActivity::class.java)) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.scan_open)) }
+        }
 
         // A tap that cannot be delivered is worth saying even here - especially here,
         // because this is the screen the worker is on when they try to clock out.

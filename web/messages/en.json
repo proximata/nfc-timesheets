@@ -838,11 +838,6 @@
     "loadFailedHint": "Please check your internet connection and try again.",
     "retry": "Try again"
   },
-  "desktopOnly": {
-    "heading": "Built for desktop",
-    "body": "The NFC TimeSheets admin panel is designed for a desktop browser. Please open it on a computer.",
-    "requirement": "Minimum window width: {width} pixels."
-  },
   "notFound": {
     "heading": "This page does not exist",
     "body": "The address may have been mistyped, or the page has moved. Please pick a screen from the menu on the left.",

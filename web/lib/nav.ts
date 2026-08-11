@@ -51,6 +51,3 @@ export const LOGIN_PATH = '/login/'
  * components/AppShell.tsx and components/DesktopOnlyGuard.tsx. Link shape: lib/portal.ts.
  */
 export const CLIENT_PORTAL_PATH = '/reinigung/'
-
-/** decision-7: below this viewport width the admin UI is replaced by a blocker. */
-export const DESKTOP_MIN_WIDTH_PX = 1024

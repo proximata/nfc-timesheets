@@ -109,41 +109,6 @@ a {
 
 /* --- Desktop / mobile swap (decision-7) ------------------------------------------------ */
 
-.desktop-only {
-  display: none;
-}
-
-.mobile-blocker {
-  display: grid;
-  place-items: center;
-  min-height: 100dvh;
-  padding: var(--space-6);
-}
-
-.mobile-blocker-card {
-  max-width: 34rem;
-  padding: var(--space-6);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  text-align: center;
-}
-
-.mobile-blocker-requirement {
-  color: var(--ink-muted);
-  font-size: 0.9rem;
-  margin-bottom: 0;
-}
-
-@media (min-width: 1024px) {
-  .desktop-only {
-    display: block;
-  }
-  .mobile-blocker {
-    display: none;
-  }
-}
-
 /* --- Shell -------------------------------------------------------------------------- */
 
 .app-shell {
@@ -855,8 +820,8 @@ a {
 /* --- Client portal (/reinigung/) --------------------------------------------------------
  *
  * The one screen a NON-EMPLOYEE sees, and the ONLY place in this stylesheet that is built
- * for a phone: decision-7's desktop-only rule covers the admin panel, and a client's point
- * of contact opens their link from a chat message on a handset (see DesktopOnlyGuard).
+ * for a phone. The panel itself now works on a phone too (decision-28); this page was built that way from the start, and a client's point
+ * of contact opens their link from a chat message on a handset (decision-28; formerly the DesktopOnlyGuard exceptipOnlyGuard).
  *
  * Sizes are in `rem`, deliberately NOT inheriting the `16px` pinned on `body`: `rem` follows
  * the browser's own font size, so a reader who has set large text (iOS Dynamic Type, Android
@@ -931,4 +896,173 @@ a {
   font-size: 0.95rem;
   text-transform: none;
   border-bottom: 2px solid var(--ink-muted);
+}
+
+/* --- Phone (decision-28) ------------------------------------------------------------- *
+ * Supersedes decision-7. Below 768px the panel does not shrink, it CHANGES SHAPE: the
+ * sidebar becomes a scrolling strip and every data table becomes a list of cards. Nothing
+ * above 768px is touched by anything in this block, which is what keeps the risk one-sided.
+ */
+@media (max-width: 767px) {
+  /* Shell: one column. The sidebar becomes a horizontal strip under the header, so
+     navigation stays reachable without a hamburger and its state machine. */
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "header"
+      "sidebar"
+      "content"
+      "footer";
+  }
+
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: var(--space-2) var(--space-3);
+    overflow-x: auto;
+  }
+
+  .nav-heading {
+    display: none;
+  }
+
+  .nav-list {
+    display: flex;
+    gap: var(--space-2);
+    /* The strip scrolls sideways; the PAGE never does. A horizontally scrolling page is the
+       failure decision-7 predicted, and it is confined to this one element. */
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+
+  .app-header,
+  .content,
+  .app-footer {
+    padding-left: var(--space-3);
+    padding-right: var(--space-3);
+  }
+
+  /* A phone has no hover, so a hover-only tooltip is an invisible control. */
+  .nav-tooltip {
+    display: none;
+  }
+
+  /* Touch targets. 44px is the floor, not the aspiration. */
+  .nav-link,
+  button,
+  .button,
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+  }
+
+  /* Tables become cards. `display: block` on the table parts, one card per row, and the
+     column heading printed beside each value via data-label (ResponsiveTableLabels). */
+  .data-table {
+    border: none;
+    background: transparent;
+    /* Without this the table still sizes to its content and the cards come out narrower
+       than the screen, which looks like a rendering fault rather than a layout. */
+    display: block;
+    width: 100%;
+  }
+
+  .data-table tbody,
+  .data-table tfoot {
+    display: block;
+    width: 100%;
+  }
+
+  .data-table thead {
+    /* Not `display: none`: that also removes it from the accessibility tree, and a screen
+       reader user on a phone still wants the column names. Visually hidden only. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .data-table tbody tr {
+    display: block;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-3);
+  }
+
+  /* The row header is the card's title. */
+  .data-table tbody th {
+    display: block;
+    padding: 0 0 var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    font-size: 1.05rem;
+  }
+
+  .data-table tbody td {
+    display: flex;
+    gap: var(--space-3);
+    justify-content: space-between;
+    align-items: baseline;
+    padding: var(--space-1) 0;
+    border-bottom: none;
+    text-align: right;
+  }
+
+  .data-table tbody td + td {
+    border-top: 1px solid var(--border-subtle, var(--border));
+  }
+
+  .data-table tbody td[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    max-width: 45%;
+    text-align: left;
+    font-size: 0.8rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+  }
+
+  /* A cell with no heading (actions) spans the card instead of pretending to be a value. */
+  .data-table tbody td:not([data-label]) {
+    justify-content: flex-start;
+    text-align: left;
+    flex-wrap: wrap;
+  }
+
+  /* The totals row is a row of numbers with no headings of its own, so left alone it
+     collapses into columns a few characters wide and breaks "12,08 €" across two lines.
+     Same card treatment, laid out as a simple row. */
+  .data-table tfoot tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-3);
+    justify-content: space-between;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: var(--space-3);
+  }
+
+  .data-table tfoot th,
+  .data-table tfoot td {
+    display: inline-block;
+    padding: 0;
+    border: none;
+    white-space: nowrap;
+  }
+
+  /* Toolbars and forms stack rather than squeezing side by side. */
+  .toolbar-field,
+  .toolbar-field select,
+  .toolbar-field input {
+    width: 100%;
+  }
 }

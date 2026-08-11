@@ -21,7 +21,7 @@ import { formatDuration } from '@/lib/shifts'
  * and nothing else is rendered, so a future server-side addition cannot leak through this
  * screen by accident.
  *
- * No admin chrome (AppShell), no desktop guard (DesktopOnlyGuard, stated exception to
+ * No admin chrome (AppShell), no desktop guard (removed in decision-28, stated exception to
  * decision-7 — this is opened on a phone), German pinned (IntlProvider).
  */
 

@@ -838,11 +838,6 @@
     "loadFailedHint": "Bitte prüfen Sie Ihre Internetverbindung und versuchen Sie es noch einmal.",
     "retry": "Erneut versuchen"
   },
-  "desktopOnly": {
-    "heading": "Für den Computer gemacht",
-    "body": "Das Admin-Panel von NFC TimeSheets ist für einen Browser am Computer gemacht. Bitte öffnen Sie es an einem Computer oder Laptop.",
-    "requirement": "Mindestbreite des Fensters: {width} Pixel."
-  },
   "notFound": {
     "heading": "Diese Seite gibt es nicht",
     "body": "Möglicherweise wurde die Adresse falsch eingegeben oder die Seite ist nicht mehr an dieser Stelle. Bitte wählen Sie links im Menü eine Seite aus.",
