@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="de-AT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schimmer und Glanz — Admin, Entwurf</title>
+<style>
+/* ============================================================================
+   DESIGN SYSTEM — flat, dark by default, achromatic base, one blue accent.
+   Brand measured from the official logo: #000000 / #ACACAC / #FFFFFF, sat 0.00.
+   Accent invented (nothing to inherit) and set to BLUE at the client's request.
+   ========================================================================== */
+:root {
+  --bg-base:    #0B0C0E;   /* never #000: flat has no shadows, so elevation must come
+                              from a LIGHTER surface. Black is a floor with no basement. */
+  --bg-raised:  #131519;
+  --bg-overlay: #1B1E23;
+  --bg-sunken:  #08090B;
+
+  --text-primary:   #E9EAEC;  /* not #FFF — pure white on dark is glare */
+  --text-secondary: #A9ADB4;  /* the brand's own #ACACAC, nudged for contrast */
+  --text-muted:     #6C7178;
+
+  --border:        rgba(255,255,255,.08);
+  --border-strong: rgba(255,255,255,.16);
+
+  /* One hue, two characters. Neon on dark, pastel on light. */
+  --accent:      oklch(.72 .17 250);
+  --accent-weak: oklch(.72 .17 250 / .14);
+  --accent-text: #06131F;
+
+  --state-open:      oklch(.72 .17 250);
+  --state-unres:     oklch(.78 .14 75);
+  --state-corrected: oklch(.72 .13 300);
+  --state-muted:     var(--text-muted);
+
+  --r-ctrl: 6px; --r-card: 10px;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+}
+[data-theme="light"] {
+  --bg-base:#FAFAFA; --bg-raised:#FFF; --bg-overlay:#FFF; --bg-sunken:#F1F2F4;
+  --text-primary:#16181C; --text-secondary:#4B5057; --text-muted:#767C85;
+  --border:rgba(0,0,0,.10); --border-strong:rgba(0,0,0,.18);
+  --accent:oklch(.55 .12 250); --accent-weak:oklch(.55 .12 250 / .12); --accent-text:#FFF;
+  --state-open:oklch(.55 .12 250); --state-unres:oklch(.58 .11 75); --state-corrected:oklch(.52 .11 300);
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg-base);color:var(--text-primary);font-family:var(--font);
+     font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+h1,h2,h3{margin:0;line-height:1.25;font-weight:600;letter-spacing:-.01em}
+h1{font-size:1.75rem} h2{font-size:1.125rem} h3{font-size:.9375rem}
+.num{font-variant-numeric:tabular-nums}  /* money never reflows between states */
+
+/* ---- doc chrome (prototype only, not part of the system) ---- */
+.doc{max-width:1180px;margin:0 auto;padding:var(--s6) var(--s5) var(--s7)}
+.doc-h{border-bottom:1px solid var(--border);padding-bottom:var(--s4);margin-bottom:var(--s5);
+       display:flex;justify-content:space-between;align-items:flex-end;gap:var(--s4);flex-wrap:wrap}
+.doc-h p{margin:var(--s2) 0 0;color:var(--text-secondary);max-width:62ch}
+.sec{margin:var(--s7) 0 0}
+.sec>h2{margin-bottom:var(--s2)}
+.sec>.lede{color:var(--text-secondary);margin:0 0 var(--s4);max-width:70ch}
+.tag{display:inline-block;font-size:.6875rem;letter-spacing:.08em;text-transform:uppercase;
+     color:var(--text-muted);border:1px solid var(--border);border-radius:999px;padding:2px 10px}
+
+/* ---- swatches ---- */
+.sw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:var(--s3)}
+.sw{border:1px solid var(--border);border-radius:var(--r-card);overflow:hidden;background:var(--bg-raised)}
+.sw .chip{height:56px}
+.sw .meta{padding:var(--s2) var(--s3);font-size:.75rem}
+.sw .meta b{display:block;font-weight:500}
+.sw .meta span{color:var(--text-muted);font-variant-numeric:tabular-nums}
+
+/* ---- buttons ---- */
+.btn{font:inherit;font-weight:500;font-size:.875rem;border-radius:var(--r-ctrl);
+     padding:9px 16px;min-height:40px;border:1px solid transparent;cursor:pointer;
+     transition:background .12s,border-color .12s,color .12s;display:inline-flex;
+     align-items:center;gap:var(--s2)}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn-primary{background:var(--accent);color:var(--accent-text)}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-ghost{background:transparent;color:var(--text-primary);border-color:var(--border-strong)}
+.btn-ghost:hover{background:var(--bg-overlay)}
+.btn-quiet{background:transparent;color:var(--text-secondary);padding:6px 10px;min-height:32px}
+.btn-quiet:hover{color:var(--text-primary);background:var(--bg-overlay)}
+
+/* ---- the app shell ---- */
+.app{border:1px solid var(--border);border-radius:var(--r-card);overflow:hidden;
+     background:var(--bg-base);display:grid;grid-template-columns:210px 1fr;min-height:560px}
+.side{background:var(--bg-sunken);border-right:1px solid var(--border);padding:var(--s4) var(--s3);
+      display:flex;flex-direction:column;gap:2px}
+.side .brand{display:flex;align-items:center;gap:var(--s2);padding:0 var(--s2) var(--s4);
+             font-weight:600;font-size:.875rem;letter-spacing:.02em}
+.side .mark{width:26px;height:26px;border-radius:50%;background:var(--text-primary);
+            color:var(--bg-base);display:grid;place-items:center;font-size:.625rem;font-weight:700}
+.side .grp{font-size:.6875rem;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);
+           padding:var(--s4) var(--s2) var(--s1)}
+.nav{display:flex;align-items:center;gap:var(--s2);padding:8px var(--s2);border-radius:var(--r-ctrl);
+     color:var(--text-secondary);font-size:.875rem;text-decoration:none;cursor:pointer;min-height:36px}
+.nav:hover{background:var(--bg-overlay);color:var(--text-primary)}
+.nav[aria-current="page"]{background:var(--accent-weak);color:var(--text-primary);font-weight:500}
+.nav .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);margin-left:auto}
+.main{padding:var(--s5);overflow:auto}
+.topline{display:flex;justify-content:space-between;align-items:flex-start;gap:var(--s4);
+         margin-bottom:var(--s5);flex-wrap:wrap}
+.question{color:var(--text-secondary);margin:var(--s1) 0 0;font-size:.9375rem}
+
+/* ---- the answer band: the thing you read first ---- */
+.answer{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;
+        background:var(--border);border:1px solid var(--border);border-radius:var(--r-card);
+        overflow:hidden;margin-bottom:var(--s5)}
+.answer .cell{background:var(--bg-raised);padding:var(--s4)}
+.answer .k{font-size:.75rem;color:var(--text-muted);margin-bottom:var(--s1)}
+.answer .v{font-size:1.625rem;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.answer .v.calm{color:var(--text-secondary);font-weight:500}
+.answer .sub{font-size:.75rem;color:var(--text-muted);margin-top:2px}
+
+/* ---- rows: read-only, calm, one action revealed on the row ---- */
+.list{border:1px solid var(--border);border-radius:var(--r-card);overflow:hidden;background:var(--bg-raised)}
+.list .lh{display:flex;justify-content:space-between;align-items:center;padding:var(--s3) var(--s4);
+          border-bottom:1px solid var(--border);background:var(--bg-overlay)}
+.list .lh h3{font-size:.8125rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);font-weight:500}
+.row{display:grid;grid-template-columns:3px 1fr auto auto;gap:var(--s3);align-items:center;
+     padding:var(--s3) var(--s4);border-bottom:1px solid var(--border);cursor:pointer}
+.row:last-child{border-bottom:0}
+.row:hover{background:var(--bg-overlay)}
+.row .rule{align-self:stretch;border-radius:2px;background:transparent}
+.row.is-open   .rule{background:var(--state-open)}
+.row.is-unres  .rule{background:var(--state-unres)}
+.row.is-corr   .rule{background:var(--state-corrected)}
+.row .who{font-weight:500}
+.row .where{color:var(--text-muted);font-size:.8125rem}
+.row .amt{font-variant-numeric:tabular-nums;color:var(--text-secondary)}
+.badge{font-size:.6875rem;padding:2px 8px;border-radius:999px;border:1px solid var(--border-strong);
+       color:var(--text-secondary);white-space:nowrap}
+.badge.open{border-color:var(--state-open);color:var(--state-open)}
+.badge.unres{border-color:var(--state-unres);color:var(--state-unres)}
+.badge.corr{border-color:var(--state-corrected);color:var(--state-corrected)}
+
+/* ---- drawer + modal: where every WRITE happens ---- */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.6);opacity:0;pointer-events:none;
+       transition:opacity .2s;z-index:40}
+.scrim.on{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(440px,100vw);background:var(--bg-raised);
+        border-left:1px solid var(--border-strong);z-index:50;transform:translateX(100%);
+        transition:transform .2s cubic-bezier(.2,0,0,1);display:flex;flex-direction:column}
+.drawer.on{transform:none}
+.drawer header{padding:var(--s4);border-bottom:1px solid var(--border);display:flex;
+               justify-content:space-between;align-items:flex-start;gap:var(--s3)}
+.drawer .body{padding:var(--s4);overflow:auto;flex:1}
+.drawer footer{padding:var(--s4);border-top:1px solid var(--border);display:flex;gap:var(--s2);
+               justify-content:flex-end;background:var(--bg-overlay)}
+.step{font-size:.75rem;color:var(--text-muted);margin-bottom:var(--s1)}
+.field{margin-bottom:var(--s4)}
+.field label{display:block;font-size:.8125rem;margin-bottom:6px;color:var(--text-secondary)}
+.field .req{color:var(--accent);margin-left:2px}
+.field .opt{color:var(--text-muted);font-size:.75rem;margin-left:6px}
+.field input,.field select{width:100%;font:inherit;font-size:.9375rem;padding:10px var(--s3);
+  min-height:44px;background:var(--bg-base);color:var(--text-primary);
+  border:1px solid var(--border-strong);border-radius:var(--r-ctrl)}
+.field input:focus,.field select:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+.field .help{font-size:.75rem;color:var(--text-muted);margin-top:6px}
+.modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-48%) scale(.98);
+       width:min(460px,92vw);background:var(--bg-raised);border:1px solid var(--border-strong);
+       border-radius:var(--r-card);z-index:50;opacity:0;pointer-events:none;
+       transition:opacity .2s,transform .2s cubic-bezier(.2,0,0,1)}
+.modal.on{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1)}
+.modal .body{padding:var(--s5)}
+.modal footer{padding:var(--s4);border-top:1px solid var(--border);display:flex;gap:var(--s2);justify-content:flex-end}
+.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:1.5rem;letter-spacing:.12em;
+      background:var(--bg-base);border:1px solid var(--border-strong);border-radius:var(--r-ctrl);
+      padding:var(--s3);text-align:center;margin:var(--s3) 0;user-select:all}
+
+.two{display:grid;grid-template-columns:1fr 1fr;gap:var(--s4)}
+.note{border-left:2px solid var(--accent);padding:var(--s2) var(--s3);background:var(--accent-weak);
+      border-radius:0 var(--r-ctrl) var(--r-ctrl) 0;font-size:.875rem;color:var(--text-secondary)}
+.bad{border-left-color:var(--state-unres);background:transparent;color:var(--text-secondary)}
+ul.tight{margin:var(--s2) 0 0;padding-left:1.1rem;color:var(--text-secondary);font-size:.875rem}
+ul.tight li{margin-bottom:4px}
+@media (max-width:860px){.app{grid-template-columns:1fr}.side{display:none}.two{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+<div class="doc">
+
+  <div class="doc-h">
+    <div>
+      <span class="tag">Entwurf · nicht live</span>
+      <h1 style="margin-top:var(--s2)">Schimmer und Glanz — Admin</h1>
+      <p>Designsystem und neue Oberfläche. Flach, dunkel als Standard, achromatische Basis
+         mit einem blauen Akzent. Jede Kernaufgabe ist isoliert: Listen zeigen, Dialoge ändern.</p>
+    </div>
+    <button class="btn btn-ghost" onclick="toggleTheme()" id="themeBtn">Hell anzeigen</button>
+  </div>
+
+  <!-- ================= 1. THE PROBLEM, QUANTIFIED ================= -->
+  <section class="sec">
+    <h2>1 · Was heute nicht funktioniert</h2>
+    <p class="lede">Gemessen, nicht behauptet — der aktuelle Stand im Repository:</p>
+    <div class="two">
+      <div class="list">
+        <div class="lh"><h3>Heute</h3></div>
+        <div class="row" style="grid-template-columns:1fr auto"><span class="who">/locations/</span><span class="amt num">1160 Zeilen · 14 Felder</span></div>
+        <div class="row" style="grid-template-columns:1fr auto"><span class="who">/shifts/</span><span class="amt num">943 Zeilen · 12 Felder</span></div>
+        <div class="row" style="grid-template-columns:1fr auto"><span class="who">/workers/</span><span class="amt num">643 Zeilen · 5 Felder</span></div>
+        <div class="row" style="grid-template-columns:1fr auto"><span class="who">Navigation</span><span class="amt num">12 Einträge, flach</span></div>
+      </div>
+      <div>
+        <div class="note bad"><b>Die Ursache ist nicht Farbe.</b> Jeder Bildschirm zeigt
+          gleichzeitig eine Liste, ein Formular zum Anlegen, Filter und Erklärtext. Man liest
+          eine Seite, statt sie zu überfliegen.</div>
+        <ul class="tight">
+          <li>Formulare stehen dauerhaft offen, auch wenn niemand etwas anlegt.</li>
+          <li>Zwei weiße Container übereinander — eine Karte in einer Karte ist fast immer eine fehlende Überschrift.</li>
+          <li>Kein Bildschirm sagt, welche Frage er beantwortet.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 2. TOKENS ================= -->
+  <section class="sec">
+    <h2>2 · Farben</h2>
+    <p class="lede">Die Marke ist messbar unbunt — aus der Logodatei gezählt: #000000, #ACACAC,
+      #FFFFFF, Sättigung 0,00. Es gibt also keinen Akzent zu erben; Blau ist gesetzt, nicht geerbt.</p>
+    <div class="sw-grid" id="swatches"></div>
+    <div class="note" style="margin-top:var(--s4)">
+      <b>Nie reines Schwarz.</b> Flach heißt keine Schatten — Höhe entsteht nur dadurch, dass eine
+      Fläche <i>heller</i> ist als die darunter. Auf #000 ginge das nicht.
+    </div>
+  </section>
+
+  <!-- ================= 3. STATES ================= -->
+  <section class="sec">
+    <h2>3 · Zustände</h2>
+    <p class="lede">Farbe ist immer das <b>zweite</b> Signal. Jeder Zustand hat eine Linie, ein Wort
+      und eine Position — der Graustufen-Test muss ihn überstehen.</p>
+    <div class="list">
+      <div class="lh"><h3>Schichten</h3><span class="badge">Nur Ansicht</span></div>
+      <div class="row is-open"   onclick="openDrawer('shift')"><span class="rule"></span><span><span class="who">Marta Nowak</span><br><span class="where">Arsenalstraße 11 · seit 09:12</span></span><span class="badge open">Läuft</span><span class="amt num">2:14 Std.</span></div>
+      <div class="row is-unres"  onclick="openDrawer('shift')"><span class="rule"></span><span><span class="who">Selim Kaya</span><br><span class="where">Arsenalstraße 11 · 11.08.</span></span><span class="badge unres">Nicht bestätigt</span><span class="amt num">8:00 Std.</span></div>
+      <div class="row is-corr"   onclick="openDrawer('shift')"><span class="rule"></span><span><span class="who">Andrea Steiner</span><br><span class="where">Arsenalstraße 11 · 10.08.</span></span><span class="badge corr">Korrigiert</span><span class="amt num">3:45 Std.</span></div>
+      <div class="row"           onclick="openDrawer('shift')"><span class="rule"></span><span><span class="who">Nikola Petrović</span><br><span class="where">Arsenalstraße 11 · 09.08.</span></span><span class="badge">Abgeschlossen</span><span class="amt num">4:05 Std.</span></div>
+    </div>
+  </section>
+
+  <!-- ================= 4. THE ADMIN ================= -->
+  <section class="sec">
+    <h2>4 · Der Bildschirm</h2>
+    <p class="lede">Die Antwort zuerst, die Details eine Handlung entfernt. Zwölf flache
+      Navigationspunkte werden zu drei Gruppen. Zeilen sind zum Lesen — geändert wird im Dialog.</p>
+
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><span class="mark">SG</span> Schimmer und Glanz</div>
+        <span class="nav" aria-current="page">Übersicht <span class="dot"></span></span>
+        <span class="nav">Schichten</span>
+        <div class="grp">Stammdaten</div>
+        <span class="nav">Mitarbeiter</span>
+        <span class="nav">Objekte</span>
+        <span class="nav">Kunden</span>
+        <div class="grp">Auswertung</div>
+        <span class="nav">Lohn</span>
+        <span class="nav">Ergebnis</span>
+        <div style="margin-top:auto"></div>
+        <span class="nav">Konto</span>
+      </aside>
+
+      <main class="main">
+        <div class="topline">
+          <div>
+            <h1>Übersicht</h1>
+            <p class="question">Muss ich gerade etwas tun?</p>
+          </div>
+          <button class="btn btn-primary" onclick="openDrawer('worker')">Mitarbeiter einladen</button>
+        </div>
+
+        <div class="answer">
+          <div class="cell"><div class="k">Zu erledigen</div><div class="v">2</div><div class="sub">1 Schicht offen, 1 zu bestätigen</div></div>
+          <div class="cell"><div class="k">Gerade im Einsatz</div><div class="v calm">1</div><div class="sub">Marta Nowak, seit 09:12</div></div>
+          <div class="cell"><div class="k">Diese Woche</div><div class="v calm num">38:20</div><div class="sub">Std. erfasst</div></div>
+        </div>
+
+        <div class="list">
+          <div class="lh"><h3>Zu erledigen</h3><button class="btn btn-quiet">Alle Schichten →</button></div>
+          <div class="row is-unres" onclick="openDrawer('shift')">
+            <span class="rule"></span>
+            <span><span class="who">Selim Kaya</span><br><span class="where">Nach 8 Stunden automatisch beendet · 11.08.</span></span>
+            <span class="badge unres">Endzeit fehlt</span>
+            <span class="amt">→</span>
+          </div>
+          <div class="row is-open" onclick="openDrawer('shift')">
+            <span class="rule"></span>
+            <span><span class="who">Marta Nowak</span><br><span class="where">Arsenalstraße 11 · seit 09:12</span></span>
+            <span class="badge open">Läuft</span>
+            <span class="amt">→</span>
+          </div>
+        </div>
+
+        <p style="color:var(--text-muted);font-size:.8125rem;margin-top:var(--s4)">
+          Alles andere ist in Ordnung. Ein leerer Bereich hier heißt: nichts zu tun.
+        </p>
+      </main>
+    </div>
+
+    <div class="note" style="margin-top:var(--s4)">
+      Zeilen anklicken — jede Kernaufgabe öffnet sich als eigener Dialog und lässt den Rest in Ruhe.
+    </div>
+  </section>
+
+  <!-- ================= 5. JOURNEYS ================= -->
+  <section class="sec">
+    <h2>5 · Die Kernaufgaben, je eine Aufgabe pro Dialog</h2>
+    <p class="lede">Kein Bildschirm hält mehr ein Dauerformular offen. Anlegen und Ändern
+      passieren in einer Schublade; unumkehrbare Dinge in einem kleinen Fenster mit klarem Ja/Nein.</p>
+    <div style="display:flex;gap:var(--s2);flex-wrap:wrap">
+      <button class="btn btn-ghost" onclick="openDrawer('worker')">Mitarbeiter einladen</button>
+      <button class="btn btn-ghost" onclick="openDrawer('shift')">Schicht korrigieren</button>
+      <button class="btn btn-ghost" onclick="openDrawer('object')">Objekt anlegen</button>
+      <button class="btn btn-ghost" onclick="openModal()">Zugangscode zeigen</button>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>6 · Was bewusst fehlt</h2>
+    <ul class="tight">
+      <li>Keine Schatten, keine Verläufe, kein Glas — bei dichten Zahlen ist das nur Rauschen.</li>
+      <li>Kein Neon-Leuchten. Das datiert das Produkt schneller als alles andere.</li>
+      <li>Keine neue Abhängigkeit: nur CSS-Variablen, wie bisher.</li>
+      <li>Keine Animation auf Zahlen. Eine Zahl, die sich bewegt, wird zweimal gelesen.</li>
+    </ul>
+  </section>
+</div>
+
+<!-- ============================ OVERLAYS ============================ -->
+<div class="scrim" id="scrim" onclick="closeAll()"></div>
+
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dTitle">
+  <header>
+    <div><div class="step" id="dStep">Schritt 1 von 1</div><h2 id="dTitle">Titel</h2></div>
+    <button class="btn btn-quiet" onclick="closeAll()" aria-label="Schließen">✕</button>
+  </header>
+  <div class="body" id="dBody"></div>
+  <footer>
+    <button class="btn btn-ghost" onclick="closeAll()">Abbrechen</button>
+    <button class="btn btn-primary" id="dOk" onclick="closeAll()">Speichern</button>
+  </footer>
+</aside>
+
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+  <div class="body">
+    <h2 id="mTitle">Zugangscode für Marta Nowak</h2>
+    <p style="color:var(--text-secondary);font-size:.875rem;margin:var(--s2) 0 0">
+      Einmal gültig. Der Code wird nur jetzt angezeigt.</p>
+    <div class="code">K7M4-P2QX</div>
+    <p style="color:var(--text-muted);font-size:.8125rem;margin:0">
+      Läuft ab am <b>22.08.2026, 12:22</b> — in 5 Tagen.</p>
+  </div>
+  <footer>
+    <button class="btn btn-ghost" onclick="closeAll()">Fertig</button>
+    <button class="btn btn-primary" onclick="closeAll()">Code kopieren</button>
+  </footer>
+</div>
+
+<script>
+const FORMS = {
+  worker: { title:'Mitarbeiter einladen', step:'Schritt 1 von 2 · Person', ok:'Weiter zum Code', body:`
+    <div class="field"><label>Name <span class="req">*</span></label><input value="" placeholder="Marta Nowak"></div>
+    <div class="field"><label>Stundensatz <span class="opt">optional</span></label><input placeholder="14,50 €">
+      <div class="help">Ohne Satz erscheint die Person in der Lohnrechnung als ausgenommen — nie als 0,00 €.</div></div>
+    <div class="field"><label>Telefon <span class="opt">optional</span></label><input placeholder="+43 660 1234567">
+      <div class="help">Nur zum Anrufen. Die Anmeldung läuft über den Zugangscode.</div></div>
+    <div class="note">Danach erscheint der Zugangscode. Er gilt 5 Tage und wird nur einmal angezeigt.</div>`},
+  shift: { title:'Schicht korrigieren', step:'Selim Kaya · 11.08.2026', ok:'Speichern', body:`
+    <div class="note bad" style="margin-bottom:var(--s4)">Nach 8 Stunden automatisch beendet.
+      Die Endzeit ist geschätzt und zählt erst nach Bestätigung zur Lohnrechnung.</div>
+    <div class="field"><label>Beginn</label><input value="06:00"></div>
+    <div class="field"><label>Ende <span class="req">*</span></label><input value="14:00">
+      <div class="help">Tatsächliches Ende laut Rückfrage bei der Person.</div></div>
+    <div class="field"><label>Grund der Änderung <span class="req">*</span></label>
+      <input placeholder="z. B. Abmeldung vergessen">
+      <div class="help">Wird mitgespeichert, damit später nachvollziehbar ist, warum sich eine Zahl geändert hat.</div></div>`},
+  object: { title:'Objekt anlegen', step:'Schritt 1 von 2 · Adresse', ok:'Weiter zum Vertrag', body:`
+    <div class="field"><label>Bezeichnung <span class="req">*</span></label><input placeholder="Wohnhausanlage Donaufeld"></div>
+    <div class="field"><label>Adresse <span class="req">*</span></label><input placeholder="Donaufelder Straße 1, 1210 Wien">
+      <div class="help">Wird einmalig geokodiert — daraus kommen Karte und Gebäudefoto.</div></div>
+    <div class="field"><label>Kunde <span class="opt">optional</span></label>
+      <select><option>— noch keiner —</option><option>Hausverwaltung Donaufeld</option><option>+ Neuen Kunden anlegen</option></select></div>
+    <div class="note">Vertragswert und Zielstunden kommen im zweiten Schritt. Nichts davon wird
+      jetzt gebraucht, um die erste Schicht zu erfassen.</div>`}
+};
+const $=id=>document.getElementById(id);
+let lastFocus=null;
+function openDrawer(k){const f=FORMS[k];lastFocus=document.activeElement;
+  $('dTitle').textContent=f.title;$('dStep').textContent=f.step;$('dOk').textContent=f.ok;$('dBody').innerHTML=f.body;
+  $('drawer').classList.add('on');$('scrim').classList.add('on');
+  setTimeout(()=>{const i=$('dBody').querySelector('input');i&&i.focus()},210)}
+function openModal(){lastFocus=document.activeElement;$('modal').classList.add('on');$('scrim').classList.add('on')}
+function closeAll(){['drawer','modal','scrim'].forEach(i=>$(i).classList.remove('on'));lastFocus&&lastFocus.focus()}
+addEventListener('keydown',e=>{if(e.key==='Escape')closeAll()});
+function toggleTheme(){const l=document.documentElement.getAttribute('data-theme')==='light';
+  document.documentElement.setAttribute('data-theme',l?'dark':'light');
+  $('themeBtn').textContent=l?'Hell anzeigen':'Dunkel anzeigen';paint()}
+const SW=[['--bg-base','Grundfläche'],['--bg-raised','Karte'],['--bg-overlay','Dialog'],
+          ['--text-primary','Text'],['--text-secondary','Text, zweitrangig'],['--text-muted','Text, leise'],
+          ['--accent','Akzent'],['--state-unres','Nicht bestätigt'],['--state-corrected','Korrigiert']];
+function paint(){const cs=getComputedStyle(document.documentElement);
+  $('swatches').innerHTML=SW.map(([v,n])=>{const c=cs.getPropertyValue(v).trim();
+    return `<div class="sw"><div class="chip" style="background:${c}"></div>
+      <div class="meta"><b>${n}</b><span>${v}</span></div></div>`}).join('')}
+paint();
+</script>
+</body>
+</html>
