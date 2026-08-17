@@ -4,6 +4,12 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useFormatter, useTranslations } from 'next-intl'
 import { useCallback, useEffect, useState } from 'react'
+import { AnswerBand } from '@/components/AnswerBand'
+import { type AttentionItem, AttentionList } from '@/components/AttentionList'
+import { EmptyState } from '@/components/EmptyState'
+import { ListPanel } from '@/components/ListPanel'
+import { PageHeader } from '@/components/PageHeader'
+import { StateBadge } from '@/components/StateBadge'
 import { type AdminSnapshot, ApiError, fetchAdminSnapshot, type Shift } from '@/lib/api'
 import type { ErrorKey } from '@/lib/locale'
 import { LOGIN_PATH } from '@/lib/nav'
@@ -16,12 +22,12 @@ import {
 } from '@/lib/shifts'
 
 /**
- * Dashboard — the answer to "is anything wrong right now?", plus one plain answer to "did
- * my people tap in at all?".
+ * Dashboard — „Muss ich gerade etwas tun?", answered in that order: the ANSWER first, then
+ * the exceptions, then the reassurance.
  *
  * Deliberately not a metrics wall. Every block above the last one is either a person
  * currently on site, something that will cost somebody money if it is ignored, or a thing
- * that is already broken; and every one of them links to the screen that fixes it.
+ * that is already broken; and every one of them opens the screen that fixes it.
  *
  * THE LAST BLOCK IS THE EXCEPTION AND IT IS BOUNDED ON PURPOSE. The director opened an
  * admin panel that showed him nothing at all and concluded his data was gone; in fact five
@@ -30,9 +36,17 @@ import {
  * is exactly what produced that misreading — no total, no badge, no colour and no count,
  * and it is not part of `problemCount`. It goes LAST so that "something is wrong" keeps the
  * top of the page. A "hours this month" tile was rejected for the same reason: on the 3rd
- * of August it would have read EUR 0,00 and raised the alarm all over again.
+ * of August it would have read EUR 0,00 and raised the alarm all over again. The prototype's
+ * third answer cell ("Diese Woche 38:20") is the same tile in a different hat and is
+ * deliberately NOT built: on a Monday morning it reads 0:00 and means nothing.
  *
- * No new API: this is `GET /admin/data` (one round trip) sliced five ways.
+ * AN EMPTY „ZU ERLEDIGEN" LIST MUST READ AS „NICHTS ZU TUN", never as a screen that failed
+ * to load. That is why the empty case is a sentence about the company and not a dash, and
+ * why the checks that came back clean are still named — smaller — when something else did not.
+ *
+ * This screen WRITES NOTHING: one round trip, `GET /admin/data` (one payload) sliced five
+ * ways, plus a refresh. So it has no drawer and no confirm modal, and every row here is a
+ * jump to the screen that owns the fix.
  */
 
 /** ops/sql/autoclose.sql closes an open shift at start + 8h (decision-10). */
@@ -41,7 +55,24 @@ const AUTO_CLOSE_MINUTES = 8 * 60
 /** How many recent shifts the activity block shows. Named in the heading, never summed. */
 const RECENT_SHIFTS = 10
 
+/**
+ * How many rows „Zu erledigen" shows before it stops listing and starts counting. A payload
+ * capped at 2000 shifts can carry more unresolved ones than a screen should scroll through,
+ * and a list you have to scroll is not an answer. The remainder is stated in words.
+ */
+const TRIAGE_ROWS = 8
+
+/** How many people the answer band names before it counts the rest. */
+const ONSITE_NAMES = 3
+
 const SHIFTS_PATH = '/shifts/'
+/**
+ * Unresolved shifts are frequently OLDER than 30 days — that is what makes them unresolved —
+ * and `/shifts/` defaults to the last 30 days. Jumping without a period would land the
+ * director on an empty table, which is the one reading this whole product must never
+ * produce. `/shifts/` reads this parameter on mount.
+ */
+const SHIFTS_ALL_PATH = '/shifts/?period=all'
 const WORKERS_PATH = '/workers/'
 const LOCATIONS_PATH = '/locations/'
 
@@ -106,10 +137,8 @@ export default function DashboardPage() {
           .filter((shift) => shift.end_time === null)
           .sort((a, b) => a.start_time.localeCompare(b.start_time))
 
-  const unresolvedCount =
-    snapshot === null
-      ? 0
-      : snapshot.shifts.filter((shift) => shiftState(shift) === 'unresolved').length
+  const unresolvedShifts =
+    snapshot === null ? [] : snapshot.shifts.filter((shift) => shiftState(shift) === 'unresolved')
 
   // A worker with no email can never sign in at all (decision-22), so they can never file
   // an hour. Silent and permanent until somebody notices it here.
@@ -160,6 +189,13 @@ export default function DashboardPage() {
       timeZone: BUSINESS_TIME_ZONE,
     })
 
+  const hourMinute = (iso: string) =>
+    format.dateTime(new Date(iso), {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: BUSINESS_TIME_ZONE,
+    })
+
   const dayTime = (iso: string) =>
     format.dateTime(new Date(iso), {
       dateStyle: 'medium',
@@ -167,13 +203,112 @@ export default function DashboardPage() {
       timeZone: BUSINESS_TIME_ZONE,
     })
 
-  const problemCount = unresolvedCount + workersWithoutEmail.length + locationsWithoutShifts.length
+  const problemCount =
+    unresolvedShifts.length + workersWithoutEmail.length + locationsWithoutShifts.length
+
+  /**
+   * One row per NAMED thing that needs doing. A count alone is not actionable — "3 Objekte
+   * ohne Schicht" tells the director nothing he can act on this morning, and the names do.
+   * Every row opens the screen that owns the fix; this one owns none of them.
+   */
+  const todo: AttentionItem[] = [
+    ...unresolvedShifts.map(
+      (shift): AttentionItem => ({
+        id: `shift-${shift.id}`,
+        who: shift.worker_name,
+        where: t('rowUnresolved', {
+          location: shift.location_name,
+          date: dayTime(shift.start_time),
+        }),
+        state: 'unres',
+        trailing: <StateBadge state="unres" label={t('badgeUnresolved')} />,
+        openLabel: t('unresolvedLink'),
+        onOpen: () => router.push(SHIFTS_ALL_PATH),
+      }),
+    ),
+    ...workersWithoutEmail.map(
+      (worker): AttentionItem => ({
+        id: `worker-${worker.id}`,
+        who: worker.name,
+        where: t('rowNoEmail'),
+        state: 'muted',
+        trailing: <StateBadge state="muted" label={t('badgeNoEmail')} />,
+        openLabel: t('noEmailLink'),
+        onOpen: () => router.push(WORKERS_PATH),
+      }),
+    ),
+    ...locationsWithoutShifts.map(
+      (location): AttentionItem => ({
+        id: `location-${location.id}`,
+        who: location.name,
+        where: t('rowDeadTag'),
+        state: 'muted',
+        trailing: <StateBadge state="muted" label={t('badgeDeadTag')} />,
+        openLabel: t('deadTagLink'),
+        onOpen: () => router.push(LOCATIONS_PATH),
+      }),
+    ),
+  ]
+
+  /** Which parts the number in the answer band is made of. Never just the total. */
+  const todoParts = [
+    unresolvedShifts.length === 0 ? null : t('toDoUnresolved', { count: unresolvedShifts.length }),
+    workersWithoutEmail.length === 0
+      ? null
+      : t('toDoNoEmail', { count: workersWithoutEmail.length }),
+    locationsWithoutShifts.length === 0
+      ? null
+      : t('toDoDeadTag', { count: locationsWithoutShifts.length }),
+  ].filter((part) => part !== null)
+
+  /**
+   * The checks that came back clean, still named but typeset small. When EVERYTHING is
+   * clean the list below says so on its own and this would be the same sentence twice.
+   */
+  const clearNotes =
+    problemCount === 0
+      ? []
+      : [
+          unresolvedShifts.length === 0 ? t('unresolvedNone') : null,
+          workersWithoutEmail.length === 0 ? t('noEmailNone') : null,
+          locationsWithoutShifts.length === 0 ? t('deadTagNone') : null,
+        ].filter((note) => note !== null)
+
+  const onSiteSub =
+    openShifts.length === 0
+      ? t('onSiteEmpty')
+      : [
+          ...openShifts
+            .slice(0, ONSITE_NAMES)
+            .map((shift) =>
+              t('onSiteSince', { name: shift.worker_name, time: hourMinute(shift.start_time) }),
+            ),
+          openShifts.length > ONSITE_NAMES
+            ? t('onSiteMore', { count: openShifts.length - ONSITE_NAMES })
+            : null,
+        ]
+          .filter((part) => part !== null)
+          .join(' · ')
 
   return (
     <>
-      <h1>{t('heading')}</h1>
-      <p className="lede">{t('intro')}</p>
+      <PageHeader
+        title={t('heading')}
+        question={t('question')}
+        action={
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => void load()}
+            disabled={busy}
+          >
+            {busy ? t('refreshing') : t('refresh')}
+          </button>
+        }
+      />
 
+      {/* Above the snapshot and independent of it: a failed refresh must not be able to
+          present the previous payload as current without saying so. */}
       {loadError !== null ? (
         <p className="form-error" role="alert">
           {tError(loadError)}
@@ -184,16 +319,57 @@ export default function DashboardPage() {
         <p role="status">{t('loading')}</p>
       ) : (
         <>
-          <p className="page-summary" role="status">
-            {problemCount === 0
-              ? t('allClear', { count: openShifts.length })
-              : t('needsAttention', { count: problemCount })}
-          </p>
+          {/* The answer, first. AnswerBand is the page's role="status" — it replaces the
+              summary sentence this screen used to lead with, and it must not be wrapped
+              in a second live region. */}
+          <AnswerBand
+            cells={[
+              {
+                k: t('triageHeading'),
+                v: problemCount,
+                sub: problemCount === 0 ? t('toDoNone') : todoParts.join(' · '),
+              },
+              {
+                k: t('onSiteHeading'),
+                v: openShifts.length,
+                calm: true,
+                sub: onSiteSub,
+              },
+            ]}
+          />
 
-          <section aria-labelledby="onsite-heading">
-            <h2 id="onsite-heading">{t('onSiteHeading')}</h2>
+          <ListPanel
+            title={t('triageHeading')}
+            action={
+              <Link className="btn btn-quiet" href={SHIFTS_ALL_PATH}>
+                {t('unresolvedLink')}
+              </Link>
+            }
+          >
+            {todo.length === 0 ? (
+              /* „Leer heißt: nichts zu tun." Never a dash, never a blank panel: an empty
+                 exception view is what a director once read as data loss. */
+              <EmptyState>{t('allClear', { count: openShifts.length })}</EmptyState>
+            ) : (
+              <AttentionList items={todo.slice(0, TRIAGE_ROWS)} />
+            )}
+          </ListPanel>
+
+          {todo.length > TRIAGE_ROWS ? (
+            <p className="field-hint">{t('moreToDo', { count: todo.length - TRIAGE_ROWS })}</p>
+          ) : null}
+
+          {clearNotes.length > 0 ? <p className="field-hint">{clearNotes.join(' ')}</p> : null}
+
+          {/* The shift list is capped by the server; do not let a truncated payload be
+              read as "this building has never been cleaned". */}
+          {snapshot.shifts.length >= snapshot.shift_limit ? (
+            <p className="field-hint">{t('truncatedNote', { limit: snapshot.shift_limit })}</p>
+          ) : null}
+
+          <ListPanel title={t('onSiteHeading')}>
             {openShifts.length === 0 ? (
-              <p>{t('onSiteEmpty')}</p>
+              <EmptyState>{t('onSiteEmpty')}</EmptyState>
             ) : (
               <table className="data-table" aria-busy={busy}>
                 <caption className="visually-hidden">{t('onSiteCaption')}</caption>
@@ -209,7 +385,7 @@ export default function DashboardPage() {
                   {openShifts.map((shift) => {
                     const minutes = minutesOnSite(shift.start_time)
                     return (
-                      <tr key={shift.id}>
+                      <tr key={shift.id} className="is-open">
                         <th scope="row">{shift.worker_name}</th>
                         <td>{shift.location_name}</td>
                         <td>{clockTime(shift.start_time)}</td>
@@ -224,84 +400,31 @@ export default function DashboardPage() {
                 </tbody>
               </table>
             )}
-            <p className="field-hint">
-              {t('asOf', {
-                time: format.dateTime(asOf, {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  timeZone: BUSINESS_TIME_ZONE,
-                }),
-              })}
-            </p>
-            <div className="form-actions">
-              <button
-                type="button"
-                className="button-secondary"
-                onClick={() => void load()}
-                disabled={busy}
-              >
-                {busy ? t('refreshing') : t('refresh')}
-              </button>
-            </div>
-          </section>
+          </ListPanel>
 
-          <section aria-labelledby="triage-heading">
-            <h2 id="triage-heading">{t('triageHeading')}</h2>
-            <ul className="triage-list">
-              {/* decision-10: an unresolved shift is unpaid work. The worker is also locked
-                  out of clocking in until it is resolved, so this is urgent for two people. */}
-              <li>
-                {unresolvedCount === 0 ? (
-                  t('unresolvedNone')
-                ) : (
-                  <>
-                    {t('unresolvedSome', { count: unresolvedCount })}{' '}
-                    <Link href={SHIFTS_PATH}>{t('unresolvedLink')}</Link>
-                  </>
-                )}
-              </li>
-
-              <li>
-                {workersWithoutEmail.length === 0 ? (
-                  t('noEmailNone')
-                ) : (
-                  <>
-                    {t('noEmailSome', {
-                      count: workersWithoutEmail.length,
-                      names: workersWithoutEmail.map((w) => w.name).join(', '),
-                    })}{' '}
-                    <Link href={WORKERS_PATH}>{t('noEmailLink')}</Link>
-                  </>
-                )}
-              </li>
-
-              <li>
-                {locationsWithoutShifts.length === 0 ? (
-                  t('deadTagNone')
-                ) : (
-                  <>
-                    {t('deadTagSome', {
-                      count: locationsWithoutShifts.length,
-                      names: locationsWithoutShifts.map((l) => l.name).join(', '),
-                    })}{' '}
-                    <Link href={LOCATIONS_PATH}>{t('deadTagLink')}</Link>
-                  </>
-                )}
-              </li>
-            </ul>
-            {/* The shift list is capped by the server; do not let a truncated payload be
-                read as "this building has never been cleaned". */}
-            {snapshot.shifts.length >= snapshot.shift_limit ? (
-              <p className="field-hint">{t('truncatedNote', { limit: snapshot.shift_limit })}</p>
-            ) : null}
-          </section>
+          {/* The elapsed column is frozen at load and says so. */}
+          <p className="field-hint">
+            {t('asOf', {
+              time: format.dateTime(asOf, {
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZone: BUSINESS_TIME_ZONE,
+              }),
+            })}
+          </p>
 
           {/* Last, and deliberately plain. Not a live region: it is not news, it is
-              reassurance, and announcing it would compete with the summary above. */}
-          <section aria-labelledby="recent-heading">
-            <h2 id="recent-heading">{t('recentHeading', { count: RECENT_SHIFTS })}</h2>
+              reassurance, and announcing it would compete with the answer band above. */}
+          <ListPanel
+            title={t('recentHeading', { count: RECENT_SHIFTS })}
+            action={
+              <Link className="btn btn-quiet" href={SHIFTS_PATH}>
+                {t('recentLink')}
+              </Link>
+            }
+          >
             {recentShifts.length === 0 ? (
-              <p>{t('recentEmpty')}</p>
+              <EmptyState>{t('recentEmpty')}</EmptyState>
             ) : (
               <table className="data-table">
                 <caption className="visually-hidden">{t('recentCaption')}</caption>
@@ -325,11 +448,9 @@ export default function DashboardPage() {
                 </tbody>
               </table>
             )}
-            <p className="field-hint">{t('recentScope', { count: RECENT_SHIFTS })}</p>
-            <p>
-              <Link href={SHIFTS_PATH}>{t('recentLink')}</Link>
-            </p>
-          </section>
+          </ListPanel>
+
+          <p className="field-hint">{t('recentScope', { count: RECENT_SHIFTS })}</p>
         </>
       )}
     </>

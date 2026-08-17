@@ -7,6 +7,7 @@ import type { ReactNode } from 'react'
 import { LocaleSwitcher } from '@/components/LocaleSwitcher'
 import { LogoutButton } from '@/components/LogoutButton'
 import { SidebarNav } from '@/components/SidebarNav'
+import { ThemeSwitcher } from '@/components/ThemeSwitcher'
 import { LOGIN_PATH } from '@/lib/nav'
 import { isClientPortalPath } from '@/lib/portal'
 
@@ -43,6 +44,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="brand-suffix">{t('app.brandSuffix')}</span>
         </Link>
         <div className="header-actions">
+          {/* System / Dunkel / Hell. The attribute it writes is already on <html> before
+              first paint — the inline script in app/layout.tsx. */}
+          <ThemeSwitcher />
           <LocaleSwitcher />
           <LogoutButton />
         </div>

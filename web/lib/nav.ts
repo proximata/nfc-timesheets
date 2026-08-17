@@ -6,28 +6,76 @@ export type NavItem = {
 }
 
 /**
- * Live screens, in the order the director works through them: what is happening now, then
- * the records behind it, then the money.
- *
- * The four that used to sit in FUTURE_NAV are here now — /material-requests/, /pl/,
- * /contracts/ and /analytics/ exist and are navigable. Material requests sit next to
- * /shifts/ rather than next to /inventory/ on purpose: a worker is standing in a building
- * WAITING on that queue, which makes it a today problem, not a catalogue one.
+ * Group headings. Real `nav.*` message keys since the redesign fragments were folded into
+ * de.json/en.json, so a typo here fails `pnpm typecheck` like any other key.
  */
-export const PRIMARY_NAV: readonly NavItem[] = [
-  { href: '/', labelKey: 'dashboard' },
-  { href: '/shifts/', labelKey: 'shifts' },
-  { href: '/material-requests/', labelKey: 'materialRequests' },
-  { href: '/workers/', labelKey: 'workers' },
-  { href: '/locations/', labelKey: 'locations' },
-  { href: '/clients/', labelKey: 'clients' },
-  { href: '/inventory/', labelKey: 'inventory' },
-  { href: '/contracts/', labelKey: 'contractManagement' },
-  { href: '/payroll/', labelKey: 'payroll' },
-  { href: '/pl/', labelKey: 'plDashboard' },
-  { href: '/analytics/', labelKey: 'buildingAnalytics' },
-  { href: '/account/', labelKey: 'account' },
+export type NavGroupKey = Extract<
+  NavKey,
+  'groupToday' | 'groupMasterData' | 'groupReports' | 'groupAccount'
+>
+
+export type NavGroup = {
+  headingKey: NavGroupKey
+  /** true → the heading is `.visually-hidden`. It is still a real, named group. */
+  hidden?: boolean
+  /** true → pushed to the bottom of the sidebar with margin-top:auto. */
+  pinBottom?: boolean
+  items: readonly NavItem[]
+}
+
+/**
+ * Twelve flat entries became three visible groups plus two unlabelled blocks. ALL TWELVE
+ * SURVIVE — nothing is hidden, nothing is behind a "more". Grouping is the fix for a
+ * sidebar you read; hiding routes would be a different, worse screen.
+ *
+ * Order is still the order the director works through them: what is happening now, then the
+ * records behind it, then the money, then himself.
+ *
+ * /material-requests/ stays TOP-LEVEL and is deliberately not filed under Stammdaten: a
+ * worker is standing in a building WAITING on that queue, which makes it a today problem,
+ * not a catalogue one.
+ */
+export const NAV_GROUPS: readonly NavGroup[] = [
+  {
+    headingKey: 'groupToday',
+    hidden: true,
+    items: [
+      { href: '/', labelKey: 'dashboard' },
+      { href: '/shifts/', labelKey: 'shifts' },
+      { href: '/material-requests/', labelKey: 'materialRequests' },
+    ],
+  },
+  {
+    headingKey: 'groupMasterData',
+    items: [
+      { href: '/workers/', labelKey: 'workers' },
+      { href: '/locations/', labelKey: 'locations' },
+      { href: '/clients/', labelKey: 'clients' },
+      { href: '/contracts/', labelKey: 'contractManagement' },
+      { href: '/inventory/', labelKey: 'inventory' },
+    ],
+  },
+  {
+    headingKey: 'groupReports',
+    items: [
+      { href: '/payroll/', labelKey: 'payroll' },
+      { href: '/pl/', labelKey: 'plDashboard' },
+      { href: '/analytics/', labelKey: 'buildingAnalytics' },
+    ],
+  },
+  {
+    headingKey: 'groupAccount',
+    hidden: true,
+    pinBottom: true,
+    items: [{ href: '/account/', labelKey: 'account' }],
+  },
 ]
+
+/**
+ * Derived, and kept so nothing that imports the flat list breaks. One line, and it removes
+ * the temptation to grep-and-replace across files owned by other agents.
+ */
+export const PRIMARY_NAV: readonly NavItem[] = NAV_GROUPS.flatMap((group) => group.items)
 
 /**
  * Roadmap stubs: rendered locked and never navigable, so a director can see what is coming

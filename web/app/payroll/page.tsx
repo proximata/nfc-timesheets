@@ -4,6 +4,11 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useFormatter, useLocale, useTranslations } from 'next-intl'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { AnswerBand } from '@/components/AnswerBand'
+import { EmptyState } from '@/components/EmptyState'
+import { Field } from '@/components/Field'
+import { ListPanel } from '@/components/ListPanel'
+import { PageHeader } from '@/components/PageHeader'
 import { type AdminSnapshot, ApiError, fetchPayrollSnapshot } from '@/lib/api'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { centsToPlainEuros } from '@/lib/money'
@@ -22,12 +27,16 @@ import { toBusinessInput } from '@/lib/shifts'
 /**
  * Payroll — what to actually pay each person for a calendar period.
  *
+ * „Was ist diesen Monat auszuzahlen?" — the answer band says it in one number, the table
+ * says it per person, and the exceptions between them say what that number is NOT.
+ *
  * WHERE THE NUMBERS COME FROM, because this is the screen where being vague costs money:
  *
  * THE PERIOD GOES TO THE SERVER. `GET /admin/data?from=&to=` cuts the shift ROWS and the
- * pre-aggregated `hours` with the same WHERE clause, so the total under the table and the
- * rows in it describe the same days by construction rather than by two pieces of code
- * happening to agree. Until that parameter existed, `hours` was an ALL-TIME sum sitting
+ * pre-aggregated `hours` with the same WHERE clause, so the total in the answer band, the
+ * total under the table and the rows in it describe the same days by construction rather
+ * than by two pieces of code happening to agree — all three read the SAME `totals` object,
+ * for the same reason. Until that parameter existed, `hours` was an ALL-TIME sum sitting
  * next to a period-filtered, row-capped list — which on 3 August 2026 could put July money
  * beside an empty August table, and which capped usable history at whatever the most recent
  * 2000 shifts happened to cover (roughly ten weeks at 20 workers).
@@ -40,16 +49,22 @@ import { toBusinessInput } from '@/lib/shifts'
  * Changing the period REFETCHES. It has to: the rows for last March are not in a payload
  * fetched for August.
  *
- * What it excludes and says so: open shifts, and auto-closed shifts nobody has confirmed
- * (decision-10). Those are unpaid work belonging to a real person, so they are counted,
- * named and linked, never quietly dropped.
+ * What it excludes and says so: open shifts, auto-closed shifts nobody has confirmed
+ * (decision-10), and anybody whose hourly rate has never been set. Those are unpaid work
+ * belonging to a real person, so they are counted, named and linked, never quietly dropped.
+ * THE REDESIGN MOVED THIS PROSE, IT DID NOT DELETE ANY OF IT: the exceptions that are
+ * actionable today stay above the table, and the two standing limitations sit in an open
+ * „Wie diese Seite funktioniert" disclosure under it. Nothing here is hover-only.
  *
  * KNOWN GAP, stated on screen: `workers.hourly_rate_cents` is a single mutable column.
  * There is no rate history, so past hours are priced at today's rate. Editing a rate
  * retroactively changes what last month appears to have cost.
+ *
+ * NO WRITES. The CSV is a client-side Blob, so this screen has no drawer and no confirm.
  */
 
 const SHIFTS_PATH = '/shifts/'
+const WORKERS_PATH = '/workers/'
 
 /**
  * `YYYY-MM-DD` for the export filename, in VIENNA time and not the browser's.
@@ -89,7 +104,6 @@ export default function PayrollPage() {
   const router = useRouter()
 
   const periodId = useId()
-  const periodHintId = useId()
 
   // null = still loading. Never rendered as "no hours yet".
   const [snapshot, setSnapshot] = useState<AdminSnapshot | null>(null)
@@ -138,6 +152,13 @@ export default function PayrollPage() {
   const incomplete = coverage !== null && periodExceedsCoverage(range, coverage)
   const reconciliation =
     snapshot === null ? null : reconcile(snapshot.workers, snapshot.shifts, snapshot.hours)
+  /**
+   * 0 cents is not a rate anybody agreed (`/workers/` says so on the row too). Their hours
+   * are real and are in the hours column; their money is priced at zero and is therefore
+   * MISSING from the amount. Counted and named, never shown as a confident EUR 0,00.
+   */
+  const noRateLines =
+    totals === null ? [] : totals.lines.filter((l) => l.worker.hourly_rate_cents === 0)
 
   // Explicit map, not a template-literal key: messages are typed (global.d.ts), and a
   // computed key would defeat the check that catches a typo at build time.
@@ -236,19 +257,90 @@ export default function PayrollPage() {
     }
   }
 
+  const excludedShifts = totals === null ? 0 : totals.unresolvedShifts + totals.openShifts
+  /** What is excluded, in the words the rows use. Never empty: „nothing" is a branch. */
+  const shiftExclusionSummary =
+    totals === null || excludedShifts === 0
+      ? t('answerExcludedNone')
+      : [
+          totals.unresolvedShifts > 0
+            ? t('excludedUnresolved', { count: totals.unresolvedShifts })
+            : null,
+          totals.openShifts > 0 ? t('excludedOpen', { count: totals.openShifts }) : null,
+        ]
+          .filter((part) => part !== null)
+          .join(' · ')
+  const noRateSummary =
+    noRateLines.length === 0 ? null : t('answerExcludedNoRate', { count: noRateLines.length })
+
   return (
     <>
-      <h1>{t('heading')}</h1>
-      <p className="lede">{t('intro')}</p>
+      <PageHeader
+        title={t('heading')}
+        question={t('question')}
+        action={
+          totals !== null && totals.lines.length > 0 ? (
+            <button type="button" className="btn btn-primary" onClick={downloadCsv}>
+              {t('exportCsv')}
+            </button>
+          ) : undefined
+        }
+      />
 
-      <section aria-labelledby="payroll-period-heading">
-        <h2 id="payroll-period-heading">{t('periodHeading')}</h2>
-        <div className="field toolbar-field">
-          <label htmlFor={periodId}>{t('fieldPeriod')}</label>
+      {/*
+        THE PAGE'S live regions, permanently mounted and empty when there is nothing to say —
+        a text change inside an existing region is announced far more reliably than a node
+        that blinks into existence, and the export button now lives in the header, so its
+        outcome has to be announced at page level rather than beside a table that may have
+        been replaced by a period change in the meantime.
+      */}
+      <p className="form-error" role="alert">
+        {loadError === null ? '' : tError(loadError)}
+      </p>
+      <p className="form-status" role="status">
+        {exported ? t('exported') : ''}
+      </p>
+      <p className="form-error" role="alert">
+        {exportFailed ? t('exportFailed') : ''}
+      </p>
+
+      {/* THE ANSWER FIRST, above the control that changes it: one amount, and what it does
+          not include. Every figure here comes from the SAME `totals` the table below is
+          rendered from — a review once caught this screen showing a total and a row list
+          that disagreed — and the first cell names its own period, so the number is never
+          read without knowing which days it covers. */}
+      {totals === null ? null : (
+        <AnswerBand
+          cells={[
+            { k: t('answerAmount'), v: money(totals.payCents), sub: rangeLabel },
+            {
+              k: t('answerHours'),
+              v: hours(totals.payableMs),
+              calm: true,
+              sub: t('answerHoursSub'),
+            },
+            { k: t('answerWorkers'), v: totals.lines.length, calm: true },
+            {
+              k: t('answerExcluded'),
+              // The number counts SHIFTS. An unpriced worker is not a shift, so it is named
+              // in the line underneath instead of being added to a count of a different
+              // thing — but it still turns this cell from calm to something to act on.
+              v: excludedShifts,
+              calm: excludedShifts === 0 && noRateLines.length === 0,
+              // The SAME plural-correct strings the rows use, joined the same way — a second
+              // phrasing of the same count is a second thing to keep in step. The shift
+              // clause is ALWAYS first, including its „nothing" branch, so the 0 above can
+              // never be read as a claim about the unpriced worker named after it.
+              sub: [shiftExclusionSummary, noRateSummary].filter((p) => p !== null).join(' · '),
+            },
+          ]}
+        />
+      )}
+
+      <div className="filter-bar">
+        <Field id={periodId} label={t('fieldPeriod')} help={rangeLabel}>
           <select
-            id={periodId}
             value={period}
-            aria-describedby={periodHintId}
             onChange={(event) => {
               const next = event.target.value
               if (isPeriod(next)) setPeriod(next)
@@ -262,152 +354,160 @@ export default function PayrollPage() {
               </option>
             ))}
           </select>
-          <p className="field-hint" id={periodHintId}>
-            {rangeLabel} {t('attributionHint')}
-          </p>
-        </div>
-      </section>
+        </Field>
+      </div>
 
-      <section aria-labelledby="payroll-result-heading">
-        <h2 id="payroll-result-heading">{t('resultHeading')}</h2>
-
-        {loadError !== null ? (
-          <p className="form-error" role="alert">
-            {tError(loadError)}
-          </p>
-        ) : null}
-
-        {snapshot === null || totals === null || coverage === null || reconciliation === null ? (
-          <p role="status">{t('loading')}</p>
-        ) : (
-          <>
-            {/* One permanent live region: the summary is re-announced when the period changes. */}
-            <p className="page-summary" role="status">
-              {t('summary', {
-                period: rangeLabel,
-                workers: totals.lines.length,
-                hours: hours(totals.payableMs),
-                amount: money(totals.payCents),
-              })}
-            </p>
-
-            <div className="callout">
-              <h3>{t('caveatHeading')}</h3>
-              <ul>
-                {/* decision-10: named, counted, linked. Never a silent exclusion. */}
-                {totals.unresolvedShifts > 0 ? (
-                  <li>
-                    {t('caveatUnresolved', { count: totals.unresolvedShifts })}{' '}
-                    <Link href={SHIFTS_PATH}>{t('caveatUnresolvedLink')}</Link>
-                  </li>
-                ) : null}
-                {totals.openShifts > 0 ? (
-                  <li>
-                    {t('caveatOpen', { count: totals.openShifts })}{' '}
-                    <Link href={SHIFTS_PATH}>{t('caveatOpenLink')}</Link>
-                  </li>
-                ) : null}
-                {totals.unresolvedShifts === 0 && totals.openShifts === 0 ? (
-                  <li>{t('caveatNoneExcluded')}</li>
-                ) : null}
-
-                {/* The shift list is capped; the server aggregate is not. Say which. */}
-                {incomplete && coverage.earliestStart !== null ? (
-                  <li>
-                    {t('caveatTruncated', {
-                      limit: snapshot.shift_limit,
-                      earliest: monthDayFormat.format(new Date(coverage.earliestStart)),
-                    })}
-                  </li>
-                ) : null}
-                {reconciliation.missingCents !== 0 ? (
-                  <li>
-                    {t('caveatReconcile', {
-                      server: money(reconciliation.serverCents),
-                      visible: money(reconciliation.visibleCents),
-                    })}
-                  </li>
-                ) : (
-                  <li>{t('caveatReconcileOk')}</li>
-                )}
-                {/* Paid, not excluded — but a payslip dispute has to be able to find the
-                    hours that no tag stands behind. Same fact the shift log shows in its
-                    "how it was recorded" column; no extra column here, one sentence. */}
-                {totals.manualShifts > 0 ? (
-                  <li>
-                    {t('caveatManual', { count: totals.manualShifts })}{' '}
-                    <Link href={SHIFTS_PATH}>{t('caveatManualLink')}</Link>
-                  </li>
-                ) : null}
-                {totals.orphanShifts > 0 ? <li>{t('caveatOrphan')}</li> : null}
-
-                <li>{t('caveatRateHistory')}</li>
-              </ul>
+      {snapshot === null || totals === null || coverage === null || reconciliation === null ? (
+        <p role="status">{t('loading')}</p>
+      ) : (
+        <>
+          {/* THE TOTAL MAY BE WRONG, not merely incomplete. Two sentences, above everything,
+              and neither of them is ever a tooltip or a hover. */}
+          {incomplete || reconciliation.missingCents !== 0 ? (
+            <div className="note bad">
+              {incomplete && coverage.earliestStart !== null ? (
+                <p>
+                  {t('caveatTruncated', {
+                    limit: snapshot.shift_limit,
+                    earliest: monthDayFormat.format(new Date(coverage.earliestStart)),
+                  })}
+                </p>
+              ) : null}
+              {reconciliation.missingCents !== 0 ? (
+                <p>
+                  {t('caveatReconcile', {
+                    server: money(reconciliation.serverCents),
+                    visible: money(reconciliation.visibleCents),
+                  })}
+                </p>
+              ) : null}
             </div>
+          ) : null}
 
+          {/* Before paying: what is excluded, counted and linked (decision-10). The clean
+              branches are here too — „nichts fehlt" that is never said is indistinguishable
+              from a check nobody ran. */}
+          <div className="callout">
+            <h3>{t('caveatHeading')}</h3>
+            <ul>
+              {totals.unresolvedShifts > 0 ? (
+                <li>
+                  {t('caveatUnresolved', { count: totals.unresolvedShifts })}{' '}
+                  <Link href={SHIFTS_PATH}>{t('caveatUnresolvedLink')}</Link>
+                </li>
+              ) : null}
+              {totals.openShifts > 0 ? (
+                <li>
+                  {t('caveatOpen', { count: totals.openShifts })}{' '}
+                  <Link href={SHIFTS_PATH}>{t('caveatOpenLink')}</Link>
+                </li>
+              ) : null}
+              {totals.unresolvedShifts === 0 && totals.openShifts === 0 ? (
+                <li>{t('caveatNoneExcluded')}</li>
+              ) : null}
+              {/* An unset rate is not a free worker. Their hours are in the hours column and
+                  their money is in nobody's column, so the sum is too low by an amount this
+                  screen cannot know. */}
+              {noRateLines.length > 0 ? (
+                <li>
+                  {t('caveatNoRate', { count: noRateLines.length })}{' '}
+                  <Link href={WORKERS_PATH}>{t('caveatNoRateLink')}</Link>
+                </li>
+              ) : null}
+              {/* The row list is capped; the server aggregate is not. The failing branch is
+                  in the warning above, and the reconciled branch is stated here, because
+                  silence would read as "not checked". */}
+              {reconciliation.missingCents === 0 ? <li>{t('caveatReconcileOk')}</li> : null}
+              {/* Paid, not excluded — but a payslip dispute has to be able to find the
+                  hours that no tag stands behind. Same fact the shift log shows in its
+                  "how it was recorded" column, and a column in the CSV. */}
+              {totals.manualShifts > 0 ? (
+                <li>
+                  {t('caveatManual', { count: totals.manualShifts })}{' '}
+                  <Link href={SHIFTS_PATH}>{t('caveatManualLink')}</Link>
+                </li>
+              ) : null}
+              {totals.orphanShifts > 0 ? <li>{t('caveatOrphan')}</li> : null}
+            </ul>
+          </div>
+
+          <ListPanel title={t('resultHeading')}>
             {totals.lines.length === 0 ? (
               /* Empty is not an error. But it is ambiguous, and the ambiguous reading is the
                  expensive one, so the screen says which: nothing in THIS period, and here is
                  when something was last recorded, and here is one click to that period. */
-              <div className="notice">
-                <p>{t('emptyBody')}</p>
-                {latestStart === null ? (
-                  <p>{t('emptyNeverRecorded')}</p>
-                ) : (
-                  <>
-                    <p>
-                      {t('emptyLatestRecorded', {
+              <div className="list-body">
+                <EmptyState>
+                  {t('emptyBody')}{' '}
+                  {latestStart === null
+                    ? t('emptyNeverRecorded')
+                    : t('emptyLatestRecorded', {
                         date: monthDayFormat.format(new Date(latestStart)),
                       })}
-                    </p>
-                    {latestPeriod === null || latestPeriod === period ? null : (
-                      <p className="form-actions">
-                        <button
-                          type="button"
-                          className="button-primary"
-                          onClick={() => {
-                            setPeriod(latestPeriod)
-                            setExported(false)
-                            setExportFailed(false)
-                          }}
-                        >
-                          {t('emptyJump', { period: periodLabel[latestPeriod] })}
-                        </button>
-                      </p>
-                    )}
-                  </>
-                )}
+                </EmptyState>
+                {latestStart !== null && latestPeriod !== null && latestPeriod !== period ? (
+                  <p className="form-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => {
+                        setPeriod(latestPeriod)
+                        setExported(false)
+                        setExportFailed(false)
+                      }}
+                    >
+                      {t('emptyJump', { period: periodLabel[latestPeriod] })}
+                    </button>
+                  </p>
+                ) : null}
               </div>
             ) : (
-              <>
-                <table className="data-table">
-                  <caption className="visually-hidden">
-                    {t('tableCaption', { period: rangeLabel })}
-                  </caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">{t('colWorker')}</th>
-                      <th scope="col" className="col-numeric">
-                        {t('colHours')}
-                      </th>
-                      <th scope="col" className="col-numeric">
-                        {t('colRate')}
-                      </th>
-                      <th scope="col" className="col-numeric">
-                        {t('colAmount')}
-                      </th>
-                      <th scope="col">{t('colExcluded')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {totals.lines.map((line) => (
-                      <tr key={line.worker.id}>
+              <table className="data-table">
+                <caption className="visually-hidden">
+                  {t('tableCaption', { period: rangeLabel })}
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">{t('colWorker')}</th>
+                    <th scope="col" className="col-numeric">
+                      {t('colHours')}
+                    </th>
+                    <th scope="col" className="col-numeric">
+                      {t('colRate')}
+                    </th>
+                    <th scope="col" className="col-numeric">
+                      {t('colAmount')}
+                    </th>
+                    <th scope="col">{t('colExcluded')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {totals.lines.map((line) => {
+                    const noRate = line.worker.hourly_rate_cents === 0
+                    const attention = noRate || line.unresolvedShifts > 0 || line.openShifts > 0
+                    return (
+                      // The 3px left rule is the THIRD signal. The words in the last column
+                      // are the first, their position is the second; desaturate this table
+                      // and it still reads.
+                      <tr key={line.worker.id} className={attention ? 'is-unres' : undefined}>
                         <th scope="row">{line.worker.name}</th>
                         <td className="col-numeric">{hours(line.payableMs)}</td>
-                        <td className="col-numeric">{money(line.worker.hourly_rate_cents)}</td>
-                        <td className="col-numeric">{money(line.payCents)}</td>
+                        <td className="col-numeric">
+                          {noRate ? (
+                            <span className="cell-muted">{t('rowNoRate')}</span>
+                          ) : (
+                            money(line.worker.hourly_rate_cents)
+                          )}
+                        </td>
+                        <td className="col-numeric">
+                          {noRate ? (
+                            <span className="cell-muted">{t('amountNoRate')}</span>
+                          ) : (
+                            money(line.payCents)
+                          )}
+                        </td>
                         <td>
-                          {line.unresolvedShifts === 0 && line.openShifts === 0 ? (
+                          {!noRate && line.unresolvedShifts === 0 && line.openShifts === 0 ? (
                             <span className="cell-muted">{t('excludedNone')}</span>
                           ) : (
                             [
@@ -417,42 +517,47 @@ export default function PayrollPage() {
                               line.openShifts > 0
                                 ? t('excludedOpen', { count: line.openShifts })
                                 : null,
+                              noRate ? t('excludedNoRate') : null,
                             ]
                               .filter((part) => part !== null)
                               .join(' · ')
                           )}
                         </td>
                       </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr>
-                      <th scope="row">{t('totalLabel')}</th>
-                      <td className="col-numeric">{hours(totals.payableMs)}</td>
-                      <td className="col-numeric" />
-                      <td className="col-numeric">{money(totals.payCents)}</td>
-                      <td />
-                    </tr>
-                  </tfoot>
-                </table>
-
-                <div className="form-actions">
-                  <button type="button" className="button-secondary" onClick={downloadCsv}>
-                    {t('exportCsv')}
-                  </button>
-                </div>
-                {/* Permanent live regions, same reasoning as the workers form. */}
-                <p className="form-status" role="status">
-                  {exported ? t('exported') : ''}
-                </p>
-                <p className="form-error" role="alert">
-                  {exportFailed ? t('exportFailed') : ''}
-                </p>
-              </>
+                    )
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <th scope="row">{t('totalLabel')}</th>
+                    <td className="col-numeric">{hours(totals.payableMs)}</td>
+                    <td className="col-numeric" />
+                    <td className="col-numeric">{money(totals.payCents)}</td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
             )}
-          </>
-        )}
-      </section>
+          </ListPanel>
+
+          {/*
+            The two standing limitations. OPEN by default and collapsible, never hover-only:
+            they are true in every period, so they are typeset small and put under the table
+            rather than above it — and they may not be deleted to make the screen lighter.
+          */}
+          <details className="callout" open>
+            <summary>{t('howHeading')}</summary>
+            <ul>
+              {/* `intro` is no longer a lede over the table — the question replaced it — but the
+                  sentence it carried is a fact about where these numbers come from, so it is
+                  kept here rather than deleted with the paragraph it used to live in. */}
+              <li>{t('intro')}</li>
+              <li>{t('caveatRateHistory')}</li>
+              <li>{t('attributionHint')}</li>
+            </ul>
+          </details>
+        </>
+      )}
     </>
   )
 }

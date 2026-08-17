@@ -2,17 +2,25 @@
 
 import { useTranslations } from 'next-intl'
 import { type FormEvent, useId, useState } from 'react'
+import { Field } from '@/components/Field'
+import { ListPanel } from '@/components/ListPanel'
+import { PageHeader } from '@/components/PageHeader'
 import { ApiError, changePassword } from '@/lib/api'
 import type { ErrorKey } from '@/lib/locale'
 
 /**
  * The admin's own account. One job: change the password.
  *
+ * The form is NOT in a drawer. A drawer exists to get a form off a screen that also has to
+ * show a list; this screen has no list, so a drawer would put the only content on the page
+ * one click behind an empty page.
+ *
  * There is deliberately no "reset by email" here. The admin identity is a USERNAME, not an
- * address (the login route never validated the field as an email and now the form does not
+ * address (the login route never validated the field as an email and the form does not
  * pretend it is one), and this deployment has no outbound mail. A reset link we cannot send
- * is a dead end that looks like a feature. Recovery is the operator, on the machine, and
- * that is written down rather than implied.
+ * is a dead end that looks like a feature. Recovery is the operator, on the machine — and
+ * that is now said on the screen (`noReset`) instead of only in this comment, because a
+ * director hunting for "Passwort vergessen" deserves an answer rather than an absence.
  */
 type State =
   | { kind: 'idle' }
@@ -72,53 +80,63 @@ export default function AccountPage() {
   }
 
   return (
-    <section>
-      <h1>{t('heading')}</h1>
-      <p className="lede">{t('question')}</p>
+    <>
+      <PageHeader title={t('heading')} question={t('question')} />
 
-      <form className="auth-form" onSubmit={onSubmit} style={{ maxWidth: '28rem' }}>
-        <label htmlFor={currentId}>{t('current')}</label>
-        <input
-          id={currentId}
-          name="current"
-          type="password"
-          autoComplete="current-password"
-          required
-        />
+      {/* A password form is a narrow column, not a page-wide panel: a 28rem form inside a
+          1200px surface is the empty-container look this redesign is removing. */}
+      <div style={{ maxWidth: '34rem' }}>
+        <ListPanel title={t('formHeading')} padded>
+          <form className="auth-form" onSubmit={onSubmit}>
+            <Field id={currentId} label={t('current')} required>
+              <input name="current" type="password" autoComplete="current-password" required />
+            </Field>
 
-        <label htmlFor={nextId}>{t('next')}</label>
-        <input
-          id={nextId}
-          name="next"
-          type="password"
-          autoComplete="new-password"
-          minLength={MIN}
-          required
-          aria-describedby={statusId}
-        />
+            <Field id={nextId} label={t('next')} required help={t('hint', { min: MIN })}>
+              <input
+                name="next"
+                type="password"
+                autoComplete="new-password"
+                minLength={MIN}
+                required
+                aria-describedby={statusId}
+              />
+            </Field>
 
-        <label htmlFor={repeatId}>{t('repeat')}</label>
-        <input
-          id={repeatId}
-          name="repeat"
-          type="password"
-          autoComplete="new-password"
-          minLength={MIN}
-          required
-        />
+            <Field id={repeatId} label={t('repeat')} required>
+              <input
+                name="repeat"
+                type="password"
+                autoComplete="new-password"
+                minLength={MIN}
+                required
+              />
+            </Field>
 
-        <p className="hint">{t('hint', { min: MIN })}</p>
+            <div className="form-actions">
+              <button type="submit" className="btn btn-primary" disabled={state.kind === 'saving'}>
+                {state.kind === 'saving' ? t('saving') : t('submit')}
+              </button>
+            </div>
 
-        <button type="submit" disabled={state.kind === 'saving'}>
-          {state.kind === 'saving' ? t('saving') : t('submit')}
-        </button>
+            {/* One live region for both outcomes, so a screen reader announces either
+                without the page reflowing differently for success and failure. The class
+                changes with the outcome; the NODE does not, which keeps the region alive. */}
+            <p
+              id={statusId}
+              role="status"
+              aria-live="polite"
+              className={state.kind === 'error' ? 'form-error' : 'form-status'}
+            >
+              {state.kind === 'done' ? t('done') : state.kind === 'error' ? state.text : ''}
+            </p>
+          </form>
+        </ListPanel>
 
-        {/* One live region for both outcomes, so a screen reader announces either without
-            the page reflowing differently for success and failure. */}
-        <p id={statusId} role="status" aria-live="polite" className="form-status">
-          {state.kind === 'done' ? t('done') : state.kind === 'error' ? state.text : ''}
-        </p>
-      </form>
-    </section>
+        {/* Stated, not implied. There is no control here to forget a password with, and this
+            is why. It must never grow one: no outbound mail exists to send a link over. */}
+        <p className="note">{t('noReset')}</p>
+      </div>
+    </>
   )
 }

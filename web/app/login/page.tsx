@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { type FormEvent, useId, useState } from 'react'
+import { Field } from '@/components/Field'
 import { ApiError, login } from '@/lib/api'
 import type { ErrorKey } from '@/lib/locale'
 
@@ -14,9 +15,19 @@ type LoginError = { kind: 'failed' } | { kind: 'api'; key: ErrorKey } | null
  *
  * The session is an httpOnly cookie set by the server, so this page never sees, stores or
  * forwards a credential after the request completes.
+ *
+ * This is the FIRST screen a new operator sees, and it renders outside the admin shell: no
+ * nav, no sign-out, no locale switcher — navigating an admin sidebar before there is a
+ * session is noise at best and a 401 at worst. So the card carries the product's own name
+ * instead, which is the only thing here that says whose panel this is.
+ *
+ * THE FIELD IS A USERNAME. `type="text"` + `autoComplete="username"`, never `type="email"`:
+ * the live identity is `schimmer`, and a browser that validates it as an address locks the
+ * operator out of their own panel with a message we did not write.
  */
 export default function LoginPage() {
   const t = useTranslations('login')
+  const tApp = useTranslations('app')
   const tError = useTranslations('error')
   const router = useRouter()
 
@@ -54,6 +65,12 @@ export default function LoginPage() {
 
   return (
     <div className="auth-card">
+      {/* Not a link: home is behind the session that does not exist yet. */}
+      <p className="brand">
+        <span className="brand-name">{tApp('brand')}</span>
+        <span className="brand-suffix">{tApp('brandSuffix')}</span>
+      </p>
+
       <h1>{t('heading')}</h1>
       <p className="lede">{t('intro')}</p>
 
@@ -67,10 +84,10 @@ export default function LoginPage() {
           {errorText}
         </p>
 
-        <div className="field">
-          <label htmlFor={emailId}>{t('email')}</label>
+        {/* No required markers: both fields are mandatory, and a form where every field
+            carries an asterisk has told the reader nothing. */}
+        <Field id={emailId} label={t('email')}>
           <input
-            id={emailId}
             name="email"
             type="text"
             autoComplete="username"
@@ -81,12 +98,10 @@ export default function LoginPage() {
             aria-invalid={error !== null}
             disabled={pending}
           />
-        </div>
+        </Field>
 
-        <div className="field">
-          <label htmlFor={passwordId}>{t('password')}</label>
+        <Field id={passwordId} label={t('password')}>
           <input
-            id={passwordId}
             name="password"
             type="password"
             autoComplete="current-password"
@@ -95,9 +110,9 @@ export default function LoginPage() {
             aria-invalid={error !== null}
             disabled={pending}
           />
-        </div>
+        </Field>
 
-        <button type="submit" className="button-primary" disabled={pending}>
+        <button type="submit" className="btn btn-primary" disabled={pending}>
           {pending ? t('submitting') : t('submit')}
         </button>
       </form>

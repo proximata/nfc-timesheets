@@ -3,7 +3,15 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useFormatter, useTranslations } from 'next-intl'
-import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useId, useState } from 'react'
+import { AnswerBand } from '@/components/AnswerBand'
+import { ConfirmModal } from '@/components/ConfirmModal'
+import { Drawer } from '@/components/Drawer'
+import { EmptyState } from '@/components/EmptyState'
+import { Field } from '@/components/Field'
+import { ListPanel } from '@/components/ListPanel'
+import { PageHeader } from '@/components/PageHeader'
+import { type BadgeState, StateBadge } from '@/components/StateBadge'
 import {
   ApiError,
   fetchMaterialSnapshot,
@@ -16,7 +24,14 @@ import {
   patchMaterialRequest,
 } from '@/lib/api'
 import type { ErrorKey } from '@/lib/locale'
-import { isAcknowledged, isOpen, isUnpriced, nextStatuses, stageOf } from '@/lib/materials'
+import {
+  isAcknowledged,
+  isOpen,
+  isUnpriced,
+  type MaterialStage,
+  nextStatuses,
+  stageOf,
+} from '@/lib/materials'
 import { centsToPlainEuros, parseEuroToCents } from '@/lib/money'
 import { LOGIN_PATH } from '@/lib/nav'
 import { BUSINESS_TIME_ZONE } from '@/lib/shifts'
@@ -27,8 +42,12 @@ import { BUSINESS_TIME_ZONE } from '@/lib/shifts'
  * THE POINT OF THIS SCREEN is that the next action is one click. A worker wrote "der blaue
  * Reiniger, der große" and cannot work without it; every extra step between the director
  * opening this page and that request moving is a step taken while somebody waits. So the
- * lifecycle move is a button in the row, and the paperwork (which catalogue item, how many,
- * what it cost) is a separate, optional form that never blocks the move.
+ * forward move stays a single button IN the row — never a dropdown of every status, never
+ * behind a confirmation — and the paperwork (which catalogue item, how many, what it cost)
+ * moved into a drawer that never blocks the move.
+ *
+ * The ONE exception is refusing: `rejected` is terminal, the server 409s every later edit of
+ * a refused request, and the worker is told no. That gets a plain yes/no first.
  *
  * WHAT THIS SCREEN REFUSES TO DO:
  *
@@ -87,6 +106,28 @@ function draftOf(request: MaterialRequestRow): Draft {
   }
 }
 
+/**
+ * The stage, as a badge and as a row rule. COLOUR IS THE SECOND SIGNAL: the cell always
+ * carries the word, the rule repeats it, and the sort order carries the rest.
+ *
+ * Amber = waiting on the director. Blue = in flight, somebody else's move. Nothing = done.
+ */
+const BADGE_OF: Record<MaterialStage, BadgeState> = {
+  decide: 'unres',
+  order: 'open',
+  deliver: 'open',
+  done: 'muted',
+  refused: 'muted',
+}
+
+const ROW_CLASS_OF: Record<MaterialStage, string | undefined> = {
+  decide: 'is-unres',
+  order: 'is-open',
+  deliver: 'is-open',
+  done: undefined,
+  refused: 'is-muted',
+}
+
 export default function MaterialRequestsPage() {
   const t = useTranslations('materials')
   const tError = useTranslations('error')
@@ -95,23 +136,19 @@ export default function MaterialRequestsPage() {
 
   const filterId = useId()
   const filterHintId = useId()
-  const detailHeadingId = useId()
+  const formId = useId()
   const itemId = useId()
-  const itemHintId = useId()
   const quantityId = useId()
   const costId = useId()
-  const costHintId = useId()
   const locationId = useId()
-  const locationHintId = useId()
   const noteId = useId()
-  const noteHintId = useId()
-  const detailRef = useRef<HTMLElement>(null)
 
   // null = still loading. Never rendered as "no requests".
   const [snapshot, setSnapshot] = useState<MaterialSnapshot | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
   const [filter, setFilter] = useState<Filter>('open')
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [rejecting, setRejecting] = useState<MaterialRequestRow | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [formError, setFormError] = useState<ErrorMessage | null>(null)
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
@@ -148,22 +185,24 @@ export default function MaterialRequestsPage() {
     return () => controller.abort()
   }, [load])
 
-  // The detail form renders ABOVE the table, so a keyboard or screen-reader user would
-  // otherwise be left on a button while the thing it opened scrolled out of sight.
-  useEffect(() => {
-    if (draft !== null) detailRef.current?.focus()
-  }, [draft])
-
   /**
    * A 409 here is the row having moved under us — somebody else advanced it, or a button
    * was double-clicked. `ApiError` carries no server text on purpose, and both readings
    * have the SAME correct action: look at the real state again. So this reloads.
+   *
+   * `into` is where the refusal belongs. With a drawer open the drawer IS the screen on a
+   * phone, so a message on the page behind it would be announced into something the reader
+   * can no longer see; with no drawer open the page's live region is the only place it can
+   * go. Never both — two live regions saying the same sentence is announced twice.
    */
-  function reportFailure(cause: unknown) {
+  function reportFailure(cause: unknown, into: 'drawer' | 'page') {
     if (handleAuthLoss(cause)) return
+    const say = (key: ErrorMessage) => {
+      if (into === 'drawer') setFormError(key)
+      else setNotice({ ok: false, text: t(key) })
+    }
     if (cause instanceof ApiError && cause.status === 409) {
-      setFormError('errorMoved')
-      setNotice({ ok: false, text: t('errorMoved') })
+      say('errorMoved')
       void load()
       return
     }
@@ -171,8 +210,7 @@ export default function MaterialRequestsPage() {
       setLoadError(cause.messageKey)
       return
     }
-    setFormError('errorRejected')
-    setNotice({ ok: false, text: t('errorRejected') })
+    say('errorRejected')
   }
 
   /** The one-click lifecycle move. Nothing else on the row is touched. */
@@ -183,13 +221,15 @@ export default function MaterialRequestsPage() {
     setFormError(null)
     try {
       await patchMaterialRequest(request.id, { status })
+      setRejecting(null)
       setNotice({
         ok: true,
         text: t('moved', { worker: request.worker_name, state: stateLabel[status] }),
       })
       await load()
     } catch (cause) {
-      reportFailure(cause)
+      setRejecting(null)
+      reportFailure(cause, 'page')
     } finally {
       setBusy(false)
     }
@@ -260,7 +300,7 @@ export default function MaterialRequestsPage() {
       closeDetail()
       await load()
     } catch (cause) {
-      reportFailure(cause)
+      reportFailure(cause, 'drawer')
     } finally {
       setBusy(false)
     }
@@ -287,7 +327,7 @@ export default function MaterialRequestsPage() {
     format.number(cents / 100, { style: 'currency', currency: 'EUR' })
 
   /** Explicit maps, not template-literal keys: messages are typed, and a typo must fail. */
-  const stageLabel: Record<ReturnType<typeof stageOf>, string> = {
+  const stageLabel: Record<MaterialStage, string> = {
     decide: t('stageDecide'),
     order: t('stageOrder'),
     deliver: t('stageDeliver'),
@@ -338,19 +378,7 @@ export default function MaterialRequestsPage() {
 
   return (
     <>
-      <h1>{t('heading')}</h1>
-      <p className="lede">{t('intro')}</p>
-
-      {/* Standing facts, not transient status. Both of these are things a director would
-          otherwise reasonably assume the opposite of. */}
-      <div className="callout">
-        <h2>{t('standingHeading')}</h2>
-        <ul>
-          <li>{t('notePolling')}</li>
-          <li>{t('noteAttribution')}</li>
-          <li>{t('noteUnpriced')}</li>
-        </ul>
-      </div>
+      <PageHeader title={t('heading')} question={t('question')} />
 
       {loadError !== null ? (
         <p className="form-error" role="alert">
@@ -364,194 +392,76 @@ export default function MaterialRequestsPage() {
         {notice === null ? '' : notice.text}
       </p>
 
-      {draft === null ? null : (
-        <section
-          className="notice share-panel"
-          ref={detailRef}
-          tabIndex={-1}
-          aria-labelledby={detailHeadingId}
-        >
-          <h2 id={detailHeadingId}>{t('detailHeading', { worker: draft.request.worker_name })}</h2>
-          <p>
-            <q>{draft.request.body}</q>
-          </p>
+      {snapshot === null ? (
+        <p role="status">{t('loading')}</p>
+      ) : (
+        <>
+          {/* Replaces the old `.page-summary` sentence and carries the same three numbers:
+              who is waiting on the director, and who is waiting on a van. */}
+          <AnswerBand
+            cells={[
+              { k: t('answerDecide'), v: waiting.decide, sub: t('answerDecideSub') },
+              { k: t('answerOrder'), v: waiting.order, sub: t('answerOrderSub') },
+              {
+                k: t('answerDeliver'),
+                v: waiting.deliver,
+                sub: t('answerDeliverSub'),
+                calm: true,
+              },
+            ]}
+          />
 
-          <form className="worker-form" onSubmit={submitDetail} noValidate>
-            <p className="form-error" role="alert">
-              {formError === null ? '' : t(formError)}
+          {unpriced > 0 ? (
+            <p className="note bad">
+              {t('unpricedWarning', { unpriced })} <Link href={PL_PATH}>{t('plLink')}</Link>
             </p>
+          ) : null}
 
-            <div className="field">
-              <label htmlFor={itemId}>{t('fieldItem')}</label>
-              <select
-                id={itemId}
-                value={draft.itemId}
-                aria-describedby={itemHintId}
-                disabled={busy}
-                onChange={(event) => setDraft({ ...draft, itemId: event.target.value })}
-              >
-                <option value="">{t('itemNone')}</option>
-                {inventory.map((item) => (
-                  <option key={item.id} value={String(item.id)}>
-                    {item.active ? item.name : t('optionInactive', { name: item.name })}
-                  </option>
-                ))}
-              </select>
-              <p className="field-hint" id={itemHintId}>
-                {t('itemHint')} <Link href={INVENTORY_PATH}>{t('itemCatalogueLink')}</Link>
-              </p>
-            </div>
+          {truncated ? (
+            <p className="note">{t('truncated', { limit: snapshot.material_request_limit })}</p>
+          ) : null}
 
-            <div className="field">
-              <label htmlFor={quantityId}>{t('fieldQuantity')}</label>
-              <input
-                id={quantityId}
-                type="text"
-                inputMode="numeric"
-                value={draft.quantity}
-                aria-describedby={`${quantityId}-error`}
-                aria-invalid={fieldErrors.quantity !== undefined}
-                disabled={busy}
-                onChange={(event) => setDraft({ ...draft, quantity: event.target.value })}
-              />
-              <p className="field-error" id={`${quantityId}-error`} role="alert">
-                {fieldErrors.quantity === undefined ? '' : t(fieldErrors.quantity)}
-              </p>
-            </div>
-
-            <div className="field">
-              <label htmlFor={costId}>{t('fieldCost')}</label>
-              <input
-                id={costId}
-                type="text"
-                inputMode="decimal"
-                value={draft.cost}
-                aria-describedby={`${costHintId} ${costId}-error`}
-                aria-invalid={fieldErrors.cost !== undefined}
-                disabled={busy}
-                onChange={(event) => setDraft({ ...draft, cost: event.target.value })}
-              />
-              <p className="field-hint" id={costHintId}>
-                {t('costHint')}
-              </p>
-              <p className="field-error" id={`${costId}-error`} role="alert">
-                {fieldErrors.cost === undefined ? '' : t(fieldErrors.cost)}
-              </p>
-            </div>
-
-            <div className="field">
-              <label htmlFor={locationId}>{t('fieldLocation')}</label>
-              <select
-                id={locationId}
-                value={draft.locationId}
-                aria-describedby={locationHintId}
-                disabled={busy}
-                onChange={(event) => setDraft({ ...draft, locationId: event.target.value })}
-              >
-                <option value="">{t('locationNone')}</option>
-                {locations.map((location) => (
-                  <option key={location.id} value={location.id}>
-                    {location.active ? location.name : t('optionInactive', { name: location.name })}
-                  </option>
-                ))}
-              </select>
-              {/* decision-6, at the point of the control that would otherwise imply the
-                  opposite. A select labelled "building" next to a cost field reads as cost
-                  attribution unless it says, right here, that it is not. */}
-              <p className="field-hint" id={locationHintId}>
-                {t('locationHint')}
-              </p>
-            </div>
-
-            <div className="field">
-              <label htmlFor={noteId}>{t('fieldNote')}</label>
-              <textarea
-                id={noteId}
-                rows={3}
-                maxLength={1000}
-                value={draft.note}
-                aria-describedby={noteHintId}
-                disabled={busy}
-                onChange={(event) => setDraft({ ...draft, note: event.target.value })}
-              />
-              <p className="field-hint" id={noteHintId}>
-                {t('noteHint')}
-              </p>
-            </div>
-
-            <div className="form-actions">
-              <button type="submit" className="button-primary" disabled={busy}>
-                {busy ? t('submitting') : t('detailSubmit')}
-              </button>
-              <button type="button" className="button-secondary" onClick={closeDetail}>
-                {t('cancel')}
-              </button>
-            </div>
-          </form>
-        </section>
-      )}
-
-      <section aria-labelledby="materials-queue-heading">
-        <h2 id="materials-queue-heading">{t('queueHeading')}</h2>
-
-        {snapshot === null ? (
-          <p role="status">{t('loading')}</p>
-        ) : (
-          <>
-            <p className="page-summary" role="status">
-              {t('summary', {
-                decide: waiting.decide,
-                order: waiting.order,
-                deliver: waiting.deliver,
-              })}
+          {/* No submit: the filter re-slices a list already in memory. No `.filter-bar`
+              card either — one select does not need a container, and a box around it is the
+              second surface this redesign exists to remove. */}
+          <div className="field toolbar-field">
+            <label htmlFor={filterId}>{t('filterLabel')}</label>
+            <select
+              id={filterId}
+              value={filter}
+              aria-describedby={filterHintId}
+              onChange={(event) => {
+                if (isFilter(event.target.value)) setFilter(event.target.value)
+              }}
+            >
+              <option value="open">{t('filterOpen')}</option>
+              <option value="all">{t('filterAll')}</option>
+            </select>
+            <p className="field-hint" id={filterHintId}>
+              {t('filterHint')}
             </p>
+          </div>
 
-            {unpriced > 0 ? (
-              <p className="notice">
-                {t('unpricedWarning', { unpriced })} <Link href={PL_PATH}>{t('plLink')}</Link>
-              </p>
-            ) : null}
-
-            {truncated ? (
-              <p className="notice">{t('truncated', { limit: snapshot.material_request_limit })}</p>
-            ) : null}
-
-            <div className="field toolbar-field">
-              <label htmlFor={filterId}>{t('filterLabel')}</label>
-              <select
-                id={filterId}
-                value={filter}
-                aria-describedby={filterHintId}
-                onChange={(event) => {
-                  if (isFilter(event.target.value)) setFilter(event.target.value)
-                }}
-              >
-                <option value="open">{t('filterOpen')}</option>
-                <option value="all">{t('filterAll')}</option>
-              </select>
-              <p className="field-hint" id={filterHintId}>
-                {t('filterHint')}
-              </p>
-            </div>
-
+          <ListPanel title={t('queueHeading')}>
             {visible.length === 0 ? (
               /* Empty is NOT an error and must never read as one. Which empty it is
                  matters: an empty queue is the good day, an empty history is a feature
                  nobody has used yet, and neither is data loss. */
-              <div className="notice">
-                <p>{filter === 'open' ? t('emptyOpen') : t('emptyAll')}</p>
+              <EmptyState>
+                {filter === 'open' ? t('emptyOpen') : t('emptyAll')}
                 {filter === 'open' && requests.length > 0 ? (
-                  <p className="form-actions">
+                  <>
+                    {' '}
                     <button
                       type="button"
-                      className="button-secondary"
+                      className="btn btn-quiet"
                       onClick={() => setFilter('all')}
                     >
                       {t('emptyShowAll', { total: requests.length })}
                     </button>
-                  </p>
+                  </>
                 ) : null}
-              </div>
+              </EmptyState>
             ) : (
               <table className="data-table" aria-busy={busy}>
                 <caption className="visually-hidden">{t('tableCaption')}</caption>
@@ -567,50 +477,68 @@ export default function MaterialRequestsPage() {
                 <tbody>
                   {visible.map((request) => {
                     const stage = stageOf(request.status)
+                    const moves = nextStatuses(request.status)
+                    // ONE forward move per row. `rejected` is not a step forward, it is the
+                    // end, so it is not offered as one.
+                    const forward = moves.find((status) => status !== 'rejected')
                     return (
-                      <tr
-                        key={request.id}
-                        className={stage === 'decide' ? 'row-attention' : undefined}
-                      >
+                      <tr key={request.id} className={ROW_CLASS_OF[stage]}>
                         <th scope="row">
                           {request.worker_name}
                           <span className="shift-state-note">
                             {t('askedAt', { when: dayTime(request.created_at) })}
                           </span>
                         </th>
+                        {/*
+                          The <div> is not decoration: a labelled cell is `display: flex` on a
+                          phone, so four sibling children became four ~55px columns with
+                          „Staubsa / uger" broken mid-word. One wrapper = one flex item and the
+                          sentences stack. Inert on the desktop table.
+                        */}
                         <td>
-                          {/* The worker's own words, verbatim and quoted so it is obvious
-                              they are not ours. */}
-                          <q>{request.body}</q>
-                          <span className="shift-state-note">
-                            {request.location_name === null
-                              ? t('noLocationNamed')
-                              : t('locationNamed', { name: request.location_name })}
-                          </span>
-                          {request.item_name === null ? (
-                            <span className="shift-state-note">{t('itemUnmapped')}</span>
-                          ) : (
+                          <div>
+                            {/* The worker's own words, verbatim and quoted so it is obvious
+                                they are not ours. */}
+                            <q>{request.body}</q>
                             <span className="shift-state-note">
-                              {request.quantity === null
-                                ? t('itemMapped', { name: request.item_name })
-                                : t('itemMappedQuantity', {
-                                    name: request.item_name,
-                                    quantity: request.quantity,
-                                  })}
+                              {request.location_name === null
+                                ? t('noLocationNamed')
+                                : t('locationNamed', { name: request.location_name })}
                             </span>
-                          )}
-                          {request.admin_note === null ? null : (
-                            <span className="shift-state-note">
-                              {t('adminNote', { note: request.admin_note })}
-                            </span>
-                          )}
+                            {request.item_name === null ? (
+                              <span className="shift-state-note">{t('itemUnmapped')}</span>
+                            ) : (
+                              <span className="shift-state-note">
+                                {request.quantity === null
+                                  ? t('itemMapped', { name: request.item_name })
+                                  : t('itemMappedQuantity', {
+                                      name: request.item_name,
+                                      quantity: request.quantity,
+                                    })}
+                              </span>
+                            )}
+                            {request.admin_note === null ? null : (
+                              <span className="shift-state-note">
+                                {t('adminNote', { note: request.admin_note })}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         {/* Text, not colour: this survives greyscale and a screen reader. */}
                         <td>
-                          <span className={`shift-state material-stage-${stage}`}>
-                            {stageLabel[stage]}
-                          </span>
-                          <span className="shift-state-note">{timeline(request)}</span>
+                          <div>
+                            {stage === 'refused' ? (
+                              /* Refused is terminal and is not a warning: it is a decision
+                                 that was made and recorded. The line-through is the signal
+                                 that survives greyscale. */
+                              <span className="badge muted material-stage-refused">
+                                {stageLabel.refused}
+                              </span>
+                            ) : (
+                              <StateBadge state={BADGE_OF[stage]} label={stageLabel[stage]} />
+                            )}
+                            <span className="shift-state-note">{timeline(request)}</span>
+                          </div>
                         </td>
                         <td className="col-numeric">
                           {request.cost_cents === null ? (
@@ -618,36 +546,67 @@ export default function MaterialRequestsPage() {
                               {isUnpriced(request) ? t('costMissing') : t('costNotYet')}
                             </span>
                           ) : (
-                            money(request.cost_cents)
+                            <span className="num">{money(request.cost_cents)}</span>
                           )}
                         </td>
-                        <td className="cell-actions">
-                          {nextStatuses(request.status).map((status) => (
+                        {/*
+                          Inert on the desktop table; load-bearing on a phone. ≤767px makes a
+                          labelled cell `display: flex` while `.cell-actions` keeps
+                          `white-space: nowrap`, so three German labels overflow the card and
+                          the PAGE scrolls sideways — the failure decision-28 removed.
+                          Measured at 360px: scrollWidth 501 without, 360 with. Pre-existing;
+                          `git show HEAD:` on this file overflows too.
+
+                          ponytail: one inert attribute instead of a stylesheet this batch does
+                          not own. CEILING: every other screen with wide row actions has the
+                          same overflow and no assertion. UPGRADE PATH: `flex-wrap: wrap` on
+                          `.cell-actions` in the ≤767px block (Foundation), then delete this.
+                        */}
+                        <td className="cell-actions" style={{ flexWrap: 'wrap' }}>
+                          {forward === undefined ? null : (
                             <button
-                              key={status}
                               type="button"
-                              className={
-                                status === 'rejected' ? 'button-secondary' : 'button-primary'
-                              }
+                              className="btn btn-primary"
                               disabled={busy}
-                              onClick={() => advance(request, status)}
+                              onClick={() => advance(request, forward)}
                             >
-                              {actionLabel[status]}
+                              {actionLabel[forward]}
                               <span className="visually-hidden">
                                 {t('forRequest', { worker: request.worker_name })}
                               </span>
                             </button>
-                          ))}
-                          <button
-                            type="button"
-                            className="button-secondary"
-                            onClick={() => openDetail(request)}
-                          >
-                            {t('detailOpen')}
-                            <span className="visually-hidden">
-                              {t('forRequest', { worker: request.worker_name })}
-                            </span>
-                          </button>
+                          )}
+                          {moves.includes('rejected') ? (
+                            <button
+                              type="button"
+                              className="btn btn-quiet"
+                              disabled={busy}
+                              onClick={() => setRejecting(request)}
+                            >
+                              {actionLabel.rejected}
+                              <span className="visually-hidden">
+                                {t('forRequest', { worker: request.worker_name })}
+                              </span>
+                            </button>
+                          ) : null}
+                          {/* A refused request 409s on every edit, cost included: the
+                              server will not attribute money to something we declined to
+                              buy. So the control is not offered — a button whose only
+                              possible outcome is a refusal is worse than no button. */}
+                          {stage === 'refused' ? (
+                            <span className="cell-muted">{t('refusedClosed')}</span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn btn-quiet"
+                              onClick={() => openDetail(request)}
+                            >
+                              {t('detailOpen')}
+                              <span className="visually-hidden">
+                                {t('forRequest', { worker: request.worker_name })}
+                              </span>
+                            </button>
+                          )}
                         </td>
                       </tr>
                     )
@@ -655,9 +614,151 @@ export default function MaterialRequestsPage() {
                 </tbody>
               </table>
             )}
+          </ListPanel>
+
+          {/* Standing facts, not transient status, and each one is something a director
+              would otherwise reasonably assume the opposite of. Typeset small and placed
+              after the queue — never removed. */}
+          <ListPanel title={t('standingHeading')} padded>
+            <ul className="triage-list">
+              <li>{t('notePolling')}</li>
+              <li>{t('noteAttribution')}</li>
+              <li>{t('noteUnpriced')}</li>
+            </ul>
+          </ListPanel>
+        </>
+      )}
+
+      <Drawer
+        open={draft !== null}
+        onClose={closeDetail}
+        title={draft === null ? '' : t('detailHeading', { worker: draft.request.worker_name })}
+        step={draft === null ? undefined : stageLabel[stageOf(draft.request.status)]}
+        busy={busy}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={closeDetail}>
+              {t('cancel')}
+            </button>
+            <button type="submit" form={formId} className="btn btn-primary" disabled={busy}>
+              {busy ? t('submitting') : t('detailSubmit')}
+            </button>
           </>
+        }
+      >
+        {draft === null ? null : (
+          <form id={formId} onSubmit={submitDetail} noValidate>
+            {/* The drawer stays open when the server refuses, so the refusal stays with it:
+                on a phone the drawer IS the screen, and a message on the page behind it
+                would be announced into something the reader can no longer see. */}
+            <p className="form-error" role="alert">
+              {formError === null ? '' : t(formError)}
+            </p>
+
+            {/* The worker's words travel with the form, so the paperwork is filled in
+                against what was actually asked for rather than from memory. */}
+            <p>
+              <q>{draft.request.body}</q>
+            </p>
+
+            <Field
+              id={itemId}
+              label={t('fieldItem')}
+              optional
+              help={
+                <>
+                  {t('itemHint')} <Link href={INVENTORY_PATH}>{t('itemCatalogueLink')}</Link>
+                </>
+              }
+            >
+              <select
+                value={draft.itemId}
+                disabled={busy}
+                onChange={(event) => setDraft({ ...draft, itemId: event.target.value })}
+              >
+                <option value="">{t('itemNone')}</option>
+                {inventory.map((item) => (
+                  <option key={item.id} value={String(item.id)}>
+                    {item.active ? item.name : t('optionInactive', { name: item.name })}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field
+              id={quantityId}
+              label={t('fieldQuantity')}
+              optional
+              error={fieldErrors.quantity === undefined ? null : t(fieldErrors.quantity)}
+            >
+              <input
+                type="text"
+                inputMode="numeric"
+                value={draft.quantity}
+                disabled={busy}
+                onChange={(event) => setDraft({ ...draft, quantity: event.target.value })}
+              />
+            </Field>
+
+            <Field
+              id={costId}
+              label={t('fieldCost')}
+              optional
+              help={t('costHint')}
+              error={fieldErrors.cost === undefined ? null : t(fieldErrors.cost)}
+            >
+              <input
+                type="text"
+                inputMode="decimal"
+                value={draft.cost}
+                disabled={busy}
+                onChange={(event) => setDraft({ ...draft, cost: event.target.value })}
+              />
+            </Field>
+
+            {/* decision-6, at the point of the control that would otherwise imply the
+                opposite. A select labelled "building" next to a cost field reads as cost
+                attribution unless it says, right here, that it is not. */}
+            <Field id={locationId} label={t('fieldLocation')} optional help={t('locationHint')}>
+              <select
+                value={draft.locationId}
+                disabled={busy}
+                onChange={(event) => setDraft({ ...draft, locationId: event.target.value })}
+              >
+                <option value="">{t('locationNone')}</option>
+                {locations.map((location) => (
+                  <option key={location.id} value={location.id}>
+                    {location.active ? location.name : t('optionInactive', { name: location.name })}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field id={noteId} label={t('fieldNote')} optional help={t('noteHint')}>
+              <textarea
+                rows={3}
+                maxLength={1000}
+                value={draft.note}
+                disabled={busy}
+                onChange={(event) => setDraft({ ...draft, note: event.target.value })}
+              />
+            </Field>
+          </form>
         )}
-      </section>
+      </Drawer>
+
+      <ConfirmModal
+        open={rejecting !== null}
+        onClose={() => setRejecting(null)}
+        onConfirm={() => {
+          if (rejecting !== null) void advance(rejecting, 'rejected')
+        }}
+        title={rejecting === null ? '' : t('confirmRejectTitle', { worker: rejecting.worker_name })}
+        body={t('confirmRejectBody')}
+        confirmLabel={t('actionReject')}
+        destructive
+        busy={busy}
+      />
     </>
   )
 }

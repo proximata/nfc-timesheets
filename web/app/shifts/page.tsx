@@ -2,7 +2,15 @@
 
 import { useRouter } from 'next/navigation'
 import { useFormatter, useTranslations } from 'next-intl'
-import { type FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { AnswerBand } from '@/components/AnswerBand'
+import { type AttentionItem, AttentionList } from '@/components/AttentionList'
+import { Drawer } from '@/components/Drawer'
+import { EmptyState } from '@/components/EmptyState'
+import { Field } from '@/components/Field'
+import { ListPanel } from '@/components/ListPanel'
+import { PageHeader } from '@/components/PageHeader'
+import { type BadgeState, StateBadge } from '@/components/StateBadge'
 import {
   ApiError,
   createShift,
@@ -36,20 +44,27 @@ import {
 } from '@/lib/shifts'
 
 /**
- * Shift log — what actually happened, and the only place to fix it.
+ * Shift log — „Welche Schichten brauchen eine Entscheidung?"
  *
  * Two jobs. (1) Month-end verification: before payroll runs, every shift must be closed
  * and every auto-closed one resolved, because decision-10 keeps the rest out of the pay
  * total silently. Silence is the danger, so state is spelled out in words in its own
- * column and the shifts that block payroll are counted at the top of the screen.
+ * column, the shifts that block payroll are counted in the answer band at the top, and the
+ * ones that need a decision are listed by name above the log.
  * (2) Correction: `PATCH /admin/shifts/:id` is how a forgotten tap-out becomes a paid
  * shift and how a shift filed against the wrong building gets moved.
  *
  * (3) Entry by hand: `POST /admin/shifts` files the day of a worker whose phone died or
  * whose tag was destroyed. Without it that person is paid EUR 0 and the only recovery is
- * SQL on the production box. Such a shift is labelled as hand-entered in the form AND in
+ * SQL on the production box. Such a shift is labelled as hand-entered in the drawer AND in
  * its own column in the log, because payroll gets audited and a typed shift must never be
  * read as a tapped one.
+ *
+ * TWO DRAWERS, ONE JOB EACH, AND DELIBERATELY NOT ONE DRAWER BEHIND A MODE FLAG. Correcting
+ * a shift allows an EMPTY end time (that is how a shift is put back to running); filing one
+ * by hand REQUIRES it (the server refuses to open a shift by hand). One component holding
+ * both rules is exactly how the two drift apart and start disagreeing about what a shift is.
+ * Owner decision, this turn, and it is not an implementation detail.
  *
  * Filtering and sorting happen in the browser over the single UNBOUNDED `/admin/data`
  * payload, even though the route now takes `?from=&to=`. That is deliberate: this screen
@@ -89,7 +104,7 @@ type ErrorMessage =
 type FieldErrors = { start?: ErrorMessage; end?: ErrorMessage }
 
 /**
- * The hand-entry form. Nothing is preselected: a wrong worker chosen by default is a wrong
+ * The hand-entry drawer. Nothing is preselected: a wrong worker chosen by default is a wrong
  * payslip, so both selects start empty and the director has to name the person.
  */
 type NewDraft = {
@@ -102,7 +117,7 @@ type NewDraft = {
 
 const EMPTY_NEW_DRAFT: NewDraft = { workerId: '', locationId: '', start: '', end: '' }
 
-/** Message keys for the hand-entry form. */
+/** Message keys for the hand-entry drawer. */
 type NewErrorMessage =
   | 'errorWorkerRequired'
   | 'errorLocationRequired'
@@ -124,6 +139,33 @@ type NewFieldErrors = {
 
 const WORKER_ALL = 'all'
 const LOCATION_ALL = 'all'
+
+/**
+ * The submit button lives in the drawer's footer and the fields in its body, so the two are
+ * tied together by `form=` rather than by nesting. Constant ids, not `useId()`: only one
+ * drawer is ever open, and an IDREF is easier to read in a DOM inspector than `:r7:`.
+ */
+const CORRECT_FORM_ID = 'shift-correct-form'
+const CREATE_FORM_ID = 'shift-create-form'
+
+/** How many rows „Zu entscheiden" names before it stops listing and starts counting. */
+const TRIAGE_ROWS = 8
+
+const ROW_CLASS: Record<ShiftState, string | undefined> = {
+  open: 'is-open',
+  unresolved: 'is-unres',
+  resolved: 'is-corr',
+  // A finished, payable shift is the normal case and gets no rule. Everything cannot be
+  // highlighted; if it is, nothing is.
+  complete: undefined,
+}
+
+const BADGE: Record<ShiftState, BadgeState> = {
+  open: 'open',
+  unresolved: 'unres',
+  resolved: 'corr',
+  complete: 'muted',
+}
 
 function draftOf(shift: Shift): Draft {
   return {
@@ -148,23 +190,13 @@ export default function ShiftsPage() {
   const periodRangeId = useId()
   const startId = useId()
   const endId = useId()
-  const endHintId = useId()
   const editWorkerId = useId()
   const editLocationId = useId()
-  const errorId = useId()
-  const statusId = useId()
-  const correctionHeadingId = useId()
-  const correctionRef = useRef<HTMLHeadingElement>(null)
 
   const newWorkerId = useId()
   const newLocationId = useId()
   const newStartId = useId()
   const newEndId = useId()
-  const newTimeZoneHintId = useId()
-  const newErrorId = useId()
-  const newStatusId = useId()
-  const newHeadingId = useId()
-  const newHeadingRef = useRef<HTMLHeadingElement>(null)
 
   // null = still loading. An empty list is a legitimate first-run state, not an error.
   const [snapshot, setSnapshot] = useState<ShiftSnapshot | null>(null)
@@ -186,6 +218,7 @@ export default function ShiftsPage() {
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
 
+  const [createOpen, setCreateOpen] = useState(false)
   const [newDraft, setNewDraft] = useState<NewDraft>(EMPTY_NEW_DRAFT)
   const [newFieldErrors, setNewFieldErrors] = useState<NewFieldErrors>({})
   const [newFormError, setNewFormError] = useState<NewErrorMessage | null>(null)
@@ -193,6 +226,19 @@ export default function ShiftsPage() {
   const [clash, setClash] = useState<Shift | null>(null)
   const [created, setCreated] = useState(false)
   const [creating, setCreating] = useState(false)
+
+  /**
+   * `/shifts/?period=all`, as the dashboard's unresolved rows link to it. An unresolved
+   * shift is usually OLDER than the 30-day default — that is what made it unresolved — so
+   * arriving without a period would land on an empty table, which is the one reading this
+   * product must never produce. Read from `location`, not `useSearchParams`, so the static
+   * export needs no Suspense boundary; in an effect, so the prerendered HTML and the first
+   * client render still agree.
+   */
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get('period')
+    if (wanted !== null && isPeriod(wanted)) setPeriod(wanted)
+  }, [])
 
   /** A dead session must not render an empty table that reads as "no shifts". */
   const handleAuthLoss = useCallback(
@@ -264,27 +310,47 @@ export default function ShiftsPage() {
   const latest = latestStart === null ? null : periodContaining(latestStart, now)
   const latestPeriod = latest === 'all' || latest === period ? null : latest
 
-  /** How many of the shifts on screen the payroll total will silently leave out. */
-  const blockedCount = visible.filter((shift) => blocksPayroll(shiftState(shift))).length
+  /** The shifts on screen the payroll total will silently leave out — the whole point. */
+  const blocked = visible.filter((shift) => blocksPayroll(shiftState(shift)))
 
   // The server LIMITs the shift list. Hitting that limit means older shifts exist and are
   // NOT on this screen; saying nothing would present a truncated month as a complete one.
   const truncated = snapshot !== null && snapshot.shifts.length >= snapshot.shift_limit
 
+  /**
+   * Opening a correction. There is no focus bookkeeping here on purpose: <Drawer> moves
+   * focus in, traps it, and returns it to the control that opened it — and when a save
+   * removes that control (a resolved shift leaves the triage list) lib/useOverlay.ts falls
+   * back to #main-content instead of dropping the keyboard user on <body>.
+   */
   function startCorrection(shift: Shift) {
+    setCreateOpen(false)
     setDraft(draftOf(shift))
     setFieldErrors({})
     setFormError(null)
     setSaved(false)
-    // The form mounts in this render; focus lands once it exists.
-    window.requestAnimationFrame(() => correctionRef.current?.focus())
   }
 
-  function cancelCorrection() {
+  function closeCorrection() {
     setDraft(null)
     setFieldErrors({})
     setFormError(null)
-    correctionRef.current?.focus()
+  }
+
+  function openCreate() {
+    setDraft(null)
+    setNewFieldErrors({})
+    setNewFormError(null)
+    setClash(null)
+    setCreated(false)
+    setCreateOpen(true)
+  }
+
+  function closeCreate() {
+    setCreateOpen(false)
+    setNewFieldErrors({})
+    setNewFormError(null)
+    setClash(null)
   }
 
   function reportSaveFailure(cause: unknown) {
@@ -335,11 +401,11 @@ export default function ShiftsPage() {
     setBusy(true)
     try {
       await updateShift(draft.id, patch)
+      // The drawer closes and <Drawer> restores focus; the result is announced by the
+      // PAGE's live region, which is still on screen after the drawer is gone.
       setDraft(null)
       setSaved(true)
       await load()
-      // The form just unmounted; put focus somewhere real instead of on <body>.
-      correctionRef.current?.focus()
     } catch (cause) {
       reportSaveFailure(cause)
     } finally {
@@ -349,7 +415,7 @@ export default function ShiftsPage() {
 
   /**
    * Every timestamp on this screen, in Vienna time. Passed explicitly rather than left to
-   * the browser, so the table and the two forms cannot disagree by an hour.
+   * the browser, so the table and the two drawers cannot disagree by an hour.
    */
   function showDateTime(iso: string): string {
     return format.dateTime(new Date(iso), {
@@ -359,7 +425,15 @@ export default function ShiftsPage() {
     })
   }
 
-  /** File a shift that was never tapped. Deliberately separate from the correction form. */
+  function showTime(iso: string): string {
+    return format.dateTime(new Date(iso), {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: BUSINESS_TIME_ZONE,
+    })
+  }
+
+  /** File a shift that was never tapped. Its own drawer, its own validation rules. */
   async function onCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (creating) return
@@ -411,10 +485,9 @@ export default function ShiftsPage() {
         end_time: end,
       })
       setNewDraft(EMPTY_NEW_DRAFT)
+      setCreateOpen(false)
       setCreated(true)
       await load()
-      // The submit button is disabled while saving, so focus would fall to <body>.
-      newHeadingRef.current?.focus()
     } catch (cause) {
       if (handleAuthLoss(cause)) return
       if (cause instanceof ApiError && cause.status === 409) {
@@ -457,8 +530,6 @@ export default function ShiftsPage() {
     complete: t('stateComplete'),
   }
 
-  const formErrorText = formError === null ? '' : t(formError)
-
   const clashText =
     clash === null
       ? ''
@@ -468,244 +539,357 @@ export default function ShiftsPage() {
           from: showDateTime(clash.start_time),
           to: clash.end_time === null ? t('endMissing') : showDateTime(clash.end_time),
         })
-  // One alert region for both, so whichever refusal applies is announced in the same place.
-  const newFormErrorText = `${clashText} ${newFormError === null ? '' : t(newFormError)}`.trim()
+
+  const correctErrorText = formError === null ? '' : t(formError)
+  // One refusal, whichever applies, in one sentence.
+  const createErrorText = `${clashText} ${newFormError === null ? '' : t(newFormError)}`.trim()
+
+  /**
+   * THE PAGE'S OWN LIVE REGIONS, and they are not inside either drawer on purpose: Escape
+   * closes a drawer at any moment, including mid-save, and a message that leaves with the
+   * thing it is reporting on has not been read. The drawers repeat the refusal visually
+   * (aria-hidden, so it is announced once) because a drawer is the whole screen on a phone
+   * and a refusal nobody can see is a refusal nobody can act on.
+   */
+  const pageErrorText = [
+    loadError === null ? null : tError(loadError),
+    correctErrorText === '' ? null : correctErrorText,
+    createErrorText === '' ? null : createErrorText,
+  ]
+    .filter((part) => part !== null)
+    .join(' ')
+
+  const pageStatusText = [saved ? t('saved') : null, created ? t('createSaved') : null]
+    .filter((part) => part !== null)
+    .join(' ')
+
+  /**
+   * „Zu entscheiden": one row per shift that is holding up the payroll, named, with the
+   * decision one click away. NOT a table — these are not columns that line up, they are
+   * things to be dealt with. The full log below still lists every one of them.
+   */
+  const triage: AttentionItem[] = blocked.slice(0, TRIAGE_ROWS).map((shift) => {
+    const state = shiftState(shift)
+    return {
+      id: String(shift.id),
+      who: shift.worker_name,
+      where:
+        state === 'open'
+          ? t('rowOpen', { location: shift.location_name, time: showTime(shift.start_time) })
+          : t('rowUnresolved', {
+              location: shift.location_name,
+              date: showDateTime(shift.start_time),
+            }),
+      state: BADGE[state],
+      trailing: <StateBadge state={BADGE[state]} label={stateLabel[state]} />,
+      openLabel: t('correct'),
+      onOpen: () => startCorrection(shift),
+    }
+  })
+
+  const hasTable = snapshot !== null && visible.length > 0
 
   return (
     <>
-      <h1>{t('heading')}</h1>
-      <p className="lede">{t('intro')}</p>
+      <PageHeader
+        title={t('heading')}
+        question={t('question')}
+        action={
+          <button type="button" className="btn btn-primary" onClick={openCreate}>
+            {t('createTitle')}
+          </button>
+        }
+      />
 
-      <section aria-labelledby="shift-filters-heading">
-        <h2 id="shift-filters-heading">{t('filterHeading')}</h2>
+      <p className="form-error" role="alert">
+        {pageErrorText}
+      </p>
+      <p className="form-status" role="status">
+        {pageStatusText}
+      </p>
 
-        {/* No submit: each control filters a list already in memory, so there is nothing
-            to wait for and a submit button would only add a step. */}
-        <div className="filter-bar">
-          <div className="field">
-            <label htmlFor={workerFilterId}>{t('filterWorker')}</label>
-            <select
-              id={workerFilterId}
-              value={workerFilter}
-              onChange={(event) => setWorkerFilter(event.target.value)}
-            >
-              <option value={WORKER_ALL}>{t('allWorkers')}</option>
-              {(snapshot?.workers ?? []).map((worker) => (
-                <option key={worker.id} value={String(worker.id)}>
-                  {worker.name}
-                </option>
-              ))}
-            </select>
-          </div>
+      {snapshot === null ? (
+        <p role="status">{t('loading')}</p>
+      ) : (
+        <>
+          {/* The answer first: how much of what is on screen the pay total will leave out.
+              AnswerBand IS this page's role="status" — it replaces the result sentence and
+              must not be wrapped in a second live region. */}
+          <AnswerBand
+            cells={[
+              {
+                k: t('answerBlocked'),
+                v: blocked.length,
+                sub:
+                  visible.length === 0
+                    ? // A claim about an empty table is a claim about nothing, and saying
+                      // "all of them count" over no rows is part of what made the empty
+                      // table unreadable in the first place.
+                      ''
+                    : blocked.length === 0
+                      ? t('noneBlocked')
+                      : t('notPayable'),
+              },
+              {
+                k: t('answerShown'),
+                v: visible.length,
+                calm: true,
+                sub: [
+                  rangeLabel,
+                  outsideCount === 0 ? null : t('outsideCount', { count: outsideCount }),
+                ]
+                  .filter((part) => part !== null)
+                  .join(' '),
+              },
+            ]}
+          />
 
-          <div className="field">
-            <label htmlFor={locationFilterId}>{t('filterLocation')}</label>
-            <select
-              id={locationFilterId}
-              value={locationFilter}
-              onChange={(event) => setLocationFilter(event.target.value)}
-            >
-              <option value={LOCATION_ALL}>{t('allLocations')}</option>
-              {(snapshot?.locations ?? []).map((location) => (
-                <option key={location.id} value={location.id}>
-                  {location.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          <section aria-labelledby="shift-filters-heading">
+            <h2 className="visually-hidden" id="shift-filters-heading">
+              {t('filterHeading')}
+            </h2>
 
-          <div className="field">
-            <label htmlFor={periodFilterId}>{t('filterPeriod')}</label>
-            <select
-              id={periodFilterId}
-              value={period}
-              aria-describedby={periodRangeId}
-              onChange={(event) => {
-                if (isPeriod(event.target.value)) setPeriod(event.target.value)
-              }}
-            >
-              {PERIODS.map((value) => (
-                <option key={value} value={value}>
-                  {periodLabel[value]}
-                </option>
-              ))}
-            </select>
-            <p className="field-hint" id={periodRangeId}>
-              {rangeLabel}
-            </p>
-          </div>
-        </div>
+            {/* No submit: each control filters a list already in memory, so there is nothing
+                to wait for and a submit button would only add a step. */}
+            <div className="filter-bar">
+              <div className="field">
+                <label htmlFor={workerFilterId}>{t('filterWorker')}</label>
+                <select
+                  id={workerFilterId}
+                  value={workerFilter}
+                  onChange={(event) => setWorkerFilter(event.target.value)}
+                >
+                  <option value={WORKER_ALL}>{t('allWorkers')}</option>
+                  {(snapshot?.workers ?? []).map((worker) => (
+                    <option key={worker.id} value={String(worker.id)}>
+                      {worker.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-        {/* Live region: the table has no other way to tell a screen reader that changing
-            a select just changed what is below it. The count of shifts the PERIOD is
-            hiding is part of the same sentence on purpose — it is the fact that makes an
-            empty table readable, and it must not be somewhere the eye can skip. */}
-        <p role="status">
-          {snapshot === null
-            ? ''
-            : [
-                t('resultCount', { count: visible.length }),
-                // Only when there IS something on screen for it to be about. "All of them
-                // count towards pay" said over an empty table is a claim about nothing,
-                // and it was part of what made the empty table unreadable in the first
-                // place. The sentence that matters when the table is empty is the next one.
-                visible.length === 0
-                  ? null
-                  : blockedCount === 0
-                    ? t('noneBlocked')
-                    : t('blockedCount', { count: blockedCount }),
-                outsideCount === 0 ? null : t('outsideCount', { count: outsideCount }),
-              ]
-                .filter((part) => part !== null)
-                .join(' ')}
-        </p>
+              <div className="field">
+                <label htmlFor={locationFilterId}>{t('filterLocation')}</label>
+                <select
+                  id={locationFilterId}
+                  value={locationFilter}
+                  onChange={(event) => setLocationFilter(event.target.value)}
+                >
+                  <option value={LOCATION_ALL}>{t('allLocations')}</option>
+                  {(snapshot?.locations ?? []).map((location) => (
+                    <option key={location.id} value={location.id}>
+                      {location.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-        {truncated ? (
-          <p className="notice">{t('truncated', { limit: snapshot.shift_limit })}</p>
-        ) : null}
+              <div className="field">
+                <label htmlFor={periodFilterId}>{t('filterPeriod')}</label>
+                <select
+                  id={periodFilterId}
+                  value={period}
+                  aria-describedby={periodRangeId}
+                  onChange={(event) => {
+                    if (isPeriod(event.target.value)) setPeriod(event.target.value)
+                  }}
+                >
+                  {PERIODS.map((value) => (
+                    <option key={value} value={value}>
+                      {periodLabel[value]}
+                    </option>
+                  ))}
+                </select>
+                <p className="field-hint" id={periodRangeId}>
+                  {rangeLabel}
+                </p>
+              </div>
+            </div>
 
-        <p className="field-hint">{t('timeZoneHint')}</p>
-      </section>
+            {truncated ? (
+              <p className="notice">{t('truncated', { limit: snapshot.shift_limit })}</p>
+            ) : null}
 
-      <section aria-labelledby={newHeadingId}>
-        {/* Focus target after a shift is filed. */}
-        <h2 id={newHeadingId} ref={newHeadingRef} tabIndex={-1}>
-          {t('createHeading')}
-        </h2>
-        <p>{t('createIntro')}</p>
+            <p className="field-hint">{t('timeZoneHint')}</p>
+          </section>
 
-        {/* Said before the form, not after it: what this button produces is a shift marked
-            as hand-entered forever, and that is not something to discover afterwards. */}
-        <p className="notice">{t('createManualNotice')}</p>
+          {triage.length === 0 ? null : (
+            <ListPanel title={t('triageHeading')}>
+              <AttentionList items={triage} />
+            </ListPanel>
+          )}
 
-        <form className="worker-form" onSubmit={onCreate} noValidate>
-          {/* Permanent live regions: a text change inside an existing region is announced
-              far more reliably than a node that appears and disappears. */}
-          <p className="form-error" id={newErrorId} role="alert">
-            {newFormErrorText}
-          </p>
-          <p className="form-status" id={newStatusId} role="status">
-            {created ? t('createSaved') : ''}
-          </p>
+          {blocked.length > TRIAGE_ROWS ? (
+            <p className="field-hint">{t('triageMore', { count: blocked.length - TRIAGE_ROWS })}</p>
+          ) : null}
 
-          {/* ACTIVE rows only: the server refuses a shift pointed at a deactivated worker
-              or building, and there is no existing value to preserve on a new shift. */}
-          <div className="field">
-            <label htmlFor={newWorkerId}>{t('fieldWorker')}</label>
-            <select
-              id={newWorkerId}
-              value={newDraft.workerId}
-              onChange={(event) => setNewDraft({ ...newDraft, workerId: event.target.value })}
-              aria-describedby={`${newWorkerId}-error`}
-              aria-invalid={newFieldErrors.worker !== undefined}
-              disabled={creating}
-            >
-              <option value="">{t('choosePlaceholder')}</option>
-              {(snapshot?.workers ?? [])
-                .filter((worker) => worker.active)
-                .map((worker) => (
-                  <option key={worker.id} value={String(worker.id)}>
-                    {worker.name}
-                  </option>
-                ))}
-            </select>
-            <p className="field-error" id={`${newWorkerId}-error`} role="alert">
-              {newFieldErrors.worker === undefined ? '' : t(newFieldErrors.worker)}
-            </p>
-          </div>
+          <ListPanel title={t('listHeading')} padded={!hasTable}>
+            {shifts.length === 0 && latestStart === null ? (
+              <EmptyState>{t('emptyBody')}</EmptyState>
+            ) : visible.length === 0 ? (
+              /* The empty state that started all of this. It states, in words, how many
+                 shifts exist just outside the chosen period and when the most recent one
+                 was, and puts the way out one keystroke away. "Nothing here" and
+                 "everything is gone" must never render the same. */
+              <>
+                <EmptyState>
+                  {outsideCount === 0
+                    ? t('emptyFiltered')
+                    : t('emptyOutside', { count: outsideCount })}
+                </EmptyState>
+                {latestStart === null ? null : (
+                  <p className="field-hint">
+                    {t('latestRecorded', { date: showDateTime(latestStart) })}
+                  </p>
+                )}
+                {outsideCount === 0 && latestStart === null ? null : (
+                  <div className="form-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => setPeriod('all')}
+                    >
+                      {t('showAll')}
+                    </button>
+                    {latestPeriod === null ? null : (
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => setPeriod(latestPeriod)}
+                      >
+                        {t('jumpToLatest', { period: periodLabel[latestPeriod] })}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </>
+            ) : (
+              <table className="data-table" aria-busy={busy || creating}>
+                <caption className="visually-hidden">{t('tableCaption')}</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">{t('colWorker')}</th>
+                    <th scope="col">{t('colLocation')}</th>
+                    <th scope="col">{t('colStart')}</th>
+                    <th scope="col">{t('colEnd')}</th>
+                    <th scope="col">{t('colDuration')}</th>
+                    <th scope="col">{t('colState')}</th>
+                    <th scope="col">{t('colOrigin')}</th>
+                    <th scope="col">{t('colActions')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((shift) => {
+                    const state = shiftState(shift)
+                    return (
+                      <tr key={shift.id} className={ROW_CLASS[state]}>
+                        <th scope="row">{shift.worker_name}</th>
+                        <td>{shift.location_name}</td>
+                        <td>{showDateTime(shift.start_time)}</td>
+                        <td>
+                          {shift.end_time === null ? (
+                            <span className="cell-muted">{t('endMissing')}</span>
+                          ) : (
+                            showDateTime(shift.end_time)
+                          )}
+                        </td>
+                        <td>
+                          {/* An open shift has no duration yet, and showing one frozen at
+                              page load would be a number the admin could not act on. */}
+                          {shift.end_time === null ? (
+                            <span className="cell-muted">{t('durationRunning')}</span>
+                          ) : (
+                            formatDuration(durationMinutes(shift.start_time, shift.end_time))
+                          )}
+                        </td>
+                        {/* Words first. The badge tint and the 3px row rule are the second
+                            and third signals only — this column has to survive greyscale,
+                            a screen reader and a printed page. */}
+                        <td>
+                          <StateBadge state={BADGE[state]} label={stateLabel[state]} />
+                          <span className="shift-state-note">
+                            {blocksPayroll(state) ? t('notPayable') : t('payable')}
+                          </span>
+                        </td>
+                        {/* Its own column, in words: an auditor comparing this log against
+                            the tap history has to be able to see at a glance which rows a
+                            human typed. `client_uuid IS NULL` is the only record of it. */}
+                        <td>
+                          {isManualEntry(shift) ? (
+                            <span className="shift-origin-manual">{t('originManual')}</span>
+                          ) : (
+                            <span className="cell-muted">{t('originTap')}</span>
+                          )}
+                        </td>
+                        <td className="cell-actions">
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            onClick={() => startCorrection(shift)}
+                          >
+                            {t('correct')}
+                            <span className="visually-hidden">
+                              {t('forShift', {
+                                worker: shift.worker_name,
+                                date: showDateTime(shift.start_time),
+                              })}
+                            </span>
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+          </ListPanel>
+        </>
+      )}
 
-          <div className="field">
-            <label htmlFor={newLocationId}>{t('fieldLocation')}</label>
-            <select
-              id={newLocationId}
-              value={newDraft.locationId}
-              onChange={(event) => setNewDraft({ ...newDraft, locationId: event.target.value })}
-              aria-describedby={`${newLocationId}-error`}
-              aria-invalid={newFieldErrors.location !== undefined}
-              disabled={creating}
-            >
-              <option value="">{t('choosePlaceholder')}</option>
-              {(snapshot?.locations ?? [])
-                .filter((location) => location.active)
-                .map((location) => (
-                  <option key={location.id} value={location.id}>
-                    {location.name}
-                  </option>
-                ))}
-            </select>
-            <p className="field-error" id={`${newLocationId}-error`} role="alert">
-              {newFieldErrors.location === undefined ? '' : t(newFieldErrors.location)}
-            </p>
-          </div>
-
-          <div className="field">
-            <label htmlFor={newStartId}>{t('fieldStart')}</label>
-            <input
-              id={newStartId}
-              type="datetime-local"
-              value={newDraft.start}
-              onChange={(event) => setNewDraft({ ...newDraft, start: event.target.value })}
-              aria-describedby={`${newTimeZoneHintId} ${newStartId}-error`}
-              aria-invalid={newFieldErrors.start !== undefined}
-              disabled={creating}
-            />
-            <p className="field-hint" id={newTimeZoneHintId}>
-              {t('timeZoneHint')}
-            </p>
-            <p className="field-error" id={`${newStartId}-error`} role="alert">
-              {newFieldErrors.start === undefined ? '' : t(newFieldErrors.start)}
-            </p>
-          </div>
-
-          <div className="field">
-            <label htmlFor={newEndId}>{t('fieldEnd')}</label>
-            <input
-              id={newEndId}
-              type="datetime-local"
-              value={newDraft.end}
-              onChange={(event) => setNewDraft({ ...newDraft, end: event.target.value })}
-              aria-describedby={`${newTimeZoneHintId} ${newEndId}-error`}
-              aria-invalid={newFieldErrors.end !== undefined}
-              disabled={creating}
-            />
-            <p className="field-error" id={`${newEndId}-error`} role="alert">
-              {newFieldErrors.end === undefined ? '' : t(newFieldErrors.end)}
-            </p>
-          </div>
-
-          <div className="form-actions">
-            <button type="submit" className="button-primary" disabled={creating}>
-              {creating ? t('submitting') : t('submitCreate')}
-            </button>
-          </div>
-        </form>
-      </section>
-
-      <section aria-labelledby={correctionHeadingId}>
-        {/* Focus target after the form opens, saves or is cancelled. */}
-        <h2 id={correctionHeadingId} ref={correctionRef} tabIndex={-1}>
-          {t('correctHeading')}
-        </h2>
-
-        {/* Permanent live regions: a text change inside an existing region is announced
-            far more reliably than a node that appears and disappears. */}
-        <p className="form-error" id={errorId} role="alert">
-          {formErrorText}
-        </p>
-        <p className="form-status" id={statusId} role="status">
-          {saved ? t('saved') : ''}
-        </p>
-
-        {draft === null ? (
-          <p>{t('correctIdle')}</p>
-        ) : (
-          <form className="worker-form" onSubmit={onSubmit} noValidate>
-            <p className="field-hint">
-              {t('correctFor', {
+      {/* DRAWER 1 — correct an existing shift. End time OPTIONAL: clearing it puts the
+          shift back to running, which is the only way to undo a wrong auto-close. */}
+      <Drawer
+        open={draft !== null}
+        onClose={closeCorrection}
+        title={t('correctHeading')}
+        step={
+          draft === null
+            ? undefined
+            : t('correctFor', {
                 worker: draft.original.worker_name,
                 location: draft.original.location_name,
-              })}
-            </p>
+              })
+        }
+        busy={busy}
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={closeCorrection}
+              disabled={busy}
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="submit"
+              form={CORRECT_FORM_ID}
+              className="btn btn-primary"
+              disabled={busy}
+            >
+              {busy ? t('submitting') : t('submitSave')}
+            </button>
+          </>
+        }
+      >
+        {draft === null ? null : (
+          <form id={CORRECT_FORM_ID} onSubmit={onSubmit} noValidate>
+            {/* Visual only — the page's role="alert" above does the announcing. */}
+            {correctErrorText === '' ? null : (
+              <p className="form-error" aria-hidden="true">
+                {correctErrorText}
+              </p>
+            )}
 
             {/* PATCH /admin/shifts/:id stamps `corrected_at` whenever an edit leaves an
                 auto-closed shift with an end time — including an edit that changes nothing.
@@ -716,51 +900,42 @@ export default function ShiftsPage() {
               <p className="notice">{t('correctUnresolvedNotice')}</p>
             ) : null}
 
-            <div className="field">
-              <label htmlFor={startId}>{t('fieldStart')}</label>
+            <Field
+              id={startId}
+              label={t('fieldStart')}
+              required
+              help={t('timeZoneHint')}
+              error={fieldErrors.start === undefined ? null : t(fieldErrors.start)}
+            >
               <input
-                id={startId}
                 type="datetime-local"
+                required
                 value={draft.start}
                 onChange={(event) => setDraft({ ...draft, start: event.target.value })}
-                aria-describedby={`${startId}-hint ${startId}-error`}
-                aria-invalid={fieldErrors.start !== undefined}
                 disabled={busy}
               />
-              <p className="field-hint" id={`${startId}-hint`}>
-                {t('timeZoneHint')}
-              </p>
-              <p className="field-error" id={`${startId}-error`} role="alert">
-                {fieldErrors.start === undefined ? '' : t(fieldErrors.start)}
-              </p>
-            </div>
+            </Field>
 
-            <div className="field">
-              <label htmlFor={endId}>{t('fieldEnd')}</label>
+            <Field
+              id={endId}
+              label={t('fieldEnd')}
+              optional
+              help={t('endHint')}
+              error={fieldErrors.end === undefined ? null : t(fieldErrors.end)}
+            >
               <input
-                id={endId}
                 type="datetime-local"
                 value={draft.end}
                 onChange={(event) => setDraft({ ...draft, end: event.target.value })}
-                aria-describedby={`${endHintId} ${endId}-error`}
-                aria-invalid={fieldErrors.end !== undefined}
                 disabled={busy}
               />
-              <p className="field-hint" id={endHintId}>
-                {t('endHint')}
-              </p>
-              <p className="field-error" id={`${endId}-error`} role="alert">
-                {fieldErrors.end === undefined ? '' : t(fieldErrors.end)}
-              </p>
-            </div>
+            </Field>
 
             {/* Only ACTIVE rows are offered: the server rejects a shift pointed at a
                 deactivated worker or building. The current one is listed regardless so
                 the select can show what the shift actually says today. */}
-            <div className="field">
-              <label htmlFor={editWorkerId}>{t('fieldWorker')}</label>
+            <Field id={editWorkerId} label={t('fieldWorker')}>
               <select
-                id={editWorkerId}
                 value={String(draft.workerId)}
                 onChange={(event) => setDraft({ ...draft, workerId: Number(event.target.value) })}
                 disabled={busy}
@@ -773,12 +948,10 @@ export default function ShiftsPage() {
                     </option>
                   ))}
               </select>
-            </div>
+            </Field>
 
-            <div className="field">
-              <label htmlFor={editLocationId}>{t('fieldLocation')}</label>
+            <Field id={editLocationId} label={t('fieldLocation')}>
               <select
-                id={editLocationId}
                 value={draft.locationId}
                 onChange={(event) => setDraft({ ...draft, locationId: event.target.value })}
                 disabled={busy}
@@ -795,149 +968,135 @@ export default function ShiftsPage() {
                     </option>
                   ))}
               </select>
-            </div>
-
-            <div className="form-actions">
-              <button type="submit" className="button-primary" disabled={busy}>
-                {busy ? t('submitting') : t('submitSave')}
-              </button>
-              <button
-                type="button"
-                className="button-secondary"
-                onClick={cancelCorrection}
-                disabled={busy}
-              >
-                {t('cancel')}
-              </button>
-            </div>
+            </Field>
           </form>
         )}
-      </section>
+      </Drawer>
 
-      <section aria-labelledby="shift-list-heading">
-        <h2 id="shift-list-heading">{t('listHeading')}</h2>
-
-        {loadError !== null ? (
-          <p className="form-error" role="alert">
-            {tError(loadError)}
-          </p>
-        ) : null}
-
-        {snapshot === null ? (
-          <p role="status">{t('loading')}</p>
-        ) : shifts.length === 0 && latestStart === null ? (
-          <p>{t('emptyBody')}</p>
-        ) : visible.length === 0 ? (
-          /* The empty state that started all of this. It now states, in words, how many
-             shifts exist just outside the chosen period and when the most recent one was,
-             and puts the way out one keystroke away. "Nothing here" and "everything is
-             gone" must never render the same. */
-          <div className="notice">
-            <p>
-              {outsideCount === 0 ? t('emptyFiltered') : t('emptyOutside', { count: outsideCount })}
+      {/* DRAWER 2 — file a shift that was never tapped. End time REQUIRED, because
+          POST /admin/shifts refuses to open a shift by hand. A SEPARATE drawer from the
+          correction above, and not the same one behind a flag: that is how these two rules
+          drift apart. */}
+      <Drawer
+        open={createOpen}
+        onClose={closeCreate}
+        title={t('createTitle')}
+        busy={creating}
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={closeCreate}
+              disabled={creating}
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="submit"
+              form={CREATE_FORM_ID}
+              className="btn btn-primary"
+              disabled={creating}
+            >
+              {creating ? t('submitting') : t('submitCreate')}
+            </button>
+          </>
+        }
+      >
+        <form id={CREATE_FORM_ID} onSubmit={onCreate} noValidate>
+          {/* Visual only — the page's role="alert" above does the announcing. */}
+          {createErrorText === '' ? null : (
+            <p className="form-error" aria-hidden="true">
+              {createErrorText}
             </p>
-            {latestStart === null ? null : (
-              <p>{t('latestRecorded', { date: showDateTime(latestStart) })}</p>
-            )}
-            {outsideCount === 0 && latestStart === null ? null : (
-              <p className="form-actions">
-                <button type="button" className="button-primary" onClick={() => setPeriod('all')}>
-                  {t('showAll')}
-                </button>
-                {latestPeriod === null ? null : (
-                  <button
-                    type="button"
-                    className="button-secondary"
-                    onClick={() => setPeriod(latestPeriod)}
-                  >
-                    {t('jumpToLatest', { period: periodLabel[latestPeriod] })}
-                  </button>
-                )}
-              </p>
-            )}
-          </div>
-        ) : (
-          <table className="data-table" aria-busy={busy}>
-            <caption className="visually-hidden">{t('tableCaption')}</caption>
-            <thead>
-              <tr>
-                <th scope="col">{t('colWorker')}</th>
-                <th scope="col">{t('colLocation')}</th>
-                <th scope="col">{t('colStart')}</th>
-                <th scope="col">{t('colEnd')}</th>
-                <th scope="col">{t('colDuration')}</th>
-                <th scope="col">{t('colState')}</th>
-                <th scope="col">{t('colOrigin')}</th>
-                <th scope="col">{t('colActions')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((shift) => {
-                const state = shiftState(shift)
-                const blocked = blocksPayroll(state)
-                return (
-                  <tr key={shift.id} className={blocked ? 'row-attention' : undefined}>
-                    <th scope="row">{shift.worker_name}</th>
-                    <td>{shift.location_name}</td>
-                    <td>{showDateTime(shift.start_time)}</td>
-                    <td>
-                      {shift.end_time === null ? (
-                        <span className="cell-muted">{t('endMissing')}</span>
-                      ) : (
-                        showDateTime(shift.end_time)
-                      )}
-                    </td>
-                    <td>
-                      {/* An open shift has no duration yet, and showing one frozen at page
-                          load would be a number the admin could not act on. */}
-                      {shift.end_time === null ? (
-                        <span className="cell-muted">{t('durationRunning')}</span>
-                      ) : (
-                        formatDuration(durationMinutes(shift.start_time, shift.end_time))
-                      )}
-                    </td>
-                    {/* Words first. The class is a second signal only — this column has to
-                        survive greyscale, a screen reader and a printed page. */}
-                    <td>
-                      <span className={`shift-state shift-state-${state}`}>
-                        {stateLabel[state]}
-                      </span>
-                      <span className="shift-state-note">
-                        {blocked ? t('notPayable') : t('payable')}
-                      </span>
-                    </td>
-                    {/* Its own column, in words: an auditor comparing this log against the
-                        tap history has to be able to see at a glance which rows a human
-                        typed. `client_uuid IS NULL` is the only record of that fact. */}
-                    <td>
-                      {isManualEntry(shift) ? (
-                        <span className="shift-origin-manual">{t('originManual')}</span>
-                      ) : (
-                        <span className="cell-muted">{t('originTap')}</span>
-                      )}
-                    </td>
-                    <td className="cell-actions">
-                      <button
-                        type="button"
-                        className="button-secondary"
-                        onClick={() => startCorrection(shift)}
-                      >
-                        {t('correct')}
-                        <span className="visually-hidden">
-                          {t('forShift', {
-                            worker: shift.worker_name,
-                            date: showDateTime(shift.start_time),
-                          })}
-                        </span>
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-      </section>
+          )}
+
+          <p>{t('createIntro')}</p>
+
+          {/* Said BEFORE the fields, not after them: what this button produces is a shift
+              marked as hand-entered forever, and that is not something to discover later. */}
+          <p className="notice">{t('createManualNotice')}</p>
+
+          {/* ACTIVE rows only: the server refuses a shift pointed at a deactivated worker
+              or building, and there is no existing value to preserve on a new shift. */}
+          <Field
+            id={newWorkerId}
+            label={t('fieldWorker')}
+            required
+            error={newFieldErrors.worker === undefined ? null : t(newFieldErrors.worker)}
+          >
+            <select
+              required
+              value={newDraft.workerId}
+              onChange={(event) => setNewDraft({ ...newDraft, workerId: event.target.value })}
+              disabled={creating}
+            >
+              <option value="">{t('choosePlaceholder')}</option>
+              {(snapshot?.workers ?? [])
+                .filter((worker) => worker.active)
+                .map((worker) => (
+                  <option key={worker.id} value={String(worker.id)}>
+                    {worker.name}
+                  </option>
+                ))}
+            </select>
+          </Field>
+
+          <Field
+            id={newLocationId}
+            label={t('fieldLocation')}
+            required
+            error={newFieldErrors.location === undefined ? null : t(newFieldErrors.location)}
+          >
+            <select
+              required
+              value={newDraft.locationId}
+              onChange={(event) => setNewDraft({ ...newDraft, locationId: event.target.value })}
+              disabled={creating}
+            >
+              <option value="">{t('choosePlaceholder')}</option>
+              {(snapshot?.locations ?? [])
+                .filter((location) => location.active)
+                .map((location) => (
+                  <option key={location.id} value={location.id}>
+                    {location.name}
+                  </option>
+                ))}
+            </select>
+          </Field>
+
+          <Field
+            id={newStartId}
+            label={t('fieldStart')}
+            required
+            help={t('timeZoneHint')}
+            error={newFieldErrors.start === undefined ? null : t(newFieldErrors.start)}
+          >
+            <input
+              type="datetime-local"
+              required
+              value={newDraft.start}
+              onChange={(event) => setNewDraft({ ...newDraft, start: event.target.value })}
+              disabled={creating}
+            />
+          </Field>
+
+          <Field
+            id={newEndId}
+            label={t('fieldEnd')}
+            required
+            error={newFieldErrors.end === undefined ? null : t(newFieldErrors.end)}
+          >
+            <input
+              type="datetime-local"
+              required
+              value={newDraft.end}
+              onChange={(event) => setNewDraft({ ...newDraft, end: event.target.value })}
+              disabled={creating}
+            />
+          </Field>
+        </form>
+      </Drawer>
     </>
   )
 }

@@ -4,6 +4,12 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { AnswerBand } from '@/components/AnswerBand'
+import { Drawer } from '@/components/Drawer'
+import { EmptyState } from '@/components/EmptyState'
+import { Field } from '@/components/Field'
+import { ListPanel } from '@/components/ListPanel'
+import { PageHeader } from '@/components/PageHeader'
 import {
   type AnalyticsBuilding,
   type AnalyticsReport,
@@ -33,14 +39,16 @@ import { formatDuration } from '@/lib/shifts'
 
 /**
  * Building analytics — agreed time against time actually worked, the trend behind it, and
- * a map of Vienna.
+ * a map of Vienna. „Wo geht die Zeit hin?"
  *
  * THE MAP IS THE OPTIONAL PART AND THE TABLE IS NOT. Everything the map shows, the table
  * below it shows too, for every building, including the ones that have no coordinates. A
  * building without a pin is a building we cannot draw, never a building the director cannot
  * see — that distinction is the whole reason the table is not "extra detail" but the
  * primary presentation, and it is also what makes this screen usable with a keyboard and a
- * screen reader without a second implementation.
+ * screen reader without a second implementation. The redesign did not demote it: the map is
+ * a panel, the table is a panel, and the answer band above both counts BUILDINGS and not
+ * pins.
  *
  * FIVE WAYS THE MAP CAN NOT WORK, all of them ordinary, all of them named on screen:
  *   noKey    the build had no NEXT_PUBLIC_GOOGLE_MAPS_KEY. Not a fault; a deployment fact.
@@ -55,6 +63,11 @@ import { formatDuration } from '@/lib/shifts'
  * minutes and the delta between the last two. With fewer than two months that contain any
  * shift at all the answer is "not enough data" and NOT a flat line, which would be a claim
  * with nothing behind it.
+ *
+ * ONE WRITE: re-geocoding a single building, and it stays a ROW action — the row is where
+ * the director is looking when they notice the pin is missing. The detail view became a
+ * drawer, which is what finally gives it a focus trap, Escape, and a focus return to the
+ * button that opened it.
  */
 
 const BUILDINGS_PATH = '/locations/'
@@ -71,14 +84,9 @@ export default function AnalyticsPage() {
   const router = useRouter()
 
   const periodId = useId()
-  const periodHintId = useId()
   const monthsId = useId()
-  const monthsHintId = useId()
-  const mapHeadingId = useId()
-  const panelHeadingId = useId()
 
   const mapContainerRef = useRef<HTMLDivElement>(null)
-  const panelRef = useRef<HTMLElement>(null)
 
   const [report, setReport] = useState<AnalyticsReport | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
@@ -236,12 +244,6 @@ export default function AnalyticsPage() {
 
   const selected = buildings.find((b) => b.location_id === selectedId) ?? null
 
-  // The panel is the answer to a click on a pin, and a pin is not in the tab order in any
-  // useful way. Focus follows so a keyboard user who used the table's button lands in it.
-  useEffect(() => {
-    if (selected !== null) panelRef.current?.focus()
-  }, [selected])
-
   /** Ask Google again for one building's pin. 200 does NOT mean a pin came back. */
   async function retryGeocode(building: AnalyticsBuilding) {
     if (busy) return
@@ -331,84 +333,92 @@ export default function AnalyticsPage() {
   /** Longest month in the trend, so the bars have a scale. `1` keeps an all-zero trend safe. */
   const trendPeak = Math.max(1, ...(selected?.trend ?? []).map((point) => point.actual_minutes))
 
+  /** Counted over the SAME list the table renders, so the band cannot disagree with a row. */
+  const overCount = buildings.filter(
+    (b) => b.variance_minutes !== null && b.variance_minutes > 0,
+  ).length
+  const underCount = buildings.filter(
+    (b) => b.variance_minutes !== null && b.variance_minutes < 0,
+  ).length
+  const noTargetCount = buildings.filter((b) => b.target_minutes === null).length
+
   return (
     <>
-      <h1>{t('heading')}</h1>
-      <p className="lede">{t('intro')}</p>
+      <PageHeader title={t('heading')} question={t('question')} />
 
-      <section aria-labelledby="analytics-controls-heading">
-        <h2 id="analytics-controls-heading">{t('controlsHeading')}</h2>
-        <div className="filter-bar">
-          <div className="field">
-            <label htmlFor={periodId}>{t('fieldPeriod')}</label>
-            <select
-              id={periodId}
-              value={period}
-              aria-describedby={periodHintId}
-              onChange={(event) => {
-                const next = event.target.value
-                if (isPeriod(next) && next !== 'all') setPeriod(next)
-              }}
-            >
-              {PAYROLL_PERIODS.map((option) => (
-                <option key={option} value={option}>
-                  {periodLabel[option]}
-                </option>
-              ))}
-            </select>
-            <p className="field-hint" id={periodHintId}>
-              {rangeLabel}
-            </p>
-          </div>
-
-          <div className="field">
-            <label htmlFor={monthsId}>{t('fieldMonths')}</label>
-            <select
-              id={monthsId}
-              value={String(months)}
-              aria-describedby={monthsHintId}
-              onChange={(event) => setMonths(Number(event.target.value))}
-            >
-              {TREND_CHOICES.map((choice) => (
-                <option key={choice} value={String(choice)}>
-                  {t('monthsOption', { months: choice })}
-                </option>
-              ))}
-            </select>
-            <p className="field-hint" id={monthsHintId}>
-              {t('monthsHint')}
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <div className="callout">
-        <h2>{t('standingHeading')}</h2>
-        <ul>
-          <li>{t('noteExclusions')}</li>
-          <li>{t('noteTrend')}</li>
-          <li>{t('noteTargetSource')}</li>
-          <li>{t('noteMapEquivalent')}</li>
-        </ul>
-      </div>
-
-      {loadError !== null ? (
-        <p className="form-error" role="alert">
-          {tError(loadError)}
-        </p>
-      ) : null}
-
+      {/* Permanently-mounted page live regions. The geocode outcome is announced here and
+          not inside the drawer, which Escape can close at any moment. */}
+      <p className="form-error" role="alert">
+        {loadError === null ? '' : tError(loadError)}
+      </p>
       <p className={notice?.ok === false ? 'form-error' : 'form-status'} role="status">
         {notice === null ? '' : notice.text}
       </p>
 
-      <section aria-labelledby={mapHeadingId}>
-        <h2 id={mapHeadingId}>{t('mapHeading')}</h2>
+      {/* The answer first, above the controls that change it. It counts BUILDINGS and
+          not pins: the map is the optional part. */}
+      {report === null ? null : (
+        <AnswerBand
+          cells={[
+            {
+              k: t('answerOver'),
+              v: overCount,
+              calm: overCount === 0,
+              sub: rangeLabel,
+            },
+            { k: t('answerUnder'), v: underCount, calm: true },
+            {
+              k: t('answerNoTarget'),
+              v: noTargetCount,
+              calm: noTargetCount === 0,
+              sub: t('answerNoTargetSub'),
+            },
+            {
+              k: t('answerBuildings'),
+              v: buildings.length,
+              calm: true,
+              sub: t('answerPinnedSub', { pinned: pinned.length }),
+            },
+          ]}
+        />
+      )}
 
+      <div className="filter-bar">
+        <Field id={periodId} label={t('fieldPeriod')} help={rangeLabel}>
+          <select
+            value={period}
+            onChange={(event) => {
+              const next = event.target.value
+              if (isPeriod(next) && next !== 'all') setPeriod(next)
+            }}
+          >
+            {PAYROLL_PERIODS.map((option) => (
+              <option key={option} value={option}>
+                {periodLabel[option]}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field id={monthsId} label={t('fieldMonths')} help={t('monthsHint')}>
+          <select
+            value={String(months)}
+            onChange={(event) => setMonths(Number(event.target.value))}
+          >
+            {TREND_CHOICES.map((choice) => (
+              <option key={choice} value={String(choice)}>
+                {t('monthsOption', { months: choice })}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      <ListPanel title={t('mapHeading')} padded>
         {/* The state of the map, in words, ALWAYS — including when it worked. A director
             who cannot see pins has to be able to tell "nothing is geocoded" from "Google
             refused our key", because those have different owners and different fixes. */}
-        <p className="notice" role="status">
+        <p className="note" role="status">
           {mapStatus === 'noKey'
             ? t('mapNoKey')
             : mapStatus === 'noPins'
@@ -426,7 +436,7 @@ export default function AnalyticsPage() {
 
         {mapStatus === 'failed' ? (
           <p className="form-actions">
-            <button type="button" className="button-secondary" onClick={() => void load()}>
+            <button type="button" className="btn btn-ghost" onClick={() => void load()}>
               {t('mapRetry')}
             </button>
           </p>
@@ -443,253 +453,261 @@ export default function AnalyticsPage() {
         {/* Only when there is actually a map to click. "Selecting a pin opens…" printed
             under a notice that says no map was drawn is the screen contradicting itself. */}
         {mapStatus === 'ready' ? <p className="field-hint">{t('mapTableHint')}</p> : null}
-      </section>
+      </ListPanel>
 
-      {selected === null ? null : (
-        <section
-          className="callout building-panel"
-          ref={panelRef}
-          tabIndex={-1}
-          aria-labelledby={panelHeadingId}
-        >
-          <h2 id={panelHeadingId}>{selected.name}</h2>
-
-          {showPhoto && photoUrl !== null ? (
-            /* Rendered ONLY because the Street View METADATA endpoint already answered OK
-               for this exact coordinate. The image endpoint serves a grey "no imagery"
-               tile with HTTP 200, so trusting `onError` alone ships that tile as a
-               photograph of the client's building. `onError` is still wired, as the second
-               line of defence for a late refusal.
-
-               A plain <img>, not next/image: a static export has no image optimizer
-               (decision-16), so `unoptimized` would emit this same tag plus runtime. */
-            // biome-ignore lint/performance/noImgElement: decision-16 makes this a static export, so no Next image optimizer exists; next/image with `unoptimized` emits this same tag plus client runtime, and the LCP argument does not apply to a 400x220 thumbnail inside a panel the director opens on purpose.
-            <img
-              className="building-photo"
-              src={photoUrl}
-              alt={t('photoAlt', { name: selected.name })}
-              width={400}
-              height={220}
-              onError={() =>
-                setPhotoFailed((previous) => new Set(previous).add(selected.location_id))
-              }
-            />
-          ) : (
-            <p className="cell-muted">{photoReason(selected)}</p>
-          )}
-
-          <dl className="panel-metrics">
-            <dt>{t('panelAddress')}</dt>
-            <dd>{selected.address ?? t('noAddress')}</dd>
-            <dt>{t('panelClient')}</dt>
-            <dd>
-              {selected.client_name ?? t('noClient')}
-              {selected.contact_name === null ? '' : ` · ${selected.contact_name}`}
-            </dd>
-            <dt>{t('panelActual')}</dt>
-            <dd>{formatDuration(selected.actual_minutes)}</dd>
-            <dt>{t('panelTarget')}</dt>
-            <dd>
-              {selected.target_minutes === null
-                ? t('targetUnknown')
-                : formatDuration(selected.target_minutes)}
-            </dd>
-            <dt>{t('panelVariance')}</dt>
-            <dd>
-              {selected.variance_minutes === null
-                ? t('varianceUnknown')
-                : selected.variance_minutes === 0
-                  ? t('varianceExact')
-                  : selected.variance_minutes > 0
-                    ? t('varianceOver', { delta: formatDuration(selected.variance_minutes) })
-                    : t('varianceUnder', {
-                        delta: formatDuration(Math.abs(selected.variance_minutes)),
-                      })}
-            </dd>
-            <dt>{t('panelTrend')}</dt>
-            <dd>{trendText(selected)}</dd>
-            <dt>{t('panelMapState')}</dt>
-            <dd>{geocodeText(selected)}</dd>
-            <dt>{t('panelExcluded')}</dt>
-            <dd>
-              {selected.excluded_unresolved_shifts === 0 && selected.open_shifts === 0
-                ? t('excludedNone')
-                : t('excludedSome', {
-                    shifts: selected.excluded_unresolved_shifts,
-                    open: selected.open_shifts,
-                    hours: formatDuration(Math.round(selected.excluded_unresolved_seconds / 60)),
-                  })}
-            </dd>
-          </dl>
-
-          <h3>{t('panelTrendHeading', { months: report?.trend_months ?? months })}</h3>
-          <table className="data-table">
+      <ListPanel title={t('tableHeading')}>
+        {report === null ? (
+          <div className="list-body">
+            <p role="status">{t('loading')}</p>
+          </div>
+        ) : buildings.length === 0 ? (
+          <div className="list-body">
+            <EmptyState>
+              {t('emptyBody')} <Link href={BUILDINGS_PATH}>{t('emptyLink')}</Link>
+            </EmptyState>
+          </div>
+        ) : (
+          <table className="data-table" aria-busy={busy}>
             <caption className="visually-hidden">
-              {t('trendCaption', { name: selected.name })}
+              {t('tableCaption', { period: rangeLabel })}
             </caption>
             <thead>
               <tr>
-                <th scope="col">{t('colMonth')}</th>
+                <th scope="col">{t('colBuilding')}</th>
                 <th scope="col" className="col-numeric">
                   {t('colActual')}
                 </th>
                 <th scope="col" className="col-numeric">
-                  {t('colShifts')}
+                  {t('colTarget')}
                 </th>
+                <th scope="col" className="col-numeric">
+                  {t('colVariance')}
+                </th>
+                <th scope="col">{t('colTrend')}</th>
+                <th scope="col">{t('colMapState')}</th>
+                <th scope="col">{t('colActions')}</th>
               </tr>
             </thead>
             <tbody>
-              {selected.trend.map((point) => (
-                <tr key={point.month}>
-                  <th scope="row">{monthLabel(point.month)}</th>
+              {buildings.map((building) => (
+                <tr key={building.location_id} className={building.active ? undefined : 'is-muted'}>
+                  <th scope="row">
+                    {building.name}
+                    <span className="shift-state-note">
+                      {building.client_name ?? t('noClient')}
+                    </span>
+                    {building.excluded_unresolved_shifts > 0 ? (
+                      <span className="shift-state-note">
+                        {t('rowExcluded', { shifts: building.excluded_unresolved_shifts })}
+                      </span>
+                    ) : null}
+                  </th>
+                  <td className="col-numeric">{formatDuration(building.actual_minutes)}</td>
                   <td className="col-numeric">
-                    {formatDuration(point.actual_minutes)}
-                    {/* Decorative only. The number to its left is the fact; this is a
-                        shape, and it is aria-hidden so nothing is announced twice. */}
-                    <span
-                      className="trend-bar"
-                      aria-hidden="true"
-                      style={{ width: `${Math.round((point.actual_minutes / trendPeak) * 100)}%` }}
-                    />
+                    {building.target_minutes === null ? (
+                      <span className="cell-muted">{t('targetUnknown')}</span>
+                    ) : (
+                      formatDuration(building.target_minutes)
+                    )}
                   </td>
-                  <td className="col-numeric">{point.shifts}</td>
+                  {/* Signed h:mm, the same unit as the two columns beside it. `+` is
+                      printed explicitly because `formatDuration` only ever emits `-`, and
+                      an unsigned "1:30" in a variance column is genuinely ambiguous. */}
+                  <td className="col-numeric">
+                    {building.variance_minutes === null ? (
+                      <span className="cell-muted">{t('varianceUnknown')}</span>
+                    ) : (
+                      `${building.variance_minutes > 0 ? '+' : ''}${formatDuration(building.variance_minutes)}`
+                    )}
+                  </td>
+                  <td>{trendText(building)}</td>
+                  <td>
+                    {geocodeText(building)}
+                    {building.geocode_state === 'pinned' ? null : (
+                      <span className="cell-actions">
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          disabled={busy}
+                          onClick={() => retryGeocode(building)}
+                        >
+                          {t('geoRetry')}
+                          <span className="visually-hidden">
+                            {t('forBuilding', { name: building.name })}
+                          </span>
+                        </button>
+                      </span>
+                    )}
+                  </td>
+                  <td className="cell-actions">
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      aria-pressed={selectedId === building.location_id}
+                      onClick={() => setSelectedId(building.location_id)}
+                    >
+                      {t('openDetails')}
+                      <span className="visually-hidden">
+                        {t('forBuilding', { name: building.name })}
+                      </span>
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        )}
+      </ListPanel>
 
-          <p className="form-actions">
-            <Link href={CONTRACTS_PATH}>{t('panelContractLink')}</Link>
-            {' · '}
-            <Link href={SHIFTS_PATH}>{t('panelShiftsLink')}</Link>
-            {' · '}
-            <Link href={BUILDINGS_PATH}>{t('panelBuildingLink')}</Link>
-          </p>
-          <p className="form-actions">
-            <button type="button" className="button-secondary" onClick={() => setSelectedId(null)}>
-              {t('panelClose')}
-            </button>
-          </p>
-        </section>
-      )}
+      {/* Standing notes: what these numbers ARE. Small, permanently visible, never a
+          tooltip — `noteMapEquivalent` in particular is the sentence that says the table,
+          and not the map, is the complete list. */}
+      <div className="callout">
+        <h3>{t('standingHeading')}</h3>
+        <ul>
+          <li>{t('noteExclusions')}</li>
+          <li>{t('noteTrend')}</li>
+          <li>{t('noteTargetSource')}</li>
+          <li>{t('noteMapEquivalent')}</li>
+        </ul>
+      </div>
 
-      <section aria-labelledby="analytics-table-heading">
-        <h2 id="analytics-table-heading">{t('tableHeading')}</h2>
-
-        {report === null ? (
-          <p role="status">{t('loading')}</p>
-        ) : buildings.length === 0 ? (
-          <div className="notice">
-            <p>{t('emptyBody')}</p>
-            <p>
-              <Link href={BUILDINGS_PATH}>{t('emptyLink')}</Link>
-            </p>
-          </div>
-        ) : (
+      {/*
+        The detail view. It was a focus-managed callout; as a drawer it gets Escape, a real
+        focus trap and a focus RETURN to the row button that opened it — and the row it
+        describes is still behind it rather than pushed off screen. Read-only: the one write
+        on this screen (re-geocode) stays on the row, because that is where the director is
+        looking when they notice the pin is missing.
+      */}
+      <Drawer
+        open={selected !== null}
+        onClose={() => setSelectedId(null)}
+        title={selected?.name ?? ''}
+        step={selected?.client_name ?? undefined}
+        footer={
+          <button type="button" className="btn btn-ghost" onClick={() => setSelectedId(null)}>
+            {t('panelClose')}
+          </button>
+        }
+      >
+        {selected === null ? null : (
           <>
-            <p className="page-summary" role="status">
-              {t('summary', {
-                period: rangeLabel,
-                buildings: buildings.length,
-                pinned: pinned.length,
-              })}
-            </p>
+            {showPhoto && photoUrl !== null ? (
+              /* Rendered ONLY because the Street View METADATA endpoint already answered OK
+                 for this exact coordinate. The image endpoint serves a grey "no imagery"
+                 tile with HTTP 200, so trusting `onError` alone ships that tile as a
+                 photograph of the client's building. `onError` is still wired, as the second
+                 line of defence for a late refusal.
 
-            <table className="data-table" aria-busy={busy}>
+                 A plain <img>, not next/image: a static export has no image optimizer
+                 (decision-16), so `unoptimized` would emit this same tag plus runtime. */
+              // biome-ignore lint/performance/noImgElement: decision-16 makes this a static export, so no Next image optimizer exists; next/image with `unoptimized` emits this same tag plus client runtime, and the LCP argument does not apply to a 400x220 thumbnail inside a panel the director opens on purpose.
+              <img
+                className="building-photo"
+                src={photoUrl}
+                alt={t('photoAlt', { name: selected.name })}
+                width={400}
+                height={220}
+                onError={() =>
+                  setPhotoFailed((previous) => new Set(previous).add(selected.location_id))
+                }
+              />
+            ) : (
+              <p className="cell-muted">{photoReason(selected)}</p>
+            )}
+
+            <dl className="panel-metrics">
+              <dt>{t('panelAddress')}</dt>
+              <dd>{selected.address ?? t('noAddress')}</dd>
+              <dt>{t('panelClient')}</dt>
+              <dd>
+                {selected.client_name ?? t('noClient')}
+                {selected.contact_name === null ? '' : ` · ${selected.contact_name}`}
+              </dd>
+              <dt>{t('panelActual')}</dt>
+              <dd>{formatDuration(selected.actual_minutes)}</dd>
+              <dt>{t('panelTarget')}</dt>
+              <dd>
+                {selected.target_minutes === null
+                  ? t('targetUnknown')
+                  : formatDuration(selected.target_minutes)}
+              </dd>
+              <dt>{t('panelVariance')}</dt>
+              <dd>
+                {selected.variance_minutes === null
+                  ? t('varianceUnknown')
+                  : selected.variance_minutes === 0
+                    ? t('varianceExact')
+                    : selected.variance_minutes > 0
+                      ? t('varianceOver', { delta: formatDuration(selected.variance_minutes) })
+                      : t('varianceUnder', {
+                          delta: formatDuration(Math.abs(selected.variance_minutes)),
+                        })}
+              </dd>
+              <dt>{t('panelTrend')}</dt>
+              <dd>{trendText(selected)}</dd>
+              <dt>{t('panelMapState')}</dt>
+              <dd>{geocodeText(selected)}</dd>
+              <dt>{t('panelExcluded')}</dt>
+              <dd>
+                {selected.excluded_unresolved_shifts === 0 && selected.open_shifts === 0
+                  ? t('excludedNone')
+                  : t('excludedSome', {
+                      shifts: selected.excluded_unresolved_shifts,
+                      open: selected.open_shifts,
+                      hours: formatDuration(Math.round(selected.excluded_unresolved_seconds / 60)),
+                    })}
+              </dd>
+            </dl>
+
+            <h3>{t('panelTrendHeading', { months: report?.trend_months ?? months })}</h3>
+            <table className="data-table">
               <caption className="visually-hidden">
-                {t('tableCaption', { period: rangeLabel })}
+                {t('trendCaption', { name: selected.name })}
               </caption>
               <thead>
                 <tr>
-                  <th scope="col">{t('colBuilding')}</th>
+                  <th scope="col">{t('colMonth')}</th>
                   <th scope="col" className="col-numeric">
                     {t('colActual')}
                   </th>
                   <th scope="col" className="col-numeric">
-                    {t('colTarget')}
+                    {t('colShifts')}
                   </th>
-                  <th scope="col" className="col-numeric">
-                    {t('colVariance')}
-                  </th>
-                  <th scope="col">{t('colTrend')}</th>
-                  <th scope="col">{t('colMapState')}</th>
-                  <th scope="col">{t('colActions')}</th>
                 </tr>
               </thead>
               <tbody>
-                {buildings.map((building) => (
-                  <tr
-                    key={building.location_id}
-                    className={building.active ? undefined : 'row-inactive'}
-                  >
-                    <th scope="row">
-                      {building.name}
-                      <span className="shift-state-note">
-                        {building.client_name ?? t('noClient')}
-                      </span>
-                      {building.excluded_unresolved_shifts > 0 ? (
-                        <span className="shift-state-note">
-                          {t('rowExcluded', { shifts: building.excluded_unresolved_shifts })}
-                        </span>
-                      ) : null}
-                    </th>
-                    <td className="col-numeric">{formatDuration(building.actual_minutes)}</td>
+                {selected.trend.map((point) => (
+                  <tr key={point.month}>
+                    <th scope="row">{monthLabel(point.month)}</th>
                     <td className="col-numeric">
-                      {building.target_minutes === null ? (
-                        <span className="cell-muted">{t('targetUnknown')}</span>
-                      ) : (
-                        formatDuration(building.target_minutes)
-                      )}
+                      {formatDuration(point.actual_minutes)}
+                      {/* Decorative only. The number to its left is the fact; this is a
+                          shape, and it is aria-hidden so nothing is announced twice. */}
+                      <span
+                        className="trend-bar"
+                        aria-hidden="true"
+                        style={{
+                          width: `${Math.round((point.actual_minutes / trendPeak) * 100)}%`,
+                        }}
+                      />
                     </td>
-                    {/* Signed h:mm, the same unit as the two columns beside it. `+` is
-                        printed explicitly because `formatDuration` only ever emits `-`, and
-                        an unsigned "1:30" in a variance column is genuinely ambiguous. */}
-                    <td className="col-numeric">
-                      {building.variance_minutes === null ? (
-                        <span className="cell-muted">{t('varianceUnknown')}</span>
-                      ) : (
-                        `${building.variance_minutes > 0 ? '+' : ''}${formatDuration(building.variance_minutes)}`
-                      )}
-                    </td>
-                    <td>{trendText(building)}</td>
-                    <td>
-                      {geocodeText(building)}
-                      {building.geocode_state === 'pinned' ? null : (
-                        <span className="cell-actions">
-                          <button
-                            type="button"
-                            className="button-secondary"
-                            disabled={busy}
-                            onClick={() => retryGeocode(building)}
-                          >
-                            {t('geoRetry')}
-                            <span className="visually-hidden">
-                              {t('forBuilding', { name: building.name })}
-                            </span>
-                          </button>
-                        </span>
-                      )}
-                    </td>
-                    <td className="cell-actions">
-                      <button
-                        type="button"
-                        className="button-secondary"
-                        aria-pressed={selectedId === building.location_id}
-                        onClick={() => setSelectedId(building.location_id)}
-                      >
-                        {t('openDetails')}
-                        <span className="visually-hidden">
-                          {t('forBuilding', { name: building.name })}
-                        </span>
-                      </button>
-                    </td>
+                    <td className="col-numeric">{point.shifts}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+
+            <p>
+              <Link href={CONTRACTS_PATH}>{t('panelContractLink')}</Link>
+              {' · '}
+              <Link href={SHIFTS_PATH}>{t('panelShiftsLink')}</Link>
+              {' · '}
+              <Link href={BUILDINGS_PATH}>{t('panelBuildingLink')}</Link>
+            </p>
           </>
         )}
-      </section>
+      </Drawer>
     </>
   )
 }

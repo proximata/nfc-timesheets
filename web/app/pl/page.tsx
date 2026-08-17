@@ -4,6 +4,12 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useFormatter, useLocale, useTranslations } from 'next-intl'
 import { type FormEvent, useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { AnswerBand } from '@/components/AnswerBand'
+import { Drawer } from '@/components/Drawer'
+import { EmptyState } from '@/components/EmptyState'
+import { Field } from '@/components/Field'
+import { ListPanel } from '@/components/ListPanel'
+import { PageHeader } from '@/components/PageHeader'
 import {
   ApiError,
   clearSetting,
@@ -30,6 +36,9 @@ import { formatDuration } from '@/lib/shifts'
 /**
  * Profit and loss per building: revenue − labour − materials, for one period.
  *
+ * „Verdienen wir an diesem Objekt?" — answered by the band, argued by the flagged blocks,
+ * evidenced by the table, and qualified by the methodology under it.
+ *
  * EVERY NUMBER HERE COMES FROM THE SERVER'S SQL (`GET /admin/pl`), not from arithmetic in
  * this file. `/admin/data` caps shift rows at 2000, so a browser-side aggregate would
  * silently report a smaller month than actually happened — and a P&L that can quietly be
@@ -47,12 +56,18 @@ import { formatDuration } from '@/lib/shifts'
  * 3. Invent the baseline. `pl_margin_baseline_bp` ships UNSET and nothing defaults it. With
  *    it unset no building is flagged and the screen says so, because this codebase has no
  *    basis for an opinion about what a Viennese cleaning contract ought to earn. Setting it
- *    is a control on this page, and unsetting it is too.
+ *    is a control on this page, and unsetting it is too — an invented threshold would end up
+ *    in a real conversation about revising a client's contract.
  *
  * A FLAG IS NOT A RED DOT. The director has to be able to argue the case to a client, so
  * every flagged building gets a paragraph naming the margin, the floor, the shortfall, and
  * where the money went — including the hours that were deliberately NOT counted
- * (decision-10), because a building looks cheap precisely while those are outstanding.
+ * (decision-10), because a building looks cheap precisely while those are outstanding. Those
+ * paragraphs stay paragraphs. Compressing them into a badge was never on the table.
+ *
+ * ONE WRITE: the baseline, in a drawer. Its result is announced in the PAGE's live region,
+ * because Escape closes a drawer at any moment and a message that leaves with the overlay
+ * reporting it has not been read.
  */
 
 const MATERIALS_PATH = '/material-requests/'
@@ -67,9 +82,7 @@ export default function PlPage() {
   const router = useRouter()
 
   const periodId = useId()
-  const periodHintId = useId()
   const baselineId = useId()
-  const baselineHintId = useId()
 
   /**
    * Austrian month names. next-intl is handed the message-file key ('de'), whose Intl
@@ -96,6 +109,7 @@ export default function PlPage() {
   const [now] = useState(() => new Date())
   const range = useMemo(() => periodRange(period, now), [period, now])
 
+  const [baselineOpen, setBaselineOpen] = useState(false)
   const [baselineDraft, setBaselineDraft] = useState('')
   const [baselineError, setBaselineError] = useState(false)
   const [baselineNotice, setBaselineNotice] = useState<{ ok: boolean; text: string } | null>(null)
@@ -165,6 +179,9 @@ export default function PlPage() {
           percent: format.number(bpToRatio(bp), { style: 'percent', minimumFractionDigits: 2 }),
         }),
       })
+      // Closed on success: the drawer had one job and it is done. The outcome is announced
+      // in the page's live region, which is still on screen after the close.
+      setBaselineOpen(false)
       await load()
     } catch (cause) {
       if (!handleAuthLoss(cause)) setBaselineNotice({ ok: false, text: t('baselineFailed') })
@@ -180,6 +197,7 @@ export default function PlPage() {
     try {
       await clearSetting(MARGIN_BASELINE_KEY)
       setBaselineNotice({ ok: true, text: t('baselineCleared') })
+      setBaselineOpen(false)
       await load()
     } catch (cause) {
       if (!handleAuthLoss(cause)) setBaselineNotice({ ok: false, text: t('baselineFailed') })
@@ -233,17 +251,17 @@ export default function PlPage() {
    * phone to a client: what the building earned, what it cost to clean, in what proportion,
    * and how far short of the floor that lands.
    */
-  function reasoning(building: PlBuilding, baselineBp: number): string[] {
+  function reasoning(building: PlBuilding, floorBp: number): string[] {
     const lines: string[] = []
     const labourShare = shareBp(building.labour_cents, building.revenue_cents)
     const materialShare = shareBp(building.material_cents, building.revenue_cents)
-    const short = shortfallBp(building.margin_bp, baselineBp)
+    const short = shortfallBp(building.margin_bp, floorBp)
 
     if (building.margin_bp !== null && short !== null) {
       lines.push(
         t('whyMargin', {
           margin: percent(building.margin_bp),
-          baseline: percent(baselineBp),
+          baseline: percent(floorBp),
           points: points(short),
         }),
       )
@@ -286,17 +304,76 @@ export default function PlPage() {
 
   return (
     <>
-      <h1>{t('heading')}</h1>
-      <p className="lede">{t('intro')}</p>
+      <PageHeader
+        title={t('heading')}
+        question={t('question')}
+        action={
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              setBaselineError(false)
+              setBaselineOpen(true)
+            }}
+          >
+            {t('baselineOpen')}
+          </button>
+        }
+      />
 
-      <section aria-labelledby="pl-period-heading">
-        <h2 id="pl-period-heading">{t('periodHeading')}</h2>
-        <div className="field toolbar-field">
-          <label htmlFor={periodId}>{t('fieldPeriod')}</label>
+      {/* The page's live regions: permanently mounted, empty when there is nothing to say,
+          and OUTSIDE the drawer that produces the baseline outcome. */}
+      <p className="form-error" role="alert">
+        {loadError === null ? '' : tError(loadError)}
+      </p>
+      <p className={baselineNotice?.ok === false ? 'form-error' : 'form-status'} role="status">
+        {baselineNotice === null ? '' : baselineNotice.text}
+      </p>
+
+      {/* The answer first, above the control that changes it. `flagged` leads because it is
+          the only cell that asks for something; everything else here is context. */}
+      {report === null || totals === null ? null : (
+        <AnswerBand
+          cells={[
+            {
+              k: t('answerFlagged'),
+              v: totals.flagged,
+              calm: totals.flagged === 0,
+              sub:
+                totals.notAssessable > 0
+                  ? t('totalNotAssessable', { buildings: totals.notAssessable })
+                  : t('totalAllAssessed'),
+            },
+            {
+              k: t('answerProfit'),
+              v: totals.profitCents === null ? t('profitUnknown') : money(totals.profitCents),
+              sub: rangeLabel,
+            },
+            {
+              k: t('answerMargin'),
+              v: totals.marginBp === null ? t('marginUnknown') : percent(totals.marginBp),
+              calm: true,
+              sub:
+                baselineBp === null
+                  ? t('answerNoBaseline')
+                  : t('answerBaseline', { percent: percent(baselineBp) }),
+            },
+            {
+              k: t('answerRevenue'),
+              v: money(totals.revenueCents),
+              calm: true,
+              sub: t('totalScope', {
+                buildings: report.buildings.length - totals.unpricedBuildings,
+              }),
+            },
+          ]}
+        />
+      )}
+
+      <div className="filter-bar">
+        <Field id={periodId} label={t('fieldPeriod')} help={rangeLabel}>
           <select
-            id={periodId}
             value={period}
-            aria-describedby={periodHintId}
             onChange={(event) => {
               const next = event.target.value
               // `all` is excluded by PAYROLL_PERIODS and by the API: /admin/pl requires both
@@ -311,320 +388,322 @@ export default function PlPage() {
               </option>
             ))}
           </select>
-          <p className="field-hint" id={periodHintId}>
-            {rangeLabel} {t('attributionHint')}
-          </p>
-        </div>
-      </section>
+        </Field>
+      </div>
 
-      <section aria-labelledby="pl-baseline-heading">
-        <h2 id="pl-baseline-heading">{t('baselineHeading')}</h2>
-        <p>{t('baselineIntro')}</p>
-
-        <form className="worker-form" onSubmit={submitBaseline} noValidate>
-          <p className={baselineNotice?.ok === false ? 'form-error' : 'form-status'} role="status">
-            {baselineNotice === null ? '' : baselineNotice.text}
-          </p>
-
-          <div className="field">
-            <label htmlFor={baselineId}>{t('fieldBaseline')}</label>
-            <input
-              id={baselineId}
-              type="text"
-              inputMode="decimal"
-              value={baselineDraft}
-              aria-describedby={`${baselineHintId} ${baselineId}-error`}
-              aria-invalid={baselineError}
-              disabled={busy}
-              onChange={(event) => setBaselineDraft(event.target.value)}
-            />
-            <p className="field-hint" id={baselineHintId}>
-              {t('baselineHint')}
-            </p>
-            <p className="field-error" id={`${baselineId}-error`} role="alert">
-              {baselineError ? t('errorBaselineInvalid') : ''}
-            </p>
-          </div>
-
-          <div className="form-actions">
-            <button type="submit" className="button-primary" disabled={busy}>
-              {busy ? t('submitting') : t('baselineSubmit')}
-            </button>
-            {report?.baseline_set === true ? (
-              <button
-                type="button"
-                className="button-secondary"
-                disabled={busy}
-                onClick={removeBaseline}
-              >
-                {t('baselineClear')}
-              </button>
-            ) : null}
-          </div>
-        </form>
-
-        {/* State in TEXT. "Not set" is a supported, deliberate state, not a fault, and the
-            sentence says what follows from it rather than leaving the reader to guess. */}
-        <p className="notice">
-          {report === null
-            ? t('baselineLoading')
-            : report.baseline_margin_bp === null
+      {report === null || totals === null ? (
+        <p role="status">{t('loading')}</p>
+      ) : (
+        <>
+          {/* „Nicht gesetzt" is a supported, deliberate state and not a fault. The sentence
+              says what FOLLOWS from it rather than leaving the reader to guess, and it stays
+              on the page — not in the drawer that sets it. */}
+          <p className="note">
+            {report.baseline_margin_bp === null
               ? t('baselineUnset')
               : t('baselineCurrent', { percent: percent(report.baseline_margin_bp) })}
-        </p>
-      </section>
-
-      <section aria-labelledby="pl-result-heading">
-        <h2 id="pl-result-heading">{t('resultHeading')}</h2>
-
-        {loadError !== null ? (
-          <p className="form-error" role="alert">
-            {tError(loadError)}
           </p>
-        ) : null}
 
-        {report === null || totals === null ? (
-          <p role="status">{t('loading')}</p>
-        ) : (
-          <>
-            <p className="page-summary" role="status">
-              {t('summary', {
-                period: rangeLabel,
-                buildings: report.buildings.length,
-                flagged: totals.flagged,
-              })}
-            </p>
+          {/* THE ARGUMENT, before the evidence. A red row is not something a director can
+              take to a client; these paragraphs are. */}
+          <ListPanel title={t('flaggedHeading')} padded>
+            {baselineBp === null ? (
+              <EmptyState>{t('flaggedNoBaseline')}</EmptyState>
+            ) : flagged.length === 0 ? (
+              <EmptyState>
+                {t('flaggedNone', { baseline: percent(baselineBp) })}
+                {totals.notAssessable > 0
+                  ? ` ${t('flaggedNoneCaveat', { buildings: totals.notAssessable })}`
+                  : ''}
+              </EmptyState>
+            ) : (
+              flagged.map((building) => (
+                <div className="callout" key={building.location_id}>
+                  <h3>{t('flaggedFor', { name: building.name })}</h3>
+                  <ul>
+                    {reasoning(building, baselineBp).map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                  <p>
+                    <Link href={CONTRACTS_PATH}>{t('flaggedContractLink')}</Link>
+                    {' · '}
+                    <Link href={SHIFTS_PATH}>{t('flaggedShiftsLink')}</Link>
+                  </p>
+                </div>
+              ))
+            )}
+          </ListPanel>
 
-            {/* Standing methodology. Every line is something a reader would otherwise
-                reasonably assume the opposite of, and all of them change what the numbers
-                mean. Permanently visible, never a tooltip. */}
-            <div className="callout">
-              <h3>{t('methodHeading')}</h3>
-              <ul>
-                {/* decision-28 / the API's `labour.rate_basis`. Rendered from OUR messages
-                    rather than the server's `rate_basis_note`, which is German-only and
-                    would sit untranslated on the English locale. */}
-                <li>
-                  {report.labour.rate_basis === 'current'
-                    ? t('methodRates')
-                    : t('methodRatesUnknown')}
-                </li>
-                <li>{t('methodMaterials')}</li>
-                <li>
-                  {t('methodMaterialPool', {
-                    pool: money(report.materials.pool_cents),
-                    priced: report.materials.priced_requests,
-                  })}
-                </li>
-                {report.materials.unpriced_requests > 0 ? (
-                  <li>
-                    {t('methodUnpriced', { unpriced: report.materials.unpriced_requests })}{' '}
-                    <Link href={MATERIALS_PATH}>{t('methodUnpricedLink')}</Link>
-                  </li>
-                ) : null}
-                {report.materials.unallocated_cents > 0 ? (
-                  <li>
-                    {t('methodUnallocated', {
-                      amount: money(report.materials.unallocated_cents),
-                    })}
-                  </li>
-                ) : null}
-                <li>{t('methodExclusions')}</li>
-                {totals.unpricedBuildings > 0 ? (
-                  <li>
-                    {t('methodNoContract', {
-                      buildings: totals.unpricedBuildings,
-                      cost: money(totals.costCentsUnpriced),
-                    })}{' '}
-                    <Link href={CONTRACTS_PATH}>{t('methodNoContractLink')}</Link>
-                  </li>
-                ) : null}
-              </ul>
-            </div>
-
+          <ListPanel title={t('resultHeading')}>
             {report.buildings.length === 0 ? (
               /* Empty is not an error and must not read like one. There is genuinely
                  nothing to report when no building is active and none was worked in. */
-              <div className="notice">
-                <p>{t('emptyBody')}</p>
-                <p>{t('emptyHint')}</p>
+              <div className="list-body">
+                <EmptyState>
+                  {t('emptyBody')} {t('emptyHint')}
+                </EmptyState>
               </div>
             ) : (
-              <>
-                <table className="data-table">
-                  <caption className="visually-hidden">
-                    {t('tableCaption', { period: rangeLabel })}
-                  </caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">{t('colBuilding')}</th>
-                      <th scope="col">{t('colClient')}</th>
-                      <th scope="col" className="col-numeric">
-                        {t('colRevenue')}
-                      </th>
-                      <th scope="col" className="col-numeric">
-                        {t('colLabour')}
-                      </th>
-                      <th scope="col" className="col-numeric">
-                        {t('colMaterial')}
-                      </th>
-                      <th scope="col" className="col-numeric">
-                        {t('colProfit')}
-                      </th>
-                      <th scope="col" className="col-numeric">
-                        {t('colMargin')}
-                      </th>
-                      <th scope="col">{t('colAssessment')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.buildings.map((building) => (
-                      <tr
-                        key={building.location_id}
-                        className={
-                          building.below_baseline === true
-                            ? 'row-attention'
-                            : building.active
-                              ? undefined
-                              : 'row-inactive'
-                        }
-                      >
-                        <th scope="row">
-                          {building.name}
-                          {building.active ? null : (
-                            <span className="shift-state-note">{t('buildingInactive')}</span>
-                          )}
-                          {building.excluded_unresolved_shifts > 0 ? (
-                            <span className="shift-state-note">
-                              {t('rowExcluded', {
-                                shifts: building.excluded_unresolved_shifts,
-                              })}
-                            </span>
-                          ) : null}
-                        </th>
-                        <td>
-                          {building.client_name ?? (
-                            <span className="cell-muted">{t('noClient')}</span>
-                          )}
-                        </td>
-                        <td className="col-numeric">
-                          {building.revenue_cents === null ? (
-                            <span className="cell-muted">{t('revenueUnknown')}</span>
-                          ) : (
-                            <>
-                              {money(building.revenue_cents)}
-                              {building.revenue_days < building.period_days ? (
-                                <span className="shift-state-note">
-                                  {t('revenuePartial', {
-                                    days: building.revenue_days,
-                                    periodDays: building.period_days,
-                                  })}
-                                </span>
-                              ) : null}
-                            </>
-                          )}
-                        </td>
-                        <td className="col-numeric">
-                          {money(building.labour_cents)}
+              <table className="data-table">
+                <caption className="visually-hidden">
+                  {t('tableCaption', { period: rangeLabel })}
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">{t('colBuilding')}</th>
+                    <th scope="col">{t('colClient')}</th>
+                    <th scope="col" className="col-numeric">
+                      {t('colRevenue')}
+                    </th>
+                    <th scope="col" className="col-numeric">
+                      {t('colLabour')}
+                    </th>
+                    <th scope="col" className="col-numeric">
+                      {t('colMaterial')}
+                    </th>
+                    <th scope="col" className="col-numeric">
+                      {t('colProfit')}
+                    </th>
+                    <th scope="col" className="col-numeric">
+                      {t('colMargin')}
+                    </th>
+                    <th scope="col">{t('colAssessment')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.buildings.map((building) => (
+                    <tr
+                      key={building.location_id}
+                      className={
+                        building.below_baseline === true
+                          ? 'is-unres'
+                          : building.active
+                            ? undefined
+                            : 'is-muted'
+                      }
+                    >
+                      <th scope="row">
+                        {building.name}
+                        {building.active ? null : (
+                          <span className="shift-state-note">{t('buildingInactive')}</span>
+                        )}
+                        {building.excluded_unresolved_shifts > 0 ? (
                           <span className="shift-state-note">
-                            {t('labourHours', {
-                              hours: formatDuration(building.labour_minutes),
+                            {t('rowExcluded', {
+                              shifts: building.excluded_unresolved_shifts,
                             })}
                           </span>
-                        </td>
-                        <td className="col-numeric">{money(building.material_cents)}</td>
-                        <td className="col-numeric">
-                          {building.profit_cents === null ? (
-                            <span className="cell-muted">{t('profitUnknown')}</span>
-                          ) : (
-                            money(building.profit_cents)
-                          )}
-                        </td>
-                        <td className="col-numeric">
-                          {building.margin_bp === null ? (
-                            <span className="cell-muted">{t('marginUnknown')}</span>
-                          ) : (
-                            percent(building.margin_bp)
-                          )}
-                        </td>
-                        <td>{assessment(building)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr>
-                      <th scope="row">
-                        {t('totalLabel')}
+                        ) : null}
+                      </th>
+                      <td>
+                        {building.client_name ?? (
+                          <span className="cell-muted">{t('noClient')}</span>
+                        )}
+                      </td>
+                      <td className="col-numeric">
+                        {building.revenue_cents === null ? (
+                          <span className="cell-muted">{t('revenueUnknown')}</span>
+                        ) : (
+                          <>
+                            {money(building.revenue_cents)}
+                            {building.revenue_days < building.period_days ? (
+                              <span className="shift-state-note">
+                                {t('revenuePartial', {
+                                  days: building.revenue_days,
+                                  periodDays: building.period_days,
+                                })}
+                              </span>
+                            ) : null}
+                          </>
+                        )}
+                      </td>
+                      <td className="col-numeric">
+                        {money(building.labour_cents)}
                         <span className="shift-state-note">
-                          {t('totalScope', {
-                            buildings: report.buildings.length - totals.unpricedBuildings,
+                          {t('labourHours', {
+                            hours: formatDuration(building.labour_minutes),
                           })}
                         </span>
-                      </th>
-                      <td />
-                      <td className="col-numeric">{money(totals.revenueCents)}</td>
-                      <td className="col-numeric">{money(totals.labourCentsPriced)}</td>
-                      <td className="col-numeric">{money(totals.materialCentsPriced)}</td>
+                      </td>
+                      <td className="col-numeric">{money(building.material_cents)}</td>
                       <td className="col-numeric">
-                        {totals.profitCents === null ? (
+                        {building.profit_cents === null ? (
                           <span className="cell-muted">{t('profitUnknown')}</span>
                         ) : (
-                          money(totals.profitCents)
+                          money(building.profit_cents)
                         )}
                       </td>
                       <td className="col-numeric">
-                        {totals.marginBp === null ? (
+                        {building.margin_bp === null ? (
                           <span className="cell-muted">{t('marginUnknown')}</span>
                         ) : (
-                          percent(totals.marginBp)
+                          percent(building.margin_bp)
                         )}
                       </td>
-                      <td>
-                        {totals.notAssessable > 0
-                          ? t('totalNotAssessable', { buildings: totals.notAssessable })
-                          : t('totalAllAssessed')}
-                      </td>
+                      <td>{assessment(building)}</td>
                     </tr>
-                  </tfoot>
-                </table>
-
-                {/* THE ARGUMENT. A red row is not something a director can take to a
-                    client; this is. One block per flagged building, with the numbers that
-                    produced the verdict spelled out. */}
-                <section aria-labelledby="pl-flagged-heading">
-                  <h3 id="pl-flagged-heading">{t('flaggedHeading')}</h3>
-                  {baselineBp === null ? (
-                    <p className="notice">{t('flaggedNoBaseline')}</p>
-                  ) : flagged.length === 0 ? (
-                    <p className="notice">
-                      {t('flaggedNone', { baseline: percent(baselineBp) })}
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <th scope="row">
+                      {t('totalLabel')}
+                      <span className="shift-state-note">
+                        {t('totalScope', {
+                          buildings: report.buildings.length - totals.unpricedBuildings,
+                        })}
+                      </span>
+                    </th>
+                    <td />
+                    <td className="col-numeric">{money(totals.revenueCents)}</td>
+                    <td className="col-numeric">{money(totals.labourCentsPriced)}</td>
+                    <td className="col-numeric">{money(totals.materialCentsPriced)}</td>
+                    <td className="col-numeric">
+                      {totals.profitCents === null ? (
+                        <span className="cell-muted">{t('profitUnknown')}</span>
+                      ) : (
+                        money(totals.profitCents)
+                      )}
+                    </td>
+                    <td className="col-numeric">
+                      {totals.marginBp === null ? (
+                        <span className="cell-muted">{t('marginUnknown')}</span>
+                      ) : (
+                        percent(totals.marginBp)
+                      )}
+                    </td>
+                    <td>
                       {totals.notAssessable > 0
-                        ? ` ${t('flaggedNoneCaveat', { buildings: totals.notAssessable })}`
-                        : ''}
-                    </p>
-                  ) : (
-                    flagged.map((building) => (
-                      <div className="callout" key={building.location_id}>
-                        <h4>{t('flaggedFor', { name: building.name })}</h4>
-                        <ul>
-                          {reasoning(building, baselineBp).map((line) => (
-                            <li key={line}>{line}</li>
-                          ))}
-                        </ul>
-                        <p>
-                          <Link href={CONTRACTS_PATH}>{t('flaggedContractLink')}</Link>
-                          {' · '}
-                          <Link href={SHIFTS_PATH}>{t('flaggedShiftsLink')}</Link>
-                        </p>
-                      </div>
-                    ))
-                  )}
-                </section>
-              </>
+                        ? t('totalNotAssessable', { buildings: totals.notAssessable })
+                        : t('totalAllAssessed')}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
             )}
+          </ListPanel>
+
+          {/* Standing methodology. Every line is something a reader would otherwise
+              reasonably assume the opposite of, and all of them change what the numbers
+              mean. Permanently visible — never a tooltip, never behind a hover. It moved
+              BELOW the table in the redesign and got smaller. It did not lose a line. */}
+          <div className="callout">
+            <h3>{t('methodHeading')}</h3>
+            <ul>
+              {/* The old lede's second sentence: every number on this page is the server's
+                  SQL over exactly the chosen days. The lede is gone, the fact is not. */}
+              <li>{t('intro')}</li>
+              {/* decision-28 / the API's `labour.rate_basis`. Rendered from OUR messages
+                  rather than the server's `rate_basis_note`, which is German-only and
+                  would sit untranslated on the English locale. */}
+              <li>
+                {report.labour.rate_basis === 'current'
+                  ? t('methodRates')
+                  : t('methodRatesUnknown')}
+              </li>
+              <li>{t('methodMaterials')}</li>
+              <li>
+                {t('methodMaterialPool', {
+                  pool: money(report.materials.pool_cents),
+                  priced: report.materials.priced_requests,
+                })}
+              </li>
+              {report.materials.unpriced_requests > 0 ? (
+                <li>
+                  {t('methodUnpriced', { unpriced: report.materials.unpriced_requests })}{' '}
+                  <Link href={MATERIALS_PATH}>{t('methodUnpricedLink')}</Link>
+                </li>
+              ) : null}
+              {report.materials.unallocated_cents > 0 ? (
+                <li>
+                  {t('methodUnallocated', {
+                    amount: money(report.materials.unallocated_cents),
+                  })}
+                </li>
+              ) : null}
+              <li>{t('methodExclusions')}</li>
+              {totals.unpricedBuildings > 0 ? (
+                <li>
+                  {t('methodNoContract', {
+                    buildings: totals.unpricedBuildings,
+                    cost: money(totals.costCentsUnpriced),
+                  })}{' '}
+                  <Link href={CONTRACTS_PATH}>{t('methodNoContractLink')}</Link>
+                </li>
+              ) : null}
+              <li>{t('attributionHint')}</li>
+            </ul>
+          </div>
+        </>
+      )}
+
+      {/*
+        THE ONE WRITE. Configurable, clearable, and never defaulted: an invented threshold
+        would end up in a real conversation about revising a client's contract.
+      */}
+      <Drawer
+        open={baselineOpen}
+        onClose={() => setBaselineOpen(false)}
+        title={t('baselineHeading')}
+        busy={busy}
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setBaselineOpen(false)}
+              disabled={busy}
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="submit"
+              form="pl-baseline-form"
+              className="btn btn-primary"
+              disabled={busy}
+            >
+              {busy ? t('submitting') : t('baselineSubmit')}
+            </button>
           </>
-        )}
-      </section>
+        }
+      >
+        <p>{t('baselineIntro')}</p>
+        {/* The form is in the body and the submit button is in the footer, joined by `form=`
+            rather than by a click handler: Enter in the field must save, exactly as it did
+            when the form was inline on the page. */}
+        <form id="pl-baseline-form" onSubmit={submitBaseline} noValidate>
+          <Field
+            id={baselineId}
+            label={t('fieldBaseline')}
+            help={t('baselineHint')}
+            error={baselineError ? t('errorBaselineInvalid') : undefined}
+          >
+            <input
+              type="text"
+              inputMode="decimal"
+              value={baselineDraft}
+              disabled={busy}
+              onChange={(event) => setBaselineDraft(event.target.value)}
+            />
+          </Field>
+        </form>
+        {/* Clearing is in the BODY, not the footer: three buttons in a drawer footer wrap on
+            a 480px drawer and the primary action ends up on its own line. Clearing is also
+            reversible — it is re-settable from this same field — so it needs no confirm. */}
+        {report?.baseline_set === true ? (
+          <p className="form-actions">
+            <button
+              type="button"
+              className="btn btn-quiet"
+              disabled={busy}
+              onClick={removeBaseline}
+            >
+              {t('baselineClear')}
+            </button>
+          </p>
+        ) : null}
+      </Drawer>
     </>
   )
 }

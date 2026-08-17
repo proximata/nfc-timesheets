@@ -3,7 +3,13 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from 'react'
+import { type FormEvent, Fragment, useCallback, useEffect, useId, useState } from 'react'
+import { ConfirmModal } from '@/components/ConfirmModal'
+import { Drawer } from '@/components/Drawer'
+import { EmptyState } from '@/components/EmptyState'
+import { Field } from '@/components/Field'
+import { ListPanel } from '@/components/ListPanel'
+import { PageHeader } from '@/components/PageHeader'
 import {
   ApiError,
   type Client,
@@ -27,7 +33,19 @@ import { LOGIN_PATH } from '@/lib/nav'
  *
  * Deactivating a person also revokes any link they were given (the DELETE route does it
  * server-side), because the realistic reason to deactivate them is that they left the client
- * company and must stop seeing our work that same minute.
+ * company and must stop seeing our work that same minute. That used to live in a code
+ * comment and in one sentence of intro prose; it is now the body of the confirmation, which
+ * is the only moment it can still change the answer.
+ *
+ * REDESIGN, owner's answer Q3: ONE list. The two tables and their two permanently-open forms
+ * were literally the "two white containers" complaint, and a segmented control would have
+ * been worse — hiding half the data to look tidy makes the screen worse, not lighter. So a
+ * client is a row and its people are the rows underneath it, and both writes are drawers.
+ *
+ * WHY EACH CONTACT SUB-ROW STILL HAS AN EMPTY "Objekte" CELL: the column belongs to the
+ * client, a person has no buildings of their own, and `ResponsiveTableLabels` captions the
+ * ≤767px cards BY CELL POSITION. Dropping the cell would shift every later label one column
+ * left and confidently caption a phone number "Objekte" — readable, and false.
  */
 
 /** Shape checks only, mirroring server/lib/validate.js. The server decides for real. */
@@ -67,28 +85,26 @@ export default function ClientsPage() {
   const tError = useTranslations('error')
   const router = useRouter()
 
+  const clientFormId = useId()
   const clientNameId = useId()
   const clientActiveId = useId()
-  const clientFormHeadingId = useId()
+  const contactFormId = useId()
   const contactClientId = useId()
   const contactNameId = useId()
   const contactEmailId = useId()
   const contactPhoneId = useId()
   const contactActiveId = useId()
-  const contactFormHeadingId = useId()
-  const clientNameRef = useRef<HTMLInputElement>(null)
-  const contactNameRef = useRef<HTMLInputElement>(null)
 
   // null = still loading. Empty lists = loaded and genuinely empty, the first-run state.
   const [snapshot, setSnapshot] = useState<ClientsSnapshot | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const [clientDraft, setClientDraft] = useState<ClientDraft>(EMPTY_CLIENT)
+  /** null = that drawer is closed. No separate "is the form open" flag exists. */
+  const [clientDraft, setClientDraft] = useState<ClientDraft | null>(null)
   const [clientError, setClientError] = useState<ErrorMessage | null>(null)
-  const [clientSaved, setClientSaved] = useState(false)
 
-  const [contactDraft, setContactDraft] = useState<ContactDraft>(EMPTY_CONTACT)
+  const [contactDraft, setContactDraft] = useState<ContactDraft | null>(null)
   const [contactErrors, setContactErrors] = useState<{
     client?: ErrorMessage
     name?: ErrorMessage
@@ -96,7 +112,12 @@ export default function ClientsPage() {
     phone?: ErrorMessage
   }>({})
   const [contactError, setContactError] = useState<ErrorMessage | null>(null)
-  const [contactSaved, setContactSaved] = useState(false)
+
+  /** The person about to lose their links. Deactivation is the one irreversible write here. */
+  const [confirming, setConfirming] = useState<Contact | null>(null)
+
+  /** What the page's one live region is currently saying. '' = nothing happened yet. */
+  const [status, setStatus] = useState('')
 
   /** A dead session must not render empty tables that look like "nothing on file yet". */
   const handleAuthLoss = useCallback(
@@ -134,7 +155,7 @@ export default function ClientsPage() {
   const contacts = snapshot?.contacts ?? []
   const locations = snapshot?.locations ?? []
 
-  /** 4xx belongs to the form, 5xx and offline belong to the page-level error. */
+  /** 4xx belongs to the open drawer, 5xx and offline belong to the page-level error. */
   function reportFailure(cause: unknown, setError: (value: ErrorMessage | null) => void) {
     if (handleAuthLoss(cause)) return
     if (cause instanceof ApiError && cause.status >= 400 && cause.status < 500) {
@@ -147,9 +168,9 @@ export default function ClientsPage() {
 
   async function onSubmitClient(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (busy) return
+    if (busy || clientDraft === null) return
     const name = clientDraft.name.trim()
-    setClientSaved(false)
+    setStatus('')
     if (name === '') {
       setClientError('errorNameRequired')
       return
@@ -162,11 +183,12 @@ export default function ClientsPage() {
         name,
         active: clientDraft.active,
       })
-      setClientDraft(EMPTY_CLIENT)
-      setClientSaved(true)
+      // The drawer closes on success and would take its own confirmation with it unread,
+      // so the outcome is announced by the page's live region. Focus goes back to the
+      // control that opened the drawer — components/Drawer.tsx, lib/useOverlay.ts.
+      setClientDraft(null)
+      setStatus(t('clientSaved'))
       await load()
-      // The submit button is disabled while saving, so focus would otherwise fall to <body>.
-      clientNameRef.current?.focus()
     } catch (cause) {
       reportFailure(cause, setClientError)
     } finally {
@@ -176,7 +198,7 @@ export default function ClientsPage() {
 
   async function onSubmitContact(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (busy) return
+    if (busy || contactDraft === null) return
     const name = contactDraft.name.trim()
     const email = contactDraft.email.trim()
     const phone = contactDraft.phone.trim()
@@ -188,7 +210,7 @@ export default function ClientsPage() {
     if (phone !== '' && !PHONE_RE.test(phone)) errors.phone = 'errorPhoneShape'
     setContactErrors(errors)
     setContactError(null)
-    setContactSaved(false)
+    setStatus('')
     if (Object.keys(errors).length > 0) return
 
     setBusy(true)
@@ -201,10 +223,9 @@ export default function ClientsPage() {
         phone,
         active: contactDraft.active,
       })
-      setContactDraft(EMPTY_CONTACT)
-      setContactSaved(true)
+      setContactDraft(null)
+      setStatus(t('contactSaved'))
       await load()
-      contactNameRef.current?.focus()
     } catch (cause) {
       reportFailure(cause, setContactError)
     } finally {
@@ -216,11 +237,14 @@ export default function ClientsPage() {
    * Soft deactivate / reactivate. Deactivating goes through DELETE because for a contact
    * that route ALSO revokes their live links; reactivating is a normal save. Nothing is
    * ever destroyed: buildings and shifts keep naming who was paying and who we reported to.
+   *
+   * A client is reversible in one click and asks nothing first. A contact is not — the
+   * links do not come back — so that one goes through the confirmation below.
    */
   async function toggleClient(client: Client) {
     if (busy) return
     setBusy(true)
-    setClientSaved(false)
+    setStatus('')
     try {
       if (client.active) await deactivateClient(client.id)
       else await saveClient({ id: client.id, name: client.name, active: true })
@@ -235,7 +259,7 @@ export default function ClientsPage() {
   async function toggleContact(contact: Contact) {
     if (busy) return
     setBusy(true)
-    setContactSaved(false)
+    setStatus('')
     try {
       if (contact.active) await deactivateContact(contact.id)
       else {
@@ -248,23 +272,43 @@ export default function ClientsPage() {
           active: true,
         })
       }
+      setConfirming(null)
       await load()
     } catch (cause) {
+      setConfirming(null)
       reportFailure(cause, setContactError)
     } finally {
       setBusy(false)
     }
   }
 
-  function editClient(client: Client) {
-    setClientDraft({ id: client.id, name: client.name, active: client.active })
+  /** Open / close, one pair per drawer. Escape, the scrim and Cancel all land in `close`. */
+  function openClient(draft: ClientDraft) {
+    setClientDraft(draft)
     setClientError(null)
-    setClientSaved(false)
-    clientNameRef.current?.focus()
+    setStatus('')
+  }
+
+  function closeClient() {
+    setClientDraft(null)
+    setClientError(null)
+  }
+
+  function openContact(draft: ContactDraft) {
+    setContactDraft(draft)
+    setContactErrors({})
+    setContactError(null)
+    setStatus('')
+  }
+
+  function closeContact() {
+    setContactDraft(null)
+    setContactErrors({})
+    setContactError(null)
   }
 
   function editContact(contact: Contact) {
-    setContactDraft({
+    openContact({
       id: contact.id,
       clientChoice: String(contact.client_id),
       name: contact.name,
@@ -272,140 +316,173 @@ export default function ClientsPage() {
       phone: contact.phone ?? '',
       active: contact.active,
     })
-    setContactErrors({})
-    setContactError(null)
-    setContactSaved(false)
-    contactNameRef.current?.focus()
   }
 
-  function clientName(id: number): string {
-    return clients.find((client) => client.id === id)?.name ?? t('unknownClient')
+  /**
+   * One group per client, its people underneath it. A contact whose client is missing from
+   * the payload keeps its own group rather than vanishing from the screen — an invisible
+   * row is how a person nobody can see keeps a link nobody remembers giving them.
+   */
+  const groups = clients.map((client) => ({
+    client,
+    people: contacts.filter((contact) => contact.client_id === client.id),
+    buildings: locations.filter((row) => row.client_id === client.id).map((row) => row.name),
+  }))
+  const orphans = contacts.filter(
+    (contact) => !clients.some((client) => client.id === contact.client_id),
+  )
+
+  /** The cell exists so the columns keep lining up; a person has no buildings of their own. */
+  const notApplicable = <span className="cell-muted">{t('notApplicable')}</span>
+
+  function contactRow(contact: Contact) {
+    return (
+      <tr key={`contact-${contact.id}`} className={contact.active ? undefined : 'is-muted'}>
+        {/* The status lives in the row header rather than in a column of its own: with five
+            columns the buildings list and the contact details ate the width and „Status"
+            broke MID-WORD in the header (`.data-table th` sets `overflow-wrap: anywhere`).
+            Here the word sits next to the name it describes, which is also where a screen
+            reader announces it. */}
+        <th scope="row">
+          <span aria-hidden="true">↳ </span>
+          {contact.name} <span className="badge muted">{t('rolePerson')}</span>{' '}
+          {contact.active ? (
+            /* Active is the normal case and gets no chip — a column of „Aktiv" chips is the
+               noise this redesign is removing. It stays in the accessibility tree, because
+               "nothing said" is not the same as "active" to somebody who cannot see the row. */
+            <span className="visually-hidden">{t('statusActive')}</span>
+          ) : (
+            <span className="badge muted">{t('statusInactivePerson')}</span>
+          )}
+        </th>
+        <td>{notApplicable}</td>
+        <td>
+          {contact.email === null ? (
+            <span className="cell-muted">{t('noEmail')}</span>
+          ) : (
+            contact.email
+          )}
+          {' · '}
+          {contact.phone === null ? (
+            <span className="cell-muted">{t('noPhone')}</span>
+          ) : (
+            contact.phone
+          )}
+        </td>
+        <td className="cell-actions">
+          <button type="button" className="btn btn-quiet" onClick={() => editContact(contact)}>
+            {/* .visually-hidden disambiguator: nine buttons on this screen say „Bearbeiten". */}
+            {t('edit')}
+            <span className="visually-hidden">{t('forName', { name: contact.name })}</span>
+          </button>
+          <button
+            type="button"
+            className="btn btn-quiet"
+            onClick={() => (contact.active ? setConfirming(contact) : toggleContact(contact))}
+          >
+            {contact.active ? t('deactivate') : t('activate')}
+            <span className="visually-hidden">{t('forName', { name: contact.name })}</span>
+          </button>
+        </td>
+      </tr>
+    )
   }
 
   return (
     <>
-      <h1>{t('heading')}</h1>
-      <p className="lede">{t('intro')}</p>
-      <p>
-        <Link href="/locations/">{t('buildingsLink')}</Link>
+      <PageHeader
+        title={t('heading')}
+        question={t('question')}
+        action={
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => openClient(EMPTY_CLIENT)}
+          >
+            {t('clientCreateHeading')}
+          </button>
+        }
+      />
+
+      {/* Load-bearing: this page is never a prerequisite. Both things can be created from
+          the buildings form, and this screen is where they get corrected afterwards. */}
+      <p className="note">
+        {t('intro')} <Link href="/locations/">{t('buildingsLink')}</Link>
       </p>
 
+      {/* Permanent live regions: a text change inside an existing region is announced far
+          more reliably than a node that appears and disappears. */}
       {loadError !== null ? (
         <p className="form-error" role="alert">
           {tError(loadError)}
         </p>
       ) : null}
+      <p className="form-status" role="status">
+        {status}
+      </p>
 
-      <section aria-labelledby={clientFormHeadingId}>
-        <h2 id={clientFormHeadingId}>
-          {clientDraft.id === undefined ? t('clientCreateHeading') : t('clientEditHeading')}
-        </h2>
-
-        <form className="worker-form" onSubmit={onSubmitClient} noValidate>
-          {/* Permanent live regions: a text change inside an existing region is announced
-              far more reliably than a node that appears and disappears. */}
-          <p className="form-error" role="alert">
-            {clientError === null ? '' : t(clientError)}
-          </p>
-          <p className="form-status" role="status">
-            {clientSaved ? t('clientSaved') : ''}
-          </p>
-
-          <div className="field">
-            <label htmlFor={clientNameId}>{t('fieldClientName')}</label>
-            <input
-              id={clientNameId}
-              ref={clientNameRef}
-              type="text"
-              value={clientDraft.name}
-              onChange={(event) => setClientDraft({ ...clientDraft, name: event.target.value })}
-              maxLength={160}
-              autoComplete="off"
-              aria-describedby={`${clientNameId}-error`}
-              aria-invalid={clientError === 'errorNameRequired'}
-              disabled={busy}
-            />
-            <p className="field-error" id={`${clientNameId}-error`} role="alert">
-              {clientError === 'errorNameRequired' ? t('errorNameRequired') : ''}
-            </p>
-          </div>
-
-          <div className="field field-check">
-            <input
-              id={clientActiveId}
-              type="checkbox"
-              checked={clientDraft.active}
-              onChange={(event) => setClientDraft({ ...clientDraft, active: event.target.checked })}
-              disabled={busy}
-            />
-            <label htmlFor={clientActiveId}>{t('fieldClientActive')}</label>
-          </div>
-
-          <div className="form-actions">
-            <button type="submit" className="button-primary" disabled={busy}>
-              {busy
-                ? t('submitting')
-                : clientDraft.id === undefined
-                  ? t('clientSubmitCreate')
-                  : t('submitSave')}
-            </button>
-            {clientDraft.id === undefined ? null : (
-              <button
-                type="button"
-                className="button-secondary"
-                onClick={() => setClientDraft(EMPTY_CLIENT)}
-              >
-                {t('cancel')}
-              </button>
-            )}
-          </div>
-        </form>
-
-        <h3>{t('clientListHeading')}</h3>
+      <ListPanel
+        title={t('listHeading')}
+        action={
+          <button
+            type="button"
+            className="btn btn-quiet"
+            onClick={() => openContact(EMPTY_CONTACT)}
+          >
+            {t('contactCreateHeading')}
+          </button>
+        }
+      >
         {snapshot === null ? (
-          <p role="status">{t('loading')}</p>
-        ) : clients.length === 0 ? (
-          <p>{t('clientEmptyBody')}</p>
+          <p className="empty-state" role="status">
+            {t('loading')}
+          </p>
+        ) : clients.length === 0 && orphans.length === 0 ? (
+          <EmptyState>{t('empty')}</EmptyState>
         ) : (
           <table className="data-table" aria-busy={busy}>
-            <caption className="visually-hidden">{t('clientTableCaption')}</caption>
+            <caption className="visually-hidden">{t('tableCaption')}</caption>
             <thead>
               <tr>
-                <th scope="col">{t('colClient')}</th>
+                <th scope="col">{t('colNameNested')}</th>
                 <th scope="col">{t('colBuildings')}</th>
-                <th scope="col">{t('colPeople')}</th>
-                <th scope="col">{t('colStatus')}</th>
+                <th scope="col">{t('colContact')}</th>
                 <th scope="col">{t('colActions')}</th>
               </tr>
             </thead>
             <tbody>
-              {clients.map((client) => {
-                const buildings = locations.filter((row) => row.client_id === client.id)
-                const people = contacts.filter((row) => row.client_id === client.id)
-                return (
-                  <tr key={client.id} className={client.active ? undefined : 'row-inactive'}>
-                    <th scope="row">{client.name}</th>
+              {groups.map(({ client, people, buildings }) => (
+                <Fragment key={`client-${client.id}`}>
+                  <tr className={client.active ? undefined : 'is-muted'}>
+                    <th scope="row">
+                      {client.name}{' '}
+                      {client.active ? (
+                        <span className="visually-hidden">{t('statusActive')}</span>
+                      ) : (
+                        <span className="badge muted">{t('statusInactiveClient')}</span>
+                      )}
+                    </th>
                     <td>
                       {buildings.length === 0 ? (
                         <span className="cell-muted">{t('noBuildings')}</span>
                       ) : (
-                        buildings.map((row) => row.name).join(', ')
+                        buildings.join(', ')
                       )}
                     </td>
                     <td>
                       {people.length === 0 ? (
                         <span className="cell-muted">{t('noPeople')}</span>
                       ) : (
-                        people.map((row) => row.name).join(', ')
+                        t('peopleCount', { count: people.length })
                       )}
                     </td>
-                    {/* Text, not a colour: the status must survive greyscale and a screen reader. */}
-                    <td>{client.active ? t('statusActive') : t('statusInactiveClient')}</td>
                     <td className="cell-actions">
                       <button
                         type="button"
-                        className="button-secondary"
-                        onClick={() => editClient(client)}
+                        className="btn btn-quiet"
+                        onClick={() =>
+                          openClient({ id: client.id, name: client.name, active: client.active })
+                        }
                       >
                         {t('edit')}
                         <span className="visually-hidden">
@@ -414,7 +491,7 @@ export default function ClientsPage() {
                       </button>
                       <button
                         type="button"
-                        className="button-secondary"
+                        className="btn btn-quiet"
                         onClick={() => toggleClient(client)}
                       >
                         {client.active ? t('deactivate') : t('activate')}
@@ -424,208 +501,230 @@ export default function ClientsPage() {
                       </button>
                     </td>
                   </tr>
-                )
-              })}
+                  {people.map(contactRow)}
+                </Fragment>
+              ))}
+
+              {orphans.length === 0 ? null : (
+                <Fragment key="unknown-client">
+                  <tr>
+                    <th scope="row">{t('unknownClient')}</th>
+                    <td>{notApplicable}</td>
+                    <td>{t('peopleCount', { count: orphans.length })}</td>
+                    <td className="cell-actions">{notApplicable}</td>
+                  </tr>
+                  {orphans.map(contactRow)}
+                </Fragment>
+              )}
             </tbody>
           </table>
         )}
-      </section>
+      </ListPanel>
 
-      <section aria-labelledby={contactFormHeadingId}>
-        <h2 id={contactFormHeadingId}>
-          {contactDraft.id === undefined ? t('contactCreateHeading') : t('contactEditHeading')}
-        </h2>
-        <p>{t('contactIntro')}</p>
-
-        <form className="worker-form" onSubmit={onSubmitContact} noValidate>
-          <p className="form-error" role="alert">
-            {contactError === null ? '' : t(contactError)}
-          </p>
-          <p className="form-status" role="status">
-            {contactSaved ? t('contactSaved') : ''}
-          </p>
-
-          <div className="field">
-            <label htmlFor={contactClientId}>{t('fieldContactClient')}</label>
-            <select
-              id={contactClientId}
-              value={contactDraft.clientChoice}
-              onChange={(event) =>
-                setContactDraft({ ...contactDraft, clientChoice: event.target.value })
-              }
-              aria-describedby={`${contactClientId}-error`}
-              aria-invalid={contactErrors.client !== undefined}
-              disabled={busy}
-            >
-              <option value="">{t('pickClient')}</option>
-              {clients.map((client) => (
-                <option key={client.id} value={String(client.id)}>
-                  {client.active ? client.name : t('optionInactive', { name: client.name })}
-                </option>
-              ))}
-            </select>
-            <p className="field-error" id={`${contactClientId}-error`} role="alert">
-              {contactErrors.client === undefined ? '' : t(contactErrors.client)}
-            </p>
-          </div>
-
-          <div className="field">
-            <label htmlFor={contactNameId}>{t('fieldContactName')}</label>
-            <input
-              id={contactNameId}
-              ref={contactNameRef}
-              type="text"
-              value={contactDraft.name}
-              onChange={(event) => setContactDraft({ ...contactDraft, name: event.target.value })}
-              maxLength={160}
-              autoComplete="off"
-              aria-describedby={`${contactNameId}-error`}
-              aria-invalid={contactErrors.name !== undefined}
-              disabled={busy}
-            />
-            <p className="field-error" id={`${contactNameId}-error`} role="alert">
-              {contactErrors.name === undefined ? '' : t(contactErrors.name)}
-            </p>
-          </div>
-
-          <div className="field">
-            <label htmlFor={contactEmailId}>{t('fieldContactEmail')}</label>
-            <input
-              id={contactEmailId}
-              type="email"
-              value={contactDraft.email}
-              onChange={(event) => setContactDraft({ ...contactDraft, email: event.target.value })}
-              maxLength={320}
-              autoComplete="off"
-              aria-describedby={`${contactEmailId}-hint ${contactEmailId}-error`}
-              aria-invalid={contactErrors.email !== undefined}
-              disabled={busy}
-            />
-            <p className="field-hint" id={`${contactEmailId}-hint`}>
-              {t('contactEmailHint')}
-            </p>
-            <p className="field-error" id={`${contactEmailId}-error`} role="alert">
-              {contactErrors.email === undefined ? '' : t(contactErrors.email)}
-            </p>
-          </div>
-
-          <div className="field">
-            <label htmlFor={contactPhoneId}>{t('fieldContactPhone')}</label>
-            <input
-              id={contactPhoneId}
-              type="tel"
-              value={contactDraft.phone}
-              onChange={(event) => setContactDraft({ ...contactDraft, phone: event.target.value })}
-              maxLength={40}
-              autoComplete="off"
-              aria-describedby={`${contactPhoneId}-error`}
-              aria-invalid={contactErrors.phone !== undefined}
-              disabled={busy}
-            />
-            <p className="field-error" id={`${contactPhoneId}-error`} role="alert">
-              {contactErrors.phone === undefined ? '' : t(contactErrors.phone)}
-            </p>
-          </div>
-
-          <div className="field field-check">
-            <input
-              id={contactActiveId}
-              type="checkbox"
-              checked={contactDraft.active}
-              onChange={(event) =>
-                setContactDraft({ ...contactDraft, active: event.target.checked })
-              }
-              disabled={busy}
-            />
-            <label htmlFor={contactActiveId}>{t('fieldContactActive')}</label>
-          </div>
-
-          <div className="form-actions">
-            <button type="submit" className="button-primary" disabled={busy}>
+      <Drawer
+        open={clientDraft !== null}
+        onClose={closeClient}
+        title={clientDraft?.id === undefined ? t('clientCreateHeading') : t('clientEditHeading')}
+        busy={busy}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={closeClient}>
+              {t('cancel')}
+            </button>
+            <button type="submit" form={clientFormId} className="btn btn-primary" disabled={busy}>
               {busy
                 ? t('submitting')
-                : contactDraft.id === undefined
+                : clientDraft?.id === undefined
+                  ? t('clientSubmitCreate')
+                  : t('submitSave')}
+            </button>
+          </>
+        }
+      >
+        {clientDraft === null ? null : (
+          <form id={clientFormId} onSubmit={onSubmitClient} noValidate>
+            {/* The drawer stays open when the server refuses, so the refusal stays with it:
+                on a phone the drawer IS the screen, and a message on the page behind it
+                would be announced into something the reader can no longer see. */}
+            <p className="form-error" role="alert">
+              {/* Only what belongs to the FORM. A field error is announced once, on its own
+                  field — printing it here as well says the same sentence twice. */}
+              {clientError === 'errorRejected' ? t(clientError) : ''}
+            </p>
+
+            <Field
+              id={clientNameId}
+              label={t('fieldClientName')}
+              required
+              error={clientError === 'errorNameRequired' ? t('errorNameRequired') : null}
+            >
+              <input
+                type="text"
+                required
+                value={clientDraft.name}
+                onChange={(event) => setClientDraft({ ...clientDraft, name: event.target.value })}
+                maxLength={160}
+                autoComplete="off"
+                disabled={busy}
+              />
+            </Field>
+
+            {/* `.field-check` WITHOUT `.field`: `.field input` is width:100% + min-height:44px,
+                which turns a checkbox into a 44px blue slab. Verified by looking at it. */}
+            <div className="field-check">
+              <input
+                id={clientActiveId}
+                type="checkbox"
+                checked={clientDraft.active}
+                onChange={(event) =>
+                  setClientDraft({ ...clientDraft, active: event.target.checked })
+                }
+                disabled={busy}
+              />
+              <label htmlFor={clientActiveId}>{t('fieldClientActive')}</label>
+            </div>
+          </form>
+        )}
+      </Drawer>
+
+      <Drawer
+        open={contactDraft !== null}
+        onClose={closeContact}
+        title={contactDraft?.id === undefined ? t('contactCreateHeading') : t('contactEditHeading')}
+        busy={busy}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={closeContact}>
+              {t('cancel')}
+            </button>
+            <button type="submit" form={contactFormId} className="btn btn-primary" disabled={busy}>
+              {busy
+                ? t('submitting')
+                : contactDraft?.id === undefined
                   ? t('contactSubmitCreate')
                   : t('submitSave')}
             </button>
-            {contactDraft.id === undefined ? null : (
-              <button
-                type="button"
-                className="button-secondary"
-                onClick={() => setContactDraft(EMPTY_CONTACT)}
-              >
-                {t('cancel')}
-              </button>
-            )}
-          </div>
-        </form>
+          </>
+        }
+      >
+        {contactDraft === null ? null : (
+          <form id={contactFormId} onSubmit={onSubmitContact} noValidate>
+            <p className="form-error" role="alert">
+              {contactError === null ? '' : t(contactError)}
+            </p>
 
-        <h3>{t('contactListHeading')}</h3>
-        {snapshot === null ? (
-          <p role="status">{t('loading')}</p>
-        ) : contacts.length === 0 ? (
-          <p>{t('contactEmptyBody')}</p>
-        ) : (
-          <table className="data-table" aria-busy={busy}>
-            <caption className="visually-hidden">{t('contactTableCaption')}</caption>
-            <thead>
-              <tr>
-                <th scope="col">{t('colPerson')}</th>
-                <th scope="col">{t('colClient')}</th>
-                <th scope="col">{t('colEmail')}</th>
-                <th scope="col">{t('colPhone')}</th>
-                <th scope="col">{t('colStatus')}</th>
-                <th scope="col">{t('colActions')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {contacts.map((contact) => (
-                <tr key={contact.id} className={contact.active ? undefined : 'row-inactive'}>
-                  <th scope="row">{contact.name}</th>
-                  <td>{clientName(contact.client_id)}</td>
-                  <td>
-                    {contact.email === null ? (
-                      <span className="cell-muted">{t('noEmail')}</span>
-                    ) : (
-                      contact.email
-                    )}
-                  </td>
-                  <td>
-                    {contact.phone === null ? (
-                      <span className="cell-muted">{t('noPhone')}</span>
-                    ) : (
-                      contact.phone
-                    )}
-                  </td>
-                  <td>{contact.active ? t('statusActive') : t('statusInactivePerson')}</td>
-                  <td className="cell-actions">
-                    <button
-                      type="button"
-                      className="button-secondary"
-                      onClick={() => editContact(contact)}
-                    >
-                      {t('edit')}
-                      <span className="visually-hidden">
-                        {t('forName', { name: contact.name })}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className="button-secondary"
-                      onClick={() => toggleContact(contact)}
-                    >
-                      {contact.active ? t('deactivate') : t('activate')}
-                      <span className="visually-hidden">
-                        {t('forName', { name: contact.name })}
-                      </span>
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            <Field
+              id={contactClientId}
+              label={t('fieldContactClient')}
+              required
+              error={contactErrors.client === undefined ? null : t(contactErrors.client)}
+            >
+              <select
+                required
+                value={contactDraft.clientChoice}
+                onChange={(event) =>
+                  setContactDraft({ ...contactDraft, clientChoice: event.target.value })
+                }
+                disabled={busy}
+              >
+                <option value="">{t('pickClient')}</option>
+                {clients.map((client) => (
+                  <option key={client.id} value={String(client.id)}>
+                    {client.active ? client.name : t('optionInactive', { name: client.name })}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field
+              id={contactNameId}
+              label={t('fieldContactName')}
+              required
+              error={contactErrors.name === undefined ? null : t(contactErrors.name)}
+            >
+              <input
+                type="text"
+                required
+                value={contactDraft.name}
+                onChange={(event) => setContactDraft({ ...contactDraft, name: event.target.value })}
+                maxLength={160}
+                autoComplete="off"
+                disabled={busy}
+              />
+            </Field>
+
+            <Field
+              id={contactEmailId}
+              label={t('fieldContactEmail')}
+              optional
+              help={t('contactEmailHint')}
+              error={contactErrors.email === undefined ? null : t(contactErrors.email)}
+            >
+              <input
+                type="email"
+                value={contactDraft.email}
+                onChange={(event) =>
+                  setContactDraft({ ...contactDraft, email: event.target.value })
+                }
+                maxLength={320}
+                autoComplete="off"
+                disabled={busy}
+              />
+            </Field>
+
+            <Field
+              id={contactPhoneId}
+              label={t('fieldContactPhone')}
+              optional
+              error={contactErrors.phone === undefined ? null : t(contactErrors.phone)}
+            >
+              <input
+                type="tel"
+                value={contactDraft.phone}
+                onChange={(event) =>
+                  setContactDraft({ ...contactDraft, phone: event.target.value })
+                }
+                maxLength={40}
+                autoComplete="off"
+                disabled={busy}
+              />
+            </Field>
+
+            <div className="field-check">
+              <input
+                id={contactActiveId}
+                type="checkbox"
+                checked={contactDraft.active}
+                onChange={(event) =>
+                  setContactDraft({ ...contactDraft, active: event.target.checked })
+                }
+                aria-describedby={`${contactActiveId}-hint`}
+                disabled={busy}
+              />
+              <label htmlFor={contactActiveId}>{t('fieldContactActive')}</label>
+            </div>
+            {/* The link revocation, said where the checkbox that triggers it lives. The
+                confirmation says it again at the moment of the decision. */}
+            <p className="field-hint" id={`${contactActiveId}-hint`}>
+              {t('contactIntro')}
+            </p>
+          </form>
         )}
-      </section>
+      </Drawer>
+
+      {/* The one irreversible write on this screen: the links do not come back. */}
+      <ConfirmModal
+        open={confirming !== null}
+        onClose={() => setConfirming(null)}
+        onConfirm={() => {
+          if (confirming !== null) void toggleContact(confirming)
+        }}
+        title={t('confirmDeactivateTitle', { name: confirming?.name ?? '' })}
+        body={t('confirmDeactivateBody')}
+        confirmLabel={t('confirmDeactivateConfirm')}
+        destructive
+        busy={busy}
+      />
     </>
   )
 }

@@ -2,7 +2,12 @@
 
 import { useRouter } from 'next/navigation'
 import { useFormatter, useTranslations } from 'next-intl'
-import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useId, useState } from 'react'
+import { Drawer } from '@/components/Drawer'
+import { EmptyState } from '@/components/EmptyState'
+import { Field } from '@/components/Field'
+import { ListPanel } from '@/components/ListPanel'
+import { PageHeader } from '@/components/PageHeader'
 import {
   ApiError,
   fetchInventory,
@@ -27,6 +32,11 @@ import { LOGIN_PATH } from '@/lib/nav'
  * of ONE unit; consumption per building is not tracked in this version, so nothing here
  * feeds payroll yet — decision-6 will divide these costs pro-rata by labour hours when the
  * material-request screen exists.
+ *
+ * REDESIGN: the list READS and the drawer WRITES. The create form used to be mounted above
+ * the table at all times, which is half of what the owner meant by "I read a whole screen
+ * instead of skimming it". There is exactly one drawer because create and update have the
+ * SAME validation — a second one would be two copies of one rule waiting to disagree.
  */
 
 type Draft = {
@@ -62,21 +72,17 @@ export default function InventoryPage() {
   const format = useFormatter()
   const router = useRouter()
 
+  const formId = useId()
   const nameId = useId()
   const kindId = useId()
-  const kindHintId = useId()
   const costId = useId()
-  const costHintId = useId()
   const activeId = useId()
-  const errorId = useId()
-  const statusId = useId()
-  const formHeadingId = useId()
-  const nameRef = useRef<HTMLInputElement>(null)
 
   // null = still loading. [] = loaded and genuinely empty, which is the first-run state.
   const [items, setItems] = useState<InventoryItem[] | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
-  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT)
+  /** null = the drawer is closed. There is no other "is the form open" flag. */
+  const [draft, setDraft] = useState<Draft | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [formError, setFormError] = useState<ErrorMessage | null>(null)
   const [saved, setSaved] = useState(false)
@@ -114,19 +120,18 @@ export default function InventoryPage() {
     return () => controller.abort()
   }, [load])
 
-  function editItem(item: InventoryItem) {
-    setDraft(draftOf(item))
+  function openDrawer(next: Draft) {
+    setDraft(next)
     setFieldErrors({})
     setFormError(null)
     setSaved(false)
-    nameRef.current?.focus()
   }
 
-  function cancelEdit() {
-    setDraft(EMPTY_DRAFT)
+  /** Escape, the scrim and Cancel all land here — including mid-save, by design. */
+  function closeDrawer() {
+    setDraft(null)
     setFieldErrors({})
     setFormError(null)
-    nameRef.current?.focus()
   }
 
   function reportSaveFailure(cause: unknown) {
@@ -145,7 +150,7 @@ export default function InventoryPage() {
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (busy) return
+    if (busy || draft === null) return
 
     const name = draft.name.trim()
     // Empty is allowed and means 0 = "not priced yet", which is a real answer the server
@@ -170,12 +175,12 @@ export default function InventoryPage() {
         unit_cost_cents: cost,
         active: draft.active,
       })
-      setDraft(EMPTY_DRAFT)
+      // The drawer closes on success and takes anything written inside it with it, so the
+      // outcome is announced by the PAGE's live region below the header. A failure keeps
+      // the drawer open, which is why the failure text stays in the drawer.
+      setDraft(null)
       setSaved(true)
       await load()
-      // The submit button is disabled while saving, so focus would otherwise fall to
-      // <body>. Put it back where the next item gets typed.
-      nameRef.current?.focus()
     } catch (cause) {
       reportSaveFailure(cause)
     } finally {
@@ -185,7 +190,9 @@ export default function InventoryPage() {
 
   /**
    * Soft delete / undo, through the same upsert route. Nothing is ever destroyed: a price
-   * that was paid last month has to stay explicable next month.
+   * that was paid last month has to stay explicable next month. Reversible in one click, so
+   * it asks nothing first — a confirmation for a reversible action teaches people to
+   * dismiss confirmations.
    */
   async function toggleActive(item: InventoryItem) {
     if (busy) return
@@ -213,127 +220,36 @@ export default function InventoryPage() {
     equipment: t('kindEquipment'),
   }
 
-  const editing = draft.id !== undefined
-  const formErrorText = formError === null ? '' : t(formError)
-
   return (
     <>
-      <h1>{t('heading')}</h1>
-      <p className="lede">{t('intro')}</p>
+      <PageHeader
+        title={t('heading')}
+        question={t('question')}
+        action={
+          <button type="button" className="btn btn-primary" onClick={() => openDrawer(EMPTY_DRAFT)}>
+            {t('createHeading')}
+          </button>
+        }
+      />
 
-      <section aria-labelledby={formHeadingId}>
-        <h2 id={formHeadingId}>{editing ? t('editHeading') : t('createHeading')}</h2>
+      {/* Permanent live regions: a text change inside an existing region is announced far
+          more reliably than a node that appears and disappears. */}
+      {loadError !== null ? (
+        <p className="form-error" role="alert">
+          {tError(loadError)}
+        </p>
+      ) : null}
+      <p className="form-status" role="status">
+        {saved ? t('saved') : ''}
+      </p>
 
-        <form className="worker-form" onSubmit={onSubmit} noValidate>
-          {/* Permanent live regions: a text change inside an existing region is announced
-              far more reliably than a node that appears and disappears. */}
-          <p className="form-error" id={errorId} role="alert">
-            {formErrorText}
-          </p>
-          <p className="form-status" id={statusId} role="status">
-            {saved ? t('saved') : ''}
-          </p>
-
-          <div className="field">
-            <label htmlFor={nameId}>{t('fieldName')}</label>
-            <input
-              id={nameId}
-              ref={nameRef}
-              type="text"
-              value={draft.name}
-              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-              maxLength={160}
-              autoComplete="off"
-              aria-describedby={`${nameId}-error`}
-              aria-invalid={fieldErrors.name !== undefined}
-              disabled={busy}
-            />
-            <p className="field-error" id={`${nameId}-error`} role="alert">
-              {fieldErrors.name === undefined ? '' : t(fieldErrors.name)}
-            </p>
-          </div>
-
-          <div className="field">
-            <label htmlFor={kindId}>{t('fieldKind')}</label>
-            <select
-              id={kindId}
-              value={draft.kind}
-              onChange={(event) => {
-                if (isInventoryKind(event.target.value)) {
-                  setDraft({ ...draft, kind: event.target.value })
-                }
-              }}
-              aria-describedby={kindHintId}
-              disabled={busy}
-            >
-              {INVENTORY_KINDS.map((kind) => (
-                <option key={kind} value={kind}>
-                  {kindLabel[kind]}
-                </option>
-              ))}
-            </select>
-            <p className="field-hint" id={kindHintId}>
-              {t('kindHint')}
-            </p>
-          </div>
-
-          <div className="field">
-            <label htmlFor={costId}>{t('fieldCost')}</label>
-            <input
-              id={costId}
-              type="text"
-              inputMode="decimal"
-              value={draft.cost}
-              onChange={(event) => setDraft({ ...draft, cost: event.target.value })}
-              aria-describedby={`${costHintId} ${costId}-error`}
-              aria-invalid={fieldErrors.cost !== undefined}
-              disabled={busy}
-            />
-            <p className="field-hint" id={costHintId}>
-              {t('costHint')}
-            </p>
-            <p className="field-error" id={`${costId}-error`} role="alert">
-              {fieldErrors.cost === undefined ? '' : t(fieldErrors.cost)}
-            </p>
-          </div>
-
-          <div className="field field-check">
-            <input
-              id={activeId}
-              type="checkbox"
-              checked={draft.active}
-              onChange={(event) => setDraft({ ...draft, active: event.target.checked })}
-              disabled={busy}
-            />
-            <label htmlFor={activeId}>{t('fieldActive')}</label>
-          </div>
-
-          <div className="form-actions">
-            <button type="submit" className="button-primary" disabled={busy}>
-              {busy ? t('submitting') : editing ? t('submitSave') : t('submitCreate')}
-            </button>
-            {editing ? (
-              <button type="button" className="button-secondary" onClick={cancelEdit}>
-                {t('cancel')}
-              </button>
-            ) : null}
-          </div>
-        </form>
-      </section>
-
-      <section aria-labelledby="inventory-list-heading">
-        <h2 id="inventory-list-heading">{t('listHeading')}</h2>
-
-        {loadError !== null ? (
-          <p className="form-error" role="alert">
-            {tError(loadError)}
-          </p>
-        ) : null}
-
+      <ListPanel title={t('listHeading')}>
         {items === null ? (
-          <p role="status">{t('loading')}</p>
+          <p className="empty-state" role="status">
+            {t('loading')}
+          </p>
         ) : items.length === 0 ? (
-          <p>{t('emptyBody')}</p>
+          <EmptyState>{t('empty')}</EmptyState>
         ) : (
           <table className="data-table" aria-busy={busy}>
             <caption className="visually-hidden">{t('tableCaption')}</caption>
@@ -341,17 +257,19 @@ export default function InventoryPage() {
               <tr>
                 <th scope="col">{t('colName')}</th>
                 <th scope="col">{t('colKind')}</th>
-                <th scope="col">{t('colCost')}</th>
+                <th scope="col" className="col-numeric">
+                  {t('colCost')}
+                </th>
                 <th scope="col">{t('colStatus')}</th>
                 <th scope="col">{t('colActions')}</th>
               </tr>
             </thead>
             <tbody>
               {items.map((item) => (
-                <tr key={item.id} className={item.active ? undefined : 'row-inactive'}>
+                <tr key={item.id} className={item.active ? undefined : 'is-muted'}>
                   <th scope="row">{item.name}</th>
                   <td>{kindLabel[item.kind]}</td>
-                  <td>
+                  <td className="col-numeric">
                     {/* 0 cents is "nobody has priced this yet", not "free". Saying EUR 0.00
                         would put a wrong number into a later cost calculation unchallenged. */}
                     {item.unit_cost_cents === 0 ? (
@@ -363,20 +281,25 @@ export default function InventoryPage() {
                       })
                     )}
                   </td>
-                  {/* Text, not a colour: the status has to survive greyscale and a screen reader. */}
-                  <td>{item.active ? t('statusActive') : t('statusInactive')}</td>
+                  {/* The WORD, in a chip that does not wrap. Text, not a colour: the status
+                      has to survive greyscale and a screen reader. */}
+                  <td>
+                    <span className={item.active ? 'badge' : 'badge muted'}>
+                      {item.active ? t('statusActive') : t('statusInactive')}
+                    </span>
+                  </td>
                   <td className="cell-actions">
                     <button
                       type="button"
-                      className="button-secondary"
-                      onClick={() => editItem(item)}
+                      className="btn btn-quiet"
+                      onClick={() => openDrawer(draftOf(item))}
                     >
                       {t('edit')}
                       <span className="visually-hidden">{t('forItem', { name: item.name })}</span>
                     </button>
                     <button
                       type="button"
-                      className="button-secondary"
+                      className="btn btn-quiet"
                       onClick={() => toggleActive(item)}
                     >
                       {item.active ? t('deactivate') : t('activate')}
@@ -388,7 +311,102 @@ export default function InventoryPage() {
             </tbody>
           </table>
         )}
-      </section>
+      </ListPanel>
+
+      <Drawer
+        open={draft !== null}
+        onClose={closeDrawer}
+        title={draft?.id === undefined ? t('createHeading') : t('editHeading')}
+        busy={busy}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={closeDrawer}>
+              {t('cancel')}
+            </button>
+            <button type="submit" form={formId} className="btn btn-primary" disabled={busy}>
+              {busy
+                ? t('submitting')
+                : draft?.id === undefined
+                  ? t('submitCreate')
+                  : t('submitSave')}
+            </button>
+          </>
+        }
+      >
+        {draft === null ? null : (
+          <form id={formId} onSubmit={onSubmit} noValidate>
+            {/* The drawer stays open when the server refuses, so this belongs here rather
+                than in the page's region behind it — on a phone the drawer IS the screen. */}
+            <p className="form-error" role="alert">
+              {formError === null ? '' : t(formError)}
+            </p>
+
+            <Field
+              id={nameId}
+              label={t('fieldName')}
+              required
+              error={fieldErrors.name === undefined ? null : t(fieldErrors.name)}
+            >
+              <input
+                type="text"
+                required
+                value={draft.name}
+                onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                maxLength={160}
+                autoComplete="off"
+                disabled={busy}
+              />
+            </Field>
+
+            <Field id={kindId} label={t('fieldKind')} help={t('kindHint')}>
+              <select
+                value={draft.kind}
+                onChange={(event) => {
+                  if (isInventoryKind(event.target.value)) {
+                    setDraft({ ...draft, kind: event.target.value })
+                  }
+                }}
+                disabled={busy}
+              >
+                {INVENTORY_KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {kindLabel[kind]}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field
+              id={costId}
+              label={t('fieldCost')}
+              optional
+              help={t('costHint')}
+              error={fieldErrors.cost === undefined ? null : t(fieldErrors.cost)}
+            >
+              <input
+                type="text"
+                inputMode="decimal"
+                value={draft.cost}
+                onChange={(event) => setDraft({ ...draft, cost: event.target.value })}
+                disabled={busy}
+              />
+            </Field>
+
+            {/* `.field-check` WITHOUT `.field`: `.field input` is width:100% + min-height:44px,
+                which turns a checkbox into a 44px blue slab. Verified by looking at it. */}
+            <div className="field-check">
+              <input
+                id={activeId}
+                type="checkbox"
+                checked={draft.active}
+                onChange={(event) => setDraft({ ...draft, active: event.target.checked })}
+                disabled={busy}
+              />
+              <label htmlFor={activeId}>{t('fieldActive')}</label>
+            </div>
+          </form>
+        )}
+      </Drawer>
     </>
   )
 }

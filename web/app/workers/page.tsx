@@ -3,6 +3,12 @@
 import { useRouter } from 'next/navigation'
 import { useFormatter, useTranslations } from 'next-intl'
 import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from 'react'
+import { ConfirmModal } from '@/components/ConfirmModal'
+import { Drawer } from '@/components/Drawer'
+import { EmptyState } from '@/components/EmptyState'
+import { Field } from '@/components/Field'
+import { ListPanel } from '@/components/ListPanel'
+import { PageHeader } from '@/components/PageHeader'
 import {
   ApiError,
   type FreshEnrolmentCode,
@@ -19,7 +25,7 @@ import { LOGIN_PATH } from '@/lib/nav'
 import { BUSINESS_TIME_ZONE } from '@/lib/shifts'
 
 /**
- * Workers screen — create, edit and lock out the people who file hours.
+ * Workers screen — who may file hours, and how that person gets into the app.
  *
  * The email column is not a contact detail. Sign in with Apple hands the server an email
  * address and the server only lets a worker in if an ACTIVE row already carries it
@@ -31,9 +37,14 @@ import { BUSINESS_TIME_ZONE } from '@/lib/shifts'
  * code FOR A PERSON, reads it out, and the worker types it once on a phone that has no
  * Apple ID. It is an alternative to Sign in with Apple, NOT a replacement — the email
  * address is still what gets an iPhone in, which is why nothing here calls it optional.
+ *
+ * REDESIGN (B1): the list is read-only and every write happens in the drawer or behind a
+ * confirmation. The fresh enrolment code deliberately did NOT become a modal: the director
+ * reads it aloud over the phone while looking at that person's row, and a centred modal
+ * covers the row. It stays an inline panel that focus moves to.
  */
 
-/** How often the code column re-checks the clock. Codes live an hour; 30s is plenty. */
+/** How often the code column re-checks the clock. A code lives 5 days; 30 s is plenty. */
 const CODE_TICK_MS = 30_000
 
 /** Shape check only, mirroring server/lib/validate.js. Deliverability is not knowable here. */
@@ -66,7 +77,9 @@ function draftOf(worker: Worker): Draft {
     name: worker.name,
     email: worker.email ?? '',
     phone: worker.phone ?? '',
-    rate: centsToPlainEuros(worker.hourly_rate_cents),
+    // 0 is "nobody has told us yet" and is shown as an empty field, not as "0.00": a rate
+    // that reads as a real agreed number is how an unset rate stops being noticed.
+    rate: worker.hourly_rate_cents === 0 ? '' : centsToPlainEuros(worker.hourly_rate_cents),
     active: worker.active,
   }
 }
@@ -87,40 +100,40 @@ type FieldErrors = {
   rate?: ErrorMessage
 }
 
+/** The one irreversible-or-destructive action waiting for a plain yes/no. */
+type Pending = { kind: 'revoke' | 'reissue' | 'deactivate'; worker: Worker }
+
 export default function WorkersPage() {
   const t = useTranslations('workers')
   const tError = useTranslations('error')
   const format = useFormatter()
   const router = useRouter()
 
+  const formId = useId()
   const nameId = useId()
   const emailId = useId()
-  const emailHintId = useId()
   const phoneId = useId()
-  const phoneHintId = useId()
   const rateId = useId()
-  const rateHintId = useId()
   const activeId = useId()
-  const errorId = useId()
-  const statusId = useId()
-  const formHeadingId = useId()
   const codeHeadingId = useId()
   const codeValueId = useId()
   const codeOnceId = useId()
-  const nameRef = useRef<HTMLInputElement>(null)
   const codePanelRef = useRef<HTMLElement>(null)
 
   // null = still loading. [] = loaded and genuinely empty, which is the first-run state.
   const [workers, setWorkers] = useState<Worker[] | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
-  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT)
+  /** null = the drawer is closed. There is no half-open form on this screen any more. */
+  const [draft, setDraft] = useState<Draft | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [formError, setFormError] = useState<ErrorMessage | null>(null)
-  const [saved, setSaved] = useState(false)
+  /** A 5xx or an offline browser during a SAVE. Shown in the drawer, which stays open. */
+  const [saveError, setSaveError] = useState<ErrorKey | null>(null)
   const [busy, setBusy] = useState(false)
+  const [pending, setPending] = useState<Pending | null>(null)
   /** The code just created, shown once. Unrecoverable afterwards — see `issueEnrolmentCode`. */
   const [freshCode, setFreshCode] = useState<FreshEnrolmentCode | null>(null)
-  /** Result of the last copy / revoke action, announced in a permanent live region. */
+  /** Result of the last write, announced in the page's permanent live region. */
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   /** Ticks so an expiry that has passed stops being reported as a live code. */
   const [now, setNow] = useState(() => Date.now())
@@ -169,19 +182,28 @@ export default function WorkersPage() {
     return () => controller.abort()
   }, [load])
 
-  function editWorker(worker: Worker) {
-    setDraft(draftOf(worker))
-    setFieldErrors({})
-    setFormError(null)
-    setSaved(false)
-    nameRef.current?.focus()
-  }
-
-  function cancelEdit() {
+  function openCreate() {
     setDraft(EMPTY_DRAFT)
     setFieldErrors({})
     setFormError(null)
-    nameRef.current?.focus()
+    setSaveError(null)
+    setNotice(null)
+  }
+
+  function openEdit(worker: Worker) {
+    setDraft(draftOf(worker))
+    setFieldErrors({})
+    setFormError(null)
+    setSaveError(null)
+    setNotice(null)
+  }
+
+  /** Escape, the scrim and Cancel all land here. Focus restoration is the Drawer's job. */
+  function closeDrawer() {
+    setDraft(null)
+    setFieldErrors({})
+    setFormError(null)
+    setSaveError(null)
   }
 
   /** Maps a failed upsert onto the field it belongs to. 409 can only be the email index. */
@@ -200,17 +222,21 @@ export default function WorkersPage() {
     if (cause instanceof ApiError && (cause.status === 0 || cause.status >= 500)) {
       setFieldErrors({})
       setLoadError(cause.messageKey)
+      setSaveError(cause.messageKey)
     }
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (busy) return
+    if (busy || draft === null) return
 
     const name = draft.name.trim()
     const email = draft.email.trim()
     const phone = draft.phone.trim()
-    const cents = parseEuroToCents(draft.rate)
+    // Only `name` is required. An EMPTY rate is a deliberate 0 — "nobody has told us yet",
+    // flagged on the row. A rate that was TYPED and does not parse is rejected and never
+    // silently zeroed: a wrong rate is wrong on every payslip until somebody notices.
+    const cents = draft.rate.trim() === '' ? 0 : parseEuroToCents(draft.rate)
 
     // Client-side validation is UX only — server/lib/validate.js decides for real.
     const errors: FieldErrors = {}
@@ -220,7 +246,7 @@ export default function WorkersPage() {
     if (cents === null) errors.rate = 'errorRateInvalid'
     setFieldErrors(errors)
     setFormError(null)
-    setSaved(false)
+    setSaveError(null)
     if (Object.keys(errors).length > 0 || cents === null) return
 
     setBusy(true)
@@ -233,13 +259,14 @@ export default function WorkersPage() {
         hourly_rate_cents: cents,
         active: draft.active,
       })
-      setDraft(EMPTY_DRAFT)
-      setSaved(true)
+      // The result is announced by the PAGE, not by the drawer: the drawer closes on
+      // success and would take its own success message with it, unread.
+      setNotice({ ok: true, text: t('saved') })
+      closeDrawer()
       await load()
-      // The submit button is disabled while saving, so focus would otherwise fall to
-      // <body>. Put it back where the next worker gets typed.
-      nameRef.current?.focus()
     } catch (cause) {
+      // A FAILED save keeps the drawer open, so its message stays inside the drawer where
+      // the fields it is about are. Nothing is carried away by a close that did not happen.
       reportSaveFailure(cause)
     } finally {
       setBusy(false)
@@ -302,7 +329,6 @@ export default function WorkersPage() {
   async function toggleActive(worker: Worker) {
     if (busy) return
     setBusy(true)
-    setSaved(false)
     setFormError(null)
     try {
       // Every column of the row goes back on the wire: the route UPDATEs all of them, so
@@ -323,8 +349,19 @@ export default function WorkersPage() {
     }
   }
 
-  const editing = draft.id !== undefined
-  const formErrorText = formError === null ? '' : t(formError)
+  /**
+   * The modal is dismissed BEFORE the action runs, on purpose. Closing an overlay restores
+   * focus to whatever opened it, and issuing a code moves focus to the fresh-code panel —
+   * run in the other order, the restore fires last and steals the code panel's focus.
+   */
+  function confirmPending() {
+    if (pending === null) return
+    const { kind, worker } = pending
+    setPending(null)
+    if (kind === 'revoke') void revokeCode(worker)
+    else if (kind === 'reissue') void issueCode(worker)
+    else void toggleActive(worker)
+  }
 
   // Vienna, explicitly — not the browser's zone. A code expiring "at 15:32" has to mean the
   // same 15:32 the director would say on the phone.
@@ -350,199 +387,102 @@ export default function WorkersPage() {
     }
   }
 
+  /**
+   * The row's state rule. Inactive is MUTED, not a problem: it was a decision somebody
+   * made. An ACTIVE person with no email address is the problem this screen exists to
+   * surface — they can never sign in on an iPhone (decision-22) — and it is carried by the
+   * word in the email cell first and the 3px rule second.
+   */
+  function rowState(worker: Worker): string | undefined {
+    if (!worker.active) return 'is-muted'
+    return worker.email === null ? 'is-unres' : undefined
+  }
+
+  const drawerTitle = draft?.id === undefined ? t('createHeading') : t('editHeading')
+  const editedName = draft?.id === undefined ? undefined : draft.name
+  // A server error during a save is shown inside the drawer as well, because the drawer
+  // stays open on failure and the page-level copy of it is behind the scrim.
+  const drawerError =
+    formError !== null ? t(formError) : saveError !== null ? tError(saveError) : ''
+
   return (
     <>
-      <h1>{t('heading')}</h1>
-      <p className="lede">{t('intro')}</p>
+      <PageHeader
+        title={t('heading')}
+        question={t('question')}
+        action={
+          <button type="button" className="btn btn-primary" onClick={openCreate}>
+            {t('createHeading')}
+          </button>
+        }
+      />
 
-      <section aria-labelledby={formHeadingId}>
-        <h2 id={formHeadingId}>{editing ? t('editHeading') : t('createHeading')}</h2>
+      {/* Permanent live regions, on the PAGE and never inside an overlay: an overlay that
+          closes on success takes its own success message with it, unread. A text change
+          inside an existing region is also announced far more reliably than a node that
+          appears and disappears, which is why neither is unmounted when empty. */}
+      <p className="form-error" role="alert">
+        {loadError === null ? '' : tError(loadError)}
+      </p>
+      <p className={notice?.ok === false ? 'form-error' : 'form-status'} role="status">
+        {notice === null ? '' : notice.text}
+      </p>
 
-        <form className="worker-form" onSubmit={onSubmit} noValidate>
-          {/* Permanent live regions: a text change inside an existing region is announced
-              far more reliably than a node that appears and disappears. */}
-          <p className="form-error" id={errorId} role="alert">
-            {formErrorText}
+      {/* THE WARNING COMES FIRST. "Shown only once" is useless underneath a code that has
+          already scrolled past, so it stands here permanently, above the buttons that
+          create one. It also says what a code is FOR, because the same paragraph has to
+          stop a director concluding that the email address is now optional. */}
+      <p className="note">{t('codeStandingNote')}</p>
+
+      {/* The one and only sighting of the code. NOT a dialog (owner, explicitly): the
+          director reads it out over the phone while looking at that person's row, and a
+          centred modal covers the row. Focused on appearance (above), so it is not
+          announced twice by also being a live region. */}
+      {freshCode === null ? null : (
+        <section
+          className="note share-panel"
+          ref={codePanelRef}
+          tabIndex={-1}
+          aria-labelledby={codeHeadingId}
+          aria-describedby={codeOnceId}
+        >
+          <p id={codeHeadingId}>
+            <strong>{t('codeReadyHeading', { name: freshCode.worker.name })}</strong>
           </p>
-          <p className="form-status" id={statusId} role="status">
-            {saved ? t('saved') : ''}
-          </p>
-
-          <div className="field">
-            <label htmlFor={nameId}>{t('fieldName')}</label>
-            <input
-              id={nameId}
-              ref={nameRef}
-              type="text"
-              value={draft.name}
-              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-              maxLength={120}
-              autoComplete="off"
-              aria-describedby={`${nameId}-error`}
-              aria-invalid={fieldErrors.name !== undefined}
-              disabled={busy}
-            />
-            <p className="field-error" id={`${nameId}-error`} role="alert">
-              {fieldErrors.name === undefined ? '' : t(fieldErrors.name)}
-            </p>
-          </div>
-
-          <div className="field">
-            <label htmlFor={emailId}>{t('fieldEmail')}</label>
-            <input
-              id={emailId}
-              type="email"
-              value={draft.email}
-              onChange={(event) => setDraft({ ...draft, email: event.target.value })}
-              maxLength={320}
-              autoComplete="off"
-              aria-describedby={`${emailHintId} ${emailId}-error`}
-              aria-invalid={fieldErrors.email !== undefined}
-              disabled={busy}
-            />
-            <p className="field-hint" id={emailHintId}>
-              {t('emailHint')}
-            </p>
-            <p className="field-error" id={`${emailId}-error`} role="alert">
-              {fieldErrors.email === undefined ? '' : t(fieldErrors.email)}
-            </p>
-          </div>
-
-          {/* The phone number is NOT a login. A director who assumes it is would enrol the
-              whole crew with numbers and nobody could sign in, so both fields carry the
-              distinction in their label AND in their hint. */}
-          <div className="field">
-            <label htmlFor={phoneId}>{t('fieldPhone')}</label>
-            <input
-              id={phoneId}
-              type="tel"
-              value={draft.phone}
-              onChange={(event) => setDraft({ ...draft, phone: event.target.value })}
-              maxLength={40}
-              autoComplete="off"
-              aria-describedby={`${phoneHintId} ${phoneId}-error`}
-              aria-invalid={fieldErrors.phone !== undefined}
-              disabled={busy}
-            />
-            <p className="field-hint" id={phoneHintId}>
-              {t('phoneHint')}
-            </p>
-            <p className="field-error" id={`${phoneId}-error`} role="alert">
-              {fieldErrors.phone === undefined ? '' : t(fieldErrors.phone)}
-            </p>
-          </div>
-
-          <div className="field">
-            <label htmlFor={rateId}>{t('fieldRate')}</label>
-            <input
-              id={rateId}
-              type="text"
-              inputMode="decimal"
-              value={draft.rate}
-              onChange={(event) => setDraft({ ...draft, rate: event.target.value })}
-              aria-describedby={`${rateHintId} ${rateId}-error`}
-              aria-invalid={fieldErrors.rate !== undefined}
-              disabled={busy}
-            />
-            <p className="field-hint" id={rateHintId}>
-              {t('rateHint')}
-            </p>
-            <p className="field-error" id={`${rateId}-error`} role="alert">
-              {fieldErrors.rate === undefined ? '' : t(fieldErrors.rate)}
-            </p>
-          </div>
-
-          <div className="field field-check">
-            <input
-              id={activeId}
-              type="checkbox"
-              checked={draft.active}
-              onChange={(event) => setDraft({ ...draft, active: event.target.checked })}
-              disabled={busy}
-            />
-            <label htmlFor={activeId}>{t('fieldActive')}</label>
-          </div>
-
-          <div className="form-actions">
-            <button type="submit" className="button-primary" disabled={busy}>
-              {busy ? t('submitting') : editing ? t('submitSave') : t('submitCreate')}
+          <code className="code" id={codeValueId}>
+            {freshCode.code}
+          </code>
+          {/* The expiry sits ABOVE the copy button, not below the fold: a code that expired
+              silently already cost this project a second phone call. */}
+          <p>{t('codeValidUntil', { expires: dayTime(freshCode.expires_at) })}</p>
+          <p className="form-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              aria-describedby={codeValueId}
+              onClick={() => copyCode(freshCode.code)}
+            >
+              {t('codeCopy')}
             </button>
-            {editing ? (
-              <button type="button" className="button-secondary" onClick={cancelEdit}>
-                {t('cancel')}
-              </button>
-            ) : null}
-          </div>
-        </form>
-      </section>
-
-      <section aria-labelledby="workers-list-heading">
-        <h2 id="workers-list-heading">{t('listHeading')}</h2>
-
-        {loadError !== null ? (
-          <p className="form-error" role="alert">
-            {tError(loadError)}
           </p>
-        ) : null}
+          <p>{t('codeExplain', { name: freshCode.worker.name })}</p>
+          <p id={codeOnceId}>{t('codeOnce')}</p>
+        </section>
+      )}
 
-        {/* THE WARNING COMES FIRST. "Shown only once" is useless underneath a code that has
-            already scrolled past, so it stands here permanently, above the buttons that
-            create one. It also says what a code is FOR, because the same paragraph has to
-            stop a director concluding that the email address is now optional. */}
-        <p className="notice">{t('codeStandingNote')}</p>
-
-        {/* Permanent live region for copy / revoke results, outside the table so that
-            re-rendering a row never destroys and recreates it. */}
-        <p className={notice?.ok === false ? 'form-error' : 'form-status'} role="status">
-          {notice === null ? '' : notice.text}
-        </p>
-
-        {/* The one and only sighting of the code. Not a dialog: the director reads it out
-            over the phone, and a modal that hid the row it belongs to would be in the way.
-            Focused on appearance (above), so it is not announced twice by also being a
-            live region. */}
-        {freshCode === null ? null : (
-          <section
-            className="notice share-panel"
-            ref={codePanelRef}
-            tabIndex={-1}
-            aria-labelledby={codeHeadingId}
-            aria-describedby={codeOnceId}
-          >
-            <p id={codeHeadingId}>
-              <strong>{t('codeReadyHeading', { name: freshCode.worker.name })}</strong>
-            </p>
-            <code className="code-block" id={codeValueId}>
-              {freshCode.code}
-            </code>
-            <p className="form-actions">
-              <button
-                type="button"
-                className="button-primary"
-                aria-describedby={codeValueId}
-                onClick={() => copyCode(freshCode.code)}
-              >
-                {t('codeCopy')}
-              </button>
-            </p>
-            <p>{t('codeExplain', { name: freshCode.worker.name })}</p>
-            <p>{t('codeValidUntil', { expires: dayTime(freshCode.expires_at) })}</p>
-            <p id={codeOnceId}>{t('codeOnce')}</p>
-          </section>
-        )}
-
+      <ListPanel title={t('listHeading')} padded={workers === null}>
         {workers === null ? (
           <p role="status">{t('loading')}</p>
         ) : workers.length === 0 ? (
-          <p>{t('emptyBody')}</p>
+          <EmptyState>{t('emptyBodyNew')}</EmptyState>
         ) : (
           <table className="data-table" aria-busy={busy}>
             <caption className="visually-hidden">{t('tableCaption')}</caption>
             <thead>
               <tr>
                 <th scope="col">{t('colName')}</th>
-                <th scope="col">{t('colEmail')}</th>
-                <th scope="col">{t('colPhone')}</th>
+                <th scope="col">{t('colEmailLogin')}</th>
+                <th scope="col">{t('colPhoneCall')}</th>
                 <th scope="col">{t('colRate')}</th>
                 <th scope="col">{t('colStatus')}</th>
                 <th scope="col">{t('colCode')}</th>
@@ -551,7 +491,7 @@ export default function WorkersPage() {
             </thead>
             <tbody>
               {workers.map((worker) => (
-                <tr key={worker.id} className={worker.active ? undefined : 'row-inactive'}>
+                <tr key={worker.id} className={rowState(worker)}>
                   <th scope="row">{worker.name}</th>
                   <td>
                     {worker.email === null ? (
@@ -568,11 +508,18 @@ export default function WorkersPage() {
                       <a href={`tel:${worker.phone.replace(/[^0-9+]/g, '')}`}>{worker.phone}</a>
                     )}
                   </td>
-                  <td>
-                    {format.number(worker.hourly_rate_cents / 100, {
-                      style: 'currency',
-                      currency: 'EUR',
-                    })}
+                  {/* 0 cents is NOT a rate anybody agreed. Saying so on the row is the
+                      whole fix: an unset rate is otherwise an invisible EUR 0,00 that only
+                      shows up as a wrong payslip. */}
+                  <td className="col-numeric num">
+                    {worker.hourly_rate_cents === 0 ? (
+                      <span className="cell-muted">{t('noRate')}</span>
+                    ) : (
+                      format.number(worker.hourly_rate_cents / 100, {
+                        style: 'currency',
+                        currency: 'EUR',
+                      })
+                    )}
                   </td>
                   {/* Text, not a colour: the status has to survive greyscale and a screen reader. */}
                   <td>{worker.active ? t('statusActive') : t('statusInactive')}</td>
@@ -585,8 +532,12 @@ export default function WorkersPage() {
                       {worker.active ? (
                         <button
                           type="button"
-                          className="button-secondary"
-                          onClick={() => issueCode(worker)}
+                          className="btn btn-quiet"
+                          onClick={() =>
+                            codeStateOf(worker, now) === 'live'
+                              ? setPending({ kind: 'reissue', worker })
+                              : issueCode(worker)
+                          }
                         >
                           {codeStateOf(worker, now) === 'live' ? t('codeReissue') : t('codeIssue')}
                           <span className="visually-hidden">
@@ -599,8 +550,8 @@ export default function WorkersPage() {
                       {codeStateOf(worker, now) === 'live' ? (
                         <button
                           type="button"
-                          className="button-secondary"
-                          onClick={() => revokeCode(worker)}
+                          className="btn btn-quiet"
+                          onClick={() => setPending({ kind: 'revoke', worker })}
                         >
                           {t('codeRevoke')}
                           <span className="visually-hidden">
@@ -613,8 +564,8 @@ export default function WorkersPage() {
                   <td className="cell-actions">
                     <button
                       type="button"
-                      className="button-secondary"
-                      onClick={() => editWorker(worker)}
+                      className="btn btn-quiet"
+                      onClick={() => openEdit(worker)}
                     >
                       {t('edit')}
                       <span className="visually-hidden">
@@ -623,8 +574,12 @@ export default function WorkersPage() {
                     </button>
                     <button
                       type="button"
-                      className="button-secondary"
-                      onClick={() => toggleActive(worker)}
+                      className="btn btn-quiet"
+                      onClick={() =>
+                        worker.active
+                          ? setPending({ kind: 'deactivate', worker })
+                          : toggleActive(worker)
+                      }
                     >
                       {worker.active ? t('deactivate') : t('activate')}
                       <span className="visually-hidden">
@@ -637,7 +592,164 @@ export default function WorkersPage() {
             </tbody>
           </table>
         )}
-      </section>
+      </ListPanel>
+
+      {/* ONE drawer, ONE job. Create and edit share it because they share every field and
+          every validation rule; the two shift drawers do not, and are two drawers. */}
+      <Drawer
+        open={draft !== null}
+        onClose={closeDrawer}
+        title={drawerTitle}
+        step={editedName}
+        busy={busy}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={closeDrawer}>
+              {t('cancel')}
+            </button>
+            <button type="submit" form={formId} className="btn btn-primary" disabled={busy}>
+              {busy
+                ? t('submitting')
+                : draft?.id === undefined
+                  ? t('submitCreate')
+                  : t('submitSave')}
+            </button>
+          </>
+        }
+      >
+        {draft === null ? null : (
+          <form id={formId} onSubmit={onSubmit} noValidate>
+            {/* Kept in the DOM so the live region survives a re-render. */}
+            <p className="form-error" role="alert">
+              {drawerError}
+            </p>
+
+            <Field
+              id={nameId}
+              label={t('fieldName')}
+              required
+              error={fieldErrors.name === undefined ? undefined : t(fieldErrors.name)}
+            >
+              <input
+                type="text"
+                required
+                value={draft.name}
+                onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                maxLength={120}
+                autoComplete="off"
+                disabled={busy}
+              />
+            </Field>
+
+            <Field
+              id={emailId}
+              label={t('fieldEmail')}
+              optional
+              help={t('emailHint')}
+              error={fieldErrors.email === undefined ? undefined : t(fieldErrors.email)}
+            >
+              <input
+                type="email"
+                value={draft.email}
+                onChange={(event) => setDraft({ ...draft, email: event.target.value })}
+                maxLength={320}
+                autoComplete="off"
+                disabled={busy}
+              />
+            </Field>
+
+            {/* The phone number is NOT a login. A director who assumes it is would enrol the
+                whole crew with numbers and nobody could sign in, so the field carries the
+                distinction in its label AND in its hint. */}
+            <Field
+              id={phoneId}
+              label={t('fieldPhone')}
+              optional
+              help={t('phoneHint')}
+              error={fieldErrors.phone === undefined ? undefined : t(fieldErrors.phone)}
+            >
+              <input
+                type="tel"
+                value={draft.phone}
+                onChange={(event) => setDraft({ ...draft, phone: event.target.value })}
+                maxLength={40}
+                autoComplete="off"
+                disabled={busy}
+              />
+            </Field>
+
+            <Field
+              id={rateId}
+              label={t('fieldRate')}
+              optional
+              help={`${t('rateHint')} ${t('rateOptionalHint')}`}
+              error={fieldErrors.rate === undefined ? undefined : t(fieldErrors.rate)}
+            >
+              <input
+                type="text"
+                inputMode="decimal"
+                value={draft.rate}
+                onChange={(event) => setDraft({ ...draft, rate: event.target.value })}
+                disabled={busy}
+              />
+            </Field>
+
+            <div className="field field-check">
+              <input
+                id={activeId}
+                type="checkbox"
+                checked={draft.active}
+                onChange={(event) => setDraft({ ...draft, active: event.target.checked })}
+                disabled={busy}
+              />
+              <label htmlFor={activeId}>{t('fieldActive')}</label>
+            </div>
+          </form>
+        )}
+      </Drawer>
+
+      {/* Plain yes/no for the three actions that cannot be taken back by pressing the same
+          button again. The body states the CONSEQUENCE — "are you sure?" tells the reader
+          nothing they did not already know. */}
+      <ConfirmModal
+        open={pending !== null}
+        onClose={() => setPending(null)}
+        onConfirm={confirmPending}
+        title={
+          pending === null
+            ? ''
+            : t(
+                pending.kind === 'revoke'
+                  ? 'revokeConfirmTitle'
+                  : pending.kind === 'reissue'
+                    ? 'reissueConfirmTitle'
+                    : 'deactivateConfirmTitle',
+                { name: pending.worker.name },
+              )
+        }
+        body={
+          pending === null
+            ? ''
+            : t(
+                pending.kind === 'revoke'
+                  ? 'revokeConfirmBody'
+                  : pending.kind === 'reissue'
+                    ? 'reissueConfirmBody'
+                    : 'deactivateConfirmBody',
+              )
+        }
+        confirmLabel={
+          pending === null
+            ? ''
+            : pending.kind === 'revoke'
+              ? t('codeRevoke')
+              : pending.kind === 'reissue'
+                ? t('codeReissue')
+                : t('deactivate')
+        }
+        destructive
+        busy={busy}
+      />
     </>
   )
 }
