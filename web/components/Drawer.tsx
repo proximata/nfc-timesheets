@@ -58,7 +58,19 @@ export function Drawer({ open, onClose, title, step, footer, busy, children }: D
       >
         <header>
           <div>
-            {step ? <p className="step">{step}</p> : null}
+            {/*
+              role="status" because the step line is the ONLY thing that changes when a
+              two-step drawer advances: the dialog's accessible name comes from the <h2>
+              and stays "Objekt anlegen" across both steps, so a screen-reader user who
+              crossed from step 1 to step 2 was told nothing at all (REDESIGN-A11Y.md M2).
+              Mounted whenever the drawer is, so the step change is a TEXT change inside a
+              region that already existed, which is what gets announced reliably.
+            */}
+            {step ? (
+              <p className="step" role="status">
+                {step}
+              </p>
+            ) : null}
             <h2 id={titleId}>{title}</h2>
           </div>
           <button type="button" className="btn btn-quiet" onClick={onClose}>

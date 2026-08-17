@@ -351,11 +351,9 @@ export default function ContractsPage() {
 
       {/* Permanent live regions: a text change inside an existing region is announced far
           more reliably than a node that appears and disappears. */}
-      {loadError !== null ? (
-        <p className="form-error" role="alert">
-          {tError(loadError)}
-        </p>
-      ) : null}
+      <p className="form-error" role="alert">
+        {loadError === null ? '' : tError(loadError)}
+      </p>
       <p className={notice?.ok === false ? 'form-error' : 'form-status'} role="status">
         {notice === null ? '' : notice.text}
       </p>

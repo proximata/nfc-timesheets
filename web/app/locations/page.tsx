@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useFormatter, useTranslations } from 'next-intl'
-import { type FormEvent, useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { ConfirmModal } from '@/components/ConfirmModal'
 import { Drawer } from '@/components/Drawer'
 import { EmptyState } from '@/components/EmptyState'
@@ -267,6 +267,8 @@ export default function LocationsPage() {
   const [draft, setDraft] = useState<Draft | null>(null)
   /** 1 = the building and its client. 2 = the contract and the agreed time. */
   const [step, setStep] = useState<1 | 2>(1)
+  /** Step 2's fields, so focus can be moved into them when the step changes. */
+  const stepTwoRef = useRef<HTMLDivElement | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [formError, setFormError] = useState<ErrorMessage | null>(null)
   /** A 5xx or an offline browser during a SAVE. Shown in the drawer, which stays open. */
@@ -314,6 +316,25 @@ export default function LocationsPage() {
     void load(controller.signal)
     return () => controller.abort()
   }, [load])
+
+  /**
+   * Focus follows the step. The button that advanced the drawer is REPLACED when step 2
+   * renders (different key, see the footer), so without this the browser drops focus on
+   * <body> and a keyboard user is standing outside a dialog that is still open.
+   *
+   * The step-2 CONTAINER takes focus, not its first field: a text input is a submit
+   * surface (implicit submission), so a second Enter half a second after the first would
+   * have created the object straight through step 2 without it ever being read — the same
+   * outcome C1 produced, reached a different way. Measured by demo/audit-keyboard.mjs
+   * ("a SECOND Enter after Weiter does not silently save the object").
+   *
+   * Depends on `step` alone on purpose: adding `draft` would re-steal focus on every
+   * keystroke, because every keystroke replaces the draft.
+   */
+  useEffect(() => {
+    if (step !== 2) return
+    stepTwoRef.current?.focus()
+  }, [step])
 
   /**
    * The month the time column reports on. It used to be hard-locked to the current calendar
@@ -997,19 +1018,37 @@ export default function LocationsPage() {
         footer={
           step === 1 ? (
             <>
-              <button type="button" className="btn btn-ghost" onClick={closeDrawer}>
+              <button key="cancel" type="button" className="btn btn-ghost" onClick={closeDrawer}>
                 {t('cancel')}
               </button>
-              <button type="button" className="btn btn-primary" onClick={goToContract}>
+              {/*
+                THE `key` IS THE BUG FIX, not decoration. Without distinct keys React
+                reconciles these two ternary branches as the same <button> and reuses the DOM
+                node, patching type="button" into type="submit". The browser resolves a
+                click's activation behaviour AFTER the React handler has flushed, so one press
+                of "Weiter zum Vertrag" advanced the step AND submitted the form: every new
+                Objekt was saved from step 1 with no contract, by mouse, Enter and Space alike
+                (REDESIGN-A11Y.md C1). Two keys = two nodes = the second one is never the node
+                that was clicked. A synthetic el.click() does NOT reproduce this, which is why
+                the check that covered it stayed green; demo/audit-overlays2.mjs now uses
+                Input.dispatchMouseEvent.
+              */}
+              <button key="next" type="button" className="btn btn-primary" onClick={goToContract}>
                 {t('stepNext')}
               </button>
             </>
           ) : (
             <>
-              <button type="button" className="btn btn-ghost" onClick={() => setStep(1)}>
+              <button key="back" type="button" className="btn btn-ghost" onClick={() => setStep(1)}>
                 {t('stepBack')}
               </button>
-              <button type="submit" form={formId} className="btn btn-primary" disabled={busy}>
+              <button
+                key="save"
+                type="submit"
+                form={formId}
+                className="btn btn-primary"
+                disabled={busy}
+              >
                 {busy
                   ? t('submitting')
                   : draft?.id === undefined
@@ -1216,7 +1255,10 @@ export default function LocationsPage() {
               ) : null}
             </div>
 
-            <div hidden={step !== 2}>
+            {/* tabIndex={-1} keeps this out of the tab order and only makes it a
+                programmatic focus TARGET — the step change has to land somewhere, and every
+                alternative here is a control that submits the form. */}
+            <div hidden={step !== 2} ref={stepTwoRef} tabIndex={-1}>
               <p className="note">{t('stepTwoNote')}</p>
 
               <Field

@@ -31,10 +31,18 @@
 
   --text-primary: #e9eaec; /* not #FFF — pure white on dark is glare */
   --text-secondary: #a9adb4; /* the brand's own #ACACAC, nudged for contrast */
-  --text-muted: #6c7178;
+  /* MEASURED, not chosen: #6c7178 came out at 3.98 / 3.72 / 3.40:1 on base / raised /
+     overlay (backlog/docs/REDESIGN-A11Y.md H2) and this token carries every <thead> label,
+     .cell-muted, .tag-uuid and .empty-state. On a phone the column heading is the only
+     thing saying what a card's value means, so it is body text and owes 4.5:1.
+     #868c95 = 5.78 / 5.40 / 4.93:1. Verify with `node demo/audit-contrast.mjs`. */
+  --text-muted: #868c95;
 
   --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.16);
+  /* 0.16 measured 1.55:1. This token draws the boundary of every input, select and
+     .btn-ghost — WCAG 1.4.11 asks 3:1 of a control boundary, and the resting state is
+     exactly the state a person is in while looking for the field. 0.36 = 3.28:1. */
+  --border-strong: rgba(255, 255, 255, 0.36);
 
   /* One hue, two characters. Blue by the owner's decision — the brand is measurably
      achromatic, so there was no accent to inherit and Android already shipped blue. */
@@ -98,9 +106,9 @@
   --bg-sunken: #f1f2f4;
   --text-primary: #16181c;
   --text-secondary: #4b5057;
-  --text-muted: #767c85;
+  --text-muted: #686e75; /* 4.94:1 on #fafafa; #767c85 was 4.03 — see the dark note above */
   --border: rgba(0, 0, 0, 0.1);
-  --border-strong: rgba(0, 0, 0, 0.18);
+  --border-strong: rgba(0, 0, 0, 0.44); /* 3.22:1; 0.18 was 1.52 */
   --accent: oklch(0.55 0.12 250);
   --accent-weak: oklch(0.55 0.12 250 / 0.12);
   --accent-text: #fff;
@@ -238,6 +246,9 @@ a {
   text-decoration: none;
   font-weight: 600;
   letter-spacing: 0.02em;
+  /* It is a link home in a header, not a link inside a sentence, so WCAG 2.5.8's inline
+     exception does not cover it. It measured 23px — one pixel under. */
+  min-height: 24px;
 }
 
 .brand-suffix {
@@ -279,8 +290,27 @@ a {
   max-width: 80rem;
 }
 
+/* On a wide screen the 80rem cap is not protecting a line length — every prose block in
+   this file carries its own 70ch/80ch cap — it is squeezing the nine-column tables into
+   1280px and paying for it in row height. /locations/ printed a ten-line sentence in a
+   105px column. Tables get the extra width; sentences keep their own. */
+@media (min-width: 1500px) {
+  .content {
+    max-width: 100rem;
+  }
+}
+
+/*
+ * #main-content is `.content` and takes focus in two places: the skip link, and
+ * useOverlay's fallback when the row that opened an overlay was removed by the save.
+ * The skip link is accompanied by a visible scroll; the fallback is not, and a keyboard
+ * user whose row disappeared was being moved to a container that drew nothing
+ * (REDESIGN-A11Y.md M5). `:focus-visible` does not fire for a programmatic move, so the
+ * ring has to hang off `:focus` — inset, so it never shifts the layout.
+ */
 .content:focus {
-  outline: none;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .lede,
@@ -572,8 +602,13 @@ a {
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid var(--border);
-  /* Long German compounds and long relay addresses break rather than overflow. */
-  overflow-wrap: anywhere;
+  /* Long German compounds and long relay addresses break rather than overflow — but
+     `break-word` and NOT `anywhere`: `anywhere` also collapses the cell's min-content
+     width to one character, so `table-layout: auto` squeezed columns to four characters
+     at 1440px and printed "STUN / DENS / ATZ" and "3.638,29" over two lines
+     (REDESIGN-A11Y.md H1). `.tag-uuid` keeps `anywhere` on purpose: a UUID has no words.
+     Guard: `node demo/audit-table-words.mjs`. */
+  overflow-wrap: break-word;
 }
 
 .data-table thead th {
@@ -638,7 +673,12 @@ a {
 
 /* NOT display:flex — overriding `display` on a <td> drops its table-cell role in the
    accessibility tree, so the buttons would lose their column and row association.
-   Inline buttons plus a margin do the same job without touching the cell's display. */
+   Inline buttons plus a margin do the same job without touching the cell's display.
+
+   `nowrap` keeps a PAIR of actions on one line in a wide table. It is switched back off
+   below 768px, where the same pair overflowed the card and the page scrolled sideways:
+   "Zugangscode erste…" was cut at the viewport edge with no scrollbar to reveal the rest
+   (REDESIGN-VISUAL.md D2). */
 .cell-actions {
   white-space: nowrap;
 }
@@ -798,6 +838,15 @@ a {
   font-weight: 500;
 }
 
+/* The panel's own scope line. Small, attached to the heading, and NOT a loose paragraph
+   floating between two panels — see ListPanel's `note`. */
+.list .lh .panel-note {
+  margin: 2px 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  max-width: 70ch;
+}
+
 .list .list-body {
   padding: var(--s4);
 }
@@ -928,13 +977,33 @@ a {
   max-width: 80ch;
 }
 
-.callout h3 {
+.callout h3,
+.callout > summary {
   font-size: 0.8125rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-secondary);
   font-weight: 500;
   margin-bottom: var(--s2);
+}
+
+/* A closed caveat has to look like something that opens, or it reads as a dead label. */
+.callout > summary {
+  cursor: pointer;
+  padding: var(--s1) 0;
+  min-height: 24px;
+}
+
+.callout > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.callout > p {
+  margin: 0;
+  max-width: 80ch;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
 }
 
 .callout ul,
@@ -1134,6 +1203,11 @@ a {
   padding: var(--s1) var(--s2);
   margin-bottom: var(--s2);
   user-select: all;
+  /* A floor on the column, not a fixed width. With `overflow-wrap: anywhere` the URI's
+     min-content is ONE character, so an auto-layout table happily squeezed the tag column
+     to a seven-line ribbon the moment the neighbouring columns stopped breaking mid-word.
+     This is the string a wall tag is written from and it is read character by character. */
+  min-width: 24ch;
 }
 
 .tag-uuid {
@@ -1604,6 +1678,19 @@ a {
   }
   /* biome-ignore-end lint/style/noDescendingSpecificity: end of the touch-target floor */
 
+  /* The comment above was WRONG and the measurement proved it: a bare `button` (0,0,1)
+     loses to a class (0,1,0), so every row action rendered at 35px and both header
+     selects at 36px on a phone (REDESIGN-A11Y.md M3). These are the same floor, restated
+     at class specificity. .btn-quiet's desktop exception is "the row is the target" — on
+     a phone the row IS a card and the button is the only target in it. */
+  .btn-quiet,
+  .skip-link,
+  .callout > summary,
+  .locale-switcher select,
+  .theme-switcher select {
+    min-height: 44px;
+  }
+
   /* Tables become cards. `display: block` on the table parts, one card per row, and the
      column heading printed beside each value via data-label (ResponsiveTableLabels). */
   .data-table {
@@ -1655,11 +1742,15 @@ a {
     padding-left: var(--s2);
   }
 
+  /*
+   * A cell whose value is TWO nodes — "850,00 €" + "pro Monat", a copy button + its UUID —
+   * used to be a flex container, so each node became its own column inside 390px and the
+   * price printed one character per line: `8 / 5 / 0 / , / 0 / 0` (REDESIGN-VISUAL.md D1).
+   * `flow-root` + a floated label keeps the two-column LOOK for the common one-value case
+   * while leaving the value side as ordinary flow, which cannot be split into columns.
+   */
   .data-table tbody td {
-    display: flex;
-    gap: var(--s3);
-    justify-content: space-between;
-    align-items: baseline;
+    display: flow-root;
     padding: var(--s1) 0;
     border-bottom: none;
     text-align: right;
@@ -1671,8 +1762,9 @@ a {
 
   .data-table tbody td[data-label]::before {
     content: attr(data-label);
-    flex: 0 0 auto;
+    float: left;
     max-width: 45%;
+    margin-right: var(--s3);
     text-align: left;
     font-size: 0.75rem;
     letter-spacing: 0.04em;
@@ -1680,11 +1772,32 @@ a {
     color: var(--text-muted);
   }
 
-  /* A cell with no heading (actions) spans the card instead of pretending to be a value. */
-  .data-table tbody td:not([data-label]) {
+  /* A cell with no heading (actions) spans the card instead of pretending to be a value.
+     `white-space: normal` is the load-bearing half: with the desktop `nowrap` in force a
+     pair of action buttons could not break onto a second line, so the card overflowed the
+     screen (measured documentElement.scrollWidth 543 against a 390px layout width) and the
+     second button's label was cut off with nothing to scroll. */
+  .data-table tbody td:not([data-label]),
+  .data-table tbody td.cell-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s2);
     justify-content: flex-start;
     text-align: left;
-    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  /* The actions cell gets the whole card width, so "Nicht mehr im Einsatz" does not have
+     to wrap around a caption that says nothing a button next to it does not already say.
+     The data-label ATTRIBUTE stays — the header association and the caption probe read the
+     attribute, not this pseudo-element. */
+  .data-table tbody td.cell-actions::before {
+    content: none;
+  }
+
+  .cell-actions > button + button,
+  .cell-actions > span + button {
+    margin-left: 0;
   }
 
   /* The totals row is a row of numbers with no headings of its own, so left alone it

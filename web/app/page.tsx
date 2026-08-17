@@ -309,11 +309,9 @@ export default function DashboardPage() {
 
       {/* Above the snapshot and independent of it: a failed refresh must not be able to
           present the previous payload as current without saying so. */}
-      {loadError !== null ? (
-        <p className="form-error" role="alert">
-          {tError(loadError)}
-        </p>
-      ) : null}
+      <p className="form-error" role="alert">
+        {loadError === null ? '' : tError(loadError)}
+      </p>
 
       {snapshot === null ? (
         <p role="status">{t('loading')}</p>
@@ -367,7 +365,18 @@ export default function DashboardPage() {
             <p className="field-hint">{t('truncatedNote', { limit: snapshot.shift_limit })}</p>
           ) : null}
 
-          <ListPanel title={t('onSiteHeading')}>
+          {/* The elapsed column is frozen at load and says so — in the panel's own heading,
+              because a footnote loose on the page is prose the eye has to sort out. */}
+          <ListPanel
+            title={t('onSiteHeading')}
+            note={t('asOf', {
+              time: format.dateTime(asOf, {
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZone: BUSINESS_TIME_ZONE,
+              }),
+            })}
+          >
             {openShifts.length === 0 ? (
               <EmptyState>{t('onSiteEmpty')}</EmptyState>
             ) : (
@@ -402,21 +411,11 @@ export default function DashboardPage() {
             )}
           </ListPanel>
 
-          {/* The elapsed column is frozen at load and says so. */}
-          <p className="field-hint">
-            {t('asOf', {
-              time: format.dateTime(asOf, {
-                hour: '2-digit',
-                minute: '2-digit',
-                timeZone: BUSINESS_TIME_ZONE,
-              }),
-            })}
-          </p>
-
           {/* Last, and deliberately plain. Not a live region: it is not news, it is
               reassurance, and announcing it would compete with the answer band above. */}
           <ListPanel
             title={t('recentHeading', { count: RECENT_SHIFTS })}
+            note={t('recentScope', { count: RECENT_SHIFTS })}
             action={
               <Link className="btn btn-quiet" href={SHIFTS_PATH}>
                 {t('recentLink')}
@@ -449,8 +448,6 @@ export default function DashboardPage() {
               </table>
             )}
           </ListPanel>
-
-          <p className="field-hint">{t('recentScope', { count: RECENT_SHIFTS })}</p>
         </>
       )}
     </>

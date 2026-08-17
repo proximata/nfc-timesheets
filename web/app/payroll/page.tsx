@@ -541,11 +541,15 @@ export default function PayrollPage() {
           </ListPanel>
 
           {/*
-            The two standing limitations. OPEN by default and collapsible, never hover-only:
-            they are true in every period, so they are typeset small and put under the table
-            rather than above it — and they may not be deleted to make the screen lighter.
+            The two standing limitations. Collapsible and under the table, never hover-only:
+            they are true in every period, and they may not be deleted to make the screen
+            lighter. They now ship CLOSED — the only change is disclosure, not content. Open
+            they put the prose this redesign removed from the top of the screen back at the
+            bottom of it, which is why /payroll/ came out at +1% instead of lighter
+            (REDESIGN-VISUAL.md D8). Nothing above this line folds: the reconciliation
+            sentence and the counted, named exclusions stay in view, always.
           */}
-          <details className="callout" open>
+          <details className="callout">
             <summary>{t('howHeading')}</summary>
             <ul>
               {/* `intro` is no longer a lede over the table — the question replaced it — but the

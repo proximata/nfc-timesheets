@@ -380,11 +380,11 @@ export default function MaterialRequestsPage() {
     <>
       <PageHeader title={t('heading')} question={t('question')} />
 
-      {loadError !== null ? (
-        <p className="form-error" role="alert">
-          {tError(loadError)}
-        </p>
-      ) : null}
+      {/* Permanent live region: a text change inside an existing region is announced far
+          more reliably than a node that appears and disappears. Empty is 0px high. */}
+      <p className="form-error" role="alert">
+        {loadError === null ? '' : tError(loadError)}
+      </p>
 
       {/* Permanent live region: a text change inside an existing region is announced far
           more reliably than a node that appears and disappears. */}

@@ -134,8 +134,16 @@ export default function AccountPage() {
         </ListPanel>
 
         {/* Stated, not implied. There is no control here to forget a password with, and this
-            is why. It must never grow one: no outbound mail exists to send a link over. */}
-        <p className="note">{t('noReset')}</p>
+            is why. It must never grow one: no outbound mail exists to send a link over.
+
+            Behind a <details> and NOT deleted: as a permanent four-line paragraph it made
+            /account/ the one screen the redesign left HEAVIER on a phone (858 → 1087px,
+            REDESIGN-VISUAL.md). The summary is the exact phrase a director hunts for, so
+            folding it also makes it findable instead of merely present. */}
+        <details className="callout">
+          <summary>{t('noResetHeading')}</summary>
+          <p>{t('noReset')}</p>
+        </details>
       </div>
     </>
   )
