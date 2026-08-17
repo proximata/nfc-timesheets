@@ -28,15 +28,15 @@ fun TimeSheetsTheme(content: @Composable () -> Unit) {
         // same contrast ratios, and it is what the rest of their phone looks like.
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
             if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        dark -> darkColorScheme(primary = Teal80, secondary = Slate80, tertiary = Amber80)
-        else -> lightColorScheme(primary = Teal40, secondary = Slate40, tertiary = Amber40)
+        dark -> darkColorScheme(primary = Blue80, secondary = Slate80, tertiary = Amber80)
+        else -> lightColorScheme(primary = Blue40, secondary = Slate40, tertiary = Amber40)
     }
     MaterialTheme(colorScheme = colors, content = content)
 }
 
-private val Teal40 = Color(0xFF006A63)
-private val Slate40 = Color(0xFF4A6360)
+private val Blue40 = Color(0xFF0061A4)
+private val Slate40 = Color(0xFF535F70)
 private val Amber40 = Color(0xFF7D5700)
-private val Teal80 = Color(0xFF52DBD0)
-private val Slate80 = Color(0xFFB1CCC8)
+private val Blue80 = Color(0xFF9ECAFF)
+private val Slate80 = Color(0xFFBBC7DB)
 private val Amber80 = Color(0xFFF6BD48)

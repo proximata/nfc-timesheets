@@ -125,11 +125,11 @@
   "login": {
     "heading": "Anmelden",
     "intro": "Bitte melden Sie sich mit Ihren Administrator-Zugangsdaten an.",
-    "email": "E-Mail-Adresse",
+    "email": "Benutzername",
     "password": "Passwort",
     "submit": "Anmelden",
     "submitting": "Anmeldung läuft…",
-    "failed": "E-Mail-Adresse oder Passwort stimmt nicht. Bitte noch einmal versuchen.",
+    "failed": "Benutzername oder Passwort stimmt nicht. Bitte noch einmal versuchen.",
     "logout": "Abmelden"
   },
   "workers": {

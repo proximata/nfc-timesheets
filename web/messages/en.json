@@ -125,11 +125,11 @@
   "login": {
     "heading": "Sign in",
     "intro": "Enter your administrator credentials to continue.",
-    "email": "Email address",
+    "email": "Username",
     "password": "Password",
     "submit": "Sign in",
     "submitting": "Signing in…",
-    "failed": "Email address or password is incorrect.",
+    "failed": "Username or password is not right. Please try again.",
     "logout": "Sign out"
   },
   "workers": {

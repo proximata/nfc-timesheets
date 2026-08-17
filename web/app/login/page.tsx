@@ -72,8 +72,8 @@ export default function LoginPage() {
           <input
             id={emailId}
             name="email"
-            type="email"
-            autoComplete="email"
+            type="text"
+            autoComplete="username"
             required
             // biome-ignore lint/a11y/noAutofocus: single-purpose page, the form IS the page.
             autoFocus
