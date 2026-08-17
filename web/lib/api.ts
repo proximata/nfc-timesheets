@@ -1160,3 +1160,20 @@ export function fetchAnalytics(
     signal,
   })
 }
+
+/**
+ * Change the signed-in admin's own password. The CURRENT password is required even though
+ * the caller already holds a session, because a session is also what a borrowed unlocked
+ * laptop has. On success the server revokes every other session and reissues this one.
+ */
+export function changePassword(
+  currentPassword: string,
+  newPassword: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  return apiFetch<{ ok: true }>('/admin/password', {
+    method: 'POST',
+    body: { current_password: currentPassword, new_password: newPassword },
+    signal,
+  }).then(() => undefined)
+}

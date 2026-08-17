@@ -26,6 +26,7 @@ export const PRIMARY_NAV: readonly NavItem[] = [
   { href: '/payroll/', labelKey: 'payroll' },
   { href: '/pl/', labelKey: 'plDashboard' },
   { href: '/analytics/', labelKey: 'buildingAnalytics' },
+  { href: '/account/', labelKey: 'account' },
 ]
 
 /**

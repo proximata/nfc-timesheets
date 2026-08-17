@@ -9,11 +9,11 @@
 	     Building against the iOS 26 SDK, "NDEF" is rejected outright (App Store error
 	     90778) and only "TAG" is accepted, so re-adding this key means adopting
 	     NFCTagReaderSession - not the old NFCNDEFReaderSession. -->
-	<!-- Background tap: iOS opens https://timesheets.exe.xyz/t?l=<uuid> straight into
+	<!-- Background tap: iOS opens https://schimmer-glanz.exe.xyz/t?l=<uuid> straight into
 	     the app. Requires the AASA file served from the API host (decision-4). -->
 	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>applinks:timesheets.exe.xyz</string>
+		<string>applinks:schimmer-glanz.exe.xyz</string>
 	</array>
 	<!-- Worker identity (decision-22). Apple ONLY, no Google: AuthenticationServices is a
 	     native framework with no SDK and no client secret in the binary, every user is on

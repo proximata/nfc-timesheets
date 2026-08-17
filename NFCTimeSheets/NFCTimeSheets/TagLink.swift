@@ -4,7 +4,7 @@
 //
 //  The NFC tag carries a universal link, never a hardware UID (decision-5):
 //
-//      https://timesheets.exe.xyz/t?l=<location uuid>
+//      https://schimmer-glanz.exe.xyz/t?l=<location uuid>
 //
 //  The identifier is a UUID and NOT the human-readable slug (decision-21): the slug is
 //  guessable, and a guessable id on a tag lets anyone enumerate every building the
@@ -18,7 +18,7 @@ import Foundation
 enum TagLink {
     /// The one host this app will accept a tag from. Resolved through Branding so a different
     /// signing entity can point the app at their own host without editing source; unconfigured
-    /// it is "timesheets.exe.xyz", exactly as before. It MUST match the `applinks:` entry in
+    /// it is "schimmer-glanz.exe.xyz", exactly as before. It MUST match the `applinks:` entry in
     /// NFCTimeSheets.entitlements or iOS never hands the link over in the first place.
     static let host = Branding.tagHost
     static let path = "/t"

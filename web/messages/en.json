@@ -25,7 +25,8 @@
     "materialRequests": "Material Requests",
     "plDashboard": "P&L Dashboard",
     "contractManagement": "Contract Management",
-    "buildingAnalytics": "Building Analytics"
+    "buildingAnalytics": "Building Analytics",
+    "account": "Account"
   },
   "locale": {
     "label": "Language",
@@ -854,5 +855,20 @@
     "request": "The request could not be processed.",
     "server": "The server had a problem. Please try again later.",
     "badResponse": "The server sent an unexpected response."
+  },
+  "account": {
+    "heading": "Account",
+    "question": "How do I change my password?",
+    "current": "Current password",
+    "next": "New password",
+    "repeat": "Repeat new password",
+    "hint": "At least {min} characters. Changing it signs out every other session.",
+    "submit": "Change password",
+    "saving": "Saving…",
+    "done": "Password changed.",
+    "mismatch": "The two new passwords do not match.",
+    "tooShort": "The new password needs at least {min} characters.",
+    "wrongCurrent": "The current password is not right.",
+    "rejected": "The new password was not accepted."
   }
 }

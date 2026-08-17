@@ -26,7 +26,7 @@ let appKey = "tsk_9880d49f83794967790deb8a2c8f3dd46633cc78104c2f65"
 let workerEmail = "ivan.kotelnikov@example.com"
 let scrypt = "scrypt$16384$8$1$YWJjZGVm$ZGVhZGJlZWY"
 let appleSub = "001234.abcdef0123456789abcdef0123456789.0900"
-let portalURL = "https://timesheets.exe.xyz/portal/8f3c1a7e5b2d4096/summary?week=31"
+let portalURL = "https://schimmer-glanz.exe.xyz/portal/8f3c1a7e5b2d4096/summary?week=31"
 
 let secrets = [identityToken, sessionCookie, rawNonce, appKey, workerEmail, scrypt, "8f3c1a7e5b2d4096"]
 
@@ -76,11 +76,11 @@ check(scrubbed["ts.location.id"] as? String == "3f2504e0-4f89-11d3-9a0c-0305e82c
 check(scrubbed["ts.roster.cached_locations"] as? Int == 0, "the diagnostic counter survives")
 
 // --- URLs ----------------------------------------------------------------------------
-check(Scrub.url(portalURL) == "https://timesheets.exe.xyz/portal/[redacted]/summary",
+check(Scrub.url(portalURL) == "https://schimmer-glanz.exe.xyz/portal/[redacted]/summary",
       "portal grant token redacted, query dropped: \(Scrub.url(portalURL))")
-check(Scrub.url("https://timesheets.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301")
-        == "https://timesheets.exe.xyz/t",
-      "query is always dropped: \(Scrub.url("https://timesheets.exe.xyz/t?l=x"))")
+check(Scrub.url("https://schimmer-glanz.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301")
+        == "https://schimmer-glanz.exe.xyz/t",
+      "query is always dropped: \(Scrub.url("https://schimmer-glanz.exe.xyz/t?l=x"))")
 check(Scrub.url("not a url at all ://") == "[redacted]", "an unparseable url is not passed through")
 
 // --- free-text values -----------------------------------------------------------------

@@ -23,8 +23,8 @@ func check(_ ok: Bool, _ what: String) {
 // the current TestFlight build uses. If these four lines fail, the config surface has
 // changed live behaviour, which is the one thing it is not allowed to do.
 check(Branding.infoString("TSTagHost") == nil, "no Info.plist value is present in this harness")
-check(TagLink.host == "timesheets.exe.xyz", "unconfigured tag host: \(TagLink.host)")
-check(API.base.absoluteString == "https://timesheets.exe.xyz", "unconfigured API base: \(API.base)")
+check(TagLink.host == "schimmer-glanz.exe.xyz", "unconfigured tag host: \(TagLink.host)")
+check(API.base.absoluteString == "https://schimmer-glanz.exe.xyz", "unconfigured API base: \(API.base)")
 check(API.bundleId == "io.github.qwadratic.NFCTimeSheets", "unconfigured bundle id: \(API.bundleId)")
 // An UNDEFINED Xcode build setting expands to the EMPTY STRING, not to nothing, so "" is the
 // exact byte sequence a build with Branding.xcconfig detached hands Branding. It must read as
@@ -35,25 +35,25 @@ check(Branding.normalize("   ") == nil, "whitespace-only key is unconfigured")
 check(Branding.normalize("$(TS_TAG_HOST)") == nil, "unsubstituted $(VAR) is unconfigured")
 check(Branding.normalize(" cleanco.example ") == "cleanco.example", "a real value is trimmed and used")
 
-let good = "https://timesheets.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+let good = "https://schimmer-glanz.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301"
 
 // Accepted shapes.
 check(TagLink.locationId(from: URL(string: good)!) == "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "canonical link")
-check(TagLink.locationId(from: URL(string: "https://timesheets.exe.xyz/t/?l=3F2504E0-4F89-11D3-9A0C-0305E82C3301")!)
+check(TagLink.locationId(from: URL(string: "https://schimmer-glanz.exe.xyz/t/?l=3F2504E0-4F89-11D3-9A0C-0305E82C3301")!)
         == "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "trailing slash + uppercase uuid -> lowercased")
 check(TagLink.locationId(from: URL(string: "https://TIMESHEETS.EXE.XYZ/t?x=1&l=3f2504e0-4f89-11d3-9a0c-0305e82c3301")!)
         != nil, "host case-insensitive, extra query params ignored")
 
 // Rejected shapes. Everything here would otherwise reach the server off an unlocked tag.
 let bad = [
-    "https://timesheets.exe.xyz/t?l=westbahnhof",              // a SLUG, not a uuid (decision-21)
-    "https://timesheets.exe.xyz/t?l=",                         // empty
-    "https://timesheets.exe.xyz/t",                            // no l at all
-    "https://timesheets.exe.xyz/t?l=3f2504e04f8911d39a0c0305e82c3301", // unhyphenated
-    "https://timesheets.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301'--", // sql-ish
+    "https://schimmer-glanz.exe.xyz/t?l=westbahnhof",              // a SLUG, not a uuid (decision-21)
+    "https://schimmer-glanz.exe.xyz/t?l=",                         // empty
+    "https://schimmer-glanz.exe.xyz/t",                            // no l at all
+    "https://schimmer-glanz.exe.xyz/t?l=3f2504e04f8911d39a0c0305e82c3301", // unhyphenated
+    "https://schimmer-glanz.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301'--", // sql-ish
     "https://evil.example.com/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",      // wrong host
-    "http://timesheets.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",     // not https
-    "https://timesheets.exe.xyz/admin?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301", // wrong path
+    "http://schimmer-glanz.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",     // not https
+    "https://schimmer-glanz.exe.xyz/admin?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301", // wrong path
 ]
 for s in bad {
     check(TagLink.locationId(from: URL(string: s)!) == nil, "must reject \(s)")

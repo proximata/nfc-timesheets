@@ -9,7 +9,7 @@
  * THE KEY IS PUBLIC AND MUST STAY HARMLESS. `NEXT_PUBLIC_*` is inlined into the bundle at
  * build time, so anyone who opens the panel can read it. That is normal for a Maps browser
  * key and is only safe because the key is restricted BY HTTP REFERRER in the Cloud Console
- * (currently `https://timesheets.exe.xyz/*`, `http://localhost:3000/*`,
+ * (currently `https://schimmer-glanz.exe.xyz/*`, `http://localhost:3000/*`,
  * `http://127.0.0.1:8080/*`). Never put the server-side geocoding key here: that one is
  * IP-restricted and would be usable by anybody the moment it reached a browser.
  *

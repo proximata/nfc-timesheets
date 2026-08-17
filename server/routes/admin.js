@@ -12,6 +12,7 @@ import {
   decoy,
   destroySession,
   destroyWorkerSessions,
+  hashPassword,
   hashToken,
   recordLoginFailure,
   sessionCookie,
@@ -155,6 +156,59 @@ async function logout({ session }) {
 /** GET /admin/session -> who am I. The admin UI uses it to decide login vs. dashboard. */
 async function whoami({ session }) {
   return { status: 200, body: { admin: { id: session.adminId, email: session.email } } };
+}
+
+// Short enough that a small business will actually use it, long enough to be worth the
+// scrypt cost that already guards it. The real defence here is not length: it is the
+// per-IP rate limit plus ~60 ms per attempt, both of which already exist on /admin/login.
+const PASSWORD_MIN = 5;
+
+/**
+ * POST /admin/password -> change the signed-in admin's own password.
+ *
+ * The CURRENT password is required even though the caller already holds a valid session.
+ * That is the whole point: a session cookie is something a borrowed, unlocked laptop also
+ * has, and without this check walking past an open browser is enough to lock the owner out
+ * of their own company's data.
+ *
+ * Every OTHER session for this admin is destroyed on success, and the caller keeps a fresh
+ * one. If the reason for the change is "someone else knows it", a password change that
+ * leaves the other party logged in has achieved nothing.
+ */
+async function changePassword({ body, session, ip }) {
+  checkLoginRate(ip); // same bucket as login: this endpoint verifies a password too
+
+  const current = typeof body.current_password === "string" ? body.current_password : "";
+  const next = typeof body.new_password === "string" ? body.new_password : "";
+
+  if (next.length < PASSWORD_MIN || next.length > PASSWORD_MAX) {
+    fail(422, "password_too_short", { min: PASSWORD_MIN });
+  }
+  if (next === current) fail(422, "password_unchanged");
+
+  const admin = await one("SELECT id, password_hash FROM admins WHERE id = $1", [session.adminId]);
+  // Compare against a decoy when the row has vanished, so a deleted admin costs the same
+  // time as a wrong password rather than answering instantly.
+  const ok = await verifyPassword(current, admin ? admin.password_hash : await decoy());
+  if (!ok || !admin) {
+    recordLoginFailure(ip);
+    fail(401, "invalid_credentials");
+  }
+  clearLoginFailures(ip);
+
+  const hash = await hashPassword(next);
+  await query("UPDATE admins SET password_hash = $1 WHERE id = $2", [hash, admin.id]);
+
+  // Revoke everything, then hand this caller a new session so they are not logged out by
+  // their own successful change.
+  await query("DELETE FROM sessions WHERE admin_id = $1", [admin.id]);
+  const { token, expiresAt } = await createSession(admin.id);
+
+  return {
+    status: 200,
+    body: { ok: true },
+    headers: { "set-cookie": sessionCookie(token, expiresAt) },
+  };
 }
 
 /**
@@ -1274,6 +1328,7 @@ export const adminRoutes = [
   { method: "POST", path: "/admin/login", auth: null, handler: login },
   { method: "POST", path: "/admin/logout", auth: "admin", handler: logout },
   { method: "GET", path: "/admin/session", auth: "admin", handler: whoami },
+  { method: "POST", path: "/admin/password", auth: "admin", handler: changePassword },
   { method: "GET", path: "/admin/data", auth: "admin", handler: adminData },
   { method: "POST", path: "/admin/workers", auth: "admin", handler: upsertWorker },
   { method: "DELETE", path: "/admin/workers/:id", auth: "admin", handler: deleteWorker },

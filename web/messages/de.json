@@ -25,7 +25,8 @@
     "materialRequests": "Materialanforderungen",
     "plDashboard": "Gewinn & Verlust",
     "contractManagement": "Vertragsverwaltung",
-    "buildingAnalytics": "Objektauswertung"
+    "buildingAnalytics": "Objektauswertung",
+    "account": "Konto"
   },
   "locale": {
     "label": "Sprache",
@@ -854,5 +855,20 @@
     "request": "Das konnte so nicht verarbeitet werden. Bitte prüfen Sie Ihre Eingaben und versuchen Sie es noch einmal.",
     "server": "Das hat gerade nicht funktioniert. Bitte versuchen Sie es in einigen Minuten noch einmal.",
     "badResponse": "Die Antwort vom Server war unerwartet. Bitte laden Sie die Seite neu und versuchen Sie es noch einmal."
+  },
+  "account": {
+    "heading": "Konto",
+    "question": "Wie ändere ich mein Passwort?",
+    "current": "Aktuelles Passwort",
+    "next": "Neues Passwort",
+    "repeat": "Neues Passwort wiederholen",
+    "hint": "Mindestens {min} Zeichen. Nach der Änderung werden alle anderen Sitzungen abgemeldet.",
+    "submit": "Passwort ändern",
+    "saving": "Wird gespeichert…",
+    "done": "Passwort geändert.",
+    "mismatch": "Die beiden neuen Passwörter stimmen nicht überein.",
+    "tooShort": "Das neue Passwort braucht mindestens {min} Zeichen.",
+    "wrongCurrent": "Das aktuelle Passwort stimmt nicht.",
+    "rejected": "Das neue Passwort wurde nicht angenommen."
   }
 }

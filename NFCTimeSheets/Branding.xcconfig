@@ -14,7 +14,7 @@
 TS_TEAM_ID   = 6Y842FE8Q4
 TS_BUNDLE_ID = io.github.qwadratic.NFCTimeSheets
 TS_APP_NAME  = NFC TimeSheets
-TS_TAG_HOST  = timesheets.exe.xyz
+TS_TAG_HOST  = schimmer-glanz.exe.xyz
 
 // ---- what those drive ----------------------------------------------------------------
 // Xcode substitutes build settings into Info.plist, so TS_TAG_HOST reaches Swift through

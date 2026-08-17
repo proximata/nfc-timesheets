@@ -26,7 +26,7 @@ enum Branding {
     // These are the fallbacks, not merely examples. They must stay equal to ops/branding.json;
     // `node ops/check-branding.mjs` fails if they drift.
 
-    static let defaultTagHost = "timesheets.exe.xyz"
+    static let defaultTagHost = "schimmer-glanz.exe.xyz"
     static let defaultBundleId = "io.github.qwadratic.NFCTimeSheets"
 
     // MARK: - Resolved values

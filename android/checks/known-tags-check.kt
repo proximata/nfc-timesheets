@@ -22,7 +22,7 @@ private fun check(name: String, actual: Any?, expected: Any?) {
     failures++
 }
 fun main() {
-    val host = "timesheets.exe.xyz"
+    val host = "schimmer-glanz.exe.xyz"
     val link = TagLink(host)
     val hoiv = "c3c37d4a-ca0a-42c5-b248-9704b9907ec7"
     val serial = "04:A1:A8:52:AE:5C:80"
@@ -47,7 +47,7 @@ fun main() {
     check(
         "synthesised URL is exactly the tag format",
         synthesised.toString(),
-        "https://timesheets.exe.xyz/t?l=$hoiv",
+        "https://schimmer-glanz.exe.xyz/t?l=$hoiv",
     )
     // THE ONE THAT MATTERS: what we synthesise, we must also accept.
     check("round trip parses back", link.locationId(synthesised.toString()), hoiv)

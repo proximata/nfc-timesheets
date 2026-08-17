@@ -37,7 +37,7 @@
     "identity, and a third copy would only be a third thing to desync) and the Sentry DSN",
     "(per-project, optional, decision-23)."
   ],
-  "host": "timesheets.exe.xyz",
+  "host": "schimmer-glanz.exe.xyz",
   "appName": "NFC TimeSheets",
   "apple": {
     "teamId": "6Y842FE8Q4",

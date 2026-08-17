@@ -137,7 +137,7 @@ struct NFCTimeSheetsApp: App {
                     await DemoHooks.run(session: session, inbox: inbox)
                     #endif
                 }
-                // Universal link off the tag: https://timesheets.exe.xyz/t?l=<uuid>.
+                // Universal link off the tag: https://schimmer-glanz.exe.xyz/t?l=<uuid>.
                 // Anything that is not a well-formed tag link is dropped on the floor -
                 // the tag is unlocked and its contents are untrusted (decision-15).
                 //

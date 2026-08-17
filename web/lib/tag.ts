@@ -13,10 +13,9 @@
  * at build time and `web/` must stay buildable on its own; `node ops/check-branding.mjs`
  * fails if the two ever disagree.
  */
-const TAG_BASE_URL = (process.env.NEXT_PUBLIC_TAG_BASE_URL ?? 'https://timesheets.exe.xyz').replace(
-  /\/+$/,
-  '',
-)
+const TAG_BASE_URL = (
+  process.env.NEXT_PUBLIC_TAG_BASE_URL ?? 'https://schimmer-glanz.exe.xyz'
+).replace(/\/+$/, '')
 
 export function tagUri(locationId: string): string {
   return `${TAG_BASE_URL}/t?l=${encodeURIComponent(locationId)}`

@@ -30,7 +30,7 @@
  */
 import { execFileSync } from "node:child_process";
 
-const API = process.env.API_BASE ?? "https://timesheets.exe.xyz";
+const API = process.env.API_BASE ?? "https://schimmer-glanz.exe.xyz";
 
 function arg(name, fallback = undefined) {
   const i = process.argv.indexOf(`--${name}`);
