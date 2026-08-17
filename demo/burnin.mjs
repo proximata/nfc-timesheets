@@ -92,24 +92,33 @@ export function fitFontSize(text, nominal, maxWidth, { floor = 9 } = {}) {
 }
 
 /**
- * The video filter chain: scale, fps, black bars top and bottom, the standing DEMO
- * banner in the top bar, and one `drawtext` per caption in the bottom bar.
+ * Just the caption `drawtext`s — one per caption, in the bottom band, half-open in time.
  *
- * @param captions [{at, text}] in seconds, in order. Each runs until the next one starts.
+ * Split out of captionFilter so a recorder that builds its OWN frame (its own scale, its
+ * own padding, its own title bar) can still get the caption track without inheriting a
+ * banner it does not want. captionFilter below is unchanged and still calls this, so the
+ * half-open rule — note 4 above, the one that shipped two frames of overprint — has
+ * exactly one implementation and demo/check-captions.mjs still covers it.
+ *
+ * @param captions [{at, text, until?}] in seconds, in order. Each runs until the next one
+ *   starts, or until its own `until` when it carries one — which a film cut from SEVERAL
+ *   recordings needs, because there the last caption of one segment would otherwise run on
+ *   over the opening seconds of the next one and narrate the wrong screen. Seen in
+ *   docs/media/redesign-demo: „die Zwischenablage enthält genau diese URL“ was still on
+ *   screen two and a half seconds into the phone segment.
  * @param total    length of the recording in seconds, for the last caption's end.
  */
-export function captionFilter(captions, total, { width, fps = 12, fontSize = 20, banner, top = 34, bottom = 50 }) {
+export function captionDrawtexts(captions, total, { width, fontSize = 20, bottom = 50 }) {
   // 8 px of air at each end, so a line that only just fits still looks deliberate.
   const fits = width - 16;
-
-  const drawn = captions.map(({ at, text }, i) => {
-    const until = captions[i + 1]?.at ?? total;
+  return captions.map(({ at, text, until: cap }, i) => {
+    const until = Math.min(cap ?? Number.POSITIVE_INFINITY, captions[i + 1]?.at ?? total);
     const size = fitFontSize(text, fontSize, fits);
     if (size < fontSize) console.log(`  caption shrunk ${fontSize}->${size}pt to fit: ${text}`);
     // Half-open: `gte(t,at) * lt(t,until)`, never `between`, which includes both ends and
     // therefore double-draws the frame that lands on a boundary (note 4 above). The last
     // caption has no successor to collide with and simply runs to the end of the clip.
-    const isLast = i === captions.length - 1;
+    const isLast = i === captions.length - 1 && cap === undefined;
     const enable = isLast
       ? `gte(t,${at.toFixed(3)})`
       : `gte(t,${at.toFixed(3)})*lt(t,${until.toFixed(3)})`;
@@ -121,6 +130,20 @@ export function captionFilter(captions, total, { width, fps = 12, fontSize = 20,
       `enable='${enable}'`,
     ].join("");
   });
+}
+
+/**
+ * The video filter chain: scale, fps, black bars top and bottom, the standing DEMO
+ * banner in the top bar, and one `drawtext` per caption in the bottom bar.
+ *
+ * @param captions [{at, text}] in seconds, in order. Each runs until the next one starts.
+ * @param total    length of the recording in seconds, for the last caption's end.
+ */
+export function captionFilter(captions, total, { width, fps = 12, fontSize = 20, banner, top = 34, bottom = 50 }) {
+  // 8 px of air at each end, so a line that only just fits still looks deliberate.
+  const fits = width - 16;
+
+  const drawn = captionDrawtexts(captions, total, { width, fontSize, bottom });
 
   const bannerSize = fitFontSize(banner, Math.round(fontSize * 0.85), fits);
 

@@ -1,10 +1,10 @@
 ---
 id: TASK-138
 title: 'Redesign foundation: layout and state components'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-08-17 11:19'
-updated_date: '2026-08-17 13:02'
+updated_date: '2026-08-17 13:31'
 labels:
   - ux
   - redesign
@@ -40,12 +40,31 @@ NOT built, deliberately: Button, Card, Table, Toolbar, Icon, Tooltip, Toast, use
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 web/components/ has exactly PageHeader, AnswerBand, ListPanel, AttentionList, StateBadge, Field, EmptyState added; no others
-- [ ] #2 Every added component has at least two named callers in REDESIGN-PLAN.md, or an explicit written justification
-- [ ] #3 No component renders a bare JSX string literal; every user-visible string arrives as a prop or a message key
-- [ ] #4 Field ties <label for> to its control and wires help and error text through aria-describedby
-- [ ] #5 StateBadge renders the state WORD; colour is the second signal - a desaturated screenshot of the four states is still readable
-- [ ] #6 AttentionList is not used for tabular data anywhere; every table in the app is still a <table class="data-table"> with thead/tbody
-- [ ] #7 AnswerBand and every numeric cell use font-variant-numeric: tabular-nums
-- [ ] #8 No new npm dependency; package.json unchanged
+- [x] #1 web/components/ has exactly PageHeader, AnswerBand, ListPanel, AttentionList, StateBadge, Field, EmptyState added; no others
+- [x] #2 Every added component has at least two named callers in REDESIGN-PLAN.md, or an explicit written justification
+- [x] #3 No component renders a bare JSX string literal; every user-visible string arrives as a prop or a message key
+- [x] #4 Field ties <label for> to its control and wires help and error text through aria-describedby
+- [x] #5 StateBadge renders the state WORD; colour is the second signal - a desaturated screenshot of the four states is still readable
+- [x] #6 AttentionList is not used for tabular data anywhere; every table in the app is still a <table class="data-table"> with thead/tbody
+- [x] #7 AnswerBand and every numeric cell use font-variant-numeric: tabular-nums
+- [x] #8 No new npm dependency; package.json unchanged
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Added: PageHeader, AnswerBand, ListPanel, AttentionList, StateBadge, Field, EmptyState. Plus ThemeSwitcher, which is NOT in the plan (section 1.5 deferred the control) but was ordered by the owner this turn: three states System/Dunkel/Hell, persisted in localStorage, applied before first paint by an inline script in app/layout.tsx.
+
+Field clones its single child element to attach id, aria-describedby and aria-invalid, and never overwrites a value the child already set. The error paragraph is ALWAYS mounted, empty when silent, per the live-region rule this repo states in six files. No aria-required next to a native required.
+
+AttentionList renders each row as ONE button, so the trailing prop is documented as display-only content -- a focusable child would be a button inside a button.
+
+THE STRUCTURAL CALL HELD: no table anywhere became a div-grid. demo/check-foundation.mjs asserts, on the real /workers/, /shifts/ and /payroll/ at a VERIFIED 390px viewport, that every data-label equals the header TEXT in its own column.
+
+MUTATION (the phone-caption bug this repo already shipped once): changing ResponsiveTableLabels to walk row.querySelectorAll(td) instead of row.children --
+  count probe:  GREEN, 567/567 cells still labelled on /shifts/
+  text probe:   RED x567, e.g. row "Elif Demir" col 1: labelled "Mitarbeiter" but the header there is "Objekt"
+Restored, both green. Verified by LOOKING at the 390px cards as well, not only by assertion.
+
+Not built, deliberately: Button, Card, Table, Toolbar, Icon, Tooltip, Toast, useForm.
+<!-- SECTION:NOTES:END -->

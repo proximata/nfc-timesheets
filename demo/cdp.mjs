@@ -208,7 +208,14 @@ export async function record(page, dir, drive) {
   mkdirSync(dir, { recursive: true });
 
   const frames = [];
+  // `on` has no unsubscribe, so a page that records SEVERAL clips in one session ends up
+  // with one live listener per finished clip, each still pushing frames into an array that
+  // has already been written out and still acking a session it no longer owns. `live` is
+  // the off switch: a finished recorder ignores everything. Without it, demo/record-
+  // redesign.mjs's seven clips each carried the frames of every clip after them.
+  let live = true;
   page.on("Page.screencastFrame", async (p) => {
+    if (!live) return;
     frames.push({ at: Date.now(), data: p.data });
     try {
       await page.send("Page.screencastFrameAck", { sessionId: p.sessionId });
@@ -222,6 +229,7 @@ export async function record(page, dir, drive) {
   await drive();
   await sleep(400);
   await page.send("Page.stopScreencast");
+  live = false;
 
   if (frames.length === 0) throw new Error("no frames captured");
 
@@ -229,6 +237,18 @@ export async function record(page, dir, drive) {
   frames.forEach((f, i) => {
     const name = `f${String(i).padStart(5, "0")}.jpg`;
     writeFileSync(`${dir}/${name}`, Buffer.from(f.data, "base64"));
+    // The tail is NOT reconstructed here, and that is deliberate. Screencast frames arrive
+    // only when something CHANGES, so a recording that ends on a still screen — which is
+    // most of them, since a caption is read while nothing moves — is SHORTER than the drive
+    // that produced it: /payroll/ drove 27.9 s and encoded to 15.4 s, taking its last two
+    // captions off the end and onto the next segment's footage.
+    //
+    // Trying to fix it here does not work: this list's FINAL `duration` is handled
+    // inconsistently by the concat demuxer — dropped without the repeated file, applied
+    // TWICE with it (measured: a 3.996 s tail turned a 20.0 s list into a 24.0 s clip). So
+    // the tail is held in the FILTER instead, where it can be measured after the fact —
+    // see `clipOf` in demo/record-redesign.mjs, which pads to the drive's own duration and
+    // then asserts the encoded length matches it.
     const next = frames[i + 1]?.at ?? f.at + 500;
     lines.push(`file '${name}'`, `duration ${Math.max(0.02, (next - f.at) / 1000).toFixed(3)}`);
   });

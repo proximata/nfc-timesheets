@@ -1,10 +1,10 @@
 ---
 id: TASK-136
 title: 'Redesign foundation: token layer in globals.css'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-08-17 11:19'
-updated_date: '2026-08-17 13:02'
+updated_date: '2026-08-17 13:31'
 labels:
   - ux
   - redesign
@@ -31,13 +31,31 @@ NO new dependency. 'Inter' is a font-family name only - no @font-face, no next/f
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 web/app/globals.css :root carries the exact token names and values from REDESIGN-PLAN.md section 1.1, including color-scheme: dark
-- [ ] #2 [data-theme="light"] block present with the prototype's light values and color-scheme: light
-- [ ] #3 Legacy aliases --bg/--surface/--ink/--ink-muted/--accent-soft/--focus/--space-1..8 resolve to the new tokens; no screen file was edited to achieve this
-- [ ] #4 Every rule named dead in section 1.3 is deleted, except .worker-form, .button-primary, .button-secondary which are left for the cleanup task; no rule appears in both old and new form
-- [ ] #5 .portal renders light and /reinigung/ is visually unchanged from before the change
-- [ ] #6 @media print resolves to the light token set
-- [ ] #7 MUTATION TEST recorded: the 3px left state rule set to transparent on purpose makes the /shifts/ screenshot visibly change, then is restored
-- [ ] #8 package.json dependencies are byte-identical to before
-- [ ] #9 cd web && pnpm lint && pnpm typecheck && pnpm build all green, and a screenshot of the UNTOUCHED /workers/ shows the legacy markup rendering correctly in dark mode
+- [x] #1 web/app/globals.css :root carries the exact token names and values from REDESIGN-PLAN.md section 1.1, including color-scheme: dark
+- [x] #2 [data-theme="light"] block present with the prototype's light values and color-scheme: light
+- [x] #3 Legacy aliases --bg/--surface/--ink/--ink-muted/--accent-soft/--focus/--space-1..8 resolve to the new tokens; no screen file was edited to achieve this
+- [x] #4 Every rule named dead in section 1.3 is deleted, except .worker-form, .button-primary, .button-secondary which are left for the cleanup task; no rule appears in both old and new form
+- [x] #5 .portal renders light and /reinigung/ is visually unchanged from before the change
+- [x] #6 @media print resolves to the light token set
+- [x] #7 MUTATION TEST recorded: the 3px left state rule set to transparent on purpose makes the /shifts/ screenshot visibly change, then is restored
+- [x] #8 package.json dependencies are byte-identical to before
+- [x] #9 cd web && pnpm lint && pnpm typecheck && pnpm build all green, and a screenshot of the UNTOUCHED /workers/ shows the legacy markup rendering correctly in dark mode
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Tokens landed in web/app/globals.css (sole writer). :root is the dark set + color-scheme: dark; [data-theme="light"] mirrors it. Accent BLUE oklch(.72 .17 250) / oklch(.55 .12 250).
+
+Legacy names kept as ALIASES in the same :root (--bg/--surface/--ink/--ink-muted/--accent-soft/--focus/--space-1..8), so all 13 unmigrated screens render correctly in dark mode with zero edits to files other agents own. Marked SUNSET for B6.
+
+Superseded rules deleted, not duplicated. Where a shipped class name still appears in unmigrated screens it SHARES the new rule via one selector list rather than existing beside it: .shift-state-* and .material-stage-* share .badge.open/.unres/.corr/.muted; .row-attention and .row-inactive share the new left-rule/muted-text mechanism. .page-summary and the .callout card chrome are gone. .worker-form, .button-primary, .button-secondary kept as thin aliases for B6.
+
+Additions the prototype lacks: color-scheme; --danger/--ok (the shipped #a4262c/#1c6b3c are unreadable on #0B0C0E and an unreadable error is an error that did not happen); .portal re-declares the full light set so a client's page is not darkened; @media print resolves light; the 3px state rule sits on the first CELL because a border on <tr> under border-collapse:collapse silently does not paint.
+
+MUTATION TEST (AC#7), recorded: setting .is-unres/.row-attention border-left-color to transparent turned demo/check-foundation.mjs RED -- 'state rule: the 3px left rule is painted on the first CELL {"unres":"rgba(0, 0, 0, 0)"}' -- and restoring it turned it green.
+
+A REAL regression the check caught: a .visually-hidden group heading inside the phone nav strip is positioned against the initial containing block, escapes the strip's clip and widens the document to 1305px at a 390px viewport. Fixed with .nav-group { position: relative }.
+
+pnpm verify green. package.json byte-identical.
+<!-- SECTION:NOTES:END -->
