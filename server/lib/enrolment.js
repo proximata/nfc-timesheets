@@ -58,12 +58,27 @@ const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const CODE_CHARS = 8;
 const CODE_RE = /^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{8}$/;
 
-// 60 minutes. Short enough that the arithmetic above holds, long enough for the real
-// journey: the admin phones the worker, the worker installs the app from the store,
-// works through onboarding and types the code. A 5-minute code would be a mechanism that
-// fails for everyone with a slow connection, and the recovery for an expired code is
-// another phone call.
-export const CODE_TTL_MS = 60 * 60 * 1000;
+// 5 DAYS, raised from 60 minutes on 2026-08-17 at the operator's request, after a real
+// failure: a code was issued and sent to a worker on the assumption it lasted until it was
+// claimed. It expired first, and the recovery was a second phone call.
+//
+// The window widens LINEARLY with the TTL, so the arithmetic above was redone rather than
+// assumed, exactly as that block demands:
+//
+//   keyspace                          32^8         = 1.100e12
+//   attempts buyable in 5 days at the existing 30/min global ceiling = 216_000
+//   P(hit), 1 code live the whole 5 days           = 1.96e-7  (~1 in 5_090_000)
+//   P(hit), 5 codes live the whole 5 days          = 9.82e-7  (~1 in 1_018_000)
+//   P(hit), 50 codes live the whole 5 days         = 9.82e-6  (~1 in 101_800)
+//
+// Comfortable, and the 50-code figure is still pessimistic: it assumes fifty codes sitting
+// unredeemed for five continuous days, which would itself be the anomaly worth looking at.
+// Single-use redemption, hashed storage, byte-identical failures and one-click revoke are
+// unchanged -- the TTL is the only thing that moved.
+//
+// Making this configurable is TASK-45 and is deliberately NOT done here: an env knob is one
+// more thing that can be wrong on one machine, and nobody has yet needed a second value.
+export const CODE_TTL_MS = 5 * 24 * 60 * 60 * 1000;
 
 // Longest input we will even look at. A code is 8 characters plus whatever separators a
 // human sprinkled in; 64 is generous and bounds the regex work an unauthenticated caller
