@@ -248,9 +248,9 @@ async function main() {
       assert("payroll: the CSV filename is Vienna-dated", /^payroll-\d{4}-\d{2}-\d{2}\.csv$/.test(files[0]), files[0]);
       assert("payroll: the CSV keeps its UTF-8 BOM", csv.charCodeAt(0) === 0xfeff);
       assert(
-        "payroll: the CSV header is unchanged (6 semicolon columns, manual-shift audit column last)",
+        "payroll: the CSV header is unchanged (7 semicolon columns, audit + reason columns last)",
         lines[0] ===
-          "\uFEFFMitarbeiter;Stunden;Stundensatz (Cent);Betrag (Cent);Betrag (EUR);Von Hand erfasst (Schichten)",
+          "\uFEFFMitarbeiter;Stunden;Stundensatz (Cent);Betrag (Cent);Betrag (EUR);Von Hand erfasst (Schichten);Hinweis",
         JSON.stringify(lines[0]),
       );
       assert(
@@ -258,6 +258,41 @@ async function main() {
         centsOf(`${(Number(lines.at(-1).split(";")[3]) / 100).toFixed(2).replace(".", ",")}`) ===
           footCents,
         `csv ${lines.at(-1)?.split(";")[3]}, screen ${footCents}`,
+      );
+
+      // THE FILE MUST SAY WHAT THE SCREEN SAYS. /payroll/ prints „ein Betrag wird nicht
+      // berechnet – auch nicht 0,00 €" for a worker with no rate; the export used to ship
+      // `Ana Ilic;10.500;0;0;0.00;0` under it, and the accountant keeps the export. Rows
+      // only — the header and the total row are not people.
+      const dataRows = lines.slice(1, -1).map((line) => line.split(";"));
+      const noRateRows = dataRows.filter((cells) => cells[6]?.includes("Kein Stundensatz"));
+      assert(
+        "payroll: the seeded period really contains a worker with no rate",
+        noRateRows.length > 0,
+        "without one, every assertion below passes vacuously",
+      );
+      assert(
+        "payroll: a worker with no rate carries NO amount in the CSV — not 0, not 0.00",
+        noRateRows.every((c) => c[2] === "" && c[3] === "" && c[4] === ""),
+        noRateRows.map((c) => c.join(";")).join(" | "),
+      );
+      assert(
+        "payroll: and that row still names her and her real hours",
+        noRateRows.every((c) => c[0].length > 0 && Number(c[1]) > 0),
+        noRateRows.map((c) => c.join(";")).join(" | "),
+      );
+      // The general form, so a future column shuffle cannot reintroduce it elsewhere: no
+      // row may report hours worked and an amount of zero in the same breath.
+      const pricedAtZero = dataRows.filter((c) => Number(c[1]) > 0 && c[3] === "0");
+      assert(
+        "payroll: no CSV row prices real hours at zero",
+        pricedAtZero.length === 0,
+        pricedAtZero.map((c) => c.join(";")).join(" | "),
+      );
+      assert(
+        "payroll: the CSV total row says why it is short",
+        lines.at(-1).includes("auch nicht 0,00"),
+        JSON.stringify(lines.at(-1)),
       );
     }
 
@@ -288,6 +323,57 @@ async function main() {
     assert(
       "pl: an unassessable building is not reported as a pass",
       !/Nicht beurteilbar/.test(plText) || !plText.includes("Alle Objekte konnten beurteilt werden"),
+    );
+    // LABOUR NOBODY CAN PRICE. `SUM(secs * hourly_rate_cents / 3600)` valued a rate-less
+    // worker at 0, so ten and a half hours moved a building's hours from 48:00 to 58:30 and
+    // its margin by NOTHING — and margin is what opens a conversation about a client's
+    // contract. The hours are excluded from the cost, as on /payroll/, and NAMED here.
+    const labourCells = await page.eval(`(() => {
+      const rows = [...document.querySelectorAll('table.data-table tbody tr')]
+      return rows.map((r) => (r.children[3]?.textContent ?? '').trim())
+    })()`);
+    const unpricedCells = labourCells.filter((text) => text.includes("ohne Stundensatz"));
+    assert(
+      "pl: the seeded period really contains labour nobody has priced",
+      unpricedCells.length > 0,
+      `labour cells: ${JSON.stringify(labourCells)}`,
+    );
+    assert(
+      "pl: the labour cell names the hours it could NOT price, beside the amount",
+      unpricedCells.every((text) => /nicht bewertet/.test(text) && /\d+:\d\d/.test(text)),
+      JSON.stringify(unpricedCells),
+    );
+    // A building whose ONLY hours carry no rate must not print 0,00 € as its cost — that is
+    // the same confident zero, one column to the left of the note that denies it. Built
+    // with `new RegExp` on purpose: `/\d,\d\d/` written inside an array literal is a
+    // literal backslash and matches nothing, which is a probe that cannot fail.
+    const euroAmount = new RegExp(String.raw`\d[.,]\d\d\s*€`);
+    const zeroEuro = new RegExp(String.raw`(^|[^\d])0,00\s*€`);
+    assert(
+      "pl: the euro-amount regex really matches an amount, or the next assertion is vacuous",
+      euroAmount.test("701,56 €") && zeroEuro.test("0,00 €") && !zeroEuro.test("10,00 €"),
+    );
+    assert(
+      "pl: a building whose whole labour is unpriced shows NO amount, not 0,00 €",
+      unpricedCells.every((text) => !zeroEuro.test(text)),
+      JSON.stringify(unpricedCells),
+    );
+    // Read the <li> ITSELF, not VISIBLE_TEXT: that walker only collects elements with no
+    // children, so a bullet containing a <Link> contributes the link's words and loses the
+    // sentence around them. Visibility is still asserted, on the bullet.
+    const methodUnpricedLabour = await page.eval(`(() => {
+      const li = [...document.querySelectorAll('.callout li')]
+        .find((el) => (el.textContent ?? '').includes('kein Stundensatz hinterlegt'))
+      if (!li) return null
+      return { text: li.textContent.trim(), visible: li.checkVisibility(), href: li.querySelector('a')?.getAttribute('href') ?? null }
+    })()`);
+    assert(
+      "pl: the method says the cost is short, visibly, and links to the fix",
+      methodUnpricedLabour !== null &&
+        methodUnpricedLabour.visible &&
+        methodUnpricedLabour.text.includes("auch nicht 0,00") &&
+        methodUnpricedLabour.href === "/workers/",
+      JSON.stringify(methodUnpricedLabour),
     );
 
     // The one write: the drawer opens, traps focus, and Escape returns focus to its opener.

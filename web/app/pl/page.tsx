@@ -50,7 +50,12 @@ import { formatDuration } from '@/lib/shifts'
  * 1. Show a confident zero for something nobody knows. A building with no contract in the
  *    period has `revenue_cents: null` and renders as "no contract on file", never as
  *    EUR 0.00 — a zero would report it as a total loss and flag it for a conversation with
- *    a client who is paying perfectly well.
+ *    a client who is paying perfectly well. The same rule runs down the COST side: hours
+ *    worked by somebody with no hourly rate carry NO amount rather than 0,00 EUR, exactly
+ *    as on /payroll/ and /workers/. Priced at zero they moved a building's hours from
+ *    48:00 to 58:30 and its margin by nothing at all — an inflated margin is a decision
+ *    about a client's contract taken on a false number, so those hours are excluded from
+ *    the cost and NAMED, in the labour cell, in the flagged argument and in the method.
  * 2. Treat "not assessable" as a pass. `below_baseline` is TRUE, FALSE **or NULL**, and
  *    null means the margin or the baseline is unknown. It gets its own words.
  * 3. Invent the baseline. `pl_margin_baseline_bp` ships UNSET and nothing defaults it. With
@@ -73,6 +78,7 @@ import { formatDuration } from '@/lib/shifts'
 const MATERIALS_PATH = '/material-requests/'
 const CONTRACTS_PATH = '/contracts/'
 const SHIFTS_PATH = '/shifts/'
+const WORKERS_PATH = '/workers/'
 
 export default function PlPage() {
   const t = useTranslations('pl')
@@ -251,6 +257,19 @@ export default function PlPage() {
    * phone to a client: what the building earned, what it cost to clean, in what proportion,
    * and how far short of the floor that lands.
    */
+  /**
+   * The labour amount, or the refusal to state one.
+   *
+   * A building whose ONLY hours were worked by somebody with no rate has `labour_cents: 0`,
+   * and 0,00 EUR is the exact claim this screen refuses to make about a real person's work.
+   * Zero cost with zero unpriced hours is a genuine zero — nobody cleaned it — and stays a
+   * number. Same shape as `revenueUnknown`.
+   */
+  const labourAmount = (building: PlBuilding): string =>
+    building.labour_cents === 0 && building.labour_unpriced_seconds > 0
+      ? t('labourUnknown')
+      : money(building.labour_cents)
+
   function reasoning(building: PlBuilding, floorBp: number): string[] {
     const lines: string[] = []
     const labourShare = shareBp(building.labour_cents, building.revenue_cents)
@@ -277,11 +296,22 @@ export default function PlPage() {
     }
     lines.push(
       t('whyLabour', {
-        labour: money(building.labour_cents),
+        labour: labourAmount(building),
         hours: formatDuration(building.labour_minutes),
         share: labourShare === null ? t('shareUnknown') : percent(labourShare),
       }),
     )
+    // Same shape as `whyExcluded` and for the same reason: work that is real, in the hours
+    // above, and in NOBODY's cost. Said here because it is the sentence that stops the
+    // director defending a margin that ignored somebody's wage.
+    if (building.labour_unpriced_seconds > 0) {
+      lines.push(
+        t('whyLabourUnpriced', {
+          workers: building.labour_unpriced_workers,
+          hours: formatDuration(building.labour_unpriced_minutes),
+        }),
+      )
+    }
     lines.push(
       t('whyMaterial', {
         material: money(building.material_cents),
@@ -519,12 +549,27 @@ export default function PlPage() {
                         )}
                       </td>
                       <td className="col-numeric">
-                        {money(building.labour_cents)}
+                        {building.labour_cents === 0 && building.labour_unpriced_seconds > 0 ? (
+                          <span className="cell-muted">{t('labourUnknown')}</span>
+                        ) : (
+                          money(building.labour_cents)
+                        )}
                         <span className="shift-state-note">
                           {t('labourHours', {
                             hours: formatDuration(building.labour_minutes),
                           })}
                         </span>
+                        {/* Attached to the amount it qualifies, the way `revenuePartial`
+                            is: this cell is the one that is too low, and it must not be
+                            read without the hours it does not contain. */}
+                        {building.labour_unpriced_seconds > 0 ? (
+                          <span className="shift-state-note">
+                            {t('labourUnpriced', {
+                              workers: building.labour_unpriced_workers,
+                              hours: formatDuration(building.labour_unpriced_minutes),
+                            })}
+                          </span>
+                        ) : null}
                       </td>
                       <td className="col-numeric">{money(building.material_cents)}</td>
                       <td className="col-numeric">
@@ -623,6 +668,20 @@ export default function PlPage() {
                 </li>
               ) : null}
               <li>{t('methodExclusions')}</li>
+              {/* The cost side's twin of `methodUnpriced`: a real input nobody has priced,
+                  counted rather than valued at zero, with the one link that fixes it.
+                  `unpriced_workers` is the server's DISTINCT head count — one person at
+                  three buildings is one rate to set, not three. */}
+              {report.labour.unpriced_workers > 0 ? (
+                <li>
+                  {t('methodUnpricedLabour', {
+                    workers: report.labour.unpriced_workers,
+                    hours: formatDuration(report.labour.unpriced_minutes),
+                    buildings: totals.unpricedLabourBuildings,
+                  })}{' '}
+                  <Link href={WORKERS_PATH}>{t('methodUnpricedLabourLink')}</Link>
+                </li>
+              ) : null}
               {totals.unpricedBuildings > 0 ? (
                 <li>
                   {t('methodNoContract', {

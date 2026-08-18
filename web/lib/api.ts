@@ -1025,6 +1025,17 @@ export type PlBuilding = {
   labour_minutes: number
   /** Payable labour only (decision-10), valued at CURRENT rates \u2014 see `PlLabourBasis`. */
   labour_cents: number
+  /**
+   * The part of `labour_seconds` that `labour_cents` DOES NOT CONTAIN, because nobody has
+   * set those people's hourly rate. Real hours, no amount at all \u2014 not even zero, which
+   * would make their work look free and leave the margin untouched while the hours rose.
+   * Whenever this is above zero the labour cost is too low and the margin too high by an
+   * amount nothing in this system can know, and the screen must say so.
+   */
+  labour_unpriced_seconds: number
+  labour_unpriced_minutes: number
+  /** People, at this building, with no rate on file. Named and counted, never priced. */
+  labour_unpriced_workers: number
   /** This building's share of the period's material pool, pro-rata by labour (decision-6). */
   material_cents: number
 
@@ -1065,7 +1076,15 @@ export type PlBuilding = {
  * screens render their OWN translated line off `rate_basis` so it is not German on the
  * English locale, and it must be PERMANENTLY VISIBLE, not a tooltip.
  */
-export type PlLabourBasis = { rate_basis: 'current'; rate_basis_note: string }
+export type PlLabourBasis = {
+  rate_basis: 'current'
+  rate_basis_note: string
+  /** Payable hours across the whole period that carry no rate, so carry no cost. */
+  unpriced_seconds: number
+  unpriced_minutes: number
+  /** DISTINCT people missing a rate. One person at three buildings is one rate to set. */
+  unpriced_workers: number
+}
 
 export type PlMaterials = {
   basis: 'pro_rata_labour_hours'

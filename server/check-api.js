@@ -2939,6 +2939,82 @@ try {
       await admin.query("DELETE FROM shifts WHERE id = $1", [stub]);
     });
 
+    await test("labour nobody has priced is excluded from cost AND named, never valued at zero", async () => {
+      const before = building(await pl(VIENNA_OCT_2025), plA);
+      assert.equal(before.labour_unpriced_seconds, 0, "the baseline case must be clean, or the delta below proves nothing");
+      assert.equal(before.labour_unpriced_workers, 0);
+
+      // A REAL PERSON WHOSE RATE NOBODY HAS SET. 0 is the column default, i.e. "not said",
+      // and it is exactly what /workers/ and /payroll/ refuse to price.
+      const rateless = Number(
+        (
+          await admin.query(
+            "INSERT INTO workers (name, email, hourly_rate_cents) VALUES ('PL Rateless', 'pl.rateless@example.test', 0) RETURNING id",
+          )
+        ).rows[0].id,
+      );
+      const shift = Number(
+        (
+          await admin.query(
+            `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+             VALUES ($1, $2, '2025-10-21T05:00:00Z', '2025-10-21T15:30:00Z') RETURNING id`,
+            [rateless, plA],
+          )
+        ).rows[0].id,
+      );
+
+      const after = await pl(VIENNA_OCT_2025);
+      const a = building(after, plA);
+      // THE HOURS ARE REAL AND ARE SHOWN.
+      assert.equal(a.labour_seconds, before.labour_seconds + 37_800, "10.5 hours were worked and must be counted as time");
+      // THE MONEY IS NOT INVENTED. Priced at zero this cost would be unchanged AND
+      // unremarked, which is how 48:00 became 58:30 at an identical margin.
+      assert.equal(a.labour_cents, before.labour_cents, "an unset rate must not be spent as 0,00 EUR");
+      assert.equal(a.labour_unpriced_seconds, 37_800, "...but the hours behind it must come back NAMED");
+      assert.equal(a.labour_unpriced_minutes, 630);
+      assert.equal(a.labour_unpriced_workers, 1);
+      assert.equal(after.labour.unpriced_seconds, 37_800, "and the period as a whole must say so too");
+      assert.equal(after.labour.unpriced_workers, 1);
+
+      // The SAME person at a second building is ONE rate to go and set, not two. A sum over
+      // the per-building counts would send the director looking for somebody who does not exist.
+      const second = Number(
+        (
+          await admin.query(
+            `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+             VALUES ($1, $2, '2025-10-22T05:00:00Z', '2025-10-22T06:00:00Z') RETURNING id`,
+            [rateless, plB],
+          )
+        ).rows[0].id,
+      );
+      const spread = await pl(VIENNA_OCT_2025);
+      assert.equal(spread.labour.unpriced_workers, 1, "one person cleaning two buildings is one missing rate");
+      assert.equal(
+        spread.buildings.reduce((sum, b) => sum + b.labour_unpriced_workers, 0),
+        2,
+        "the per-building counts are rows, not people, and must remain usable per row",
+      );
+      assert.equal(spread.labour.unpriced_seconds, 41_400);
+
+      // Setting the rate makes the caveat disappear and the cost appear. Both, or the
+      // exclusion is not an exclusion but a permanent hole.
+      await admin.query("UPDATE workers SET hourly_rate_cents = 2000 WHERE id = $1", [rateless]);
+      const priced = await pl(VIENNA_OCT_2025);
+      const p = building(priced, plA);
+      assert.equal(p.labour_unpriced_seconds, 0);
+      assert.equal(p.labour_unpriced_workers, 0);
+      assert.equal(priced.labour.unpriced_workers, 0);
+      assert.equal(p.labour_cents, before.labour_cents + 21_000, "10.5h at EUR 20.00 is EUR 210.00");
+
+      await admin.query("DELETE FROM shifts WHERE id = ANY($1)", [[shift, second]]);
+      await admin.query("DELETE FROM workers WHERE id = $1", [rateless]);
+      assert.equal(
+        building(await pl(VIENNA_OCT_2025), plA).labour_cents,
+        before.labour_cents,
+        "the fixture must be restored, or every assertion after this one is measuring this one",
+      );
+    });
+
     await test("nothing is flagged until the operator says what the baseline is", async () => {
       const unset = await pl(VIENNA_OCT_2025);
       assert.equal(unset.baseline_margin_bp, null);

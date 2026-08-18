@@ -112,6 +112,17 @@ export type PlTotals = {
   /** decision-10: hours deliberately withheld from the cost side, and still running work. */
   excludedUnresolvedShifts: number
   openShifts: number
+  /**
+   * How many buildings carry payable hours nobody could price, because the worker has no
+   * rate. Those hours are in the building's `labour_seconds` and NOT in its `labour_cents`,
+   * so each of these buildings reports a cost that is too low and a margin that is too
+   * high by an amount nothing here can know.
+   *
+   * BUILDINGS, not people. The distinct head count is the server's `labour.unpriced_workers`
+   * — one person cleaning three buildings is one rate to go and set, and summing per-building
+   * counts here would send the director looking for two people who do not exist.
+   */
+  unpricedLabourBuildings: number
 }
 
 export function plTotals(buildings: readonly PlBuilding[]): PlTotals {
@@ -129,6 +140,7 @@ export function plTotals(buildings: readonly PlBuilding[]): PlTotals {
     notAssessable: 0,
     excludedUnresolvedShifts: 0,
     openShifts: 0,
+    unpricedLabourBuildings: 0,
   }
 
   for (const building of buildings) {
@@ -136,6 +148,7 @@ export function plTotals(buildings: readonly PlBuilding[]): PlTotals {
     totals.materialCents += building.material_cents
     totals.excludedUnresolvedShifts += building.excluded_unresolved_shifts
     totals.openShifts += building.open_shifts
+    if (building.labour_unpriced_seconds > 0) totals.unpricedLabourBuildings += 1
     if (building.below_baseline === true) totals.flagged += 1
     if (building.below_baseline === null) totals.notAssessable += 1
 

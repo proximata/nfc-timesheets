@@ -21,6 +21,7 @@
 //   * a period with no payable hours                 -> materials cannot be split at all
 //   * a contract with no target_minutes_per_month    -> target_minutes null
 //   * a request the admin has not priced             -> excluded from the pool AND counted
+//   * a worker with no hourly rate                   -> excluded from labour cost AND counted
 //   * a margin against zero revenue                  -> margin_bp null, "zero_revenue"
 //   * a baseline nobody has set                      -> below_baseline null, nothing flagged
 import { all, one } from "./db.js";
@@ -108,6 +109,21 @@ async function periodDays(from, to) {
  * screen can carry a permanent visible notice rather than a tooltip. Fixing it means a
  * `worker_rates` table read by PAYROLL, which is live money for real people and is a
  * decision record, not a commit.
+ *
+ * A RATE OF 0 IS NOT A RATE — it is the column's default, i.e. nobody has yet said what
+ * this person costs. Pricing their hours at zero makes real work look free: it moves a
+ * building's hours up and its margin by exactly nothing, and that margin is the number the
+ * director takes into a conversation about a client's contract. So those seconds ARE in
+ * `labour_seconds` (the hours are real and are shown) and are NOT in `labour_cents` (no
+ * amount is computed for them, not even zero), and they come back named in
+ * `unpriced_seconds` / `unpriced_workers` so the screen can say so. Same rule as /payroll/
+ * and /workers/: a named, counted exclusion, never a confident 0,00 EUR.
+ *
+ * The `FILTER (WHERE hourly_rate_cents <> 0)` on the cost SUM is arithmetically a no-op —
+ * a zero rate contributes zero anyway — and it is written out anyway, because that
+ * coincidence is the entire bug: it is what let `labour_cents` look correct while it was
+ * quietly pricing somebody's wage. The predicate makes the rule visible at the site of the
+ * arithmetic, next to the two columns that carry the same rule's other half.
  */
 async function labourByLocation(from, to) {
   return all(
@@ -120,10 +136,33 @@ async function labourByLocation(from, to) {
         GROUP BY s.location_id, s.worker_id, w.hourly_rate_cents
      )
      SELECT location_id,
-            SUM(secs)::bigint                                          AS labour_seconds,
-            SUM(ROUND(secs * hourly_rate_cents / 3600.0))::bigint      AS labour_cents
+            SUM(secs)::bigint                                                   AS labour_seconds,
+            COALESCE(SUM(ROUND(secs * hourly_rate_cents / 3600.0))
+                       FILTER (WHERE hourly_rate_cents <> 0), 0)::bigint        AS labour_cents,
+            COALESCE(SUM(secs) FILTER (WHERE hourly_rate_cents = 0), 0)::bigint AS unpriced_seconds,
+            count(*) FILTER (WHERE hourly_rate_cents = 0)::int                  AS unpriced_workers
        FROM per_worker
       GROUP BY location_id`,
+    [from, to],
+  );
+}
+
+/**
+ * The period's unpriceable labour as a whole: how many seconds, and how many PEOPLE.
+ *
+ * Its own query rather than a sum over `labourByLocation`, because one person cleaning
+ * three buildings is ONE worker missing a rate and THREE unpriced rows. Summing the
+ * per-building counts would send the director to /workers/ looking for two people who do
+ * not exist.
+ */
+async function unpricedLabour(from, to) {
+  return one(
+    `SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (s.end_time - s.start_time))), 0)::bigint AS seconds,
+            count(DISTINCT s.worker_id)::int                                          AS workers
+       FROM shifts s
+       JOIN workers w ON w.id = s.worker_id
+      WHERE ${PAYABLE} AND ${IN_PERIOD}
+        AND w.hourly_rate_cents = 0`,
     [from, to],
   );
 }
@@ -218,12 +257,13 @@ const byId = (rows, key = "location_id") => new Map(rows.map((r) => [r[key], r])
  * nothing to split by, and it is reported rather than swallowed.
  */
 export async function profitAndLoss(from, to) {
-  const [locations, contracts, labour, exclusions, pool, days, baselineBp] = await Promise.all([
+  const [locations, contracts, labour, exclusions, pool, unpriced, days, baselineBp] = await Promise.all([
     reportableLocations(from, to),
     contractSlice(from, to),
     labourByLocation(from, to),
     exclusionsByLocation(from, to),
     materialPool(from, to),
+    unpricedLabour(from, to),
     periodDays(from, to),
     marginBaselineBp(),
   ]);
@@ -247,6 +287,7 @@ export async function profitAndLoss(from, to) {
 
     const labourSeconds = Number(lab?.labour_seconds ?? 0);
     const labourCents = Number(lab?.labour_cents ?? 0);
+    const unpricedSeconds = Number(lab?.unpriced_seconds ?? 0);
     const materialCents = split?.get(l.id) ?? 0;
     const revenueCents = c === null ? null : Number(c.revenue_cents);
 
@@ -269,6 +310,12 @@ export async function profitAndLoss(from, to) {
       labour_seconds: labourSeconds,
       labour_minutes: Math.round(labourSeconds / 60),
       labour_cents: labourCents,
+      // The part of `labour_seconds` that `labour_cents` does NOT contain, because nobody
+      // has set those people's rate. Real hours, no amount — so the cost below is too low
+      // and the margin too high by an amount this server cannot know.
+      labour_unpriced_seconds: unpricedSeconds,
+      labour_unpriced_minutes: Math.round(unpricedSeconds / 60),
+      labour_unpriced_workers: lab?.unpriced_workers ?? 0,
       material_cents: materialCents,
 
       revenue_cents: revenueCents,
@@ -309,6 +356,11 @@ export async function profitAndLoss(from, to) {
       rate_basis: "current",
       rate_basis_note:
         "Arbeitskosten werden mit dem AKTUELLEN Stundensatz bewertet; es gibt keine Satzhistorie.",
+      // Hours nobody can price, for the WHOLE period. Distinct people, not rows: the same
+      // person at three buildings is one rate to go and set.
+      unpriced_seconds: Number(unpriced.seconds),
+      unpriced_minutes: Math.round(Number(unpriced.seconds) / 60),
+      unpriced_workers: unpriced.workers,
     },
     materials: {
       basis: "pro_rata_labour_hours",

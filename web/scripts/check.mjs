@@ -445,6 +445,7 @@ check('lib/pl.ts: a building nobody has priced is not summed as if it earned zer
     below_baseline: null,
     excluded_unresolved_shifts: 0,
     open_shifts: 0,
+    labour_unpriced_seconds: 0,
     ...over,
   })
   const totals = plTotals([
@@ -479,6 +480,22 @@ check('lib/pl.ts: a building nobody has priced is not summed as if it earned zer
   assert.equal(totals.flagged, 0)
   assert.equal(totals.excludedUnresolvedShifts, 2)
   assert.equal(totals.openShifts, 1)
+  assert.equal(totals.unpricedLabourBuildings, 0, 'nothing to caveat when every hour has a rate')
+
+  // A worker with no hourly rate: her hours are in `labour_seconds` and her pay is in
+  // NOBODY's cents, so the building's cost is too low and its margin too high. Counted so
+  // the screen can say so — BUILDINGS, because one person can clean several of them and the
+  // head count to go and fix is the server's own distinct one.
+  const unpriced = plTotals([
+    building({ location_id: 'd', revenue_cents: 100_000, labour_cents: 60_000 }),
+    building({
+      location_id: 'e',
+      revenue_cents: 100_000,
+      labour_cents: 60_000,
+      labour_unpriced_seconds: 37_800,
+    }),
+  ])
+  assert.equal(unpriced.unpricedLabourBuildings, 1, 'only the building with unpriced hours counts')
 
   // Nothing priced at all => no bottom line is claimed.
   const none = plTotals([building({ location_id: 'c', labour_cents: 900 })])

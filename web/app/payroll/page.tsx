@@ -16,6 +16,7 @@ import { LOGIN_PATH } from '@/lib/nav'
 import {
   coverageOf,
   msToHours,
+  type PayrollLine,
   payrollFor,
   periodExceedsCoverage,
   reconcile,
@@ -61,6 +62,13 @@ import { toBusinessInput } from '@/lib/shifts'
  * retroactively changes what last month appears to have cost.
  *
  * NO WRITES. The CSV is a client-side Blob, so this screen has no drawer and no confirm.
+ *
+ * THE CSV SAYS WHAT THE SCREEN SAYS. It used to ship `Ana Ilic;10.500;0;0;0.00;0` under a
+ * screen reading „ein Betrag wird nicht berechnet – auch nicht 0,00 €“, so the accountant's
+ * copy and the director's copy disagreed about one real person. A worker with no rate now
+ * has EMPTY money cells and a stated reason, and the row still carries her name, her real
+ * hours and her manual-shift count. `exclusionNote` is the one function both the table cell
+ * and the file read.
  */
 
 const SHIFTS_PATH = '/shifts/'
@@ -200,6 +208,25 @@ export default function PayrollPage() {
   const hours = (ms: number) =>
     format.number(msToHours(ms), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+  /**
+   * What is NOT in this line's amount, in the order and the words the table's last column
+   * uses. ONE function, read by the table cell AND by the CSV, because the screen and the
+   * file the accountant keeps disagreeing about the same worker is precisely the bug this
+   * replaced: the screen said „ein Betrag wird nicht berechnet – auch nicht 0,00 €“ while
+   * the export shipped `Ana Ilic;10.500;0;0;0.00;0`.
+   */
+  function exclusionNote(line: PayrollLine): string {
+    const noRate = line.worker.hourly_rate_cents === 0
+    if (!noRate && line.unresolvedShifts === 0 && line.openShifts === 0) return t('excludedNone')
+    return [
+      line.unresolvedShifts > 0 ? t('excludedUnresolved', { count: line.unresolvedShifts }) : null,
+      line.openShifts > 0 ? t('excludedOpen', { count: line.openShifts }) : null,
+      noRate ? t('excludedNoRate') : null,
+    ]
+      .filter((part) => part !== null)
+      .join(' · ')
+  }
+
   function downloadCsv() {
     if (totals === null) return
     const rows: string[][] = [
@@ -211,22 +238,39 @@ export default function PayrollPage() {
         t('csvAmountEuro'),
         // The accountant keeps this file; the audit trail has to be in it, not only on screen.
         t('csvManualShifts'),
+        // ...and so does the reason a money cell is blank. A blank nobody explains reads as
+        // a broken exporter; this column is the file's copy of the table's last column.
+        t('csvNote'),
       ],
-      ...totals.lines.map((line) => [
-        line.worker.name,
-        msToHours(line.payableMs).toFixed(3),
-        String(line.worker.hourly_rate_cents),
-        String(line.payCents),
-        centsToPlainEuros(line.payCents),
-        String(line.manualShifts),
-      ]),
+      ...totals.lines.map((line) => {
+        // NO RATE => THE THREE MONEY CELLS ARE EMPTY, and the name, the real hours, the
+        // manual-shift count and the reason stay. Empty and not `0`: Excel's SUM skips a
+        // blank and adds a zero, so a zero silently asserts „this person's work cost
+        // nothing“ in the one artefact that outlives the screen — the same claim /payroll/
+        // and /workers/ refuse to make. Not a sentinel like -1 either: it would sum, and it
+        // would sum WRONG. Not the word „Nicht bewertet“ in a numeric column either: one
+        // text cell turns the whole column to text in Excel and breaks SUM for everyone.
+        const noRate = line.worker.hourly_rate_cents === 0
+        return [
+          line.worker.name,
+          msToHours(line.payableMs).toFixed(3),
+          noRate ? '' : String(line.worker.hourly_rate_cents),
+          noRate ? '' : String(line.payCents),
+          noRate ? '' : centsToPlainEuros(line.payCents),
+          String(line.manualShifts),
+          exclusionNote(line),
+        ]
+      }),
       [
         t('totalLabel'),
+        // The hours total includes the unpriced hours; the amount total cannot. That gap is
+        // the note's whole job — without it the two columns look like an arithmetic error.
         msToHours(totals.payableMs).toFixed(3),
         '',
         String(totals.payCents),
         centsToPlainEuros(totals.payCents),
         String(totals.manualShifts),
+        noRateLines.length === 0 ? '' : t('csvTotalNoRate', { count: noRateLines.length }),
       ],
     ]
 
@@ -508,21 +552,14 @@ export default function PayrollPage() {
                             money(line.payCents)
                           )}
                         </td>
+                        {/* Same string the CSV's last column carries, from the same
+                            function: two spellings of one exclusion is how a screen and an
+                            export drift apart again. */}
                         <td>
                           {!noRate && line.unresolvedShifts === 0 && line.openShifts === 0 ? (
-                            <span className="cell-muted">{t('excludedNone')}</span>
+                            <span className="cell-muted">{exclusionNote(line)}</span>
                           ) : (
-                            [
-                              line.unresolvedShifts > 0
-                                ? t('excludedUnresolved', { count: line.unresolvedShifts })
-                                : null,
-                              line.openShifts > 0
-                                ? t('excludedOpen', { count: line.openShifts })
-                                : null,
-                              noRate ? t('excludedNoRate') : null,
-                            ]
-                              .filter((part) => part !== null)
-                              .join(' · ')
+                            exclusionNote(line)
                           )}
                         </td>
                       </tr>
