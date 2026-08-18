@@ -1523,10 +1523,14 @@ a {
 }
 
 /* The map. A fixed HEIGHT and a fluid width: Google needs a laid-out box before `new Map`,
-   and a 0px-tall container renders a grey strip that looks exactly like a broken map. The
-   height is in `rem` so it grows with the reader's font size instead of squeezing. */
+   and a 0px-tall container renders a grey strip that looks exactly like a broken map.
+
+   NEVER 100vh (decision-39 §3). A viewport-locked map hides the triage list, the on-site
+   table and the recent-activity list on the landing screen — i.e. it loses the journey the
+   map exists to serve. The map owns the top of the fold; the ledger is one scroll away.
+   `min()` keeps it a fraction of the viewport on a laptop and caps it on a large screen. */
 .map-canvas {
-  height: 26rem;
+  height: min(52vh, 560px);
   width: 100%;
   margin-bottom: var(--s4);
   border: 1px solid var(--border);
@@ -1534,10 +1538,245 @@ a {
   background: var(--bg-sunken);
 }
 
+/* A phone that has ASKED for the map gets a small one. Never 100dvh: the page must stay
+   scrollable past it with one finger (the map itself is `gestureHandling: 'cooperative'`). */
+.map-canvas-phone {
+  height: 320px;
+}
+
 /* `hidden` is overridden by `display: block` on any element that also has a layout rule, so
    it is restated here. Without it a failed map leaves an empty grey rectangle on the page. */
 .map-canvas[hidden] {
   display: none;
+}
+
+/* --- The map region on `/` and its own pins ------------------------------------------
+ *
+ * OUR PINS, NOT GOOGLE'S. Every state below is carried by a GLYPH, a WORD and a WEIGHT
+ * first; the coloured 3px left rule is the SECOND signal, always. The shipped test is:
+ * desaturate the screenshot and every pin must still be readable.
+ */
+
+.map-region {
+  margin-bottom: var(--s5);
+}
+
+.map-region-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: var(--s2);
+}
+
+.map-region-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+/* Google positions this pane; we only need our children to be positionable inside it. */
+.map-pin-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.map-pin {
+  position: absolute;
+  /* The label sits ABOVE its coordinate and the anchor line drops onto it. */
+  transform: translate(-50%, -100%);
+  pointer-events: auto;
+}
+
+/* The stem from the label down to the actual point. Without it a label floating near a
+   street is a label that could belong to either side of it. */
+.map-pin::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 100%;
+  width: 1px;
+  height: 10px;
+  background: var(--border-strong);
+}
+
+.map-pin.is-selected {
+  /* The open one is on top of every other label, whatever the latitude ordering said. */
+  z-index: 5;
+}
+
+.map-pin-label {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  /* An opaque chip, never text directly on map tiles: text on a tiled background cannot be
+     contrast-checked, so it cannot be promised to anybody. */
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--text-muted);
+  border-radius: var(--r-ctrl);
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  /* A German compound may not be broken across a map; it may make the chip wider. */
+  white-space: nowrap;
+}
+
+/* The three parts of the label, defined before the state overrides below them. */
+.map-pin-glyph {
+  font-size: 0.6875rem;
+  line-height: 1;
+}
+
+.map-pin-name {
+  font-weight: 500;
+}
+
+.map-pin-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+/* Somebody is in the building: filled glyph, the number in 700, an accent rule. */
+.map-pin[data-state="occupied"] .map-pin-label {
+  border-left-color: var(--state-open);
+}
+
+.map-pin[data-state="occupied"] .map-pin-count b {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* Nobody is: hollow glyph, everything in 400, a muted rule. */
+.map-pin[data-state="empty"] .map-pin-count,
+.map-pin[data-state="empty"] .map-pin-glyph {
+  color: var(--text-muted);
+}
+
+.map-pin[data-state="empty"] .map-pin-count b {
+  font-weight: 400;
+}
+
+.map-pin[data-state="occupied"] .map-pin-glyph {
+  color: var(--state-open);
+}
+
+/* The attention chip. Its own boxed element with a WORD in it and its own divider rule, so
+   it never merges into the occupancy reading beside it — the two are independent. */
+.map-pin-flag {
+  border-left: 1px solid var(--border-strong);
+  padding-left: var(--s2);
+  font-weight: 600;
+  color: var(--state-unres);
+}
+
+/* „kein Tag" is not a warning, it is an absence: muted, and hatched rather than coloured so
+   it is still distinguishable from „prüfen" with no colour at all. */
+.map-pin-flag.is-notag {
+  color: var(--text-muted);
+  background: repeating-linear-gradient(
+    135deg,
+    transparent,
+    transparent 3px,
+    var(--border) 3px,
+    var(--border) 4px
+  );
+}
+
+.map-pin.is-selected .map-pin-label {
+  border-color: var(--accent);
+  background: var(--bg-raised);
+}
+
+/* THE INFO BOX ON THE PIN — the numbers AND the cross-links, attached to the place.
+
+   `position: absolute`, i.e. OUT OF THE PIN'S FLOW, and that is load-bearing rather than
+   tidiness: `.map-pin` is `translate(-50%, -100%)` so that the label sits above its
+   coordinate, and a box inside that flow makes the WRAPPER taller, which drags the label
+   and the building's name up off the top of the map. Measured, not reasoned about: the
+   first version put the box's own title 44px above the map's top edge.
+
+   It hangs BELOW the anchor by default and flips UP for a pin in the lower half of the
+   map, and it aligns LEFT of the anchor for a pin in the right half — both decided from
+   the real rectangles in components/HomeMap.tsx's `reposition`. A box that opens off the
+   edge is a box whose cross-links nobody can click. */
+.map-info {
+  position: absolute;
+  top: calc(100% + 14px);
+  left: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  width: min(24rem, 80vw);
+  /* `--map-info-max` is the room actually measured on the chosen side (HomeMap's
+     `reposition`). Without it the box is capped at a guess and hangs off the map whenever
+     the reader drags the pin towards an edge. The two constants are the ceiling the room is
+     then capped BY: sized so the numbers AND the first cross-links fit without scrolling
+     inside a box the reader has only just opened — the links are what the box is for. */
+  max-height: min(52vh, 440px, var(--map-info-max, 440px));
+  padding: var(--s3);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  text-align: left;
+  white-space: normal;
+  /* German compounds — Materialanforderungen, Monatsziel — in a narrow box. */
+  overflow-wrap: anywhere;
+}
+
+.map-pin[data-flip="up"] .map-info {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+.map-pin[data-side="left"] .map-info {
+  left: auto;
+  right: 0;
+}
+
+.map-info-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+  /* Never scrolls away: the box must keep saying which building it is about. */
+  flex: none;
+}
+
+/* Only the FACTS scroll. */
+.map-info-body {
+  overflow: auto;
+  min-height: 0;
+}
+
+.map-info-head h3 {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+/* A state glyph inside a table cell. Decoration on top of the sentence beside it, and
+   `aria-hidden` in the markup — the words are the fact. */
+.state-glyph {
+  font-size: 0.6875rem;
+}
+
+/* A state stated as a WORD in a table cell: „▲ 2 Schichten nicht bestätigt", „▢ kein Tag".
+   Block, so two of them stack instead of running into one sentence. */
+.state-word {
+  display: block;
+  font-weight: 600;
+}
+
+.state-word.is-unres {
+  color: var(--state-unres);
+}
+
+.state-word.is-muted {
+  font-weight: 400;
+  color: var(--text-muted);
 }
 
 .building-photo {
@@ -1566,6 +1805,19 @@ a {
 
 .panel-metrics dd {
   margin: 0;
+}
+
+/* The same metric sheet inside the info box on a map pin: one narrow column, because 24rem
+   minus a label column leaves nothing for „Noch nie – keine abgeschlossene Schicht erfasst."
+   Placed AFTER the base rules on purpose, so specificity ascends down the file. */
+.map-info .panel-metrics {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.map-info .panel-metrics dt {
+  margin-top: var(--s2);
+  font-size: 0.75rem;
 }
 
 /* Decorative bar under a duration. aria-hidden in the markup: the number above it is the
@@ -2043,5 +2295,26 @@ a {
   /* A drawer on a phone is the whole screen; a modal keeps its margins. */
   .drawer {
     width: 100vw;
+  }
+
+  /* A map on a phone is mostly a list, so the pins get out of the way of the one thing
+     that fits: the label loses its name and keeps its glyph, its count and its chips.
+     The name is in the list row directly below, which is where a phone reader is anyway.
+     Pins WILL overlap at this width; that is a cosmetic failure and not a lost fact,
+     because the list under the map is the guaranteed answer. */
+  .map-pin-name {
+    display: none;
+  }
+
+  /* ...except the one that is open. Tapping into a cluster of identical „○ 0 vor Ort"
+     chips has to answer WHICH building was tapped, and the info box's own heading is
+     already scrolled past by then on a 320px map. */
+  .map-pin.is-selected .map-pin-name {
+    display: inline;
+  }
+
+  .map-info {
+    width: min(20rem, 88vw);
+    max-height: 240px;
   }
 }

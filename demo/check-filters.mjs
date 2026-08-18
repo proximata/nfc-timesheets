@@ -21,6 +21,13 @@
 //   4. BACK BEHAVES. Opening a panel pushes, so back closes it; changing a filter replaces,
 //      so back does not walk through every dropdown twiddle.
 //
+// PORT 8092 IS PART OF THE FIXTURE. The Maps browser key is referrer-restricted to
+// `http://127.0.0.1:8080/*` (among others), so on 8092 Google answers `gm_authFailure`, the
+// map region on `/` tears itself down, and `?location=` renders the Objektpanel as the
+// DRAWER — which is what the assertions below read. That is the degraded path and it is the
+// right one to pin here: this file is about the parameter contract, not about the map.
+// demo/check-map-home.mjs runs on 8080 and covers the other rendering of the same URL.
+//
 // Everything is bounded: every wait has a timeout and the run has a deadline. A check that
 // blocks forever is not a slow test, it is a test that cannot fail.
 //

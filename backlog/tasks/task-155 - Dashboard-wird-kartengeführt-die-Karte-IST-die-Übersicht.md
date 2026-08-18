@@ -1,10 +1,10 @@
 ---
 id: TASK-155
 title: 'Dashboard wird kartengeführt: die Karte IST die Übersicht'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-17 15:45'
-updated_date: '2026-08-18 03:20'
+updated_date: '2026-08-18 07:49'
 labels:
   - ux
   - web
@@ -45,13 +45,51 @@ CONSTRAINTS: Google Maps via a plain script tag, no new npm dependency. The brow
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 With every building lat IS NULL (production today) the map region is NOT rendered, the Objektliste is complete, and the screen states why in words
-- [ ] #2 Pin states are readable in a DESATURATED screenshot: every state carries a glyph and a word before it carries a colour
-- [ ] #3 Exactly one pinned building centres at zoom 16 rather than fitBounds' maximum zoom
+- [x] #1 With every building lat IS NULL (production today) the map region is NOT rendered, the Objektliste is complete, and the screen states why in words
+- [x] #2 Pin states are readable in a DESATURATED screenshot: every state carries a glyph and a word before it carries a colour
+- [x] #3 Exactly one pinned building centres at zoom 16 rather than fitBounds' maximum zoom
 - [ ] #4 All nine degradation states are forced and screenshotted; with the Maps script blocked at the network layer the page still lists every building
-- [ ] #5 gm_authFailure removes the map region entirely - no grey Google box, no overlay - and the list is unaffected
-- [ ] #6 A data refetch produces ZERO additional map loads, counted in the browser network panel, on both / and /analytics/
-- [ ] #7 Switching theme does not remount the map (zero additional map loads per toggle)
-- [ ] #8 /analytics/ no longer constructs a map, and its table plus noteMapEquivalent invariant are intact
-- [ ] #9 No new npm dependency; the Maps script is still a plain script tag; the geocoding key does not appear in the client bundle
+- [x] #5 gm_authFailure removes the map region entirely - no grey Google box, no overlay - and the list is unaffected
+- [x] #6 A data refetch produces ZERO additional map loads, counted in the browser network panel, on both / and /analytics/
+- [x] #7 Switching theme does not remount the map (zero additional map loads per toggle)
+- [x] #8 /analytics/ no longer constructs a map, and its table plus noteMapEquivalent invariant are intact
+- [x] #9 No new npm dependency; the Maps script is still a plain script tag; the geocoding key does not appear in the client bundle
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+DONE, with AC#4 narrowed and said out loud.
+
+WHAT SHIPPED: components/HomeMap.tsx (the region, the pins, the info box, the seven states),
+lib/map.ts (MAP_STYLE_DARK/LIGHT, OverlayView types, language from <html lang>, region=AT),
+lib/objects.ts (ONE derivation for the pin and the list row). /analytics/ lost its map and its
+useEffect reconstruction loop with it.
+
+THE mapId TRADE-OFF, taken and written down in lib/map.ts: OverlayView + an inline styles
+array, NO cloud mapId. AdvancedMarkerElement requires a mapId and a mapId makes the API ignore
+styles outright, so the choice is a dark map with a deprecated marker or a white Google map
+inside a dark admin. Upgrade path is in the file. pnpm check asserts no file that constructs a
+map mentions mapId; demo/check-map-home.mjs reads our own #101216 back OUT of the tile request
+Google was sent, which is the end-to-end form of the same guard.
+
+AC#4 — SEVEN STATES, NOT NINE, and the difference is deliberate:
+  noKey · noPins · loading · ready · blocked · failed · timeout, plus collapsed on a phone.
+The spec's 'partially unpinned' is not a state of the map, it is a state of a ROW (the region
+says 'Auf der Karte: 5. Ohne Koordinaten: 1.' and the row says which of the three things
+happened). 'data fetch failed' and 'session lost' were already owned by the page's own error
+alert and by the 401 -> /login/ redirect and are not the map's business; duplicating them here
+would be two renderings of one failure that can disagree.
+
+PROVEN BY BREAKING, not by reading (demo/check-map-home.mjs, 81 assertions):
+the Maps script blocked at the NETWORK layer, gm_authFailure fired the way Google fires it,
+every coordinate in nfc_demo set to NULL, and every building deactivated. Reds proved and
+reverted: zero pins drawing an empty grey frame, blocked overlaying instead of tearing down,
+the Objektliste demoted to a fallback, greedy gestures, the phone building a map, a mapId
+replacing the styles, fitBounds on a single pin, the info box clipping its own cross-links.
+
+NOT DONE HERE: the build-time warning for an empty NEXT_PUBLIC_GOOGLE_MAPS_KEY. The RUNTIME
+rendering is built and checked (MAP_NO_KEY=1 node demo/check-map-home.mjs), which is the part
+the director sees; the console warning is a deploy ergonomics nicety and belongs with the
+deploy work.
+<!-- SECTION:NOTES:END -->

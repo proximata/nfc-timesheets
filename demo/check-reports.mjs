@@ -548,13 +548,27 @@ async function main() {
     });
     const anText = await page.eval(VISIBLE_TEXT);
     assert("analytics: the screen states its question", anText.includes("Wo geht die Zeit hin?"));
+    // /analytics/ LOST ITS MAP (decision-39 §2): `/` has the one map in the admin. What had
+    // to survive is the FACT the map rendered - whether a building could be located at all,
+    // in words, with the three genuinely different reasons and the retry.
     assert(
-      "analytics: the map's state is named in words",
-      /Karte|Objekt(e)? auf der Karte|keine Karte|Kartenschlüssel/.test(anText),
+      "analytics: no second map came back",
+      (await page.eval(`!document.querySelector('.map-canvas')`)) === true,
+    );
+    assert(
+      "analytics: every building's geocode state is still named in words",
+      /Auf der Karte|Nie verortet|Konnte nicht verortet werden/.test(anText),
+    );
+    assert(
+      "analytics: …and a building that could not be located can still be retried from its row",
+      (await page.eval(
+        `[...document.querySelectorAll('table.data-table button')].some((b) => b.textContent.includes('Erneut verorten'))
+         || !/Nie verortet|Konnte nicht verortet/.test(document.body.innerText)`,
+      )) === true,
     );
     assert(
       "analytics: the table-is-complete note is visible",
-      anText.includes("Die Tabelle unter der Karte enthält jedes Objekt"),
+      anText.includes("Diese Tabelle enthält jedes Objekt"),
     );
     const counts = await page.eval(`(() => {
       const cells = [...document.querySelectorAll('.answer .cell')].map((c) => ({

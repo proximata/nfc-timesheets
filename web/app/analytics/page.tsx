@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { AnswerBand } from '@/components/AnswerBand'
 import { Drawer } from '@/components/Drawer'
 import { EmptyState } from '@/components/EmptyState'
@@ -23,43 +23,27 @@ import {
 } from '@/lib/api'
 import { filterHref, useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
-import {
-  failureOf,
-  type GMarker,
-  isPinned,
-  loadGoogleMaps,
-  MAPS_API_KEY,
-  type MapFailure,
-  type MapStatus,
-  onMapsAuthFailure,
-  streetViewUrl,
-  VIENNA_CENTRE,
-} from '@/lib/map'
+import { isPinned, MAPS_API_KEY, streetViewUrl } from '@/lib/map'
 import { LOGIN_PATH } from '@/lib/nav'
 import { isPeriod, PAYROLL_PERIODS, type Period, periodRange } from '@/lib/period'
 import { formatDuration } from '@/lib/shifts'
 
 /**
- * Building analytics — agreed time against time actually worked, the trend behind it, and
- * a map of Vienna. „Wo geht die Zeit hin?"
+ * Building analytics — agreed time against time actually worked, and the trend behind it.
+ * „Wo geht die Zeit hin?"
  *
- * THE MAP IS THE OPTIONAL PART AND THE TABLE IS NOT. Everything the map shows, the table
- * below it shows too, for every building, including the ones that have no coordinates. A
- * building without a pin is a building we cannot draw, never a building the director cannot
- * see — that distinction is the whole reason the table is not "extra detail" but the
- * primary presentation, and it is also what makes this screen usable with a keyboard and a
- * screen reader without a second implementation. The redesign did not demote it: the map is
- * a panel, the table is a panel, and the answer band above both counts BUILDINGS and not
- * pins.
+ * THIS SCREEN HAS NO MAP ANY MORE (decision-39 §2). It had one; `/` now has THE one, and
+ * two maps in one admin are two things that can disagree — two extents, two selections, two
+ * sets of pin states, and two billed map loads for one question. What made the map here
+ * safe to remove is that the map was never the primary presentation: everything it showed,
+ * the table below showed too, for every building, including the ones with no coordinates.
+ * That invariant did not move — it is now the standing note `noteMapEquivalent`, and it is
+ * what `/`'s Objektliste inherits.
  *
- * FIVE WAYS THE MAP CAN NOT WORK, all of them ordinary, all of them named on screen:
- *   noKey    the build had no NEXT_PUBLIC_GOOGLE_MAPS_KEY. Not a fault; a deployment fact.
- *   noPins   no building has been geocoded yet. The buildings are listed with the reason.
- *   blocked  Google rejected the key (referrer restriction, or the Maps JavaScript API is
- *            not enabled on the project). Caught via `gm_authFailure`, because an
- *            unauthorised key still loads the script and still constructs a Map.
- *   failed   the script never arrived: offline, an ad blocker, a proxy, a timeout.
- *   ready    ...and even then, a building without coordinates is still only in the table.
+ * NOTHING TRUE WAS DELETED WITH IT. The geocode state per building is still a column, in
+ * words, with the three genuinely different reasons („noch nie abgefragt" / a status /
+ * pinned), and „erneut geokodieren" is still a row action. Those are the facts; the map was
+ * a rendering of them.
  *
  * THE TREND IS ARITHMETIC, NOT A FORECAST. N Vienna calendar months of actual payable
  * minutes and the delta between the last two. With fewer than two months that contain any
@@ -89,8 +73,6 @@ export default function AnalyticsPage() {
   const periodId = useId()
   const monthsId = useId()
 
-  const mapContainerRef = useRef<HTMLDivElement>(null)
-
   const [report, setReport] = useState<AnalyticsReport | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
   /**
@@ -107,22 +89,15 @@ export default function AnalyticsPage() {
   const range = useMemo(() => periodRange(period, now), [period, now])
 
   /**
-   * THE URL IS THE SELECTION. A pin click and a table button write it; back closes the
-   * panel because back pops the entry that opened it. That is only true because opening is
-   * a 'push' and closing is a 'replace' — see lib/filters.ts.
+   * THE URL IS THE SELECTION. A table button writes it; back closes the panel because back
+   * pops the entry that opened it. That is only true because opening is a 'push' and
+   * closing is a 'replace' — see lib/filters.ts.
    */
   const selectedId = filters.location
-  /**
-   * STABLE, and that is not a style point: it goes in the map effect's dependency list, and
-   * an identity that changes every render would reconstruct the Google map on every render.
-   * `setFilters` is already `useCallback`-stable, so this is too.
-   */
   const setSelectedId = useCallback(
     (id: string | null) => setFilters({ location: id }, id === null ? 'replace' : 'push'),
     [setFilters],
   )
-  const [mapStatus, setMapStatus] = useState<MapStatus>('loading')
-  const [mapFailure, setMapFailure] = useState<MapFailure | null>(null)
   /** Buildings whose Street View image 404ed after we asked for it. Second line of defence. */
   const [photoFailed, setPhotoFailed] = useState<ReadonlySet<string>>(new Set())
   const [busy, setBusy] = useState(false)
@@ -185,90 +160,8 @@ export default function AnalyticsPage() {
     return () => controller.abort()
   }, [load])
 
-  /**
-   * Google's own rejection signal. It fires LATE — the script loads, `new Map()` succeeds,
-   * and only then does an overlay appear over a grey rectangle — so without this the screen
-   * would report a healthy map that is not there.
-   */
-  useEffect(
-    () =>
-      onMapsAuthFailure(() => {
-        setMapFailure('auth')
-        setMapStatus('blocked')
-      }),
-    [],
-  )
-
   const buildings = useMemo(() => report?.buildings ?? [], [report])
   const pinned = useMemo(() => buildings.filter(isPinned), [buildings])
-  const unpinned = useMemo(() => buildings.filter((b) => !isPinned(b)), [buildings])
-
-  /**
-   * Draw the map.
-   *
-   * ponytail: the whole map is rebuilt whenever the period changes, rather than diffing
-   * markers. CEILING: with hundreds of buildings the redraw would be visible. There are
-   * single figures. UPGRADE PATH: keep a marker per location id and move it.
-   */
-  useEffect(() => {
-    if (report === null) return
-    if (MAPS_API_KEY === '') {
-      setMapStatus('noKey')
-      return
-    }
-    if (pinned.length === 0) {
-      setMapStatus('noPins')
-      return
-    }
-
-    let cancelled = false
-    const markers: GMarker[] = []
-    setMapStatus('loading')
-    setMapFailure(null)
-
-    loadGoogleMaps()
-      .then((api) => {
-        const container = mapContainerRef.current
-        if (cancelled || container === null) return
-        const map = new api.Map(container, {
-          center: VIENNA_CENTRE,
-          zoom: 12,
-          mapTypeControl: false,
-          streetViewControl: false,
-          fullscreenControl: false,
-        })
-        const bounds = new api.LatLngBounds()
-        for (const building of pinned) {
-          const position = { lat: building.lat, lng: building.lng }
-          bounds.extend(position)
-          const marker = new api.Marker({ position, map, title: building.name })
-          marker.addListener('click', () => setSelectedId(building.location_id))
-          markers.push(marker)
-        }
-        map.fitBounds(bounds, 48)
-        // A single pin makes `fitBounds` zoom to the maximum, which lands the director on a
-        // rooftop with no street around it. Pull back to a block.
-        const only = pinned.length === 1 ? pinned[0] : undefined
-        if (only !== undefined) {
-          map.setCenter({ lat: only.lat, lng: only.lng })
-          map.setZoom(16)
-        }
-        setMapStatus('ready')
-      })
-      .catch((cause: unknown) => {
-        if (cancelled) return
-        setMapFailure(failureOf(cause))
-        setMapStatus('failed')
-      })
-
-    return () => {
-      cancelled = true
-      for (const marker of markers) marker.setMap(null)
-    }
-    // `setSelectedId` is stable by construction (useCallback over a useCallback), so listing
-    // it costs nothing. If it ever stops being stable, this effect rebuilds the map on every
-    // render and every rebuild is a billed Maps load.
-  }, [report, pinned, setSelectedId])
 
   const selected = buildings.find((b) => b.location_id === selectedId) ?? null
 
@@ -463,47 +356,6 @@ export default function AnalyticsPage() {
           </select>
         </Field>
       </div>
-
-      <ListPanel title={t('mapHeading')} padded>
-        {/* The state of the map, in words, ALWAYS — including when it worked. A director
-            who cannot see pins has to be able to tell "nothing is geocoded" from "Google
-            refused our key", because those have different owners and different fixes. */}
-        <p className="note" role="status">
-          {mapStatus === 'noKey'
-            ? t('mapNoKey')
-            : mapStatus === 'noPins'
-              ? t('mapNoPins', { unpinned: unpinned.length })
-              : mapStatus === 'loading'
-                ? t('mapLoading')
-                : mapStatus === 'ready'
-                  ? t('mapReady', { pinned: pinned.length, unpinned: unpinned.length })
-                  : mapFailure === 'auth'
-                    ? t('mapBlocked')
-                    : mapFailure === 'timeout'
-                      ? t('mapTimeout')
-                      : t('mapNetwork')}
-        </p>
-
-        {mapStatus === 'failed' ? (
-          <p className="form-actions">
-            <button type="button" className="btn btn-ghost" onClick={() => void load()}>
-              {t('mapRetry')}
-            </button>
-          </p>
-        ) : null}
-
-        {/* Always in the DOM so the ref exists when the API resolves; `hidden` rather than
-            unmounted so a zero-height canvas never gets a Map constructed into it. */}
-        <div
-          ref={mapContainerRef}
-          className="map-canvas"
-          hidden={mapStatus !== 'loading' && mapStatus !== 'ready'}
-        />
-
-        {/* Only when there is actually a map to click. "Selecting a pin opens…" printed
-            under a notice that says no map was drawn is the screen contradicting itself. */}
-        {mapStatus === 'ready' ? <p className="field-hint">{t('mapTableHint')}</p> : null}
-      </ListPanel>
 
       <ListPanel title={t('tableHeading')}>
         {report === null ? (

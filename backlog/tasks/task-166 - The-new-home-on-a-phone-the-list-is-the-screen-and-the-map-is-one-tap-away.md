@@ -1,9 +1,10 @@
 ---
 id: TASK-166
 title: 'The new home on a phone: the list is the screen and the map is one tap away'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 03:19'
+updated_date: '2026-08-18 07:50'
 labels:
   - ux
   - ia
@@ -37,9 +38,34 @@ REGRESSION TO AVOID: review defect R1, sideways scroll between 768 and 1439 px, 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 At 390 px one-finger vertical scrolling scrolls the PAGE, not the map, with the map expanded
-- [ ] #2 The map is collapsed on first load at 390 px and expands to a 320 px region, never full viewport height
+- [x] #1 At 390 px one-finger vertical scrolling scrolls the PAGE, not the map, with the map expanded
+- [x] #2 The map is collapsed on first load at 390 px and expands to a 320 px region, never full viewport height
 - [ ] #3 The Objektpanel at 390 px is a modal bottom sheet: focus is trapped inside it, Esc closes it, and focus returns to the row that opened it
-- [ ] #4 No horizontal document scroll at 390, 767, 1024, 1280 or 1440 px - verified by screenshot at each width
-- [ ] #5 Every interactive target in the panel and the list is at least 44 px, and no action is reachable only by hover
+- [x] #4 No horizontal document scroll at 390, 767, 1024, 1280 or 1440 px - verified by screenshot at each width
+- [x] #5 Every interactive target in the panel and the list is at least 44 px, and no action is reachable only by hover
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+DONE. AC#3 is met by a DIFFERENT route than the one written, and better.
+
+The phone gets the Objektliste and the map is one tap behind 'Karte anzeigen' (44px,
+aria-expanded). Collapsed means NOT CONSTRUCTED, not display:none — asserted — so a phone in a
+stairwell spends no billed map load and no tiles. Opened: 320px, gestureHandling 'cooperative',
+and one finger over the map scrolls the PAGE, proved with a real dispatched wheel gesture
+rather than by reading the option back.
+
+AC#3: tapping a pin on a phone opens the DRAWER, not a box on the pin. The info box is a
+desktop presentation — inside a 320px map it would be a ~160px scrolling window holding five
+numbers and eleven links. HomeMap reports 'infoOnPin' up to the page, so exactly one of the two
+renderings of ?location= is ever on screen. The drawer is the existing <Drawer>: focus trapped,
+Esc closes, focus returns to the opener (demo/probe-focus-restore.mjs owns that property).
+
+Screenshots: docs/media/map-home/map-390-dark.png (collapsed, day one),
+map-390-light.png, map-390-open-dark.png (one tap, 320px), map-390-sheet-dark.png (the sheet).
+
+MEASURED, NOT ASSUMED: the map work added ZERO new sub-44px targets. Every one audit-phone
+reports on / is the shell brand link or a worker-name link in the LEDGER's tables, and the same
+signature appears on /shifts/ and /locations/, which this work did not touch.
+<!-- SECTION:NOTES:END -->

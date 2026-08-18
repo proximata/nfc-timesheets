@@ -156,24 +156,75 @@ one rule that is not a matter of taste:
   the money went, including the decision-10 hours deliberately left out of the cost.
 - **`/contracts/`** — revenue becomes period-correct, labour does not (decision-28). That is a
   permanent on-screen notice, not a release note. Only the CURRENT period can be undone.
-- **`/analytics/`** — the table is the primary presentation and the map is the optional part.
-  Buildings without coordinates are in the table with the reason and a retry button; they are
-  never invisible.
+- **`/analytics/`** — **no map any more** (decision-39 §2): `/` has the one map in the admin,
+  and two maps are two things that can disagree. The table was always the primary
+  presentation, so nothing true was lost: the geocode state per building is still a column in
+  words, with the three genuinely different reasons, and „erneut geokodieren" is still a row
+  action.
 
-### The map — `lib/map.ts` (no npm package)
+### The map — `/`, `lib/map.ts`, `components/HomeMap.tsx` (no npm package)
 
-Google Maps is loaded with a `<script>` tag and an eleven-line structural interface. No
+**The map is the landing surface and the `Objektliste` under it is not optional**
+(decision-39). Order on `/`: answer band → map region (may not appear) → Objektliste (always)
+→ the ledger, verbatim. Production holds ONE building and its `lat`/`lng` are NULL, so zero
+pins is the day-one state, not an edge case — which is why the list is the primary
+presentation and the map is a region above it.
+
+Google Maps is loaded with a `<script>` tag and a small structural interface. No
 `@googlemaps/js-api-loader`, no `@react-google-maps/api`, no `@types/google.maps`.
+
+**`OverlayView` + an inline `styles` array, and NO cloud `mapId`.** That is a trade-off, not
+an oversight: `AdvancedMarkerElement` (the non-deprecated marker) requires a cloud `mapId`,
+and a `mapId` makes the API ignore `styles` outright — the muted dark map would silently turn
+into a white Google map inside a dark admin. `lib/map.ts` states the upgrade path. `pnpm
+check` asserts that no file which constructs a map mentions `mapId`.
+
+**Our own pins, readable without colour.** Glyph + word + weight first, the 3px left rule
+second: `● 2 vor Ort` / `○ 0 vor Ort`, with `▲ prüfen` and `▢ kein Tag` as separate boxed
+chips. Occupancy and attention are independent — a building can be fully staffed and still
+need looking at. Desaturate the screenshot and it must still read;
+`docs/media/map-home/grey/` holds the proof.
+
+**Clicking a pin expands an info box ON the pin** carrying the numbers and the cross-links
+(the owner's decision, IA-PLAN §9). It is driven by the same `?location=` as the drawer, and
+exactly one of the two is ever on screen: the info box when a map is drawn and that building
+has coordinates, the `<Drawer>` otherwise. Both render `components/BuildingFacts.tsx`, so
+they cannot disagree about a number.
+
+**No Street View on `/`.** Dropped by the owner, not deferred — no image cost, and no
+photograph of a customer's front door.
+
+**Cost.** Billing is per `new google.maps.Map`. The map is constructed once per mount and
+held in a ref; a data refresh moves pins, a theme switch calls `setOptions`, and there is no
+polling on `/`. `demo/check-map-home.mjs` counts constructor calls across a refresh and two
+theme switches and requires zero.
+
+**Phone (≤767px).** The map is collapsed behind „Karte anzeigen" and is not constructed at
+all until it is asked for — no billed load and no map tiles over a stairwell's mobile data.
+Opened, it is 320px with `gestureHandling: 'cooperative'`, so one finger scrolls the page.
 
 `NEXT_PUBLIC_GOOGLE_MAPS_KEY` is a **browser** key, inlined into the bundle at build time and
 readable by anyone who opens the panel. That is only safe because it is restricted by HTTP
 referrer in the Google Cloud console. The server's `GOOGLE_GEOCODING_KEY` is IP-restricted and
 must never be put here.
 
-Six states, all named on screen and none of them a blank rectangle: `noKey` (the build had no
-key), `noPins` (nothing is geocoded yet), `loading`, `ready`, `blocked` (Google rejected the
-key — caught via `gm_authFailure`, because an unauthorised key still loads the script and still
-constructs a `Map`), and `failed` (offline, blocked by an extension, or a ten-second timeout).
+Seven states, all named on screen in German and none of them a blank rectangle: `noKey` (the
+build had no key — a deployment fact, not a fault, and not retryable), `noPins` (nothing is
+geocoded yet — the region is **not rendered at all**, because an empty grey frame over a
+complete list is a screen apologising for something that is not missing), `loading`, `ready`,
+`blocked` (Google rejected the key **or** the quota ran out — the browser cannot tell those
+apart and the sentence says so; caught via `gm_authFailure`, which fires LATE, after
+`new Map()` has already succeeded, so the region is **torn down** rather than covered),
+`failed` (offline, an ad blocker, a proxy) and `timeout` (ten seconds, no `error` event).
+Collapsed is the eighth, on a phone, by choice.
+
+`demo/check-map-home.mjs` proves these by breaking things for real: the script blocked at the
+network layer, `gm_authFailure` fired, and every coordinate in `nfc_demo` set to NULL. In
+every case it asserts the whole portfolio is still listed and the ledger is still under it.
+
+**`ops/backfill-geocode.mjs`** is what gives the map any pins at all: it re-asks Google for
+every active building with no coordinates, is idempotent, never overwrites a pin somebody
+else set, and fails soft — a missing key or an exhausted quota prints a line and exits 0.
 
 A Street View photograph is requested **only** when `locations.street_view_status === 'OK'`,
 i.e. when the metadata endpoint has already confirmed coverage. The static image endpoint

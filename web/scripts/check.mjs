@@ -765,6 +765,112 @@ check('lib/map.ts: no photo is requested unless Street View said there is one', 
   assert.equal(mapWithoutKey.streetViewUrl({ ...at, street_view_status: 'OK' }), null)
 })
 
+check('lib/map.ts: the map is MUTED and never has a second blue (decision-39, IA-PLAN §9)', () => {
+  // The owner's binding presentation decision: a muted map in OUR palette, subordinate to
+  // our own pins. Two rules are mechanical and both have bitten a map before:
+  //
+  //   labels.icon OFF - Google's motorway shields and transit markers are BLUE, and blue is
+  //     this design system's ONE accent. Two blues on a screen and the accent stops meaning
+  //     "ours", which is the whole signal the pin's left rule carries.
+  for (const [name, style] of [
+    ['MAP_STYLE_DARK', mapWithKey.MAP_STYLE_DARK],
+    ['MAP_STYLE_LIGHT', mapWithKey.MAP_STYLE_LIGHT],
+  ]) {
+    const icons = style.find((rule) => rule.elementType === 'labels.icon')
+    assert.deepEqual(
+      icons?.stylers,
+      [{ visibility: 'off' }],
+      `${name} must switch Google's own (blue) label icons off`,
+    )
+    for (const feature of ['poi', 'transit']) {
+      assert.ok(
+        style.some((rule) => rule.featureType === feature),
+        `${name} must quieten ${feature} - the map is a backdrop, not content`,
+      )
+    }
+  }
+  assert.notEqual(mapWithKey.MAP_STYLE_DARK[0], mapWithKey.MAP_STYLE_LIGHT[0])
+  assert.equal(mapWithKey.mapStyleFor('light'), mapWithKey.MAP_STYLE_LIGHT)
+  assert.equal(mapWithKey.mapStyleFor('dark'), mapWithKey.MAP_STYLE_DARK)
+})
+
+check('exactly ONE screen constructs a Google map (decision-39 §2)', () => {
+  // Two maps in one admin are two things that can disagree - two extents, two selections,
+  // two sets of pin states - and two billed map loads for one question. `/analytics/` had
+  // the other one; this is what says so out loud if a second ever comes back.
+  const constructors = sources.filter(({ text }) => /new\s+\w+\.Map\(/.test(text))
+  assert.deepEqual(
+    constructors.map(({ path }) => path),
+    ['components/HomeMap.tsx'],
+    `constructs a map: ${constructors.map(({ path }) => path)}`,
+  )
+
+  // NO CLOUD mapId, asserted where one could only ever be passed. A mapId makes the API
+  // IGNORE the inline `styles` array outright, so the muted dark map silently turns into a
+  // white Google map inside a dark admin - the single most visible failure available here.
+  // lib/map.ts argues the trade-off it buys (AdvancedMarkerElement) and the upgrade path.
+  for (const { path, text } of constructors) {
+    assert.ok(!/\bmapId\b/.test(text), `${path} passes a mapId, which disables \`styles\``)
+  }
+
+  // ...and it constructs the map ONCE per mount. Billing is per `new Map`, so the guard
+  // that stops a refetch rebuilding it is load-bearing and not a style point.
+  const homeMap = sources.find(({ path }) => path === 'components/HomeMap.tsx')
+  assert.match(
+    homeMap.text,
+    /if \(mapRef\.current !== null\) return/,
+    'HomeMap must refuse to construct a second map into the same mount',
+  )
+})
+
+check('the SERVER geocoding key can never reach a browser (decision-39 AC#9)', () => {
+  // TWO KEYS, AND ONLY ONE OF THEM IS PUBLIC BY DESIGN.
+  //
+  //   NEXT_PUBLIC_GOOGLE_MAPS_KEY   browser, inlined into the bundle, HTTP-REFERRER locked
+  //   GOOGLE_GEOCODING_KEY          server, IP-locked, lives only in server/lib/geocode.js
+  //
+  // The second one has no referrer restriction to save it, so a single `NEXT_PUBLIC_`
+  // rename or one import from a client component and it is inlined into a static export
+  // that anybody can read — and it bills to the operator's card. Nothing under web/ may
+  // name it, and the check is a NAME check on purpose: the value never exists here to
+  // compare against, so "is the secret in the bundle" is unanswerable and "does any file
+  // reach for it" is exactly answerable.
+  const offenders = sources
+    .filter(({ text }) => /GOOGLE_GEOCODING_KEY|GEOCODING_KEY/.test(text))
+    .map(({ path }) => path)
+  assert.deepEqual(
+    offenders,
+    [],
+    `names the server-only geocoding key:\n- ${offenders.join('\n- ')}`,
+  )
+
+  // …and the browser must never call the geocoding endpoint itself either: geocoding is a
+  // server route (`POST /admin/locations/:id/geocode`), which is what keeps the key on the
+  // server at all. A `fetch` to Google's geocoder from here would need a key in the page.
+  const direct = sources
+    .filter(({ text }) => /maps\.googleapis\.com\/maps\/api\/(geocode|place)/.test(text))
+    .map(({ path }) => path)
+  assert.deepEqual(
+    direct,
+    [],
+    `calls Google's geocoder from the browser:\n- ${direct.join('\n- ')}`,
+  )
+})
+
+check('the map region is never the whole viewport (decision-39 §3)', () => {
+  // A viewport-locked map hides the triage list, the on-site table and the recent-activity
+  // list on the landing screen - i.e. it loses the journey the map exists to serve.
+  const css = readFileSync(join(ROOT, 'app/globals.css'), 'utf8')
+  const canvas = css.match(/\.map-canvas \{([^}]*)\}/)
+  assert.ok(canvas, '.map-canvas rule not found')
+  const height = canvas[1].match(/height:\s*([^;]+);/)?.[1] ?? ''
+  assert.ok(height.includes('min('), `.map-canvas height must be capped, got "${height}"`)
+  assert.ok(
+    !/100dvh|100vh|100%/.test(height),
+    `.map-canvas must not fill the viewport, got "${height}"`,
+  )
+})
+
 check('lib/map.ts: a pin needs BOTH coordinates, and a failure has a name', () => {
   assert.equal(mapWithKey.isPinned({ lat: 48.2, lng: 16.3 }), true)
   assert.equal(mapWithKey.isPinned({ lat: 48.2, lng: null }), false)
@@ -775,6 +881,136 @@ check('lib/map.ts: a pin needs BOTH coordinates, and a failure has a name', () =
   assert.equal(mapWithKey.failureOf(new Error('network')), 'network')
   assert.equal(mapWithKey.failureOf(new Error('failed')), 'auth')
   assert.equal(mapWithKey.failureOf(undefined), 'auth')
+})
+
+// --- 8b. the map pin and the list row are ONE derivation (lib/objects.ts) ----------------
+//
+// RUN, not read. The pin above and the row below show the same building, and the whole
+// argument for keeping the list is that it carries every fact the map carries. Two
+// derivations would be two things that can disagree - the pin saying "2 vor Ort" beside a
+// row saying 1 - and neither number would look wrong on its own.
+
+const { pinnedOnly, summariseBuildings } = await import(
+  pathToFileURL(join(ROOT, 'lib/objects.ts')).href
+)
+
+check('lib/objects.ts: the pin and the list row cannot disagree about a building', () => {
+  const building = (over) => ({
+    id: over.id,
+    name: over.name ?? over.id,
+    lat: null,
+    lng: null,
+    geocoded_at: null,
+    geocode_status: null,
+    active: true,
+    ...over,
+  })
+  const shift = (over) => ({
+    id: over.id,
+    worker_id: over.worker_id,
+    worker_name: over.worker_name ?? `W${over.worker_id}`,
+    location_id: over.location_id,
+    start_time: over.start_time,
+    end_time: over.end_time ?? null,
+    auto_closed: over.auto_closed ?? false,
+    corrected_at: over.corrected_at ?? null,
+    client_uuid: 'x',
+  })
+
+  const summaries = summariseBuildings(
+    [
+      building({ id: 'a', name: 'Arsenal, Stiege 2', lat: 48.17, lng: 16.39 }),
+      building({ id: 'b', name: 'Donaufeld' }),
+      // Never had a shift: today's proxy for "no tag on the wall".
+      building({ id: 'c', name: 'Zeta' }),
+      // Soft-deactivated. Nothing is destroyed, but it is not a pin and not a row.
+      building({ id: 'd', name: 'Alt', active: false, lat: 48.2, lng: 16.3 }),
+    ],
+    [
+      // Two OPEN shifts, one worker each, at 'a'.
+      shift({ id: 1, worker_id: 1, location_id: 'a', start_time: '2026-08-03T06:00:00Z' }),
+      shift({ id: 2, worker_id: 2, location_id: 'a', start_time: '2026-08-03T07:00:00Z' }),
+      // …and a THIRD open row belonging to worker 1 again. `shifts_one_open_per_worker_idx`
+      // forbids this in the database, and it is here ON PURPOSE: the pin says "2 vor Ort",
+      // which is a number of PEOPLE, and the only way to know this derivation counts people
+      // rather than rows is to hand it rows that disagree with people. Without this row,
+      // `workers.size` and `open.length` are the same number in every fixture and the
+      // sabotage that swaps one for the other stays green.
+      shift({ id: 5, worker_id: 1, location_id: 'a', start_time: '2026-08-03T09:00:00Z' }),
+      // Auto-closed and never confirmed, at 'b'. NO period filter applies to this.
+      shift({
+        id: 3,
+        worker_id: 3,
+        location_id: 'b',
+        start_time: '2026-03-01T05:00:00Z',
+        end_time: '2026-03-01T13:00:00Z',
+        auto_closed: true,
+      }),
+      // A payable, completed shift at 'b'.
+      shift({
+        id: 4,
+        worker_id: 3,
+        location_id: 'b',
+        start_time: '2026-08-01T05:00:00Z',
+        end_time: '2026-08-01T08:00:00Z',
+      }),
+    ],
+  )
+
+  assert.deepEqual(
+    summaries.map((s) => s.id),
+    ['b', 'c', 'a'],
+    'attention first (b has an unconfirmed shift, c has no shift at all), then on-site, then name',
+  )
+  assert.equal(
+    summaries.find((s) => s.id === 'd'),
+    undefined,
+    'an inactive building is neither',
+  )
+
+  const a = summaries.find((s) => s.id === 'a')
+  assert.equal(a.onSite, 2, 'two PEOPLE, from three open rows')
+  assert.deepEqual(a.onSiteNames, ['W1', 'W2'], 'each person named ONCE, oldest shift first')
+  assert.equal(
+    a.onSite,
+    a.onSiteNames.length,
+    'the count and the names are one derivation and cannot disagree',
+  )
+  assert.equal(a.occupancy, 'occupied')
+  assert.equal(a.unresolved, 0)
+  assert.equal(a.attention, false, 'staffed is NOT the same thing as needing attention')
+  assert.equal(a.short, 'Arsenal', 'a pin label is cut at the first comma, not wrapped')
+  assert.equal(a.geocodeState, 'pinned')
+
+  const b = summaries.find((s) => s.id === 'b')
+  assert.equal(b.unresolved, 1, 'a March shift is an open point in August')
+  assert.equal(b.onSite, 0)
+  assert.equal(b.occupancy, 'empty')
+  assert.equal(b.noTag, false, 'it HAS shifts, so the dead-tag proxy must not fire')
+  assert.equal(b.lastCleaned.id, 4, 'the auto-closed shift is not "zuletzt gereinigt"')
+  assert.equal(b.geocodeState, 'never_attempted')
+
+  const c = summaries.find((s) => s.id === 'c')
+  assert.equal(c.noTag, true)
+  assert.equal(c.lastCleaned, null, '"noch nie" is a real answer, not an error')
+  assert.equal(c.attention, true)
+
+  // We asked and got no pin: a DIFFERENT problem from never having asked, with a different
+  // owner and a different fix, and the row says which.
+  const failed = summariseBuildings(
+    [building({ id: 'e', geocoded_at: '2026-08-01T00:00:00Z', geocode_status: 'ZERO_RESULTS' })],
+    [],
+  )
+  assert.equal(failed[0].geocodeState, 'failed')
+  assert.equal(failed[0].geocodeStatus, 'ZERO_RESULTS')
+
+  // Only a building with BOTH coordinates can be drawn - `lat!` on a NULL column is how a
+  // marker ends up at 0,0 in the Gulf of Guinea.
+  assert.deepEqual(
+    pinnedOnly(summaries).map((s) => s.id),
+    ['a'],
+  )
+  assert.deepEqual(pinnedOnly(summariseBuildings([building({ id: 'f', lat: 48.2 })], [])), [])
 })
 
 // --- 9. the payroll CSV's number format (lib/payroll.ts) --------------------------------

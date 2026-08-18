@@ -54,6 +54,13 @@ export type GMap = {
   fitBounds(bounds: GBounds, padding?: number): void
   setCenter(point: LatLngLiteral): void
   setZoom(zoom: number): void
+  /** Theme switch. `setOptions`, NEVER a remount: a remount is a billed map load. */
+  setOptions(options: Record<string, unknown>): void
+  /** Bring a selected pin into view without changing the zoom the reader chose. */
+  panTo(point: LatLngLiteral): void
+  /** Nudge in PIXELS. Positive y moves the centre down, so the pin appears higher. */
+  panBy(x: number, y: number): void
+  addListener(event: string, handler: () => void): void
 }
 
 export type GMarker = {
@@ -61,10 +68,107 @@ export type GMarker = {
   setMap(map: GMap | null): void
 }
 
+/** Pixel offset from the overlay pane's origin. What `fromLatLngToDivPixel` answers. */
+export type GPoint = { x: number; y: number }
+
+export type GProjection = { fromLatLngToDivPixel(position: LatLngLiteral): GPoint | null }
+
+/**
+ * The classic overlay path. `OverlayView` is a CLASS we subclass by assignment — Google's
+ * own documented pattern — so the three lifecycle hooks are declared writable here.
+ */
+export type GOverlayView = {
+  onAdd: () => void
+  draw: () => void
+  onRemove: () => void
+  getPanes(): { floatPane: HTMLElement; overlayMouseTarget: HTMLElement } | null
+  getProjection(): GProjection | null
+  setMap(map: GMap | null): void
+}
+
 export type GoogleMapsApi = {
   Map: new (element: HTMLElement, options: Record<string, unknown>) => GMap
   Marker: new (options: Record<string, unknown>) => GMarker
   LatLngBounds: new () => GBounds
+  OverlayView: new () => GOverlayView
+  event: { addListenerOnce(target: unknown, event: string, handler: () => void): void }
+}
+
+/* --- The map is a BACKDROP, not the content ---------------------------------------------
+ *
+ * The owner's decision (IA-PLAN §9): a MUTED map in our palette, subordinate to our own
+ * pins and boxes. So Google's tiles are pushed down to the two things they are actually for
+ * — the shape of the streets and the name of the district — and everything that competes
+ * with our own content is switched off.
+ *
+ * `labels.icon` is OFF and that is load-bearing, not taste: Google's motorway shields and
+ * transit markers are BLUE, and blue is this design system's one accent (DESIGN.md §3.3).
+ * Two blues on one screen and the accent stops meaning „ours".
+ *
+ * ponytail: TWO HAND-WRITTEN STYLE ARRAYS AND NO CLOUD `mapId`, chosen with the trade-off
+ * open. `AdvancedMarkerElement` — the non-deprecated marker — REQUIRES a cloud-configured
+ * `mapId`, and passing a `mapId` makes the API IGNORE an inline `styles` array outright. So
+ * it is one or the other: either our dark map with the deprecated `OverlayView`, or a white
+ * Google map with modern markers. A white map inside a dark admin is the single most
+ * visible thing on the screen, and a cloud map style is console configuration that lives
+ * outside this repo, cannot be reviewed in a diff and cannot be checked by
+ * `ops/check-branding.mjs`. Taken: `OverlayView` + inline styles.
+ * CEILING: `google.maps.Marker` and `OverlayView` are formally deprecated; Google has said
+ * they will keep working, not that they will keep improving.
+ * UPGRADE PATH, in order: create a cloud map style in the Cloud console, paste these arrays
+ * into it, record the id in `ops/branding.json` (decision-24 — it is operator identity, not
+ * a credential), pass `{ mapId }` here and swap the overlay for `AdvancedMarkerElement`.
+ * Its `content:` is already an `HTMLElement`, so the pin markup in components/HomeMap.tsx
+ * ports across unchanged.
+ */
+type MapStyle = readonly Record<string, unknown>[]
+
+/** Matches the dark token set in globals.css `:root`. */
+export const MAP_STYLE_DARK: MapStyle = [
+  { elementType: 'geometry', stylers: [{ color: '#101216' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#868c95' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#0b0c0e' }] },
+  { elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
+  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#131519' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#1b1e23' }] },
+  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#6c7178' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#23272d' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#08090b' }] },
+  {
+    featureType: 'administrative',
+    elementType: 'geometry.stroke',
+    stylers: [{ color: '#2a2e34' }],
+  },
+]
+
+/**
+ * Matches `[data-theme="light"]`. NOT Google's default light map: the default is saturated
+ * enough that a white pin chip on it fails contrast, and `.map-pin` sits on `--bg-overlay`
+ * (which is `#fff` in the light theme) so the tiles underneath have to stay quiet.
+ */
+export const MAP_STYLE_LIGHT: MapStyle = [
+  { elementType: 'geometry', stylers: [{ color: '#f1f2f4' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#686e75' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#fafafa' }] },
+  { elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
+  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#e8eaed' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
+  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#7b8189' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#e2e5e9' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#dfe3e8' }] },
+  {
+    featureType: 'administrative',
+    elementType: 'geometry.stroke',
+    stylers: [{ color: '#cdd1d6' }],
+  },
+]
+
+export function mapStyleFor(theme: 'dark' | 'light'): MapStyle {
+  return theme === 'light' ? MAP_STYLE_LIGHT : MAP_STYLE_DARK
 }
 
 type MapsWindow = Window & {
@@ -148,11 +252,20 @@ export function loadGoogleMaps(): Promise<GoogleMapsApi> {
     // `loading=async` is Google's own recommendation and keeps the parser unblocked;
     // `v=weekly` pins the channel rather than a version we would then have to maintain.
     // Only the `maps` library is requested — `marker`, `places` and friends are billed
-    // and unused.
+    // and unused, and `OverlayView` lives in `maps` (see the style block above for why the
+    // pin is an overlay and not an AdvancedMarkerElement).
+    //
+    // `language` follows the admin's own locale so Google's street labels are not the one
+    // English thing on a German screen; `region=AT` is FIXED, because it biases geocoding
+    // and place names towards Austria and the business is Austrian whichever language the
+    // director reads. Read from <html lang> rather than passed in: this loads once per
+    // document and a parameter would imply it could be changed later, which it cannot.
+    const language = document.documentElement.lang === 'en' ? 'en' : 'de'
     script.src =
       'https://maps.googleapis.com/maps/api/js' +
       `?key=${encodeURIComponent(MAPS_API_KEY)}` +
-      `&v=weekly&loading=async&libraries=maps&callback=${CALLBACK_NAME}`
+      `&v=weekly&loading=async&libraries=maps&language=${language}&region=AT` +
+      `&callback=${CALLBACK_NAME}`
     script.async = true
     // Blocked by an ad blocker, offline, DNS failure, or a CSP that does not allow it.
     script.onerror = () => settle(() => reject(new Error('network')))

@@ -3,13 +3,16 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useFormatter, useTranslations } from 'next-intl'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AnswerBand } from '@/components/AnswerBand'
 import { type AttentionItem, AttentionList } from '@/components/AttentionList'
+import { BuildingFacts } from '@/components/BuildingFacts'
 import { BuildingPanel } from '@/components/BuildingPanel'
 import { EmptyState } from '@/components/EmptyState'
 import { FilterChips } from '@/components/FilterChips'
+import { HomeMap } from '@/components/HomeMap'
 import { ListPanel } from '@/components/ListPanel'
+import { Objektliste } from '@/components/Objektliste'
 import { PageHeader } from '@/components/PageHeader'
 import { StateBadge } from '@/components/StateBadge'
 import {
@@ -17,12 +20,15 @@ import {
   ApiError,
   fetchAdminSnapshot,
   fetchMaterialSnapshot,
+  geocodeLocation,
   type Shift,
 } from '@/lib/api'
 import { filterHref, useFilters } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
+import { isPinned } from '@/lib/map'
 import { isOpen as isOpenMaterial } from '@/lib/materials'
 import { LOGIN_PATH } from '@/lib/nav'
+import { summariseBuildings } from '@/lib/objects'
 import {
   BUSINESS_TIME_ZONE,
   blocksPayroll,
@@ -54,9 +60,21 @@ import {
  * to load. That is why the empty case is a sentence about the company and not a dash, and
  * why the checks that came back clean are still named — smaller — when something else did not.
  *
- * This screen WRITES NOTHING: one round trip, `GET /admin/data` (one payload) sliced five
- * ways, plus a refresh. So it has no drawer and no confirm modal, and every row here is a
- * jump to the screen that owns the fix.
+ * SINCE decision-39 THE MAP IS THE LANDING SURFACE AND THIS LEDGER STAYS UNDER IT, on the
+ * same route, in the same order, with the same strings. Nothing was moved to a new screen
+ * and nothing was deleted: a `/heute/` for the ledger would be a fifteenth screen and would
+ * make the daily check two clicks, which is the complaint this work exists to end. The map
+ * owns the top of the fold; it is never `100vh`; and every correctness property below was
+ * bought with an incident and is carried verbatim — `asOf`, `recentScope`, `truncatedNote`,
+ * `overdueFlag` as a WORD, the NAMED lists in the triage rows, and the standing refusal of
+ * an „Stunden diese Woche" tile.
+ *
+ * ORDER: answer band (two cells) → map region (optional) → Objektliste (always) → the ledger.
+ *
+ * ONE WRITE, and it is new: „Koordinaten holen" on a building with no pin. It is here
+ * because this is the screen where the missing pin is visible, and because with zero
+ * geocoded buildings in production a map with no way to fix that is a decoration. Everything
+ * else is still one round trip, `GET /admin/data`, sliced six ways, plus a refresh.
  */
 
 /** ops/sql/autoclose.sql closes an open shift at start + 8h (decision-10). */
@@ -124,6 +142,9 @@ export default function DashboardPage() {
    * service. The refresh button is the way to get a newer answer, and it says so.
    */
   const [loadedAt, setLoadedAt] = useState<Date | null>(null)
+  /** The outcome of „Koordinaten holen", announced on the page and not inside an overlay. */
+  const [geoNotice, setGeoNotice] = useState<{ ok: boolean; text: string } | null>(null)
+  const [geoBusy, setGeoBusy] = useState(false)
 
   const handleAuthLoss = useCallback(
     (cause: unknown): boolean => {
@@ -364,6 +385,77 @@ export default function DashboardPage() {
   // 'replace', not 'push': closing already removed the surface, and a second history entry
   // would mean pressing back TWICE to leave a screen you have already left.
   const closePanel = () => setFilters({ location: null }, 'replace')
+  // One handler for both surfaces, so the map pin and the list row can never select
+  // different things. `useCallback` because HomeMap holds it across a map that must not be
+  // rebuilt: an unstable identity here is a billed Maps load on every render.
+  const selectBuilding = useCallback(
+    (id: string | null) => setFilters({ location: id }, id === null ? 'replace' : 'push'),
+    [setFilters],
+  )
+
+  /**
+   * Every active building, summarised ONCE for the pins and the list (lib/objects.ts).
+   *
+   * `useMemo` is not a micro-optimisation here and the measurement says so: a fresh array
+   * identity on every render made <HomeMap>'s fit effect re-run on every render, which
+   * fought the pan that opens an info box and re-entered `loadGoogleMaps()` per keystroke.
+   */
+  const objects = useMemo(
+    () => summariseBuildings(snapshot?.locations ?? [], snapshot?.shifts ?? []),
+    [snapshot],
+  )
+
+  /**
+   * WHICH SURFACE SHOWS THE SELECTED BUILDING. Exactly one, never both.
+   *
+   * The info box on the pin is the owner's chosen presentation (IA-PLAN §9) and it can only
+   * exist where there is a pin. Everything else — no key in the build, nothing geocoded, a
+   * key Google rejected, a building whose coordinates are NULL, a phone with the map
+   * collapsed — falls back to the drawer, which is the same `<BuildingFacts>` in a
+   * different frame. `mapShowsPanel` is reported UP from HomeMap rather than guessed here,
+   * because only HomeMap knows whether Google actually answered.
+   */
+  const [mapDrawn, setMapDrawn] = useState(false)
+  const panelOnMap = mapDrawn && panelBuilding !== null && isPinned(panelBuilding) && !panelUnknown
+
+  /**
+   * Ask Google again for one building's coordinates. A 200 does NOT mean a pin came back —
+   * a failed geocode is a successful request with a null answer — so the ROW is read, not
+   * the status code, and the reason is stated either way. Same contract `/analytics/` uses.
+   */
+  async function retryGeocode(id: string) {
+    if (geoBusy) return
+    const building = snapshot?.locations.find((location) => location.id === id) ?? null
+    if (building === null) return
+    setGeoBusy(true)
+    setGeoNotice(null)
+    try {
+      const updated = await geocodeLocation(id)
+      setGeoNotice(
+        updated.lat === null
+          ? {
+              ok: false,
+              text: t('geoNoPin', {
+                name: building.name,
+                status: updated.geocode_status ?? t('objectsGeoUnknown'),
+              }),
+            }
+          : { ok: true, text: t('geoPinned', { name: building.name }) },
+      )
+      await load()
+    } catch (cause) {
+      if (handleAuthLoss(cause)) return
+      setGeoNotice({
+        ok: false,
+        text:
+          cause instanceof ApiError && cause.status === 422
+            ? t('geoNoAddress', { name: building.name })
+            : t('geoFailed', { name: building.name }),
+      })
+    } finally {
+      setGeoBusy(false)
+    }
+  }
 
   return (
     <>
@@ -386,6 +478,12 @@ export default function DashboardPage() {
           present the previous payload as current without saying so. */}
       <p className="form-error" role="alert">
         {loadError === null ? '' : tError(loadError)}
+      </p>
+
+      {/* The geocode outcome. A page-level live region, not one inside the map or the
+          panel: both of those can be gone by the time the answer arrives. */}
+      <p className={geoNotice?.ok === false ? 'form-error' : 'form-status'} role="status">
+        {geoNotice === null ? '' : geoNotice.text}
       </p>
 
       {/* The filter, echoed by the screen it landed on (decision-38 rule 3). On `/` the only
@@ -430,6 +528,41 @@ export default function DashboardPage() {
               },
             ]}
           />
+
+          {/* THE MAP. Added above the ledger, never in place of it. It renders NOTHING at
+              all when no building has coordinates — an empty grey frame over a complete
+              list is a screen apologising for something that is not missing. */}
+          <HomeMap
+            buildings={objects}
+            selectedId={filters.location}
+            onSelect={selectBuilding}
+            onDrawnChange={setMapDrawn}
+            renderFacts={(id) => {
+              const building = snapshot.locations.find((location) => location.id === id)
+              if (building === undefined) return null
+              return (
+                <BuildingFacts
+                  building={building}
+                  shifts={snapshot.shifts}
+                  openMaterials={openMaterials === null ? null : (openMaterials[id] ?? 0)}
+                  truncated={snapshot.shifts.length >= snapshot.shift_limit}
+                  asOf={asOf}
+                />
+              )
+            }}
+          />
+
+          {/* ALWAYS RENDERED, on every path, whatever the map is doing. The map is the
+              region above it that may or may not appear; this is the complete list. */}
+          <ListPanel title={t('objectsHeading')} note={t('objectsNote')}>
+            <Objektliste
+              buildings={objects}
+              selectedId={filters.location}
+              onOpen={openPanel}
+              onGeocode={(id) => void retryGeocode(id)}
+              busy={geoBusy}
+            />
+          </ListPanel>
 
           <ListPanel
             title={t('triageHeading')}
@@ -576,11 +709,15 @@ export default function DashboardPage() {
         </>
       )}
 
-      {/* THE OBJEKTPANEL. Rendered last so it is the last thing in the DOM, like every other
-          overlay in this admin; <Drawer> moves focus in, traps it and restores it on close.
-          It is driven entirely by the URL, which is what makes it linkable at all. */}
+      {/* THE OBJEKTPANEL, as a drawer — the rendering used whenever the map cannot hold the
+          info box: no key, nothing geocoded, a rejected key, THIS building without
+          coordinates, or a phone with the map collapsed. Rendered last so it is the last
+          thing in the DOM, like every other overlay in this admin; <Drawer> moves focus in,
+          traps it and restores it on close. Driven entirely by the URL, which is what makes
+          it linkable at all — and `panelOnMap` guarantees the two renderings are never on
+          screen together saying the same thing twice. */}
       <BuildingPanel
-        building={panelBuilding}
+        building={panelOnMap ? null : panelBuilding}
         shifts={snapshot?.shifts ?? []}
         openMaterials={
           filters.location === null || openMaterials === null
