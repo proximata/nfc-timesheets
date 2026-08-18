@@ -53,6 +53,13 @@ import { toBusinessInput } from '@/lib/shifts'
  * Changing the period REFETCHES. It has to: the rows for last March are not in a payload
  * fetched for August.
  *
+ * THE FOUR HEADLINE CELLS ARE READ ALONE, so they carry every exclusion between them. The
+ * fourth one counted SHIFTS while calling itself „Nicht gezählt", which made it structurally
+ * incapable of counting a rate-less PERSON: it printed 0 on a payroll that was 810,30 €
+ * short, with the truth in the caveat prose underneath and the reassuring number in the
+ * large type. It counts exclusions of every kind now, and „Stunden" names the part of itself
+ * that carries no amount, so the two headline numbers reconcile without opening the CSV.
+ *
  * What it excludes and says so: open shifts, auto-closed shifts nobody has confirmed
  * (decision-10), and anybody whose hourly rate has never been set. Those are unpaid work
  * belonging to a real person, so they are counted, named and linked, never quietly dropped.
@@ -251,6 +258,14 @@ export default function PayrollPage() {
    */
   const noRateLines =
     totals === null ? [] : totals.lines.filter((l) => l.worker.hourly_rate_cents === 0)
+  /**
+   * The hours inside „Stunden" that carry NO amount, because nobody set those people's
+   * rate. They are payable, they are in the hours total, and they are in nobody's money
+   * column — so „Stunden 267,25" and „Auszuzahlen 2.827,96 €" cannot be reconciled with each
+   * other until this number is on the screen. It was not, and the gap was 810,30 € with
+   * nothing above the table to explain it (journey D14, „my hours are wrong").
+   */
+  const noRateMs = noRateLines.reduce((sum, line) => sum + line.payableMs, 0)
 
   // Explicit map, not a template-literal key: messages are typed (global.d.ts), and a
   // computed key would defeat the check that catches a typo at build time.
@@ -389,6 +404,20 @@ export default function PayrollPage() {
   }
 
   const excludedShifts = totals === null ? 0 : totals.unresolvedShifts + totals.openShifts
+  /**
+   * EXCLUSIONS OF EVERY KIND, which is what the cell above them is labelled.
+   *
+   * It used to be `excludedShifts` alone. A worker with hours and no rate is not a shift, so
+   * the one cell whose entire purpose is to name what is missing read „Nicht gezählt 0" on a
+   * screen that was 810,30 € short — the reassuring number in the large type, the truth in
+   * the small print under it. The count is now the count of things left out; the sub-line
+   * says which are shifts and which are people, in the same words the rows use.
+   *
+   * `noRateLines.length` and not „people with hours and no rate": it is the SAME number the
+   * caveat bullet and the CSV's total note already carry, and three counts of one condition
+   * is how a screen and the file the accountant keeps come to disagree again.
+   */
+  const excludedCount = excludedShifts + noRateLines.length
   /** What is excluded, in the words the rows use. Never empty: „nothing" is a branch. */
   const shiftExclusionSummary =
     totals === null || excludedShifts === 0
@@ -501,20 +530,28 @@ export default function PayrollPage() {
               k: t('answerHours'),
               v: hours(totals.payableMs),
               calm: true,
-              sub: t('answerHoursSub'),
+              // The hours are complete and the amount beside them is not. That difference
+              // is stated HERE, on the cell that is too big for the money next to it.
+              sub: [
+                t('answerHoursSub'),
+                noRateMs > 0 ? t('answerHoursUnvalued', { hours: hours(noRateMs) }) : null,
+              ]
+                .filter((part) => part !== null)
+                .join(' · '),
             },
             { k: t('answerWorkers'), v: totals.lines.length, calm: true },
             {
               k: t('answerExcluded'),
-              // The number counts SHIFTS. An unpriced worker is not a shift, so it is named
-              // in the line underneath instead of being added to a count of a different
-              // thing — but it still turns this cell from calm to something to act on.
-              v: excludedShifts,
-              calm: excludedShifts === 0 && noRateLines.length === 0,
+              // EVERYTHING left out of the amount above, counted: shifts that block payroll
+              // (decision-10) AND people whose hours carry no rate. It counted only the
+              // shifts, and therefore said „0" while a real wage was missing from the total.
+              v: excludedCount,
+              calm: excludedCount === 0,
               // The SAME plural-correct strings the rows use, joined the same way — a second
               // phrasing of the same count is a second thing to keep in step. The shift
-              // clause is ALWAYS first, including its „nothing" branch, so the 0 above can
-              // never be read as a claim about the unpriced worker named after it.
+              // clause is ALWAYS first, including its „nothing" branch: the count above is a
+              // count of two different nouns, so the breakdown may never be silent about
+              // either of them.
               sub: [shiftExclusionSummary, noRateSummary].filter((p) => p !== null).join(' · '),
             },
           ]}

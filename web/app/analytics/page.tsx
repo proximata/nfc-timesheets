@@ -25,7 +25,14 @@ import { filterHref, useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { isPinned, MAPS_API_KEY, streetViewUrl } from '@/lib/map'
 import { LOGIN_PATH } from '@/lib/nav'
-import { isPeriod, PAYROLL_PERIODS, type Period, periodRange } from '@/lib/period'
+import {
+  futureDays,
+  isPartElapsed,
+  isPeriod,
+  PAYROLL_PERIODS,
+  type Period,
+  periodRange,
+} from '@/lib/period'
 import { formatDuration } from '@/lib/shifts'
 
 /**
@@ -87,6 +94,18 @@ export default function AnalyticsPage() {
   const [months, setMonths] = useState<number>(TREND_MONTHS_DEFAULT)
   const [now] = useState(() => new Date())
   const range = useMemo(() => periodRange(period, now), [period, now])
+  /**
+   * The agreed time is a MONTHLY figure pro-rated over the days of the period
+   * (`noteTargetSource`, and `contractSlice` in server/lib/reporting.js), and it is pro-rated
+   * over ALL of them — including the ones that have not happened. Time worked only exists
+   * for the days that have. So while a period is still running, every building drifts further
+   * „unter der vereinbarten Zeit“ the earlier in the period it is read, and on the 1st of a
+   * month every single one of them is a month short of a target nobody could have met yet.
+   * Same defect as /pl/'s inflated margin, same cause, opposite direction — there it
+   * flatters, here it accuses. Stated, not silently corrected: see lib/period.ts.
+   */
+  const stillRunning = isPartElapsed(range, now)
+  const unhappenedDays = futureDays(range, now)
 
   /**
    * THE URL IS THE SELECTION. A table button writes it; back closes the panel because back
@@ -309,7 +328,14 @@ export default function AnalyticsPage() {
               calm: overCount === 0,
               sub: rangeLabel,
             },
-            { k: t('answerUnder'), v: underCount, calm: true },
+            {
+              k: t('answerUnder'),
+              v: underCount,
+              calm: true,
+              // The cell the running period bends: it counts buildings against a target
+              // accrued for days nobody has worked yet.
+              sub: stillRunning ? t('answerFuture', { days: unhappenedDays }) : undefined,
+            },
             {
               k: t('answerNoTarget'),
               v: noTargetCount,
@@ -470,6 +496,11 @@ export default function AnalyticsPage() {
           <li>{t('noteExclusions')}</li>
           <li>{t('noteTrend')}</li>
           <li>{t('noteTargetSource')}</li>
+          {/* `period_days` is the SERVER's Vienna day count, so this line waits for the
+              payload rather than printing a denominator this file guessed. */}
+          {stillRunning && report !== null ? (
+            <li>{t('noteFuture', { days: unhappenedDays, periodDays: report.period_days })}</li>
+          ) : null}
           <li>{t('noteMapEquivalent')}</li>
         </ul>
       </div>

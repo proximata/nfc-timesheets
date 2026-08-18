@@ -358,7 +358,7 @@ registerHooks({
   },
 })
 
-const { businessMidnight, periodRange, withinRange } = await import(
+const { businessMidnight, futureDays, isPartElapsed, periodRange, withinRange } = await import(
   pathToFileURL(join(ROOT, 'lib/period.ts')).href
 )
 
@@ -542,6 +542,59 @@ check('lib/period.ts: quarter and year are calendar periods in Vienna', () => {
   const y = periodRange('thisYear', new Date('2026-08-03T10:00:00Z'))
   assert.deepEqual(y, { from: '2025-12-31T23:00:00.000Z', to: '2026-12-31T23:00:00.000Z' })
   assert.deepEqual(periodRange('all', new Date()), { from: null, to: null })
+})
+
+check('lib/period.ts: a period that has not finished says how much of it has not happened', () => {
+  // THE REPORTED DEFECT, as arithmetic (TASK-175). /pl/ accrues the monthly contract fee
+  // for every day of the requested range and labour only for days that have happened, so
+  // „Dieses Jahr" picked on 18 August books 135 unworked days of revenue and reports a
+  // margin of 71,33 % where the last CLOSED month made 10,70 %.
+  const august = new Date('2026-08-18T19:00:00Z') // 21:00 in Vienna, still the 18th
+  const days = (period) => futureDays(periodRange(period, august), august)
+  assert.equal(days('thisYear'), 135, '19 August to 31 December')
+  assert.equal(days('thisQuarter'), 43, '19 August to 30 September')
+  assert.equal(days('thisMonth'), 13, '19 to 31 August')
+
+  // LATE EVENING, when the Vienna day and the UTC day are not the same day. 22:30 UTC on
+  // 18 August is already 00:30 on the 19th in Vienna, so one day fewer is still to come.
+  // Reading the clock in UTC passes every case above and is wrong for two hours every
+  // night — which is when a director in Vienna actually looks at this.
+  const lateEvening = new Date('2026-08-18T22:30:00Z')
+  assert.equal(futureDays(periodRange('thisYear', lateEvening), lateEvening), 134)
+  assert.equal(futureDays(periodRange('thisMonth', lateEvening), lateEvening), 12)
+
+  // THE NEGATIVE CASES, which are the ones that decide whether the sentence appears at all.
+  assert.equal(days('lastMonth'), 0, 'a closed period has no unhappened days')
+  assert.equal(isPartElapsed(periodRange('lastMonth', august), august), false)
+  assert.equal(isPartElapsed(periodRange('all', august), august), false, 'unbounded is not "running"')
+  assert.equal(days('all'), 0)
+  // `last30Days` ends at TOMORROW's midnight: still running, but by less than a whole day.
+  // The =0 plural branch exists for exactly this, and printing „0 Tage" would be the bug
+  // one screen up (STATE-GALLERY B4).
+  assert.equal(isPartElapsed(periodRange('last30Days', august), august), true)
+  assert.equal(days('last30Days'), 0)
+
+  // THE FIRST DAY OF A PERIOD is the worst case and must not be an off-by-one: on 1 August
+  // the whole month's fee is already booked against at most one part-day of work.
+  const firstOfMonth = new Date('2026-08-01T06:00:00Z')
+  assert.equal(futureDays(periodRange('thisMonth', firstOfMonth), firstOfMonth), 30)
+  // ...and the LAST day of one is still "running", by the rest of today alone.
+  const lastOfMonth = new Date('2026-08-31T06:00:00Z')
+  assert.equal(isPartElapsed(periodRange('thisMonth', lastOfMonth), lastOfMonth), true)
+  assert.equal(futureDays(periodRange('thisMonth', lastOfMonth), lastOfMonth), 0)
+
+  // A period ENTIRELY IN THE FUTURE counts its own length, not the gap to it. No member of
+  // PERIODS can be one, so this is the general arithmetic being pinned rather than a state
+  // the screen can reach — and it is pinned because "days between now and the end" would
+  // pass every test above and be wrong here by the size of the gap.
+  const nextJanuary = { from: '2026-12-31T23:00:00.000Z', to: '2027-01-31T23:00:00.000Z' }
+  assert.equal(futureDays(nextJanuary, august), 31)
+
+  // DST: the period that crosses the clock change is 745 hours long and still 31 days. A
+  // subtraction of instants divided by 86 400 000 would answer 31.04 here, and 30 after
+  // Math.floor — one day of a client's revenue, twice a year.
+  const october = new Date('2026-10-01T06:00:00Z')
+  assert.equal(futureDays(periodRange('thisMonth', october), october), 30)
 })
 
 // --- 5. enrolment code state (lib/enrolment.ts, decision-26) ----------------------------

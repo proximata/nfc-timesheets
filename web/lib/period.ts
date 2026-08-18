@@ -107,6 +107,59 @@ export function periodRange(period: Period, now: Date): PeriodRange {
   }
 }
 
+/**
+ * The Vienna calendar day an instant falls on, as a serial number, so that two of them can
+ * be SUBTRACTED. Only the Y-M-D survives and it is measured against UTC midnights, which
+ * have no daylight saving to get wrong — 27 October is a 25-hour day and still one day.
+ */
+function dayNumber(at: Date): number {
+  const { year, month, day } = businessDay(at)
+  return Date.UTC(year, month - 1, day) / 86_400_000
+}
+
+/**
+ * Has this period NOT FINISHED YET — is its end still ahead of `now`?
+ *
+ * WHY ANY SCREEN CARES. `thisMonth`, `thisQuarter` and `thisYear` all end at a FUTURE
+ * boundary, and the server accrues a monthly contract — both its fee and its target minutes
+ * — for every contract-valid day in the range (`contractSlice` in server/lib/reporting.js),
+ * with no clipping to today. Work only exists for days that have happened. So for as long as
+ * a period is still running, one side of every contract comparison is complete and the other
+ * is not: /pl/ books revenue for days nobody has worked and reports a margin that is too
+ * high, /analytics/ books target minutes nobody could have worked and reports every building
+ * as under its agreed time. In August 2026 that is „Dieses Jahr“ at 71,33 % margin against
+ * the 10,70 % that the last CLOSED month actually made.
+ *
+ * The arithmetic is not corrected here. Clipping the accrual changes numbers that have
+ * already been reported and needs its own decision record (TASK-175 says so, and files it
+ * separately). What these two functions buy is the SENTENCE — the screens say how much of
+ * the period has not happened, and which way that bends the number, in the same vocabulary
+ * of stated refusals /pl/ already uses for a missing contract and for unpriced labour.
+ *
+ * `last30Days` ends at TOMORROW's midnight, so it is „still running“ by less than a day: the
+ * whole of today is priced and only the hours worked so far exist. True, and small, and said
+ * with the same sentence at a count of zero whole days rather than left unsaid.
+ */
+export function isPartElapsed(range: PeriodRange, now: Date): boolean {
+  return range.to !== null && new Date(range.to).getTime() > now.getTime()
+}
+
+/**
+ * How many WHOLE Vienna days of this period lie after today — days that have not happened at
+ * all, as opposed to today, which has partly happened. Zero for a period that has closed,
+ * and zero for one that ends tonight.
+ *
+ * A period entirely in the future (not reachable from any period in `PERIODS`, but the
+ * arithmetic is general) counts its own whole length rather than the days between now and
+ * it: `from` clamps the start of the count.
+ */
+export function futureDays(range: PeriodRange, now: Date): number {
+  if (range.to === null) return 0
+  const tomorrow = dayNumber(now) + 1
+  const first = range.from === null ? tomorrow : Math.max(tomorrow, dayNumber(new Date(range.from)))
+  return Math.max(0, dayNumber(new Date(range.to)) - first)
+}
+
 /** `?from=&to=`, omitting whichever end is unbounded. Empty string when both are. */
 export function rangeQuery(range: PeriodRange): string {
   const parts: string[] = []

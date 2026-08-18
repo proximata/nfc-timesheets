@@ -24,7 +24,14 @@ import {
 import { filterHref, useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { LOGIN_PATH } from '@/lib/nav'
-import { isPeriod, PAYROLL_PERIODS, type Period, periodRange } from '@/lib/period'
+import {
+  futureDays,
+  isPartElapsed,
+  isPeriod,
+  PAYROLL_PERIODS,
+  type Period,
+  periodRange,
+} from '@/lib/period'
 import {
   bpToPlainPercent,
   bpToRatio,
@@ -58,6 +65,14 @@ import { formatDuration } from '@/lib/shifts'
  *    48:00 to 58:30 and its margin by nothing at all — an inflated margin is a decision
  *    about a client's contract taken on a false number, so those hours are excluded from
  *    the cost and NAMED, in the labour cell, in the flagged argument and in the method.
+ * 1b. Report a period that has not finished as if it had. The contract fee accrues for
+ *    every contract-valid day in the range while labour and materials only exist for days
+ *    that have happened, so "Dieses Jahr" picked in August books five more months of
+ *    revenue against three weeks of work: 71,33 % margin, next to the 10,70 % the last
+ *    CLOSED month actually made. The arithmetic is NOT corrected here — clipping the
+ *    accrual changes numbers already reported and is its own decision record — so instead
+ *    the screen states it, in the margin cell and in the method block, naming how many days
+ *    of the period have not happened. `isPartElapsed` in lib/period.ts carries the reason.
  * 2. Treat "not assessable" as a pass. `below_baseline` is TRUE, FALSE **or NULL**, and
  *    null means the margin or the baseline is unknown. It gets its own words.
  * 3. Invent the baseline. `pl_margin_baseline_bp` ships UNSET and nothing defaults it. With
@@ -127,6 +142,13 @@ export default function PlPage() {
   // Frozen at mount: "this month" must not change meaning halfway through a re-render.
   const [now] = useState(() => new Date())
   const range = useMemo(() => periodRange(period, now), [period, now])
+  /**
+   * The period has not finished, so every revenue figure on this page counts days nobody
+   * has worked yet. Said twice on purpose: once in the method block, which argues it, and
+   * once in the margin cell, which is the number the answer band exists to be read alone.
+   */
+  const stillRunning = isPartElapsed(range, now)
+  const unhappenedDays = futureDays(range, now)
 
   const [baselineOpen, setBaselineOpen] = useState(false)
   const [baselineDraft, setBaselineDraft] = useState('')
@@ -435,11 +457,17 @@ export default function PlPage() {
             {
               k: t('answerMargin'),
               v: totals.marginBp === null ? t('marginUnknown') : percent(totals.marginBp),
-              calm: true,
-              sub:
+              // NOT calm while the period is still running: this is the cell the critique
+              // caught reporting 99,25 % for a building in its first week.
+              calm: !stillRunning,
+              sub: [
                 baselineBp === null
                   ? t('answerNoBaseline')
                   : t('answerBaseline', { percent: percent(baselineBp) }),
+                stillRunning ? t('answerFuture', { days: unhappenedDays }) : null,
+              ]
+                .filter((part) => part !== null)
+                .join(' · '),
             },
             {
               k: t('answerRevenue'),
@@ -737,6 +765,17 @@ export default function PlPage() {
               {/* The old lede's second sentence: every number on this page is the server's
                   SQL over exactly the chosen days. The lede is gone, the fact is not. */}
               <li>{t('intro')}</li>
+              {/* The reverse of `revenuePartial`: there the CONTRACT covers less than the
+                  period, here the period covers more than has happened. Same honesty
+                  channel, opposite direction, and the direction is the one that flatters. */}
+              {stillRunning ? (
+                <li>
+                  {t('methodFuture', {
+                    days: unhappenedDays,
+                    periodDays: report.period_days,
+                  })}
+                </li>
+              ) : null}
               {/* decision-28 / the API's `labour.rate_basis`. Rendered from OUR messages
                   rather than the server's `rate_basis_note`, which is German-only and
                   would sit untranslated on the English locale. */}
