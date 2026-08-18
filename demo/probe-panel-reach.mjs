@@ -23,6 +23,22 @@
 // materials, and that one is a hint inside a field, not a list). If a fifth ever appears it
 // belongs in SURFACES below, or it ships unmeasured, which is how the last two got here.
 //
+// THE ONE OTHER LIST OF CROSS-LINKS IN THE ADMIN, and why it is not measured here.
+// `/pl/` prints `ul.panel-links` inside every flagged building's callout — four links, each
+// carrying that building and this period. It is NOT a panel: no fixed position, no overflow
+// of its own, no disclosure. It scrolls with the document, which is the property the four
+// surfaces above lack and the whole reason they can trap a link. Measured anyway, on a
+// baseline high enough to flag every building (2026-08-18, `pl_margin_baseline_bp` = 9990,
+// removed again afterwards):
+//
+//   1680x1000  first callout y=590, its first link y=823, 3 of 4 links in the first screen
+//    390x844   first callout y=868, its first link y=1269, one ordinary page scroll down
+//   both widths: every one of the four links is a 44px target and carries ?location= (+period)
+//
+// So: below the fold on a phone, but below it the way a paragraph three screens down is —
+// reachable by the scrollbar the reader already has, and directly under the argument it
+// belongs to. That is not defect V1 and it is not fixed by reordering anything.
+//
 // It is a PROBE and not a check: it prints geometry and exits 0, exactly like
 // demo/probe-fold.mjs. The assertions that go red on a regression are in
 // demo/check-reach.mjs.

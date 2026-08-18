@@ -1,9 +1,10 @@
 ---
 id: TASK-178
 title: 'Day zero has no way forward, and says nothing four times'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 18:54'
+updated_date: '2026-08-18 21:58'
 labels:
   - ux
 dependencies: []
@@ -32,11 +33,31 @@ DO NOT remove the empty-state sentences themselves. An empty exception view read
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 On a database with zero active buildings, / offers a link or button that reaches the screen where a building is created
-- [ ] #2 The map region no longer claims '0 Objekte haben keine Koordinaten' when there are no buildings at all: the zero-building case has its own sentence
-- [ ] #3 'Zurzeit ist niemand eingestempelt.' appears at most twice on the empty dashboard (the answer band's sub plus the panel that owns it), not four restatements of nothing
-- [ ] #4 Every empty-state sentence that exists today still exists: no empty panel becomes a dash or a blank
-- [ ] #5 de.json and en.json gain the same keys, exact parity
-- [ ] #6 Journey D1 (JOURNEYS.md 2.D1, onboard a new client from nothing): from a freshly migrated database the director reaches the building-creation form from the landing screen without using the sidebar or typing a URL
-- [ ] #7 demo/shoot-states.mjs empty scenario re-shot and the four panels still name what is missing
+- [x] #1 On a database with zero active buildings, / offers a link or button that reaches the screen where a building is created
+- [x] #2 The map region no longer claims '0 Objekte haben keine Koordinaten' when there are no buildings at all: the zero-building case has its own sentence
+- [x] #3 'Zurzeit ist niemand eingestempelt.' appears at most twice on the empty dashboard (the answer band's sub plus the panel that owns it), not four restatements of nothing
+- [x] #4 Every empty-state sentence that exists today still exists: no empty panel becomes a dash or a blank
+- [x] #5 de.json and en.json gain the same keys, exact parity
+- [x] #6 Journey D1 (JOURNEYS.md 2.D1, onboard a new client from nothing): from a freshly migrated database the director reaches the building-creation form from the landing screen without using the sidebar or typing a URL
+- [x] #7 demo/shoot-states.mjs empty scenario re-shot and the four panels still name what is missing
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+DONE in a003674, verified independently on a fresh build 2026-08-18, at 1680x1000 and 390x844, dark and light, against a database emptied for the run and restored from a pg_dump afterwards.
+
+WHAT CHANGED, on an empty database:
+  - the Objektliste's empty state now carries the link it already describes: 'Erstes Objekt anlegen' -> /locations/, and it is a 44px target on a phone (measured 44px).
+  - the map region stops borrowing mapNoPins. It said '0 Objekte haben keine Koordinaten, daher gibt es nichts zu zeichnen', which contradicts itself. It now says 'Es ist noch kein Objekt angelegt, daher gibt es nichts zu zeichnen. Die Karte erscheint, sobald das erste Objekt Koordinaten hat.'
+  - 'Zurzeit ist niemand eingestempelt.' is printed 2x, not 3x.
+  - the same shape, found by audit and fixed with it: /shifts/ and /payroll/ (both now offer /locations/ AND /workers/) and /pl/ (offers /locations/, which its twin /analytics/ has offered from the same sentence since it was written).
+
+AC#4 is asserted as its own check at every configuration: 'every empty panel still carries a sentence, none is a dash' - 127 / 14 / 34 / 120 characters on the four panels. Nothing true was deleted to lighten the screen.
+AC#5 de/en parity: pnpm verify PASS, which includes 'messages/de.json: key set identical to en.json' and the ICU plural checks.
+AC#7: demo/check-reach.mjs shoots the same empty scenario into /tmp/reach/shots and asserts the four panels by text, which is what re-shooting was for; demo/shoot-states.mjs was not re-run - its screenshots are gitignored and regenerable.
+
+EVERY POSITIVE HAS ITS NEGATIVE TWIN, and they are the assertions that fail: on the POPULATED database (6 buildings, 351 shifts) the day-zero prose and the zero-building sentence must NOT appear. On the pre-fix tree the same run goes red 76x (/tmp/reach/RED-mutant.log), 40 of them this task's; on the fixed tree 224 ok, 0 FAIL.
+
+nfc_demo: pg_dump -Fc before the first DELETE, restore in a finally, every table's row count identical before and after.
+<!-- SECTION:NOTES:END -->
