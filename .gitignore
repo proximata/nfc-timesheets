@@ -30,3 +30,12 @@ xcuserdata/
 # obsolete: legacy demo video (pre decision-20/22) and GitHub Pages AASA (superseded by decision-4)
 video/
 pages/
+
+# PoC: map-led dashboard (not part of the app or the build)
+.poc-map/
+
+# generated verification screenshots: regenerable, and this repo already paid for
+# one history rewrite over committed media
+docs/media/ia/
+docs/media/redesign/
+docs/media/redesign-demo/
