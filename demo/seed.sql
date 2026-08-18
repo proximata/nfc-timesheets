@@ -312,6 +312,61 @@ FROM locations l
 WHERE l.monthly_contract_cents IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
+-- § A worker whose hourly rate NOBODY HAS SET, at two buildings on purpose.
+--
+-- `hourly_rate_cents = 0` is the column default, i.e. "nobody has said what this person
+-- costs" — not "this person is free". Eight surfaces refuse to price those hours at
+-- 0,00 EUR and name the exclusion instead, and every one of those refusals needs a real
+-- row underneath it or its check passes vacuously.
+--
+-- TWO BUILDINGS, AND THE SECOND ONE IS THE POINT:
+--   neubaugasse-25   she is the ONLY person who works it, so its whole labour is
+--                    unpriced and its cost cell must read „Nicht bewertet“, never 0,00 €.
+--   landstrasser-46  she works it ALONGSIDE priced colleagues, so the building has a real
+--                    labour amount AND unpriced hours inside it. That is the realistic
+--                    case and the one the /pl/ defect was raised for — 48:00 became 58:30
+--                    at an unchanged margin. With only the all-or-nothing building seeded,
+--                    a change that drops the caveat whenever `labour_cents > 0` stays
+--                    fully green, so this row is what makes that check able to fail.
+--
+-- INSERTED AFTER § Contract prices ON PURPOSE. The calibration above derives each
+-- building's price from the hours worked in it; these shifts contribute no labour cost (a
+-- zero rate is excluded from the cost sum) but they do carry seconds, and seconds move
+-- `target_minutes_per_month`. Running after it leaves every existing demo figure — every
+-- price, every margin, every target — bit-for-bit what it was.
+--
+-- Dates: three in the previous calendar month, which is what /payroll/ and /pl/ open on,
+-- and two counted back from today, so the case is also inside the rolling 30-day window
+-- the shift log opens on. 07:00-10:30 Vienna wall clock = 3.5 payable hours each.
+-- ---------------------------------------------------------------------------
+INSERT INTO workers (name, email, hourly_rate_cents, active) VALUES
+  ('Ana Ilic', 'ana@example.test', 0, true);
+
+INSERT INTO shifts (worker_id, location_id, start_time, end_time, client_uuid)
+SELECT (SELECT id FROM workers WHERE email = 'ana@example.test'),
+       (SELECT id FROM locations WHERE slug = v.slug),
+       v.starts_at,
+       v.starts_at + interval '3 hours 30 minutes',
+       gen_random_uuid()::text
+FROM (
+  SELECT slug, ((day + time '07:00') AT TIME ZONE 'Europe/Vienna') AS starts_at
+  FROM (VALUES
+    ('neubaugasse-25',
+     (date_trunc('month', now() AT TIME ZONE 'Europe/Vienna') - interval '1 month')::date + 8),
+    ('neubaugasse-25',
+     (date_trunc('month', now() AT TIME ZONE 'Europe/Vienna') - interval '1 month')::date + 15),
+    ('neubaugasse-25',
+     (date_trunc('month', now() AT TIME ZONE 'Europe/Vienna') - interval '1 month')::date + 22),
+    ('landstrasser-46',
+     (date_trunc('month', now() AT TIME ZONE 'Europe/Vienna') - interval '1 month')::date + 10),
+    ('landstrasser-46',
+     (date_trunc('month', now() AT TIME ZONE 'Europe/Vienna') - interval '1 month')::date + 17),
+    ('neubaugasse-25',  (now() AT TIME ZONE 'Europe/Vienna')::date - 4),
+    ('landstrasser-46', (now() AT TIME ZONE 'Europe/Vienna')::date - 11)
+  ) AS d(slug, day)
+) AS v;
+
+-- ---------------------------------------------------------------------------
 -- Material requests: the queue in every state it can be in, in the worker's own words.
 --
 -- location_id is CONTEXT — the building the worker was standing in — and never a cost
@@ -412,4 +467,15 @@ UNION ALL SELECT 'shifts',              count(*)::text FROM shifts
 UNION ALL SELECT 'shifts open',         count(*)::text FROM shifts WHERE end_time IS NULL
 UNION ALL SELECT 'shifts unresolved',   count(*)::text FROM shifts
                                         WHERE auto_closed AND corrected_at IS NULL
+-- The two halves of the rate-less fixture, printed so a seed that lost one is obvious
+-- before a check has to say so. Both must be > 0.
+UNION ALL SELECT 'buildings wholly unpriced', count(*)::text FROM (
+            SELECT s.location_id FROM shifts s JOIN workers w ON w.id = s.worker_id
+             GROUP BY s.location_id
+            HAVING bool_and(w.hourly_rate_cents = 0)) q
+UNION ALL SELECT 'buildings mixed-rate',      count(*)::text FROM (
+            SELECT s.location_id FROM shifts s JOIN workers w ON w.id = s.worker_id
+             GROUP BY s.location_id
+            HAVING bool_or(w.hourly_rate_cents = 0)
+               AND bool_or(w.hourly_rate_cents > 0)) q
 UNION ALL SELECT 'app_settings',        count(*)::text FROM app_settings;

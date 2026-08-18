@@ -22,6 +22,10 @@
  *      METADATA endpoint has already said there is one — the image endpoint answers 200
  *      with a grey "no imagery" tile, which would otherwise ship as a photo of a client's
  *      building.
+ *   8. lib/payroll.ts writes the payroll CSV in ONE number format, and it is the format the
+ *      machine that opens it uses. A semicolon separator commits the file to German locale
+ *      conventions, under which a dot decimal is either a thousands group (hours out by
+ *      1000) or not a number at all (amounts that will not SUM).
  *
  * Message files are nested objects (next-intl's namespace format, decision-17); they are
  * flattened to dotted paths here so the comparison stays a plain set difference.
@@ -609,6 +613,150 @@ check('lib/map.ts: a pin needs BOTH coordinates, and a failure has a name', () =
   assert.equal(mapWithKey.failureOf(new Error('network')), 'network')
   assert.equal(mapWithKey.failureOf(new Error('failed')), 'auth')
   assert.equal(mapWithKey.failureOf(undefined), 'auth')
+})
+
+// --- 9. the payroll CSV's number format (lib/payroll.ts) --------------------------------
+//
+// The accountant's copy of the payroll, checked as BYTES and as what an Austrian Excel
+// makes of those bytes. The model and the RFC-4180 reader live in demo/excel-de.mjs, shared
+// with demo/check-reports.mjs (which runs them against the really downloaded file) so the
+// grammar exists once. Read across the package boundary, same as server/lib/materials.js.
+
+const { ORACLE_CASES, oracleFailures, parseCsv, readsAsDe } = await import(
+  pathToFileURL(join(ROOT, '../demo/excel-de.mjs')).href
+)
+const { decimalComma, msToHours, toCsv } = await import(
+  pathToFileURL(join(ROOT, 'lib/payroll.ts')).href
+)
+const { centsToPlainEuros } = await import(pathToFileURL(join(ROOT, 'lib/money.ts')).href)
+
+check(
+  'demo/excel-de.mjs: the Excel model itself still behaves, or nothing below means anything',
+  () => {
+    assert.deepEqual(oracleFailures(), [])
+    assert.ok(ORACLE_CASES.length > 10, 'the oracle must cover every shape this file emits')
+    // The reader, not only the model: a quoted note containing the delimiter is one cell.
+    assert.deepEqual(parseCsv('\uFEFFa;b\r\n"x;y";"say ""hi"""\r\n'), [
+      ['a', 'b'],
+      ['x;y', 'say "hi"'],
+    ])
+  },
+)
+
+check('lib/payroll.ts: the CSV states hours and amounts in ONE Austrian number format', () => {
+  // THE DEFECT, as bytes. Both of these are what the export used to ship.
+  assert.deepEqual(readsAsDe(msToHours(37_800_000).toFixed(3)), { kind: 'number', value: 10_500 })
+  assert.deepEqual(readsAsDe(centsToPlainEuros(363_826)), { kind: 'text' })
+
+  // THE FIX. Same rounding, same digits, one separator.
+  assert.equal(decimalComma(msToHours(37_800_000).toFixed(3)), '10,500')
+  assert.equal(decimalComma(centsToPlainEuros(363_826)), '3638,26')
+  assert.deepEqual(readsAsDe(decimalComma(msToHours(37_800_000).toFixed(3))), {
+    kind: 'number',
+    value: 10.5,
+  })
+  assert.deepEqual(readsAsDe(decimalComma(centsToPlainEuros(363_826))), {
+    kind: 'number',
+    value: 3638.26,
+  })
+  // A negative amount keeps its sign on the correct side of the comma.
+  assert.equal(decimalComma(centsToPlainEuros(-1250)), '-12,50')
+  // ...and nothing else in the string is touched: exactly one separator is swapped.
+  assert.equal(decimalComma('1,5'), '1,5')
+
+  // EVERY numeric column of a whole file, as that machine reads it. Cent columns carry no
+  // separator at all and must stay integers; the rate-less worker's money cells must stay
+  // EMPTY, because Excel's SUM skips a blank and adds a zero.
+  const file = toCsv([
+    [
+      'Mitarbeiter',
+      'Stunden',
+      'Stundensatz (Cent)',
+      'Betrag (Cent)',
+      'Betrag (EUR)',
+      'Von Hand erfasst (Schichten)',
+      'Hinweis',
+    ],
+    [
+      'Marta Nowak',
+      decimalComma(msToHours(88_200_000).toFixed(3)),
+      '1480',
+      '362600',
+      decimalComma(centsToPlainEuros(362_600)),
+      '1',
+      '',
+    ],
+    [
+      'Ana Ilic',
+      decimalComma(msToHours(37_800_000).toFixed(3)),
+      '',
+      '',
+      '',
+      '0',
+      'Kein Stundensatz',
+    ],
+    [
+      'Summe',
+      decimalComma(msToHours(126_000_000).toFixed(3)),
+      '',
+      '362600',
+      decimalComma(centsToPlainEuros(362_600)),
+      '1',
+      'Summe ohne 1 Mitarbeiter ohne Stundensatz',
+    ],
+  ])
+  const rows = parseCsv(file)
+  assert.equal(rows.length, 4, 'CRLF-terminated rows, no trailing empty row')
+  assert.deepEqual(
+    rows
+      .slice(1)
+      .map((r) => [
+        r[0],
+        readsAsDe(r[1]),
+        readsAsDe(r[2]),
+        readsAsDe(r[3]),
+        readsAsDe(r[4]),
+        readsAsDe(r[5]),
+      ]),
+    [
+      [
+        'Marta Nowak',
+        { kind: 'number', value: 24.5 },
+        { kind: 'number', value: 1480 },
+        { kind: 'number', value: 362_600 },
+        { kind: 'number', value: 3626 },
+        { kind: 'number', value: 1 },
+      ],
+      [
+        'Ana Ilic',
+        { kind: 'number', value: 10.5 },
+        { kind: 'empty' },
+        { kind: 'empty' },
+        { kind: 'empty' },
+        { kind: 'number', value: 0 },
+      ],
+      [
+        'Summe',
+        { kind: 'number', value: 35 },
+        { kind: 'empty' },
+        { kind: 'number', value: 362_600 },
+        { kind: 'number', value: 3626 },
+        { kind: 'number', value: 1 },
+      ],
+    ],
+  )
+  // The hours column adds up on the reader's machine, not only on ours — that is the whole
+  // claim, and 24.5 + 10.5 = 35 is only true once the separator is right.
+  assert.equal(
+    rows.slice(1, -1).reduce((sum, r) => sum + readsAsDe(r[1]).value, 0),
+    readsAsDe(rows.at(-1)[1]).value,
+  )
+  // A note containing the delimiter is still one cell, and still text.
+  const quoted = parseCsv(
+    toCsv([['Ana Ilic', '10,500', '', '', '', '0', '2 Schichten offen; Kein Stundensatz']]),
+  )
+  assert.equal(quoted[0][6], '2 Schichten offen; Kein Stundensatz')
+  assert.deepEqual(readsAsDe(quoted[0][6]), { kind: 'text' })
 })
 
 // --- report -----------------------------------------------------------------------------

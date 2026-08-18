@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createHash, generateKeyPairSync, sign as rsaSign } from "node:crypto";
 import pg from "pg";
+import { CODE_TTL_MS } from "./lib/enrolment.js";
 import { redactUrl, scrubBreadcrumb, scrubEvent, scrubLogAttributes } from "./lib/scrub.js";
 
 // sessions.token / worker_sessions.token store SHA-256(token), never the raw value, so a
@@ -1025,8 +1026,21 @@ try {
       assert.match(body.code, CODE_SHAPE, `0/O and 1/I/L are a support-call generator: ${body.code}`);
       assert.equal(body.worker.id, enrolWorkerId);
 
+      // AGAINST THE CONSTANT, not against a second copy of the number. This assertion read
+      // "~60 min" for a day after 6e5fb96 raised the TTL to five days at the operator's
+      // request; the code and its justification block moved and the check did not, so a
+      // green suite went red for a reason that was not a defect. Importing CODE_TTL_MS
+      // alone would make it vacuous, so the CONSTANT ITSELF is bounded too: anything
+      // outside minutes-to-a-fortnight is a typo, whatever both sides agree on.
       const ttl = new Date(body.expires_at).getTime() - before;
-      assert.ok(ttl > 55 * 60_000 && ttl <= 61 * 60_000, `expected a ~60 min TTL, got ${ttl}ms`);
+      assert.ok(
+        CODE_TTL_MS >= 10 * 60_000 && CODE_TTL_MS <= 14 * 24 * 3_600_000,
+        `CODE_TTL_MS is ${CODE_TTL_MS}ms — a code that lives that long is a decision, not an edit`,
+      );
+      assert.ok(
+        ttl >= CODE_TTL_MS - 60_000 && ttl <= CODE_TTL_MS + 60_000,
+        `expected the wire to carry CODE_TTL_MS (${CODE_TTL_MS}ms), got ${ttl}ms`,
+      );
 
       const row = await codeRowState();
       assert.equal(row.has_code, true, "the hash must be stored");
@@ -2953,61 +2967,76 @@ try {
           )
         ).rows[0].id,
       );
-      const shift = Number(
-        (
-          await admin.query(
-            `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
-             VALUES ($1, $2, '2025-10-21T05:00:00Z', '2025-10-21T15:30:00Z') RETURNING id`,
-            [rateless, plA],
-          )
-        ).rows[0].id,
-      );
 
-      const after = await pl(VIENNA_OCT_2025);
-      const a = building(after, plA);
-      // THE HOURS ARE REAL AND ARE SHOWN.
-      assert.equal(a.labour_seconds, before.labour_seconds + 37_800, "10.5 hours were worked and must be counted as time");
-      // THE MONEY IS NOT INVENTED. Priced at zero this cost would be unchanged AND
-      // unremarked, which is how 48:00 became 58:30 at an identical margin.
-      assert.equal(a.labour_cents, before.labour_cents, "an unset rate must not be spent as 0,00 EUR");
-      assert.equal(a.labour_unpriced_seconds, 37_800, "...but the hours behind it must come back NAMED");
-      assert.equal(a.labour_unpriced_minutes, 630);
-      assert.equal(a.labour_unpriced_workers, 1);
-      assert.equal(after.labour.unpriced_seconds, 37_800, "and the period as a whole must say so too");
-      assert.equal(after.labour.unpriced_workers, 1);
+      // EVERY ASSERTION BELOW IS INSIDE THE try, AND THE TEARDOWN IS IN THE finally.
+      // `test()` catches the throw and moves on to the next case, so a straight-line
+      // teardown after the last assertion is unreachable the moment one of them fails: the
+      // rate-less worker and her shifts survive into the P&L fixture, and the NEXT case
+      // fails as collateral. One real defect then reads as two, and the second one names a
+      // building whose numbers are fine. The shift ids are captured as they are created so
+      // the cleanup can run whether or not it got that far.
+      const shifts = [];
+      try {
+        shifts.push(
+          Number(
+            (
+              await admin.query(
+                `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+                 VALUES ($1, $2, '2025-10-21T05:00:00Z', '2025-10-21T15:30:00Z') RETURNING id`,
+                [rateless, plA],
+              )
+            ).rows[0].id,
+          ),
+        );
 
-      // The SAME person at a second building is ONE rate to go and set, not two. A sum over
-      // the per-building counts would send the director looking for somebody who does not exist.
-      const second = Number(
-        (
-          await admin.query(
-            `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
-             VALUES ($1, $2, '2025-10-22T05:00:00Z', '2025-10-22T06:00:00Z') RETURNING id`,
-            [rateless, plB],
-          )
-        ).rows[0].id,
-      );
-      const spread = await pl(VIENNA_OCT_2025);
-      assert.equal(spread.labour.unpriced_workers, 1, "one person cleaning two buildings is one missing rate");
-      assert.equal(
-        spread.buildings.reduce((sum, b) => sum + b.labour_unpriced_workers, 0),
-        2,
-        "the per-building counts are rows, not people, and must remain usable per row",
-      );
-      assert.equal(spread.labour.unpriced_seconds, 41_400);
+        const after = await pl(VIENNA_OCT_2025);
+        const a = building(after, plA);
+        // THE HOURS ARE REAL AND ARE SHOWN.
+        assert.equal(a.labour_seconds, before.labour_seconds + 37_800, "10.5 hours were worked and must be counted as time");
+        // THE MONEY IS NOT INVENTED. Priced at zero this cost would be unchanged AND
+        // unremarked, which is how 48:00 became 58:30 at an identical margin.
+        assert.equal(a.labour_cents, before.labour_cents, "an unset rate must not be spent as 0,00 EUR");
+        assert.equal(a.labour_unpriced_seconds, 37_800, "...but the hours behind it must come back NAMED");
+        assert.equal(a.labour_unpriced_minutes, 630);
+        assert.equal(a.labour_unpriced_workers, 1);
+        assert.equal(after.labour.unpriced_seconds, 37_800, "and the period as a whole must say so too");
+        assert.equal(after.labour.unpriced_workers, 1);
 
-      // Setting the rate makes the caveat disappear and the cost appear. Both, or the
-      // exclusion is not an exclusion but a permanent hole.
-      await admin.query("UPDATE workers SET hourly_rate_cents = 2000 WHERE id = $1", [rateless]);
-      const priced = await pl(VIENNA_OCT_2025);
-      const p = building(priced, plA);
-      assert.equal(p.labour_unpriced_seconds, 0);
-      assert.equal(p.labour_unpriced_workers, 0);
-      assert.equal(priced.labour.unpriced_workers, 0);
-      assert.equal(p.labour_cents, before.labour_cents + 21_000, "10.5h at EUR 20.00 is EUR 210.00");
+        // The SAME person at a second building is ONE rate to go and set, not two. A sum over
+        // the per-building counts would send the director looking for somebody who does not exist.
+        shifts.push(
+          Number(
+            (
+              await admin.query(
+                `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+                 VALUES ($1, $2, '2025-10-22T05:00:00Z', '2025-10-22T06:00:00Z') RETURNING id`,
+                [rateless, plB],
+              )
+            ).rows[0].id,
+          ),
+        );
+        const spread = await pl(VIENNA_OCT_2025);
+        assert.equal(spread.labour.unpriced_workers, 1, "one person cleaning two buildings is one missing rate");
+        assert.equal(
+          spread.buildings.reduce((sum, b) => sum + b.labour_unpriced_workers, 0),
+          2,
+          "the per-building counts are rows, not people, and must remain usable per row",
+        );
+        assert.equal(spread.labour.unpriced_seconds, 41_400);
 
-      await admin.query("DELETE FROM shifts WHERE id = ANY($1)", [[shift, second]]);
-      await admin.query("DELETE FROM workers WHERE id = $1", [rateless]);
+        // Setting the rate makes the caveat disappear and the cost appear. Both, or the
+        // exclusion is not an exclusion but a permanent hole.
+        await admin.query("UPDATE workers SET hourly_rate_cents = 2000 WHERE id = $1", [rateless]);
+        const priced = await pl(VIENNA_OCT_2025);
+        const p = building(priced, plA);
+        assert.equal(p.labour_unpriced_seconds, 0);
+        assert.equal(p.labour_unpriced_workers, 0);
+        assert.equal(priced.labour.unpriced_workers, 0);
+        assert.equal(p.labour_cents, before.labour_cents + 21_000, "10.5h at EUR 20.00 is EUR 210.00");
+      } finally {
+        await admin.query("DELETE FROM shifts WHERE id = ANY($1)", [shifts]);
+        await admin.query("DELETE FROM workers WHERE id = $1", [rateless]);
+      }
       assert.equal(
         building(await pl(VIENNA_OCT_2025), plA).labour_cents,
         before.labour_cents,

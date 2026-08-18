@@ -15,6 +15,7 @@ import { centsToPlainEuros } from '@/lib/money'
 import { LOGIN_PATH } from '@/lib/nav'
 import {
   coverageOf,
+  decimalComma,
   msToHours,
   type PayrollLine,
   payrollFor,
@@ -69,6 +70,12 @@ import { toBusinessInput } from '@/lib/shifts'
  * has EMPTY money cells and a stated reason, and the row still carries her name, her real
  * hours and her manual-shift count. `exclusionNote` is the one function both the table cell
  * and the file read.
+ *
+ * ...AND IT SAYS IT IN THE READER'S NUMBER FORMAT. The same file then shipped its decimals
+ * with a DOT under a semicolon separator, so an Austrian Excel read `10.500` hours as ten
+ * thousand five hundred and `3638.26` euros as text. Every decimal now carries a comma
+ * (`decimalComma`); the integer cent columns carry no separator at all and read the same
+ * everywhere. The rounding rules are untouched — this is a separator, not a second opinion.
  */
 
 const SHIFTS_PATH = '/shifts/'
@@ -253,10 +260,13 @@ export default function PayrollPage() {
         const noRate = line.worker.hourly_rate_cents === 0
         return [
           line.worker.name,
-          msToHours(line.payableMs).toFixed(3),
+          // DECIMAL COMMA, because the field separator is a semicolon and the two go
+          // together: `10.500` under `;` is TEN THOUSAND FIVE HUNDRED to an Austrian Excel.
+          // See `decimalComma` in lib/payroll.ts for what each column used to be read as.
+          decimalComma(msToHours(line.payableMs).toFixed(3)),
           noRate ? '' : String(line.worker.hourly_rate_cents),
           noRate ? '' : String(line.payCents),
-          noRate ? '' : centsToPlainEuros(line.payCents),
+          noRate ? '' : decimalComma(centsToPlainEuros(line.payCents)),
           String(line.manualShifts),
           exclusionNote(line),
         ]
@@ -265,10 +275,10 @@ export default function PayrollPage() {
         t('totalLabel'),
         // The hours total includes the unpriced hours; the amount total cannot. That gap is
         // the note's whole job — without it the two columns look like an arithmetic error.
-        msToHours(totals.payableMs).toFixed(3),
+        decimalComma(msToHours(totals.payableMs).toFixed(3)),
         '',
         String(totals.payCents),
-        centsToPlainEuros(totals.payCents),
+        decimalComma(centsToPlainEuros(totals.payCents)),
         String(totals.manualShifts),
         noRateLines.length === 0 ? '' : t('csvTotalNoRate', { count: noRateLines.length }),
       ],

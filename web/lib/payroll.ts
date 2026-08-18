@@ -195,3 +195,36 @@ export function toCsv(rows: readonly (readonly string[])[]): string {
     /[";\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
   return rows.map((row) => row.map(cell).join(';')).join('\r\n')
 }
+
+/**
+ * `3638.26` -> `3638,26`. The Austrian decimal comma, applied ONCE, at the file boundary.
+ *
+ * THE SEPARATOR IS PART OF THE DIALECT, and half of it was missing. Choosing `;` above
+ * commits this file to being read with the REST of the German locale conventions too:
+ * decimal `,`, thousands `.`. Under those rules the old export did not say what it meant:
+ *
+ *   Stunden      `10.500`   -> 10 500, a well-formed thousands group. A THOUSANDFOLD
+ *                             overstatement of hours, right-aligned, summing perfectly,
+ *                             with no visible symptom at all.
+ *   Betrag (EUR) `3638.26`  -> not a number: two decimals is never a valid German group,
+ *                             so Excel files it as text and the column totals 0,00 —
+ *                             or, for a value like `12.05`, as 12 May.
+ *
+ * So the file was already internally inconsistent: one column silently multiplied and the
+ * next silently not a number. Comma decimals fix both AT ONCE and match what a German
+ * Excel writes when it saves a CSV itself, so the file now round-trips through the tool it
+ * is opened in. The integer cent columns keep no separator whatsoever — they are the one
+ * part of the file that reads identically in every locale, and they are why the accountant
+ * can total the money without inheriting a spreadsheet's float either way.
+ *
+ * A separator swap, NOT a second rounding rule: `centsToPlainEuros` (and `toFixed` for
+ * hours) still decides every digit, exactly as the screen does. That is deliberate —
+ * a second copy of the rounding is how the screen and the file drift apart by a cent.
+ * `,` is not the field delimiter here, so nothing needs quoting (see `toCsv`).
+ *
+ * The German-Excel reading of every column, before and after, is asserted in
+ * web/scripts/check.mjs and against the real downloaded file in demo/check-reports.mjs.
+ */
+export function decimalComma(plain: string): string {
+  return plain.replace('.', ',')
+}

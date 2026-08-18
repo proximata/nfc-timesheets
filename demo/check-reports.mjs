@@ -16,7 +16,10 @@
 //   3. THE CSV EXPORT FAILS SILENTLY when the object URL is revoked too early (Safari) or the
 //      anchor is detached (Firefox). So the check DOWNLOADS the file through the protocol and
 //      compares its first two lines, instead of trusting the success message the page prints
-//      either way.
+//      either way. It is then parsed with a real RFC-4180 reader and every numeric column is
+//      read back AS A GERMAN EXCEL WOULD READ IT (demo/excel-de.mjs) — the file is semicolon
+//      separated, so `10.500` hours are ten thousand five hundred on the accountant's
+//      machine, silently, right-aligned and summing perfectly.
 //   4. CARD CAPTIONS ON A PHONE are matched by CELL POSITION. Every automated assertion in
 //      this repo stayed green through a bug that captioned a timestamp "Objekt", because the
 //      assertions counted labelled cells instead of reading them. Both probes run here.
@@ -27,6 +30,7 @@
 // No new dependency: demo/cdp.mjs, Node, and the Chrome already on the machine.
 import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { attach, launchChrome, sleep } from "./cdp.mjs";
+import { oracleFailures, parseCsv, readsAsDe } from "./excel-de.mjs";
 
 const BASE = process.env.DEMO_BASE ?? "http://127.0.0.1:8092";
 const SHOTS = "/tmp/ts-demo/b3-reports";
@@ -148,6 +152,12 @@ function centsOf(text) {
   return Math.round(Number(m[0].replace(/\./g, "").replace(",", ".")) * 100);
 }
 
+/** Any German-formatted number on screen (`1.234,50` -> 1234.5). null when there is none. */
+function deNum(text) {
+  const m = String(text).match(/-?[\d.]+(?:,\d+)?/);
+  return m === null ? null : Number(m[0].replace(/\./g, "").replace(",", "."));
+}
+
 async function main() {
   rmSync(SHOTS, { recursive: true, force: true });
   rmSync(DOWNLOADS, { recursive: true, force: true });
@@ -245,6 +255,11 @@ async function main() {
     if (files.length === 1) {
       const csv = readFileSync(`${DOWNLOADS}/${files[0]}`, "utf8");
       const lines = csv.split("\r\n");
+      // A REAL RFC-4180 READER, not a `split(';')`: the note column can hold a semicolon,
+      // and a quoted cell split by hand shifts every column after it by one.
+      const rows = parseCsv(csv);
+      const dataRows = rows.slice(1, -1);
+      const totalRow = rows.at(-1);
       assert("payroll: the CSV filename is Vienna-dated", /^payroll-\d{4}-\d{2}-\d{2}\.csv$/.test(files[0]), files[0]);
       assert("payroll: the CSV keeps its UTF-8 BOM", csv.charCodeAt(0) === 0xfeff);
       assert(
@@ -253,18 +268,77 @@ async function main() {
           "\uFEFFMitarbeiter;Stunden;Stundensatz (Cent);Betrag (Cent);Betrag (EUR);Von Hand erfasst (Schichten);Hinweis",
         JSON.stringify(lines[0]),
       );
+
+      // =================================================================================
+      // WHAT AN AUSTRIAN EXCEL READS. The file is semicolon separated, which commits it to
+      // the rest of the German locale: decimal `,`, thousands `.`. Under those rules the
+      // export used to state hours a THOUSAND TIMES too high (`10.500` is a well-formed
+      // thousands group) and amounts that were not numbers at all (`3638.26` is not a
+      // valid group, so Excel files it as text and the column totals 0,00). Neither has a
+      // visible symptom, so both are asserted rather than eyeballed.
+      // =================================================================================
+      assert(
+        "payroll: the German-Excel model itself still behaves, or nothing below means anything",
+        oracleFailures().length === 0,
+        oracleFailures().join(" | "),
+      );
+      // Column 0 is a name and column 6 a sentence; 1..5 are the numbers.
+      const NUMERIC = [1, 2, 3, 4, 5];
+      const misread = [];
+      for (const row of [...dataRows, totalRow]) {
+        for (const i of NUMERIC) {
+          const read = readsAsDe(row[i]);
+          if (read.kind !== "number" && read.kind !== "empty") {
+            misread.push(`"${row[0]}" col ${i} = ${JSON.stringify(row[i])} reads as ${read.kind}`);
+          }
+        }
+      }
+      assert(
+        "payroll: every numeric cell is a NUMBER to a German Excel (never text, never a date)",
+        misread.length === 0,
+        misread.join(" | "),
+      );
+      // THE 1000x CATCH, and the only assertion that can see it: the hours that reach the
+      // accountant must be the hours on the director's screen. Kind alone cannot catch this
+      // — `10.500` IS a number over there, it is just the wrong one.
+      const hoursDrift = dataRows
+        .map((row, i) => ({
+          name: row[0],
+          file: readsAsDe(row[1]).value,
+          screen: deNum(money.rows[i]?.[1] ?? ""),
+        }))
+        .filter((r) => r.screen === null || Math.abs(r.file - r.screen) > 0.005);
+      assert(
+        "payroll: the hours a German Excel reads are the hours on screen, row for row",
+        dataRows.length > 0 && hoursDrift.length === 0,
+        hoursDrift.map((r) => `${r.name}: file ${r.file}, screen ${r.screen}`).join(" | "),
+      );
+      const hoursSum = dataRows.reduce((sum, row) => sum + (readsAsDe(row[1]).value ?? 0), 0);
+      assert(
+        "payroll: and they add up to the file's own total row over there too",
+        Math.abs(hoursSum - readsAsDe(totalRow[1]).value) < 0.005,
+        `rows ${hoursSum}, total ${readsAsDe(totalRow[1]).value}`,
+      );
+      // The file must agree with ITSELF: half the columns in one convention and half in the
+      // other is its own bug. Cents x 100 is the euro column, as Excel reads both.
+      const centsVsEuro = [...dataRows, totalRow]
+        .filter((row) => readsAsDe(row[3]).kind === "number")
+        .filter((row) => Math.abs(readsAsDe(row[4]).value * 100 - readsAsDe(row[3]).value) > 0.5);
+      assert(
+        "payroll: Betrag (EUR) x 100 = Betrag (Cent) as a German Excel reads them",
+        centsVsEuro.length === 0,
+        centsVsEuro.map((row) => `${row[0]}: ${row[4]} vs ${row[3]}`).join(" | "),
+      );
       assert(
         "payroll: the CSV total row totals the same cents as the screen",
-        centsOf(`${(Number(lines.at(-1).split(";")[3]) / 100).toFixed(2).replace(".", ",")}`) ===
-          footCents,
-        `csv ${lines.at(-1)?.split(";")[3]}, screen ${footCents}`,
+        readsAsDe(totalRow[3]).value === footCents,
+        `csv ${totalRow[3]}, screen ${footCents}`,
       );
 
       // THE FILE MUST SAY WHAT THE SCREEN SAYS. /payroll/ prints „ein Betrag wird nicht
       // berechnet – auch nicht 0,00 €" for a worker with no rate; the export used to ship
       // `Ana Ilic;10.500;0;0;0.00;0` under it, and the accountant keeps the export. Rows
       // only — the header and the total row are not people.
-      const dataRows = lines.slice(1, -1).map((line) => line.split(";"));
       const noRateRows = dataRows.filter((cells) => cells[6]?.includes("Kein Stundensatz"));
       assert(
         "payroll: the seeded period really contains a worker with no rate",
@@ -278,12 +352,12 @@ async function main() {
       );
       assert(
         "payroll: and that row still names her and her real hours",
-        noRateRows.every((c) => c[0].length > 0 && Number(c[1]) > 0),
+        noRateRows.every((c) => c[0].length > 0 && readsAsDe(c[1]).value > 0),
         noRateRows.map((c) => c.join(";")).join(" | "),
       );
       // The general form, so a future column shuffle cannot reintroduce it elsewhere: no
       // row may report hours worked and an amount of zero in the same breath.
-      const pricedAtZero = dataRows.filter((c) => Number(c[1]) > 0 && c[3] === "0");
+      const pricedAtZero = dataRows.filter((c) => readsAsDe(c[1]).value > 0 && c[3] === "0");
       assert(
         "payroll: no CSV row prices real hours at zero",
         pricedAtZero.length === 0,
@@ -291,8 +365,8 @@ async function main() {
       );
       assert(
         "payroll: the CSV total row says why it is short",
-        lines.at(-1).includes("auch nicht 0,00"),
-        JSON.stringify(lines.at(-1)),
+        totalRow.join(";").includes("auch nicht 0,00"),
+        JSON.stringify(totalRow.join(";")),
       );
     }
 
@@ -328,10 +402,14 @@ async function main() {
     // worker at 0, so ten and a half hours moved a building's hours from 48:00 to 58:30 and
     // its margin by NOTHING — and margin is what opens a conversation about a client's
     // contract. The hours are excluded from the cost, as on /payroll/, and NAMED here.
-    const labourCells = await page.eval(`(() => {
+    const labourRows = await page.eval(`(() => {
       const rows = [...document.querySelectorAll('table.data-table tbody tr')]
-      return rows.map((r) => (r.children[3]?.textContent ?? '').trim())
+      return rows.map((r) => ({
+        name: (r.children[0]?.textContent ?? '').trim(),
+        labour: (r.children[3]?.textContent ?? '').trim(),
+      }))
     })()`);
+    const labourCells = labourRows.map((r) => r.labour);
     const unpricedCells = labourCells.filter((text) => text.includes("ohne Stundensatz"));
     assert(
       "pl: the seeded period really contains labour nobody has priced",
@@ -358,12 +436,56 @@ async function main() {
       unpricedCells.every((text) => !zeroEuro.test(text)),
       JSON.stringify(unpricedCells),
     );
+    // THE MIXED BUILDING, and it is the realistic one.
+    //
+    // A building where the rate-less worker is the ONLY worker has `labour_cents = 0`, so a
+    // change that only caveats a building whose WHOLE cost is missing still looks perfect
+    // against it. The case the /pl/ defect was actually raised for is the other one: she
+    // cleans alongside priced colleagues, the building shows a real amount, and the hours
+    // behind that amount are silently short — 48:00 became 58:30 at an unchanged margin.
+    // The seed carries both on purpose (demo/seed.sql § A worker whose hourly rate NOBODY
+    // HAS SET).
+    //
+    // BOTH ROWS ARE FOUND BY NAME, not by filtering on the note itself. Selecting the
+    // "mixed" rows with `text.includes('ohne Stundensatz')` looks equivalent and is not: the
+    // exact change these assertions exist to catch is the one that DELETES that note, so the
+    // filter empties, `.every()` on nothing is true, and the substantive assertion passes
+    // vacuously while the building silently under-reports its cost. Measured: with the note
+    // suppressed for any building that has priced labour, the filtered form stayed green.
+    const MIXED_BUILDING = "Aerztezentrum Landstrasse";
+    const WHOLLY_UNPRICED_BUILDING = "Studiohaus Neubaugasse";
+    const mixedRow = labourRows.find((r) => r.name.includes(MIXED_BUILDING));
+    const whollyRow = labourRows.find((r) => r.name.includes(WHOLLY_UNPRICED_BUILDING));
+    assert(
+      "pl: the seeded period really contains BOTH a mixed-rate building and a wholly unpriced one",
+      mixedRow !== undefined && whollyRow !== undefined,
+      `rows: ${JSON.stringify(labourRows.map((r) => r.name))}`,
+    );
+    assert(
+      "pl: the MIXED building shows its amount AND names the hours it could not price",
+      mixedRow !== undefined &&
+        euroAmount.test(mixedRow.labour) &&
+        /nicht bewertet/.test(mixedRow.labour) &&
+        /\d+:\d\d/.test(mixedRow.labour),
+      JSON.stringify(mixedRow),
+    );
+    assert(
+      "pl: …and the wholly unpriced building states no amount at all",
+      whollyRow !== undefined &&
+        !euroAmount.test(whollyRow.labour) &&
+        /Nicht bewertet/.test(whollyRow.labour),
+      JSON.stringify(whollyRow),
+    );
     // Read the <li> ITSELF, not VISIBLE_TEXT: that walker only collects elements with no
     // children, so a bullet containing a <Link> contributes the link's words and loses the
     // sentence around them. Visibility is still asserted, on the bullet.
+    // BOTH plural branches, because the German inflects: one worker has „kein Stundensatz
+    // hinterlegt“, several have „keine Stundensätze hinterlegt“. A finder that only knows the
+    // singular passes today because the seed holds exactly one rate-less person, and stops
+    // finding the bullet at all the day a second one appears — which is the day it matters.
     const methodUnpricedLabour = await page.eval(`(() => {
       const li = [...document.querySelectorAll('.callout li')]
-        .find((el) => (el.textContent ?? '').includes('kein Stundensatz hinterlegt'))
+        .find((el) => /kein(e)? Stundens(atz|ätze) hinterlegt/.test(el.textContent ?? ''))
       if (!li) return null
       return { text: li.textContent.trim(), visible: li.checkVisibility(), href: li.querySelector('a')?.getAttribute('href') ?? null }
     })()`);
