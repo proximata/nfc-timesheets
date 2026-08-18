@@ -451,12 +451,26 @@ check('lib/filters.ts: every well-formed value survives a round trip', () => {
     period: 'lastMonth',
     state: 'unresolved',
     status: 'open',
-    open: uuid.toUpperCase(),
+    open: uuid,
   }
   assert.deepEqual(parseFilters(filterQuery(full)), full)
-  // A UUID is case-insensitive on the wire and is kept verbatim: rewriting the case would
-  // make two links to the same building compare unequal.
-  assert.equal(parseFilters(`?open=${uuid.toUpperCase()}`).open, uuid.toUpperCase())
+  // A UUID IS NORMALISED TO LOWER CASE AT THE BOUNDARY, and this assertion used to say the
+  // opposite: „kept verbatim, because rewriting the case would make two links to the same
+  // building compare unequal". It has that backwards. Hex digits are case-insensitive on
+  // input (RFC 4122 §3), Postgres answers in lower case, and the row lookup is a string
+  // compare — so passing the value through unchanged is what made two links to the same
+  // building unequal, and the uppercase one resolved to „Objekt: unbekannt". Windows, .NET
+  // and several tag writers format uuids uppercase, and decision-21 puts the location uuid
+  // in the tag URI.
+  assert.equal(parseFilters(`?open=${uuid.toUpperCase()}`).open, uuid)
+  assert.equal(parseFilters(`?location=${uuid.toUpperCase()}`).location, uuid)
+  // Mixed case, which is what a hand-edited URL actually looks like.
+  assert.equal(
+    parseFilters(`?location=${uuid.slice(0, 8).toUpperCase()}${uuid.slice(8)}`).location,
+    uuid,
+  )
+  // Normalising is NOT widening: the shape is still the gate.
+  assert.equal(parseFilters('?location=729B9C2A-98E2-4FB6-91D1-889FC8B561CX').location, null)
   // Fixed key order, so the same filter set is always the same string.
   assert.equal(filterQuery(full), filterQuery({ ...full }))
   assert.equal(filterQuery({}), '')

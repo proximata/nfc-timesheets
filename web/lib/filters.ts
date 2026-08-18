@@ -139,6 +139,26 @@ export function isUuid(value: string): boolean {
   return UUID_RE.test(value)
 }
 
+/**
+ * A uuid parameter, VALIDATED AND NORMALISED — lower case, because hex digits are
+ * case-insensitive on input (RFC 4122 §3) and every id this admin compares against comes
+ * back from Postgres in lower case.
+ *
+ * Without the fold, `?location=5BBDB9CA-…` passed `isUuid` (the pattern is `/i`), survived
+ * the boundary unchanged, matched no row, and the screen said „Objekt: unbekannt — dieses
+ * Objekt ist hier nicht vorhanden" about a building that is right there. Safe, and wrong.
+ * It is not hypothetical: Windows, .NET and several NFC tag writers format a uuid in upper
+ * case, and decision-21 puts the location uuid in the tag URI.
+ *
+ * NORMALISING IS NOT THE SAME AS WIDENING. The shape is still validated and anything that
+ * is not a uuid is still dropped silently (see the file header's two kinds of wrong input);
+ * a well-formed id that names nothing still reaches the screen and is still said out loud.
+ */
+export function toUuid(value: string | null): string | null {
+  if (value === null || !isUuid(value)) return null
+  return value.toLowerCase()
+}
+
 /** `"12"` → 12. Anything else — `"0"`, `"-3"`, `"1.5"`, `"01"`, `"1e3"`, `""` → null. */
 export function toRowId(value: string | null): number | null {
   if (value === null || !ROW_ID_RE.test(value)) return null
@@ -165,14 +185,14 @@ export function parseFilters(search: string): AdminFilters {
   const status = text('status')
 
   return {
-    location: location !== null && isUuid(location) ? location : null,
+    location: toUuid(location),
     worker: toRowId(text('worker')),
     client: toRowId(text('client')),
     shift: toRowId(text('shift')),
     period: period !== null && isPeriod(period) ? period : null,
     state: state !== null && isFilterState(state) ? state : null,
     status: status !== null && isFilterStatus(status) ? status : null,
-    open: open !== null && isUuid(open) ? open : null,
+    open: toUuid(open),
   }
 }
 

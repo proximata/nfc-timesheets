@@ -60,7 +60,15 @@ export type GMap = {
   panTo(point: LatLngLiteral): void
   /** Nudge in PIXELS. Positive y moves the centre down, so the pin appears higher. */
   panBy(x: number, y: number): void
-  addListener(event: string, handler: () => void): void
+  /**
+   * `event` carries the ORIGINAL DOM event on `domEvent`, and the caller needs it: our own
+   * pins and the info box are portalled into Google's float pane, i.e. into the map's own
+   * DOM, so a press on a control inside the box also reaches the map's click handler. The
+   * handler has to be able to ask where the click came from. React cannot help here — it
+   * listens at the root, ABOVE the map, so a synthetic `stopPropagation` runs after Google
+   * has already been told.
+   */
+  addListener(event: string, handler: (event: { domEvent?: Event }) => void): void
 }
 
 export type GMarker = {
@@ -133,7 +141,12 @@ export const MAP_STYLE_DARK: MapStyle = [
   { featureType: 'transit', stylers: [{ visibility: 'off' }] },
   { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#131519' }] },
   { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#1b1e23' }] },
-  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#6c7178' }] },
+  // A STREET NAME IS TEXT, so it is scored as text: 4.5:1 on every geometry it can land on
+  // (road 5.40, ground 6.06, highway 4.85, water 6.44). #6c7178 was 3.40 on its own road,
+  // which is the graphic tier and the wrong tier — the same mistake --state-unres shipped
+  // with. Muted is a property of the GEOMETRY, which is unchanged; illegible is not a
+  // synonym for muted. Measured by demo/audit-map-contrast.mjs, which parses this array.
+  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#8d939c' }] },
   { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#23272d' }] },
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#08090b' }] },
   {
@@ -157,7 +170,9 @@ export const MAP_STYLE_LIGHT: MapStyle = [
   { featureType: 'transit', stylers: [{ visibility: 'off' }] },
   { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#e8eaed' }] },
   { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
-  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#7b8189' }] },
+  // Text tier, same as the dark array above: 6.17 on its own road, 5.50 on the ground, 4.88
+  // on a highway, 4.78 over water. #7b8189 was 3.93 on white.
+  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#5c6269' }] },
   { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#e2e5e9' }] },
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#dfe3e8' }] },
   {

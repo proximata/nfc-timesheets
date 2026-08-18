@@ -141,12 +141,72 @@ async function ledgerSurvives(page, where) {
   }
 }
 
+/**
+ * PUT THE DEMO DATABASE BACK. Idempotent, and callable from anywhere — including a signal
+ * handler, which is the point.
+ *
+ * A `finally` block only runs if the process gets to run code. This check spends minutes
+ * with every coordinate NULLed and every building inactive, and a run that is KILLED (^C, a
+ * timeout, an editor stopping the task) skips the teardown and leaves `nfc_demo` looking
+ * exactly like production on day one. Every later audit that needs pins then either refuses
+ * or reports a green nothing — both have happened, and one of them cost the previous round
+ * twenty minutes of chasing a defect that was a leftover fixture.
+ */
+function restoreSeed() {
+  sql("UPDATE locations SET active = true");
+  // `geocoded_at IS NULL` is the seed's „never asked" row and its status must go back to
+  // NULL, not to a status — „nie abgefragt" and „abgefragt, kein Pin" are two different
+  // sentences on screen and the demo fixture is meant to hold the first one.
+  sql("UPDATE locations SET geocode_status = CASE WHEN geocoded_at IS NULL THEN NULL ELSE 'OK' END");
+  sql(`UPDATE locations l SET lat = s.lat, lng = s.lng
+         FROM (VALUES
+           ('donaufeld-101', 48.25361, 16.42194),
+           ('wagramer-4', 48.23472, 16.42250),
+           ('gumpendorfer-63', 48.19472, 16.34694),
+           ('landstrasser-46', 48.20250, 16.39472),
+           ('handelskai-94', 48.24222, 16.38472)
+         ) AS s(slug, lat, lng)
+        WHERE l.slug = s.slug`);
+}
+
+/**
+ * The signals that actually arrive. `SIGKILL` cannot be caught — nothing can be done about
+ * that one — but ^C, a `kill`, a closed terminal and an uncaught throw all can, and all of
+ * them used to leave the fixture degraded. Chrome is killed too: a headless browser at 0 %
+ * CPU with nobody watching it is this repo's other favourite way to lose an hour.
+ */
+let browser = null;
+let restored = false;
+function bailOut(why) {
+  if (!restored) {
+    restored = true;
+    try {
+      restoreSeed();
+      console.error(`\ncheck-map-home: ${why} — demo database restored.`);
+    } catch (error) {
+      console.error(`\ncheck-map-home: ${why} — RESTORE FAILED: ${error.message}`);
+      console.error("  run:  psql -d nfc_demo -f demo/seed.sql");
+    }
+  }
+  try {
+    browser?.kill("SIGKILL");
+  } catch {
+    /* already gone */
+  }
+  process.exit(1);
+}
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]) {
+  process.on(signal, () => bailOut(signal));
+}
+process.on("uncaughtException", (error) => bailOut(`uncaught: ${error.message}`));
+
 async function main() {
   mkdirSync(SHOTS, { recursive: true });
   const before = sql(
     "SELECT count(*) FILTER (WHERE lat IS NOT NULL) || '/' || count(*) FILTER (WHERE geocode_status IS NULL) || '/' || count(*) FILTER (WHERE active) FROM locations",
   );
   const { child, port } = await launchChrome({ port: 9740 + (process.pid % 60), width: 1680, height: 1050 });
+  browser = child;
   const page = await attach(port);
 
   try {
@@ -213,6 +273,31 @@ async function main() {
         "map: the region is a band, not the viewport — the ledger stays one scroll away",
         canvasH > 200 && canvasH < 700,
         `${canvasH}px of ${await page.eval("innerHeight")}px`,
+      );
+      // …AND THE ALWAYS-RENDERED REGION REACHES THE FOLD. 'one scroll away' was measured and
+      // it was not true: at 52vh/560px the Objektliste's heading landed at y=964 on a
+      // 1000px viewport and NOT ONE ROW was on screen. The map is the optional region — it
+      // draws nothing at all on the day this ships — and it was holding the fold over the
+      // list that is rendered on every path. Asserted on the DRAWN map, because that is the
+      // case that is worst and the case that arrives after onboarding succeeds.
+      const fold = JSON.parse(
+        await page.eval(`(() => {
+          const rows = [...document.querySelectorAll('table.objects-table tbody tr')]
+          const heading = [...document.querySelectorAll('.list h2')].find((h) => h.textContent.includes('Objekte'))
+          const whole = rows.filter((r) => r.getBoundingClientRect().bottom <= window.innerHeight)
+          return JSON.stringify({
+            fold: window.innerHeight,
+            headingY: heading ? Math.round(heading.getBoundingClientRect().top) : null,
+            rows: rows.length, whole: whole.length,
+            first: whole[0]?.querySelector('th')?.childNodes[0]?.textContent?.trim() ?? null,
+          })
+        })()`),
+      );
+      assert(
+        "fold: the Objektliste reaches the first screen — the optional region does not hold it",
+        fold.whole >= 1 && fold.headingY !== null && fold.headingY < fold.fold - 100,
+        `heading at y=${fold.headingY}, ${fold.whole} of ${fold.rows} rows whole above ${fold.fold}px` +
+          `${fold.first ? ` — „${fold.first}"` : ""}`,
       );
 
       // ==== 2 · state is readable WITHOUT colour ========================================
@@ -389,54 +474,116 @@ async function main() {
       );
       await shoot(page, "map-info-1680-dark");
 
-      // …AND THE CROSS-LINKS ARE REACHABLE, not merely present in the DOM.
+      // …AND THE CROSS-LINKS ARE ON SCREEN, which is a different question from whether they
+      // exist and a different question again from whether they can be reached.
       //
-      // The box is anchored to a pin inside a ~500px region and holds five numbers AND
-      // eleven links, so it SCROLLS — that is the accepted shape, and the numbers come
-      // first because they are what the director looks at. What may never happen is the
-      // links being clipped away silently: `overflow: hidden` on this body would render a
-      // box that looks complete, answers every question and offers no way to act on any of
-      // it, which is the filing cabinet again one level down. It also photographs perfectly.
+      // THIS ASSERTION USED TO MEASURE THE WRONG PROPERTY, and it passed while the screen
+      // was broken. It dispatched a real wheel gesture over the box and confirmed that
+      // scrolling brought links into view. That was true, and it stayed true, while ZERO of
+      // TEN cross-links were inside the box's own rectangle at rest, with no scrollbar (the
+      // overlay kind is invisible until you scroll) and no expander. Reachable is not
+      // discoverable. The owner's word in IA-PLAN §9 was EXPANDABLE, and there was nothing
+      // to expand.
       //
-      // `.panel-links-out`, not `.panel-links`: the on-site cell above is also a
-      // `.panel-links` list, so the loose selector finds a WORKER link and passes while
+      // So the box is now a DISCLOSURE and this asserts what a reader can SEE:
+      //   1. collapsed — the five numbers fit, and the control naming the links is visible,
+      //      is a real target and says HOW MANY there are;
+      //   2. expanded — EVERY cross-link is inside the box's rectangle with the box NOT
+      //      scrolled. `scrollTop === 0` is part of the assertion on purpose: without it,
+      //      a box that had been scrolled to the bottom would report the same thing.
+      //
+      // `.panel-links-out`, not `.panel-links`: the on-site cell on the numbers face is also
+      // a `.panel-links` list, so the loose selector finds a WORKER link and passes while
       // every cross-link is unreachable. That is not hypothetical — the first version of
       // this assertion did exactly that and reported it as green.
-      // A REAL WHEEL GESTURE, not `scrollIntoView`. That distinction is the whole check:
-      // `overflow: hidden` still scrolls PROGRAMMATICALLY, so a script-driven scroll reports
-      // every link as reachable on a box no human can move a pixel. The first version of
-      // this assertion did precisely that and stayed green through the sabotage.
-      const boxAt = JSON.parse(
+      const collapsed = JSON.parse(
         await page.eval(`(() => {
-          const r = document.querySelector('.map-info-body').getBoundingClientRect()
-          return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) })
-        })()`),
-      );
-      await page.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: boxAt.x, y: boxAt.y, deltaX: 0, deltaY: 600 });
-      await sleep(700);
-      const reach = JSON.parse(
-        await page.eval(`(() => {
-          const body = document.querySelector('.map-info-body')
-          const links = [...document.querySelectorAll('.map-info .panel-links-out a')]
-          if (!body || links.length === 0) return JSON.stringify({ found: false })
-          const b = body.getBoundingClientRect()
-          const shown = links.filter((a) => { const f = a.getBoundingClientRect()
-            return f.height > 0 && f.top >= b.top - 1 && f.bottom <= b.bottom + 1 })
-          return JSON.stringify({ found: true, total: links.length, moved: Math.round(body.scrollTop),
-            shown: shown.length, first: shown[0]?.textContent.trim() ?? null })
+          const box = document.querySelector('.map-info')
+          const toggle = document.querySelector('.map-info-expand')
+          if (!box || !toggle) return JSON.stringify({ found: false })
+          const t = toggle.getBoundingClientRect()
+          const b = box.getBoundingClientRect()
+          // A .visually-hidden node is a 1px clipping rectangle by construction, so it
+          // always reports more content than box. That is a screen-reader sentence, not a
+          // fold. (No backticks in here: this whole function is inside a template literal.)
+          const scrolled = [box, ...box.querySelectorAll('*')]
+            .filter((el) => !el.classList.contains('visually-hidden') && el.scrollHeight > el.clientHeight + 2)
+          return JSON.stringify({
+            found: true,
+            label: toggle.textContent.trim(),
+            expanded: toggle.getAttribute('aria-expanded'),
+            visible: t.height > 0 && t.top >= b.top - 1 && t.bottom <= b.bottom + 1,
+            target: Math.round(t.height),
+            hiddenOverflow: scrolled.map((el) => String(el.className)),
+          })
         })()`),
       );
       assert(
-        "info box: a real wheel over it reaches the cross-links — never clipped out of reach",
-        reach.found && reach.moved > 0 && reach.shown > 0,
-        `${reach.shown ?? 0} of ${reach.total ?? 0} links in view after a ${reach.moved ?? 0}px wheel — „${reach.first ?? "none"}"`,
+        "info box: the control that reveals the links is VISIBLE, is a real target and says how many",
+        collapsed.found === true &&
+          collapsed.visible === true &&
+          collapsed.target >= 44 &&
+          collapsed.expanded === "false" &&
+          /\d/.test(collapsed.label ?? ""),
+        `„${collapsed.label ?? "(none)"}" ${collapsed.target ?? 0}px, aria-expanded=${collapsed.expanded ?? "?"}`,
       );
-      // A second shot, scrolled to the links: a screenshot of the top alone would leave the
-      // half of the box the owner asked for — the links — out of the evidence entirely.
-      await page.eval(`(() => { const b = document.querySelector('.map-info-body'); b.scrollTop = b.scrollHeight })()`);
-      await sleep(400);
+      assert(
+        "info box: at rest the NUMBERS fit — nothing in the box is hidden behind a silent fold",
+        Array.isArray(collapsed.hiddenOverflow) && collapsed.hiddenOverflow.length === 0,
+        collapsed.found === true
+          ? collapsed.hiddenOverflow.join(" | ") || "nothing scrolls"
+          : "no .map-info-expand in the box — there is nothing to expand",
+      );
+
+      // Pressed the way a reader presses it, and then measured. `?.` and not `.`: when the
+      // disclosure is MISSING — which is precisely the defect these three assertions exist
+      // to catch — a throw here would abandon the run and leave every later assertion
+      // unmeasured, including the ones about the phone and the degraded states. A check
+      // that stops measuring on the first defect reports one defect per run.
+      await page.eval(`document.querySelector('.map-info-expand')?.click()`);
+      await sleep(700);
+      const shown = JSON.parse(
+        await page.eval(`(() => {
+          const box = document.querySelector('.map-info')
+          const links = [...document.querySelectorAll('.map-info .panel-links-out a')]
+          if (!box || links.length === 0) return JSON.stringify({ found: false })
+          const b = box.getBoundingClientRect()
+          const scrolledBy = [box, ...box.querySelectorAll('*')]
+            .reduce((most, el) => Math.max(most, el.scrollTop), 0)
+          const inside = links.filter((a) => { const f = a.getBoundingClientRect()
+            return f.height > 0 && f.top >= b.top - 1 && f.bottom <= b.bottom + 1 })
+          return JSON.stringify({ found: true, total: links.length, inside: inside.length,
+            scrolledBy, missing: links.filter((a) => !inside.includes(a)).map((a) => a.textContent.trim().slice(0, 40)) })
+        })()`),
+      );
+      assert(
+        "info box: one press shows EVERY cross-link inside the box, with nothing scrolled",
+        shown.found === true && shown.inside === shown.total && shown.scrolledBy === 0,
+        `${shown.inside ?? 0} of ${shown.total ?? 0} links on screen, scrolled ${shown.scrolledBy ?? "?"}px` +
+          `${shown.missing?.length ? ` — missing: ${shown.missing.join(" | ")}` : ""}`,
+      );
+      // …and it is still INSIDE the map when it is bigger. The expanded box is wider and
+      // taller than the collapsed one, and a box that grows off the bottom edge has moved
+      // the same links out of reach by another route.
+      const grown = JSON.parse(
+        await page.eval(`(() => {
+          const box = document.querySelector('.map-info')
+          const map = document.querySelector('.map-canvas')
+          if (!box || !map) return JSON.stringify({ ok: false, box: null, map: null })
+          const b = box.getBoundingClientRect()
+          const m = map.getBoundingClientRect()
+          return JSON.stringify({ ok: b.top >= m.top - 1 && b.bottom <= m.bottom + 1 && b.left >= m.left - 1 && b.right <= m.right + 1,
+                                  box: [Math.round(b.top), Math.round(b.bottom)], map: [Math.round(m.top), Math.round(m.bottom)] })
+        })()`),
+      );
+      assert(
+        "info box: EXPANDED, it is still inside the map — the growth is clamped, not overflowed",
+        grown.ok,
+        `box ${grown.box} in map ${grown.map}`,
+      );
       await shoot(page, "map-info-links-1680-dark");
-      await page.eval(`(() => { const b = document.querySelector('.map-info-body'); b.scrollTop = 0 })()`);
+      await page.eval(`document.querySelector('.map-info-expand')?.click()`);
+      await sleep(400);
 
       // Collapsing is one action and it puts the URL back.
       await page.clickText("Infobox", { selector: ".map-info button" });
@@ -600,6 +747,52 @@ async function main() {
       (await page.eval(`document.querySelectorAll('table.objects-table tbody tr').length`)) >=
         activeInDb,
     );
+
+    // THE UNKNOWN-OBJECT STATE, at the width decision-28 makes mandatory. It gets its own
+    // assertion because it is the LONGEST string this product renders inside a pill
+    // („Objekt: unbekannt – dieses Objekt ist hier nicht vorhanden") and it used to be set
+    // `nowrap`: 370px of text starting 25px in, so the document measured 443px against a
+    // 390px viewport and the pill's REMOVE control sat entirely off the right edge — on the
+    // one state whose whole purpose is to be escapable. The resting screen above did not
+    // catch it, because at rest there is no chip.
+    //
+    // Two things are asserted and both are needed: the document must not scroll sideways
+    // (decision-28 forbids answering this with a scrollbar), AND the ✕ must be INSIDE the
+    // viewport — an `overflow: hidden` somewhere up the tree would satisfy the first on its
+    // own while leaving the control exactly as unreachable as before.
+    await page.goto(`${BASE}/?location=00000000-0000-4000-8000-000000000000`, { settle: 2500 });
+    const ghost = JSON.parse(
+      await page.eval(`(() => {
+        const de = document.documentElement
+        const chip = document.querySelector('.filter-chip.is-unknown')
+        const remove = chip?.querySelector('.filter-chip-remove')
+        const r = remove?.getBoundingClientRect()
+        return JSON.stringify({
+          scrollWidth: de.scrollWidth, vw: de.clientWidth,
+          chip: chip !== null, said: (chip?.textContent ?? '').trim().slice(0, 60),
+          removeRight: r ? Math.round(r.right) : null,
+          removeWidth: r ? Math.round(r.width) : null,
+          removeHeight: r ? Math.round(r.height) : null,
+        })
+      })()`),
+    );
+    assert(
+      "390px: the unknown-object chip does not push the page sideways",
+      ghost.chip === true && ghost.scrollWidth <= ghost.vw + 1,
+      `content ${ghost.scrollWidth}px in ${ghost.vw}px — „${ghost.said}“`,
+    );
+    assert(
+      "390px: …and its REMOVE control is on screen and a real target — the filter is escapable",
+      ghost.removeRight !== null &&
+        ghost.removeRight <= ghost.vw + 1 &&
+        ghost.removeWidth >= 24 &&
+        ghost.removeHeight >= 24,
+      `✕ right edge at ${ghost.removeRight}px of ${ghost.vw}px, ${ghost.removeWidth}×${ghost.removeHeight}px`,
+    );
+    await shoot(page, "map-390-ghost-dark");
+    await page.goto(`${BASE}/`, { settle: 2500 });
+    await settled(page, 25000);
+
     await ledgerSurvives(page, "390px");
     await shoot(page, "map-390-dark");
     await page.select(".theme-switcher select", "light");
@@ -778,23 +971,8 @@ async function main() {
     await ledgerSurvives(page, "no buildings");
     await shoot(page, "map-nobuildings-1680-dark");
   } finally {
-    // Put the demo database back, whatever happened above.
-    sql("UPDATE locations SET active = true");
-    // `geocoded_at IS NULL` is the seed's „never asked" row and its status must go back to
-    // NULL, not to a status — „nie abgefragt" and „abgefragt, kein Pin" are two different
-    // sentences on screen and the demo fixture is meant to hold the first one.
-    sql(
-      "UPDATE locations SET geocode_status = CASE WHEN geocoded_at IS NULL THEN NULL ELSE 'OK' END",
-    );
-    sql(`UPDATE locations l SET lat = s.lat, lng = s.lng
-           FROM (VALUES
-             ('donaufeld-101', 48.25361, 16.42194),
-             ('wagramer-4', 48.23472, 16.42250),
-             ('gumpendorfer-63', 48.19472, 16.34694),
-             ('landstrasser-46', 48.20250, 16.39472),
-             ('handelskai-94', 48.24222, 16.38472)
-           ) AS s(slug, lat, lng)
-          WHERE l.slug = s.slug`);
+    restored = true;
+    restoreSeed();
     const after = sql(
       "SELECT count(*) FILTER (WHERE lat IS NOT NULL) || '/' || count(*) FILTER (WHERE geocode_status IS NULL) || '/' || count(*) FILTER (WHERE active) FROM locations",
     );

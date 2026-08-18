@@ -547,6 +547,10 @@ export default function DashboardPage() {
                   openMaterials={openMaterials === null ? null : (openMaterials[id] ?? 0)}
                   truncated={snapshot.shifts.length >= snapshot.shift_limit}
                   asOf={asOf}
+                  /* The box on a pin has ~300px of map to live in, so the same numbers and
+                     the same links are laid out as a disclosure rather than as one column.
+                     Content identical to the drawer's — it is one component. */
+                  layout="box"
                 />
               )
             }}

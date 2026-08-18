@@ -15,6 +15,7 @@ import {
   VIENNA_CENTRE,
 } from '@/lib/map'
 import { type BuildingSummary, pinnedOnly } from '@/lib/objects'
+import { captureOpener } from '@/lib/useOverlay'
 
 /**
  * THE MAP REGION ON `/` — a backdrop under our own pins, and never the only way to read
@@ -52,6 +53,17 @@ import { type BuildingSummary, pinnedOnly } from '@/lib/objects'
  * never remounts. There is no auto-refresh polling on `/` at all — the refresh button and
  * `home.asOf` are how a newer answer is asked for.
  *
+ * ESCAPE AND FOCUS ON THE INFO BOX, and what it deliberately is NOT. The box is not a
+ * dialog, does not claim `role="dialog"` and does not trap Tab: the Objektliste below is a
+ * proven-complete keyboard path to everything the pins open, so nothing here is the only way
+ * to reach a function. What it DOES keep is the half of the overlay contract whose absence
+ * is simply surprising — Escape dismisses it, opening it moves focus into it, and closing it
+ * puts focus back on the control that opened it. Without the first, the box was the one
+ * surface in the admin that ate Escape; without the second, a keyboard reader pressed Enter
+ * on a row and nothing happened WHERE THEY WERE, because the box mounts UPSTREAM of the list
+ * in DOM order and forward Tab therefore never reaches it (measured: 30 presses, not found;
+ * Shift+Tab found it in 7, six of them Google's own controls).
+ *
  * KEYBOARD AND SCREEN READER — a deliberate, stated ceiling. Each COLLAPSED pin label is
  * `aria-hidden` and `tabindex="-1"`: pins are ordered by geography, so a tab order over
  * them is arbitrary, and a reader that hears „Donaufeld, 1 vor Ort" from a pin and again
@@ -81,7 +93,19 @@ const SINGLE_PIN_ZOOM = 16
 const PHONE_MAX_WIDTH = 767
 
 /** Breathing room between the info box and the map's own edge, in pixels. */
-const INFO_MARGIN = 24
+const INFO_MARGIN = 12
+
+/**
+ * How long after a click on our own pin layer the map's own click handler stays quiet, in
+ * milliseconds. See `layerClickAt`. Google forwards the click in the same task, so this only
+ * has to be non-zero; it is kept well under the time it takes a reader to click twice.
+ */
+const LAYER_CLICK_WINDOW = 150
+
+/** How far under the pin's own coordinate the box hangs before it is clamped. Mirrors the
+ *  `top: calc(100% + 14px)` in globals.css, and the two must agree or the clamp is off by
+ *  the difference. */
+const INFO_GAP = 14
 
 /** The info box never gets smaller than this; below it, it is a scrollbar with a title. */
 const INFO_MIN_HEIGHT = 160
@@ -89,13 +113,15 @@ const INFO_MIN_HEIGHT = 160
 /**
  * How far above the centre a selected pin is lifted, as a fraction of the map's height.
  *
- * MEASURED, not chosen: the box hangs below the pin, so a CENTRED pin leaves it exactly half
- * a map and the cross-links — which are the point of the box — end up below the fold of a
- * box that is itself below the fold. Lifting to ≈20 % from the top leaves ~75 % of the
- * region underneath, which is what makes the first links reachable without scrolling inside
- * a box the reader just opened.
+ * MEASURED, not chosen, and re-measured when the map region was cut to keep the Objektliste
+ * on the fold: the box hangs below the pin, so a CENTRED pin leaves it exactly half a map.
+ * 0.3 left ~336px of room in a 520px map; the region is smaller now, so the pin is lifted
+ * further — 0.38 puts it ~11 % from the top, which is as high as it can go before the label
+ * ABOVE the coordinate (the pin is `translate(-50%, -100%)`) is clipped by the map's edge.
+ * Everything under it is what the info box has to live in, and the expanded link list is
+ * sized against that number rather than hoping.
  */
-const INFO_LIFT = 0.3
+const INFO_LIFT = 0.38
 
 /**
  * The theme the page is in RIGHT NOW. `<html data-theme>` is the single truth — it is
@@ -140,6 +166,28 @@ export function HomeMap({
   const overlayRef = useRef<GOverlayView | null>(null)
   /** The DOM node inside Google's own float pane that our pins are portalled into. */
   const [pane, setPane] = useState<HTMLElement | null>(null)
+  /**
+   * WHEN OUR OWN PIN LAYER LAST TOOK A CLICK, as a timestamp.
+   *
+   * The pins and the open info box are portalled into Google's float pane, so every press
+   * inside the box is also a click on the map, and the map's handler clears the selection —
+   * i.e. pressing the disclosure inside the box closed the box that held it. Neither obvious
+   * fix works, and both were tried before this one:
+   *
+   *   `stopPropagation` on the box   Google's own click listener sits ON THE PIN LAYER, and
+   *                                  React's sits on the document ABOVE it. A fence between
+   *                                  the two blocks React as well, and then nothing inside
+   *                                  the box works at all.
+   *   ask `event.domEvent.target`    Google forwards the DOM event AFTER dispatch has
+   *                                  finished: `domEvent` is a real MouseEvent whose
+   *                                  `target` is already null and whose `composedPath()` is
+   *                                  empty. Measured, printed, not assumed.
+   *
+   * So the layer records the click while it is still being dispatched, and the map's handler
+   * reads that record. The window is short on purpose: it must outlast Google's forwarding
+   * (same task) and expire long before a reader can click the pin and then the map.
+   */
+  const layerClickAt = useRef(0)
   const pinRefs = useRef(new Map<string, HTMLDivElement>())
 
   const [state, setState] = useState<MapState>('loading')
@@ -177,13 +225,18 @@ export function HomeMap({
    * Put every pin where its coordinate currently projects to. Imperative on purpose: this
    * runs on every frame of a pan, and a `setState` per frame is jank with a stack trace.
    *
-   * It also decides WHICH WAY THE OPEN INFO BOX HANGS. The box is taller than the label, so
-   * a pin in the lower half of the map would open a box off the bottom edge, and a pin on
-   * the right would open one off the right edge — both of which put the cross-links
-   * somewhere nobody can click. Measured against the container's own rectangle rather than
-   * guessed from the projected pixel, because the projection's origin is the overlay pane's
-   * and not the map's viewport. Only the ONE open box is measured, so this stays a single
-   * `getBoundingClientRect` per frame rather than one per pin.
+   * It also decides WHERE THE OPEN INFO BOX SITS, and the answer is: inside the map,
+   * wherever that has to be. The box hangs under the pin by default and is then CLAMPED to
+   * the map's own rectangle — it is not flipped to whichever side has more room, which is
+   * what it used to do. The difference is not cosmetic: flipping capped the box at the room
+   * on ONE side of the pin (measured at 266px in a 380px map), and the box has to hold ten
+   * cross-links. Clamping caps it at the whole region instead, so the height available is a
+   * property of the map and not of where the reader happens to have dragged it.
+   *
+   * Measured against the container's own rectangle rather than guessed from the projected
+   * pixel, because the projection's origin is the overlay pane's and not the map's viewport.
+   * Only the ONE open box is measured, so this stays two `getBoundingClientRect` calls per
+   * frame rather than two per pin.
    */
   const reposition = useCallback(() => {
     const projection = overlayRef.current?.getProjection()
@@ -201,18 +254,20 @@ export function HomeMap({
       if (container === null) continue
       const pin = element.getBoundingClientRect()
       const map = container.getBoundingClientRect()
-      // Whichever side has more room wins, and the box is then CAPPED to that room, so it
-      // can never hang off the map however the reader has dragged it. `INFO_MIN_HEIGHT` is
-      // the floor: below that the box would be a scrollbar with a title on it.
-      const below = map.bottom - pin.bottom - INFO_MARGIN
-      const above = pin.top - map.top - INFO_MARGIN
-      const down = below >= above
-      element.dataset.flip = down ? 'down' : 'up'
       element.dataset.side = pin.left > map.left + map.width / 2 ? 'left' : 'right'
-      element.style.setProperty(
-        '--map-info-max',
-        `${Math.max(INFO_MIN_HEIGHT, Math.round(down ? below : above))}px`,
-      )
+      // The whole region, less a margin at each edge. `INFO_MIN_HEIGHT` is the floor: below
+      // that the box would be a scrollbar with a title on it.
+      const room = Math.max(INFO_MIN_HEIGHT, Math.round(map.height - INFO_MARGIN * 2))
+      element.style.setProperty('--map-info-max', `${room}px`)
+
+      // …then slide it back inside. The box is measured AFTER its max-height is set, so the
+      // number read here is the height it actually has, not the height it would like.
+      const box = element.querySelector('.map-info')
+      if (box === null) continue
+      const height = box.getBoundingClientRect().height
+      const want = pin.bottom + INFO_GAP
+      const top = Math.max(map.top + INFO_MARGIN, Math.min(want, map.bottom - INFO_MARGIN - height))
+      element.style.setProperty('--map-info-shift', `${Math.round(top - want)}px`)
     }
   }, [])
 
@@ -296,7 +351,17 @@ export function HomeMap({
           clickableIcons: false,
         })
         mapRef.current = map
-        map.addListener('click', () => onSelect(null))
+        // A click on the MAP clears the selection — but our pins and the open info box are
+        // portalled into Google's own float pane, so a press on the disclosure inside the
+        // box arrives here too, and it used to close the box that held it. Asked of the
+        // original DOM event rather than fenced off with `stopPropagation`, because the box
+        // is React's and React listens at the root, above the map: a fence that keeps this
+        // handler out also keeps React's own onClick out, and then nothing inside the box
+        // works at all. (That is not a hypothesis. Both were tried, in this order.)
+        map.addListener('click', () => {
+          if (Date.now() - layerClickAt.current < LAYER_CLICK_WINDOW) return
+          onSelect(null)
+        })
 
         // ONE overlay for ALL pins: a projection lookup per frame instead of per pin, and
         // one React portal target instead of N.
@@ -306,6 +371,15 @@ export function HomeMap({
           if (panes === null) return
           const layer = document.createElement('div')
           layer.className = 'map-pin-layer'
+          // Capture phase, and it changes nothing about the event: it only records that this
+          // click belongs to our own controls, for the map handler above.
+          layer.addEventListener(
+            'click',
+            () => {
+              layerClickAt.current = Date.now()
+            },
+            true,
+          )
           panes.floatPane.append(layer)
           setPane(layer)
         }
@@ -389,6 +463,25 @@ export function HomeMap({
     const height = containerRef.current?.clientHeight ?? 0
     if (height > 0) mapRef.current?.panBy(0, Math.round(height * INFO_LIFT))
   }, [selectedId, state])
+
+  /**
+   * The open box changes height when the reader expands its links, and nothing else in this
+   * component notices: the disclosure's state lives inside <BuildingFacts>, which is where
+   * it belongs. Without this the clamp above would still be the one computed for the
+   * COLLAPSED box, and the expanded one would hang off the bottom of the map — which is the
+   * exact failure this round is fixing, one level down.
+   *
+   * No feedback loop: `reposition` writes a position and a max-height, and neither changes
+   * the box's own content height.
+   */
+  useEffect(() => {
+    if (selectedId === null || state !== 'ready') return
+    const box = pinRefs.current.get(selectedId)?.querySelector('.map-info')
+    if (box === undefined || box === null) return
+    const observer = new ResizeObserver(() => reposition())
+    observer.observe(box)
+    return () => observer.disconnect()
+  }, [selectedId, state, reposition])
 
   /** A pin added by a refetch has never been through `draw()`. Place it now. */
   // biome-ignore lint/correctness/useExhaustiveDependencies: `reposition` reads `pinnedRef`, so biome cannot see that `pinned` and `selectedId` are what make it need re-running. They are triggers: a refetch that adds a building, or a selection that changes a pin's size, must move the labels or they sit at their old pixels until the next pan.
@@ -561,6 +654,43 @@ function Pin({
   register,
 }: PinProps) {
   const t = useTranslations('home')
+  const boxRef = useRef<HTMLElement>(null)
+  const open = selected && expandable
+
+  /**
+   * The box's half of the overlay contract (see the file header): focus in, Escape out,
+   * focus back on the opener. NOT a trap — Tab leaves, on purpose.
+   *
+   * The listener is on the document in the CAPTURE phase for the same reason
+   * `lib/useOverlay.ts` puts it there: focus is usually still on the Objektliste button that
+   * opened the box, which is nowhere near this subtree, and a control that swallows Escape
+   * (a native `<select>` does) must not be able to disable the dismissal.
+   */
+  useEffect(() => {
+    if (!open) return
+    // ONLY when the box was opened from a control OUTSIDE the map — which is to say from the
+    // Objektliste, which is the keyboard path. A mouse click on a pin leaves focus on the
+    // pin's own label; moving it into the box and then to `#main-content` on close would
+    // scroll a mouse user back to the top of the page for having closed a box.
+    const opener = document.activeElement
+    const fromPin = opener instanceof HTMLElement && opener.closest('.map-pin') !== null
+    const restore = fromPin ? null : captureOpener()
+    // The box itself, not its first link: landing on a link would read as though the reader
+    // had already chosen one of the ten.
+    if (!fromPin) boxRef.current?.focus()
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.stopPropagation()
+      onSelect(null)
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true)
+      restore?.()
+    }
+  }, [open, onSelect])
 
   const flags: ReactNode[] = []
   if (building.unresolved > 0) {
@@ -622,8 +752,10 @@ function Pin({
         NOT aria-hidden, unlike the label above it: it holds the real links out of this
         building, and a link no keyboard can reach is not a link.
       */}
-      {selected && expandable ? (
-        <section className="map-info" aria-label={building.name}>
+      {open ? (
+        // `tabIndex={-1}`: programmatically focusable so the box can be focused on open,
+        // never a tab stop of its own.
+        <section className="map-info" aria-label={building.name} ref={boxRef} tabIndex={-1}>
           {/* The heading and the close control sit OUTSIDE the scrolling area: a box whose
               own title scrolls away is a box that stops saying which building it is about,
               and that is the misreading this whole surface exists to prevent. */}

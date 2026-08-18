@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useFormatter, useTranslations } from 'next-intl'
+import { useId, useState } from 'react'
 import type { Location, Shift } from '@/lib/api'
 import { filterHref } from '@/lib/filters'
 import { periodRange, withinRange } from '@/lib/period'
@@ -30,6 +31,22 @@ export type BuildingFactsProps = {
   truncated: boolean
   /** The clock the elapsed times were read against. Frozen at load, exactly like `/`. */
   asOf: Date
+  /**
+   * WHICH FRAME THIS IS BEING RENDERED IN, and it is a layout fact rather than a content
+   * one — the numbers and the links are identical in both.
+   *
+   *   'panel' the drawer and the phone bottom sheet: a full-height surface, so the numbers
+   *           AND the links are on screen at once, which is the shape everything else in
+   *           this admin has.
+   *   'box'   the info box on a map pin: ~300px of room, measured, inside a map region that
+   *           may not eat the fold (decision-39 §3). Five numbers and ten cross-links do not
+   *           both fit in 300px at any legible size, and the version that pretended they did
+   *           put ALL TEN LINKS below the box's own fold with no scrollbar and no expander —
+   *           i.e. it hid the entire point of decision-38 on the landing surface. So the box
+   *           is a DISCLOSURE: the numbers, and one control that says how many links there
+   *           are and shows them. The owner's word for it was 'expandable' (IA-PLAN §9).
+   */
+  layout?: 'panel' | 'box'
 }
 
 /**
@@ -68,9 +85,18 @@ export function BuildingFacts({
   openMaterials,
   truncated,
   asOf,
+  layout = 'panel',
 }: BuildingFactsProps) {
   const t = useTranslations('home')
   const format = useFormatter()
+  /**
+   * Which face of the box is showing. VIEW STATE, deliberately not a URL parameter: the URL
+   * says WHICH BUILDING is open (decision-38) and a link somebody is sent must open the same
+   * thing every time. It resets when another building is selected, because that is a
+   * different box.
+   */
+  const [linksOpen, setLinksOpen] = useState(false)
+  const linksId = useId()
 
   const here = shifts.filter((shift) => shift.location_id === building.id)
   const onSite = here
@@ -206,7 +232,7 @@ export function BuildingFacts({
     })
   }
 
-  return (
+  const numbers = (
     <>
       <dl className="panel-metrics">
         {/* N1 — who is standing in this building right now. Frozen at load and says so. */}
@@ -302,8 +328,11 @@ export function BuildingFacts({
           }),
         })}
       </p>
+    </>
+  )
 
-      <h3>{t('panelLinksHeading')}</h3>
+  const linkList = (
+    <>
       {/* `panel-links-out` carries no styling. It is a HOOK: the on-site cell above is also a
           `.panel-links` list, so a check reaching for „the links out of this building" with a
           loose selector finds a worker link and passes while every cross-link is unreachable.
@@ -321,6 +350,52 @@ export function BuildingFacts({
           </li>
         ) : null}
       </ul>
+    </>
+  )
+
+  /**
+   * THE DRAWER AND THE BOTTOM SHEET: both at once, in the order the reader asks the
+   * question — what is going on here, then what can I do about it.
+   */
+  if (layout === 'panel') {
+    return (
+      <>
+        {numbers}
+        <h3>{t('panelLinksHeading')}</h3>
+        {linkList}
+      </>
+    )
+  }
+
+  /**
+   * THE INFO BOX ON A PIN: one face at a time, with the control between them saying HOW MANY
+   * links are behind it. The count is the affordance — a bare chevron is a thing to ignore,
+   * '10 Verknuepfungen' is a thing to press.
+   *
+   * Both faces stay MOUNTED and are hidden with the `hidden` attribute rather than unmounted:
+   * `hidden` takes them out of the tab order and out of the accessibility tree (which an
+   * `overflow: hidden` fold never did — that is how ten links ended up reachable only by a
+   * wheel gesture over a box with no scrollbar), while a check can still ask the DOM whether
+   * the box carries the same links the drawer does. It does; the two are one component.
+   */
+  return (
+    <>
+      <div className="map-info-face" hidden={linksOpen}>
+        {numbers}
+      </div>
+      <button
+        type="button"
+        className="map-info-expand"
+        aria-expanded={linksOpen}
+        aria-controls={linksId}
+        onClick={() => setLinksOpen((open) => !open)}
+      >
+        <span aria-hidden="true">{linksOpen ? '▴' : '▾'}</span>{' '}
+        {t('panelLinksToggle', { count: links.length })}
+      </button>
+      <div className="map-info-face is-links" id={linksId} hidden={!linksOpen}>
+        {linkList}
+      </div>
     </>
   )
 }

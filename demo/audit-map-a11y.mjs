@@ -118,9 +118,18 @@ async function mapSettled(timeout = 25000) {
 }
 
 /**
- * The FULL overlay contract, applied to whatever `selector` names. Used for the drawer AND
- * for the info box, deliberately: writing a weaker version for the surface that is not
- * called a dialog is how „it is not a dialog" turns into „so none of the rules apply".
+ * The overlay contract, applied to whatever `selector` names. Used for the drawer AND for
+ * the info box, deliberately: writing a weaker version for the surface that is not called a
+ * dialog is how „it is not a dialog" turns into „so none of the rules apply".
+ *
+ * ONE CLAUSE DIFFERS BETWEEN THEM, AND IT IS A DECISION RATHER THAN AN EXEMPTION. The drawer
+ * and the modal TRAP Tab, because they are dialogs: everything behind them is inert to the
+ * keyboard and leaving is what Escape is for. The info box on a pin is NOT a dialog, does
+ * not claim `role="dialog"`, does not lock the page's scroll, and sits inside a map region
+ * whose own controls (Google's zoom, the terms link) are legitimate tab stops. Trapping
+ * focus in a non-modal popover is the WCAG 2.1.2 failure, not the fix for it. So for the box
+ * this asserts the opposite: focus must be able to LEAVE by Tab, and Escape and focus
+ * restoration must still hold. Same number of assertions, none of them weakened.
  *
  * `open` must leave `window.__opener` set to the control that was activated, so restoration
  * is compared against a NODE REFERENCE captured before the click — a re-queried selector
@@ -158,8 +167,9 @@ async function overlayContract(label, selector, open, { expectDialogRole } = {})
     record(await bodyLocked(), `${label}: body scroll locked while open`)
   }
 
-  // Tab is trapped. Count the focusables and press that many + 3: if the trap leaks, focus
-  // is outside by then. Bounded by construction — no waiting, no timeout.
+  // Count the focusables and press that many + 3. For a DIALOG focus must still be inside
+  // at the end (trapped); for the info box it must have left (not a dialog, see above).
+  // Bounded by construction — no waiting, no timeout.
   const inside = expectDialogRole ? '.drawer' : '.map-info'
   const count = await page.eval(`(() => {
     const el = document.querySelector(${JSON.stringify(selector)})
@@ -175,11 +185,21 @@ async function overlayContract(label, selector, open, { expectDialogRole } = {})
       break
     }
   }
-  record(
-    escaped === null,
-    `${label}: Tab is trapped (${count} focusables, ${count + 3} presses)`,
-    escaped === null ? '' : `escaped at press ${escaped.step} onto ${escaped.tag} "${escaped.text}"`,
-  )
+  if (expectDialogRole) {
+    record(
+      escaped === null,
+      `${label}: Tab is trapped (${count} focusables, ${count + 3} presses)`,
+      escaped === null ? '' : `escaped at press ${escaped.step} onto ${escaped.tag} "${escaped.text}"`,
+    )
+  } else {
+    record(
+      escaped !== null,
+      `${label}: Tab LEAVES it — a non-modal popover may not trap focus (${count} focusables)`,
+      escaped === null
+        ? `still inside after ${count + 3} presses — that is a trap, and this surface is not a dialog`
+        : `left at press ${escaped.step} onto ${escaped.tag} "${escaped.text}"`,
+    )
+  }
 
   // Escape closes. Dispatched at the document, capture phase or not — a listener that is
   // simply absent is what this catches.
@@ -207,6 +227,18 @@ async function main() {
 
   // The fixture has to be the KEYED one or half this file passes by never running.
   const status = await page.eval(`document.querySelector('.map-region .note')?.textContent ?? ''`)
+  // BOUNDED WAIT, not an instant read. The region reports „ready" when Google's map is idle,
+  // and our own pins are portalled into its float pane a frame or two later — so a check
+  // that counts them in the same tick is racing the renderer, and it loses often enough to
+  // refuse a perfectly good fixture. (It did, here, for a build with five pins on screen.)
+  try {
+    await page.waitFor(`document.querySelectorAll('.map-pin').length > 0`, {
+      timeout: 15000,
+      label: 'our own pins',
+    })
+  } catch {
+    /* reported by the refusal below, with the count */
+  }
   const pins = await page.eval(`document.querySelectorAll('.map-pin').length`)
   console.log(`       map status: ${status.trim()}`)
   if (pins === 0) {

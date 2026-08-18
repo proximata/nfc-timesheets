@@ -81,8 +81,16 @@ for (const cfg of configs) {
     const uuid = process.env.LOC_UUID;
     await page.goto(`${BASE}/?location=${uuid}`, { settle: 2500 });
     await sleep(3000);
+    // BOTH FACES, because the box is a disclosure now and reporting only the one that is
+    // showing at rest would say exactly as little as the version that reported „0 of 8".
+    for (const open of [false, true]) {
+    if (open) {
+      const toggled = await page.eval(`(() => { const b = document.querySelector('.map-info-expand'); if (!b) return false; b.click(); return true })()`);
+      if (!toggled) continue;
+      await sleep(700);
+    }
     const box = await page.eval(BOX);
-    console.log(`\n=== ${cfg.tag}px ===`);
+    console.log(`\n=== ${cfg.tag}px · links ${open ? "EXPANDED" : "collapsed"} ===`);
     if (!box.found) {
       console.log("  no .map-info in the DOM (phone renders the bottom sheet instead)");
     } else {
@@ -93,6 +101,7 @@ for (const cfg of configs) {
       console.log(`  links ${box.visibleLinks}/${box.linkCount} fully visible, ${box.clippedLinks} sliced by the box edge`);
       for (const l of box.links) console.log(`     ${l.visible ? "vis " : l.clipped ? "CUT " : "HID "} top=${String(l.top).padStart(4)} h=${String(l.h).padStart(3)}  ${l.text}  -> ${l.href}`);
       console.log(`  last lines rendered: ${JSON.stringify(box.tail)}`);
+    }
     }
   } finally {
     page.close();

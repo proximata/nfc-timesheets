@@ -106,6 +106,7 @@
     "panelClientNone": "no client on file",
     "panelTruncated": "Only the most recent shifts were loaded. The numbers above are therefore floors, not totals.",
     "panelLinksHeading": "Go to",
+    "panelLinksToggle": "{count, plural, one {# link} other {# links}}",
     "panelLinkShifts": "This building’s shifts · this month",
     "panelLinkUnresolved": "{count, plural, one {Confirm # shift · all periods} other {Confirm # shifts · all periods}}",
     "panelLinkClose": "Close {name}’s open shift",

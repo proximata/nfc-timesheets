@@ -52,6 +52,75 @@ function isVisible(element: HTMLElement): boolean {
   return element.getClientRects().length > 0
 }
 
+/**
+ * WHERE FOCUS GOES WHEN A SURFACE CLOSES. Called at OPEN time; the function it returns is
+ * called at CLOSE time.
+ *
+ * `opener.isConnected` alone is not enough and this is the defect it missed. For a panel
+ * driven by the URL (`?worker=`, `?location=` — decision-38) the close itself re-renders the
+ * list that holds the opener anchor. At cleanup time the anchor is STILL connected, so
+ * `.focus()` succeeds — and React then replaces that node in the same commit, at which point
+ * the browser drops focus on `<body>`, at the top of a 351-row table. The guard was written
+ * for a different shape of close ('the save removed the row'), where the removal lands in an
+ * EARLIER commit and `isConnected` is already false.
+ *
+ * So: focus immediately, then look again after the commit has painted, and if focus fell to
+ * the document, re-find the opener BY IDENTITY IN THE MARKUP rather than by node reference —
+ * the id, the href or the label it was activated by. A replaced node carries the same three.
+ * Only if that finds nothing does focus go to `#main-content`, which is where the skip link
+ * already points. NEVER `<body>`.
+ *
+ * ponytail: the re-find is a first-match query, so two controls with the same href and label
+ * on one screen would return the earlier one. CEILING, and a harmless one — it is the same
+ * link to the same place. Upgrade path: a data attribute written by the opener, if a screen
+ * ever gets two of them and somebody minds.
+ */
+export function captureOpener(): () => void {
+  const active = document.activeElement
+  // `<body>` is not an opener, it is the absence of one — and remembering it would make the
+  // fallback below restore focus to exactly the place this function exists to avoid.
+  const opener =
+    active instanceof HTMLElement && active !== document.body && active !== document.documentElement
+      ? active
+      : null
+  const tag = opener?.tagName ?? ''
+  const id = opener?.id ?? ''
+  const href = opener?.getAttribute('href') ?? ''
+  const label = (opener?.getAttribute('aria-label') ?? opener?.textContent ?? '').trim()
+
+  const again = (): HTMLElement | null => {
+    if (id !== '') return document.getElementById(id)
+    if (tag === '') return null
+    const same = [...document.querySelectorAll<HTMLElement>(tag)].find((node) =>
+      href !== ''
+        ? node.getAttribute('href') === href
+        : label !== '' &&
+          (node.getAttribute('aria-label') ?? node.textContent ?? '').trim() === label,
+    )
+    return same ?? null
+  }
+
+  const land = () => {
+    const target = opener?.isConnected === true ? opener : again()
+    if (target?.isConnected === true) target.focus()
+    else document.getElementById('main-content')?.focus()
+  }
+
+  return () => {
+    land()
+    // After the commit that closed the surface. `requestAnimationFrame` and not a timeout:
+    // the replacement happens in React's commit, which is before the next paint.
+    requestAnimationFrame(() => {
+      // Only if focus is nowhere. Anything else — another overlay opened, the reader clicked
+      // something — is somebody with a better claim to it than a closed panel.
+      const active = document.activeElement
+      if (stack.length > 0) return
+      if (active !== null && active !== document.body && active !== document.documentElement) return
+      land()
+    })
+  }
+}
+
 export function useOverlay<T extends HTMLElement = HTMLElement>(
   open: boolean,
   onClose: () => void,
@@ -71,7 +140,7 @@ export function useOverlay<T extends HTMLElement = HTMLElement>(
     const token = Symbol('overlay')
     stack.push(token)
 
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const restore = captureOpener()
 
     if (stack.length === 1) {
       restoreOverflow = document.body.style.overflow
@@ -132,9 +201,8 @@ export function useOverlay<T extends HTMLElement = HTMLElement>(
         restoreOverflow = null
       }
 
-      // `isConnected` is the whole reason this hook exists — see the header comment.
-      if (opener?.isConnected) opener.focus()
-      else document.getElementById('main-content')?.focus()
+      // Focus restoration is the whole reason this hook exists — see `captureOpener`.
+      restore()
     }
   }, [open])
 

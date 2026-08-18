@@ -106,6 +106,7 @@
     "panelClientNone": "kein Kunde hinterlegt",
     "panelTruncated": "Es wurden nur die neuesten Schichten geladen. Die Zahlen oben sind daher Mindestwerte, keine Summen.",
     "panelLinksHeading": "Weiter zu",
+    "panelLinksToggle": "{count, plural, one {# Verknüpfung} other {# Verknüpfungen}}",
     "panelLinkShifts": "Schichten dieses Objekts · dieser Monat",
     "panelLinkUnresolved": "{count, plural, one {# Schicht bestätigen · alle Zeiträume} other {# Schichten bestätigen · alle Zeiträume}}",
     "panelLinkClose": "Offene Schicht von {name} schließen",

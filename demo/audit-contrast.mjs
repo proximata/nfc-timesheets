@@ -38,12 +38,22 @@ const PAIRS = [
   ['--danger', '--bg-raised', '.form-error inside a drawer', 'body'],
   ['--ok', '--bg-base', '.form-status text', 'body'],
   ['--ok', '--bg-raised', '.form-status inside a panel', 'body'],
-  ['--state-open', '--bg-base', '.badge.open word + the 3px rule', 'ui'],
-  ['--state-open', '--bg-raised', '.badge.open inside a panel', 'ui'],
-  ['--state-unres', '--bg-base', '.badge.unres word + the 3px rule', 'ui'],
-  ['--state-unres', '--bg-raised', '.badge.unres inside a panel', 'ui'],
-  ['--state-corrected', '--bg-base', '.badge.corr word + the 3px rule', 'ui'],
-  ['--state-corrected', '--bg-raised', '.badge.corr inside a panel', 'ui'],
+  // THE THREE STATE TOKENS ARE SCORED AS TEXT, at 4.5:1, and they used to be scored as
+  // graphics at 3:1. That disagreement is not academic — it is what let the light theme ship
+  // „Nicht bestätigt" at 4.34:1 for months: this file called it a badge (a graphic, plus a
+  // 3px rule) and passed it, while demo/audit-map-contrast.mjs called it a word and failed
+  // it. A badge is a WORD first and a shape second; the shape is the redundant signal, not
+  // the content. Whatever these tokens paint, they paint it under letters:
+  //   .badge.open/.unres/.corr, .shift-state-*, .material-stage-decide, .map-pin-flag,
+  //   .state-word.is-unres, .filter-chip.is-unknown
+  // WCAG 1.4.3 asks 4.5:1 for that, and the two checks in this tree now ask for the same
+  // number so they cannot quietly disagree again.
+  ['--state-open', '--bg-base', '.badge.open WORD (the 3px rule is the second signal)', 'body'],
+  ['--state-open', '--bg-raised', '.badge.open word inside a panel', 'body'],
+  ['--state-unres', '--bg-base', '.badge.unres WORD (the 3px rule is the second signal)', 'body'],
+  ['--state-unres', '--bg-raised', '.badge.unres word inside a panel', 'body'],
+  ['--state-corrected', '--bg-base', '.badge.corr WORD (the 3px rule is the second signal)', 'body'],
+  ['--state-corrected', '--bg-raised', '.badge.corr word inside a panel', 'body'],
   ['--border', '--bg-base', 'table hairline / panel edge', 'ui'],
   ['--border', '--bg-raised', 'hairline inside a panel', 'ui'],
   ['--border-strong', '--bg-base', '.btn-ghost outline, input outline', 'ui'],

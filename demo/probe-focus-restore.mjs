@@ -17,6 +17,23 @@
 // The identity comparison is against a node reference captured BEFORE the click, not against
 // a selector re-queried afterwards — a selector match would also be satisfied by a fresh
 // element that merely looks like the opener.
+//
+// TWO SHAPES OF OPENER, TWO CORRECT LANDINGS, and conflating them is how this probe read as
+// broken while reporting a real defect:
+//
+//   the opener is still in the document   — a create button, a row button that opens the
+//     panel in place (`?worker=` on the screen you are already on). Focus MUST return to it,
+//     even though React re-rendered the list that holds it in the same commit as the close.
+//   the opener is gone because the click NAVIGATED — /shifts/ and /payroll/ point their
+//     „Mitarbeiterpanel öffnen" at `/workers/?worker=<id>`, i.e. at another screen, and the
+//     panel opens from the URL on arrival. There is no opener in that document at all, so
+//     the only correct landing is `#main-content` (the skip link's target). What must NEVER
+//     happen is `<body>`: that is the top of a 351-row table with nothing announced, and it
+//     is what shipped — `document.activeElement` on a fresh document IS `<body>`, the old
+//     code asked `opener?.isConnected`, and `<body>` is always connected, so it dutifully
+//     focused the thing it was trying to avoid.
+//
+// The probe reports which shape it measured, so a green line says what it proved.
 import { attach, launchChrome, sleep } from './cdp.mjs'
 
 const BASE = process.env.AUDIT_BASE ?? 'http://127.0.0.1:8082'
@@ -62,6 +79,7 @@ try {
         .includes(${JSON.stringify(OPENER)}))
     if (!hit) return false
     window.__opener = hit
+    window.__openerPath = location.pathname
     hit.focus()
     hit.click()
     return true
@@ -129,16 +147,34 @@ try {
       const a = document.activeElement
       return {
         restored: a === window.__opener,
+        // Did the opener take us to another screen? Then it is not in this document and
+        // cannot be focused by anybody.
+        navigated: location.pathname !== window.__openerPath,
+        openerConnected: !!(window.__opener && window.__opener.isConnected),
+        onMain: !!(a && a.id === 'main-content'),
+        onBody: !a || a === document.body,
         tag: a ? a.tagName : 'null',
         id: a ? a.id : '',
         text: a ? (a.getAttribute('aria-label') || a.textContent || '').trim().slice(0, 48) : '',
       }
     })()`)
-    if (!where.restored) {
-      fail(`focus landed on ${where.tag}${where.id ? `#${where.id}` : ''} ` +
-        `"${where.text}" instead of the opener`)
+    const landed = `${where.tag}${where.id ? `#${where.id}` : ''} "${where.text}"`
+    if (where.onBody) {
+      fail(`focus landed on BODY — the top of the document, with nothing announced`)
+    } else if (where.navigated || !where.openerConnected) {
+      // The opener is genuinely gone. `#main-content` is the documented fallback and the
+      // only other acceptable landing; anything else is focus going somewhere nobody asked.
+      if (where.onMain) {
+        console.log(
+          `  ok   the opener navigated away, so focus went to #main-content — not to BODY`,
+        )
+      } else {
+        fail(`the opener is gone and focus landed on ${landed}, not on #main-content`)
+      }
+    } else if (where.restored) {
+      console.log(`  ok   focus returned to the opener — ${landed}`)
     } else {
-      console.log(`  ok   focus returned to the opener — ${where.tag} "${where.text}"`)
+      fail(`focus landed on ${landed} instead of the opener, which is still on screen`)
     }
   }
 } catch (error) {

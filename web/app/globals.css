@@ -113,7 +113,13 @@
   --accent-weak: oklch(0.55 0.12 250 / 0.12);
   --accent-text: #fff;
   --state-open: oklch(0.55 0.12 250);
-  --state-unres: oklch(0.58 0.11 75);
+  /* 0.58 was 4.34:1 on #fff and 4.16:1 on the base, under the 4.5:1 a WORD needs, and it
+     paints words: the badge 'Nicht bestaetigt', the pin flag 'pruefen', the material stage
+     'zu entscheiden'. 0.55 gives 4.92:1 on #fff and 4.63:1 on the base. Chroma and hue are
+     unchanged, so the state keeps the colour it has always had; 0.56 and 0.57 clear neither
+     backdrop. Scored at the body tier by demo/audit-contrast.mjs, which used to score it as
+     a graphic at 3:1, and that disagreement is what let 4.34:1 ship. */
+  --state-unres: oklch(0.55 0.11 75);
   --state-corrected: oklch(0.52 0.11 300);
   --danger: oklch(0.5 0.19 25);
   --ok: oklch(0.5 0.13 155);
@@ -1125,11 +1131,24 @@ a {
   display: inline-flex;
   align-items: center;
   gap: var(--s1);
+  /* The longest chip in the product is a whole sentence -- the unknown-object one -- and at
+     390px it was 370px of nowrap text starting 25px in, which pushed the REMOVE control off
+     the right edge of the viewport on the one state whose entire purpose is to be escapable
+     (decision-28 forbids answering that with a horizontal scrollbar). The pill may now be as
+     wide as its row and no wider; the text inside it wraps. */
+  max-width: 100%;
   padding: 2px 2px 2px var(--s3);
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   font-size: 0.8125rem;
   color: var(--text-primary);
+}
+
+.filter-chip-list > li {
+  /* A flex item refuses to shrink below its content by default, so the wrap above only
+     takes effect once the item itself is allowed to be narrower than the sentence. */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .filter-chip.is-unknown {
@@ -1138,8 +1157,13 @@ a {
   font-weight: 600;
 }
 
+/* Wrapping, not truncation: the sentence IS the answer ("dieses Objekt ist hier nicht
+   vorhanden"), and a chip that ellipsises it says less than the empty table it explains.
+   `overflow-wrap` because a German compound in a building name can be longer than a phone
+   is wide. A two-line pill is not pretty; a remove button nobody can reach is worse. */
 .filter-chip-text {
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* 44px of TARGET without 44px of chip: the pill stays the size of its text and the button
@@ -1528,11 +1552,21 @@ a {
    NEVER 100vh (decision-39 §3). A viewport-locked map hides the triage list, the on-site
    table and the recent-activity list on the landing screen — i.e. it loses the journey the
    map exists to serve. The map owns the top of the fold; the ledger is one scroll away.
-   `min()` keeps it a fraction of the viewport on a laptop and caps it on a large screen. */
+   `min()` keeps it a fraction of the viewport on a laptop and caps it on a large screen.
+
+   52vh/560px WAS TOO MUCH AND IT WAS MEASURED, not felt: at 1680x1000 the Objektliste's
+   heading landed at y=964 and NOT ONE ROW of it was on the fold. The list is rendered on
+   every path and the map is the region that may not draw at all (production has one
+   building and no coordinates), so the optional thing was holding the fold and the
+   always-rendered thing was under it. 36vh/400px puts the heading and the first rows back
+   above it while leaving the map a band and not a strip. The info box on a pin is sized
+   against this number — components/HomeMap.tsx INFO_LIFT and `--map-info-max` below. */
 .map-canvas {
-  height: min(52vh, 560px);
+  height: min(36vh, 400px);
   width: 100%;
-  margin-bottom: var(--s4);
+  /* The region already carries a bottom margin; a second one under the canvas cost 16px of
+     fold for nothing. */
+  margin-bottom: 0;
   border: 1px solid var(--border);
   border-radius: var(--r-card);
   background: var(--bg-sunken);
@@ -1589,7 +1623,15 @@ a {
 }
 
 /* The stem from the label down to the actual point. Without it a label floating near a
-   street is a label that could belong to either side of it. */
+   street is a label that could belong to either side of it.
+
+   `--text-muted`, NOT `--border-strong`, and the difference is the whole margin this thing
+   has. The stem is 1px wide, is drawn straight onto a Google tile with nothing behind it,
+   and is the ONLY mark saying which building the chip belongs to. On `--border-strong` it
+   measured 3.24:1 (dark, over a motorway) and 3.10:1 (light, over water) against a 3:1
+   floor — a tenth of a point of headroom, on the one element with no second signal. On
+   `--text-muted` it is 4.93 / 4.00. Measured by demo/audit-map-contrast.mjs on every tile
+   colour lib/map.ts can paint, worst one wins. */
 .map-pin::after {
   content: "";
   position: absolute;
@@ -1597,7 +1639,7 @@ a {
   top: 100%;
   width: 1px;
   height: 10px;
-  background: var(--border-strong);
+  background: var(--text-muted);
 }
 
 .map-pin.is-selected {
@@ -1698,13 +1740,14 @@ a {
    and the building's name up off the top of the map. Measured, not reasoned about: the
    first version put the box's own title 44px above the map's top edge.
 
-   It hangs BELOW the anchor by default and flips UP for a pin in the lower half of the
-   map, and it aligns LEFT of the anchor for a pin in the right half — both decided from
-   the real rectangles in components/HomeMap.tsx's `reposition`. A box that opens off the
-   edge is a box whose cross-links nobody can click. */
+   It hangs BELOW the anchor and is then CLAMPED into the map by `--map-info-shift`, and it
+   aligns LEFT of the anchor for a pin in the right half — both decided from the real
+   rectangles in components/HomeMap.tsx's `reposition`. A box that opens off the edge is a
+   box whose cross-links nobody can click. The 14px here is `INFO_GAP` there; they have to
+   agree or the clamp is off by the difference. */
 .map-info {
   position: absolute;
-  top: calc(100% + 14px);
+  top: calc(100% + 14px + var(--map-info-shift, 0px));
   left: 0;
   z-index: 6;
   display: flex;
@@ -1716,7 +1759,10 @@ a {
      then capped BY: sized so the numbers AND the first cross-links fit without scrolling
      inside a box the reader has only just opened — the links are what the box is for. */
   max-height: min(52vh, 440px, var(--map-info-max, 440px));
-  padding: var(--s3);
+  padding: var(--s2) var(--s3);
+  /* The two faces below are what the height is spent on, so the box must be able to be
+     shorter than its content and hand the overflow to whichever face is showing. */
+  min-height: 0;
   background: var(--bg-raised);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-card);
@@ -1726,9 +1772,12 @@ a {
   overflow-wrap: anywhere;
 }
 
-.map-pin[data-flip="up"] .map-info {
-  top: auto;
-  bottom: calc(100% + 6px);
+/* Wider only while the links are showing: two columns of German link labels need the room,
+   and a permanently 32rem box would cover more map than five numbers are worth. `:has()` so
+   the width follows the disclosure's own state and there is no second flag to keep in step
+   with `aria-expanded` — the attribute IS the state. */
+.map-info:has(.map-info-expand[aria-expanded="true"]) {
+  width: min(32rem, 76vw);
 }
 
 .map-pin[data-side="left"] .map-info {
@@ -1741,15 +1790,82 @@ a {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--s2);
-  margin-bottom: var(--s2);
+  margin-bottom: var(--s1);
   /* Never scrolls away: the box must keep saying which building it is about. */
   flex: none;
 }
 
-/* Only the FACTS scroll. */
+/* THE BOX HAS TWO FACES AND ONE CONTROL BETWEEN THEM (components/BuildingFacts.tsx).
+
+   Why it is not simply one scrolling column, which is what it was: five numbers and ten
+   cross-links are ~800px of content, the box gets ~300px of map, and the version that put
+   them in one `overflow: auto` body rendered ZERO of the ten links inside its own rectangle,
+   with no scrollbar and no expander. Every one of those links is a decision-38 cross-link
+   carrying its filter, on the landing surface, and none of them was on screen.
+
+   So: the numbers, a control that says how many links there are, and the links. The control
+   is `flex: none` and sits BETWEEN them, which is what stops it scrolling away — an expander
+   the reader has to scroll to find is the fold again with an extra step. */
 .map-info-body {
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+}
+
+.map-info-face {
+  min-height: 0;
+  /* The safety valve, and only that: at the measured geometry neither face needs it. A pin
+     dragged into a corner gets a shorter box, and a face that cannot fit must scroll rather
+     than be cut. */
+  overflow: auto;
+}
+
+/* The disclosure. Full width, its own rule, never part of the scrolling area. */
+.map-info-expand {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex: none;
+  width: 100%;
+  min-height: 44px;
+  margin-top: var(--s1);
+  padding: var(--s1) 0 0;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--border);
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Ten links one per line is 520px and the box has ~300. Two columns at 0.8125rem is 190px
+   of them, which fits with room to spare — measured, and asserted by demo/check-map-home.mjs
+   (every link inside the box's own rectangle, with the box not scrolled). */
+.map-info-face.is-links .panel-links-out {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s1) var(--s3);
+  margin-top: var(--s2);
+}
+
+/* The 44px target is decision-28's phone rule and the box is desktop-only by construction
+   (a phone gets the bottom sheet, which keeps 44px, and so does the drawer). 26px still
+   clears WCAG 2.5.8's 24px minimum, and the target is the full width of its column rather
+   than the width of the text. Applies to the worker link on the numbers face too: at 44px
+   the five numbers did not fit either. */
+.map-info .panel-links a {
+  display: block;
+  min-height: 26px;
+  padding: 2px 0;
+  line-height: 1.35;
+}
+
+/* Every pixel here is a pixel a face does not get, and both faces measured tight. */
+.map-info .field-hint {
+  margin: 0;
 }
 
 .map-info-head h3 {
@@ -1813,10 +1929,11 @@ a {
 .map-info .panel-metrics {
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
+  margin-bottom: var(--s2);
 }
 
 .map-info .panel-metrics dt {
-  margin-top: var(--s2);
+  margin-top: var(--s1);
   font-size: 0.75rem;
 }
 
