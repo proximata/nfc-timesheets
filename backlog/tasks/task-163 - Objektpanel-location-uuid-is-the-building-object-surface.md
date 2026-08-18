@@ -1,9 +1,10 @@
 ---
 id: TASK-163
 title: 'Objektpanel: /?location=<uuid> is the building object surface'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-08-18 03:18'
+updated_date: '2026-08-18 05:56'
 labels:
   - ux
   - ia
@@ -42,12 +43,27 @@ Street View: read the STORED locations.street_view_status column. Never call the
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 D5 in one action: from / a director opens a building, sees the named worker with the open shift, and reaches /shifts/?location=<uuid>&period=all&state=open&shift=<id> in ONE click
-- [ ] #2 All eleven links from IA-PLAN.md section 3 (L1-L11) are present, each carries its state, and a link whose target would be empty is NOT rendered - the zero is stated in words instead
-- [ ] #3 N2 applies NO period filter: an unresolved shift older than 30 days is counted and linked
+- [x] #1 D5 in one action: from / a director opens a building, sees the named worker with the open shift, and reaches /shifts/?location=<uuid>&period=all&state=open&shift=<id> in ONE click
+- [x] #2 All eleven links from IA-PLAN.md section 3 (L1-L11) are present, each carries its state, and a link whose target would be empty is NOT rendered - the zero is stated in words instead
+- [x] #3 N2 applies NO period filter: an unresolved shift older than 30 days is counted and linked
 - [ ] #4 N4 with target_minutes NULL renders 'Kein Monatsziel vereinbart' and never 0 percent; the variance flag does not appear before day 10 of the month
 - [ ] #5 N5 with unknown revenue renders revenueUnknown and never 0,00 EUR
 - [ ] #6 Esc closes the panel and focus returns to the row or pin that opened it; /?location=<uuid> opened cold in a new tab renders the panel for that building
 - [ ] #7 A building with no zones renders the stated one-line sentence, in de and en, and prints no zone hours and no zone euros
 - [ ] #8 Zero Street View metadata requests are made from the browser; with the API disabled the panel shows 'Keine Strassenansicht'
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+PARTIAL, deliberately: the panel shipped as the URL contract's landing surface (/?location=<uuid>, drawer, 8-11 links each carrying state, N1 vor Ort with overdueFlag as a WORD, N2 with no period filter, N3 'noch nie' as a real answer, N4 'kein Monatsziel vereinbart' never 0 percent, N5 contract + client). It is computed from the shift payload / already fetches.
+
+WHAT IS NOT BUILT AND WHY:
+ - N3 and the counts come from the CAPPED shift list, not from SQL. The panel states it (panelTruncated: 'die Zahlen oben sind Mindestwerte') rather than presenting a floor as a total. Proper fix is TASK-161's GET /admin/overview.
+ - N5 carries NO margin at all. Browser arithmetic over a capped payload would report a confident number that is quietly too small; the link to /pl/ carries the building and the period instead, and the screen that owns the number states it.
+ - The variance flag before day 10 (AC#4) is not implemented - the panel prints actual vs target and no flag.
+ - Street View (AC#8) is DROPPED, not deferred: IA-PLAN section 9 answer 3, owner. Zero metadata requests are made, which satisfies the AC's first half by construction.
+ - The zone line (AC#7) waits on TASK-167.
+ - Esc/focus-restore (AC#6) comes from the shared <Drawer>; the cold-open half is proven (/?location=<uuid> in a new tab renders the panel).
+ - No map, no pin: TASK-155/162.
+<!-- SECTION:NOTES:END -->

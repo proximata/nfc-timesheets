@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useFormatter, useTranslations } from 'next-intl'
 import { type FormEvent, useCallback, useEffect, useId, useMemo, useState } from 'react'
@@ -8,6 +9,7 @@ import { type AttentionItem, AttentionList } from '@/components/AttentionList'
 import { Drawer } from '@/components/Drawer'
 import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
+import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
 import { PageHeader } from '@/components/PageHeader'
 import { type BadgeState, StateBadge } from '@/components/StateBadge'
@@ -20,6 +22,7 @@ import {
   type ShiftSnapshot,
   updateShift,
 } from '@/lib/api'
+import { type AdminFilters, filterHref, useFilters } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
 import { LOGIN_PATH } from '@/lib/nav'
 import {
@@ -180,6 +183,7 @@ function draftOf(shift: Shift): Draft {
 
 export default function ShiftsPage() {
   const t = useTranslations('shifts')
+  const tFilter = useTranslations('filters')
   const tError = useTranslations('error')
   const format = useFormatter()
   const router = useRouter()
@@ -201,14 +205,6 @@ export default function ShiftsPage() {
   // null = still loading. An empty list is a legitimate first-run state, not an error.
   const [snapshot, setSnapshot] = useState<ShiftSnapshot | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
-  const [workerFilter, setWorkerFilter] = useState<string>(WORKER_ALL)
-  const [locationFilter, setLocationFilter] = useState<string>(LOCATION_ALL)
-  /**
-   * A ROLLING window, not the calendar month it used to be. On the 1st of a month a
-   * calendar default renders an empty table to a company that worked all of yesterday, and
-   * an empty table is exactly what a director reads as data loss.
-   */
-  const [period, setPeriod] = useState<Period>('last30Days')
   // Frozen at mount, so "last 30 days" cannot mean one thing at the top of the table and
   // another at the bottom, and cannot shift under a tab left open overnight.
   const [now] = useState(() => new Date())
@@ -228,17 +224,46 @@ export default function ShiftsPage() {
   const [creating, setCreating] = useState(false)
 
   /**
-   * `/shifts/?period=all`, as the dashboard's unresolved rows link to it. An unresolved
-   * shift is usually OLDER than the 30-day default — that is what made it unresolved — so
-   * arriving without a period would land on an empty table, which is the one reading this
-   * product must never produce. Read from `location`, not `useSearchParams`, so the static
-   * export needs no Suspense boundary; in an effect, so the prerendered HTML and the first
-   * client render still agree.
+   * THE FILTER CONTRACT (decision-38). This screen is the target of more cross-links than
+   * any other in the admin — the dashboard's triage rows, payroll's three caveats, the P&L's
+   * flagged buildings, both object panels — and every one of them now arrives with the
+   * state that produced it: which building, which person, which period, which condition, and
+   * for `?shift=` which exact row to open a correction on.
+   *
+   * `?period=all` was the first of these and its reason is the reason for all of them: an
+   * unresolved shift is usually OLDER than the 30-day default — being old is what made it
+   * unresolved — so arriving without a period lands on an empty table, which is the one
+   * reading this product must never produce.
+   *
+   * THE PARAMETERS SEED CLIENT-SIDE FILTER STATE AND NEVER BECOME A SERVER QUERY. The
+   * snapshot below is still fetched UNBOUNDED, because this screen has to be able to say
+   * „nothing in August — 5 shifts exist in earlier periods", and it can only count what it
+   * holds.
    */
-  useEffect(() => {
-    const wanted = new URLSearchParams(window.location.search).get('period')
-    if (wanted !== null && isPeriod(wanted)) setPeriod(wanted)
-  }, [])
+  const [filters, setFilters] = useFilters()
+
+  /**
+   * THE URL IS THE FILTER STATE. There is deliberately no second copy in `useState`: two
+   * sources for one filter is how the address bar and the table start disagreeing, and it
+   * is what makes the browser's back button appear to do nothing. `filters` is re-read on
+   * `popstate`, so back and forward move the table.
+   *
+   * A ROLLING window is still the default, not the calendar month it used to be: on the 1st
+   * of a month a calendar default renders an empty table to a company that worked all of
+   * yesterday, and an empty table is exactly what a director reads as data loss.
+   */
+  const period: Period = filters.period ?? 'last30Days'
+  const locationFilter = filters.location ?? LOCATION_ALL
+  const workerFilter = filters.worker === null ? WORKER_ALL : String(filters.worker)
+
+  /**
+   * Every filter write is a 'replace'. These are CONTROLS on the screen you are already
+   * looking at, and pushing a history entry per dropdown twiddle means the back button walks
+   * the director through four of them before it leaves the screen. Nobody presses back four
+   * times; they close the tab.
+   */
+  const writeFilters = (patch: Partial<AdminFilters>) => setFilters(patch, 'replace')
+  const setPeriod = (next: Period) => writeFilters({ period: next })
 
   /** A dead session must not render an empty table that reads as "no shifts". */
   const handleAuthLoss = useCallback(
@@ -289,9 +314,31 @@ export default function ShiftsPage() {
     [shifts, workerFilter, locationFilter],
   )
 
+  /**
+   * `?state=` — the condition the link was ABOUT. Payroll says „3 Schichten sind nicht
+   * bestätigt" and links here; without this the director arrives at a log of everything and
+   * has to find those three by eye, which is the work this contract removes.
+   *
+   * `noEmail` and `noTag` belong to other screens and are ignored here, silently, as
+   * decision-38 §4 requires: a parameter a screen does not understand is not an error.
+   * Applied BEFORE the period, so `outsideCount` still counts rows this state filter keeps.
+   */
+  const stateFiltered = useMemo(() => {
+    switch (filters.state) {
+      case 'open':
+        return matching.filter((shift) => shift.end_time === null)
+      case 'unresolved':
+        return matching.filter((shift) => shiftState(shift) === 'unresolved')
+      case 'manual':
+        return matching.filter((shift) => isManualEntry(shift))
+      default:
+        return matching
+    }
+  }, [matching, filters.state])
+
   const visible = useMemo(
-    () => matching.filter((shift) => withinRange(shift.start_time, range)),
-    [matching, range],
+    () => stateFiltered.filter((shift) => withinRange(shift.start_time, range)),
+    [stateFiltered, range],
   )
 
   /**
@@ -299,7 +346,7 @@ export default function ShiftsPage() {
    * screen was missing: without it "no rows" cannot be told apart from "everything is gone",
    * and the director has no reason to prefer the harmless reading.
    */
-  const outsideCount = matching.length - visible.length
+  const outsideCount = stateFiltered.length - visible.length
 
   /**
    * The newest shift in the WHOLE ledger — not bounded by this period and not capped by the
@@ -589,6 +636,96 @@ export default function ShiftsPage() {
 
   const hasTable = snapshot !== null && visible.length > 0
 
+  /**
+   * `?shift=<id>` — open the correction drawer on that row, on arrival. This is what turns
+   * „Marta could not clock out" into ONE action from a stairwell instead of a search through
+   * a log. Runs once per id: reopening the drawer every render would make it impossible to
+   * close, and clearing the parameter on open would break the back button.
+   */
+  const [linkedShift, setLinkedShift] = useState<number | null>(null)
+  useEffect(() => {
+    if (snapshot === null || filters.shift === null || filters.shift === linkedShift) return
+    setLinkedShift(filters.shift)
+    const wanted = snapshot.shifts.find((shift) => shift.id === filters.shift)
+    if (wanted !== undefined) {
+      setCreateOpen(false)
+      setDraft(draftOf(wanted))
+      setFieldErrors({})
+      setFormError(null)
+      setSaved(false)
+    }
+  }, [snapshot, filters.shift, linkedShift])
+
+  /** A well-formed shift id that is in no loaded row. Said out loud, never ignored. */
+  const linkedShiftMissing =
+    snapshot !== null &&
+    filters.shift !== null &&
+    !snapshot.shifts.some((shift) => shift.id === filters.shift)
+
+  const stateLabelOf: Record<'open' | 'unresolved' | 'manual', string> = {
+    open: tFilter('stateOpen'),
+    unresolved: tFilter('stateUnresolved'),
+    manual: tFilter('stateManual'),
+  }
+
+  /**
+   * The filter, echoed above the fold (decision-38 rule 3). The building and the worker are
+   * ALSO in the selects below; the chip is deliberately the redundant copy, because at
+   * 390px the filter bar is under the answer band and a filtered table read before it
+   * scrolls into view is exactly the „all my data is gone" misreading. The period chip only
+   * appears when a link moved it off this screen's own default — „Zeitraum: Letzte 30 Tage"
+   * on every visit is noise, and noise is what makes a real chip invisible.
+   */
+  const chips = [
+    filters.location === null
+      ? null
+      : {
+          key: 'location',
+          label: tFilter('location'),
+          value:
+            snapshot?.locations.find((location) => location.id === filters.location)?.name ??
+            tFilter('unknownLocation'),
+          unknown: snapshot !== null && !snapshot.locations.some((l) => l.id === filters.location),
+          onRemove: () => writeFilters({ location: null }),
+        },
+    filters.worker === null
+      ? null
+      : {
+          key: 'worker',
+          label: tFilter('worker'),
+          value:
+            snapshot?.workers.find((worker) => worker.id === filters.worker)?.name ??
+            tFilter('unknownWorker'),
+          unknown: snapshot !== null && !snapshot.workers.some((w) => w.id === filters.worker),
+          onRemove: () => writeFilters({ worker: null }),
+        },
+    filters.state === 'open' || filters.state === 'unresolved' || filters.state === 'manual'
+      ? {
+          key: 'state',
+          label: tFilter('state'),
+          value: stateLabelOf[filters.state],
+          onRemove: () => writeFilters({ state: null }),
+        }
+      : null,
+    filters.period === null || filters.period === 'last30Days'
+      ? null
+      : {
+          key: 'period',
+          label: tFilter('period'),
+          value: periodLabel[filters.period],
+          onRemove: () => writeFilters({ period: null }),
+        },
+    filters.shift === null
+      ? null
+      : {
+          key: 'shift',
+          label: tFilter('shift'),
+          value: linkedShiftMissing ? tFilter('unknownShift') : String(filters.shift),
+          unknown: linkedShiftMissing,
+          onRemove: () => writeFilters({ shift: null }),
+        },
+  ].filter((chip) => chip !== null)
+
   return (
     <>
       <PageHeader
@@ -607,6 +744,11 @@ export default function ShiftsPage() {
       <p className="form-status" role="status">
         {pageStatusText}
       </p>
+
+      <FilterChips chips={chips} />
+      {/* A link that named a shift the payload does not hold. Stated, because the silent
+          alternative is a drawer that never opens and a director who thinks he misclicked. */}
+      {linkedShiftMissing ? <p className="notice bad">{t('linkedShiftMissing')}</p> : null}
 
       {snapshot === null ? (
         <p role="status">{t('loading')}</p>
@@ -657,7 +799,11 @@ export default function ShiftsPage() {
                 <select
                   id={workerFilterId}
                   value={workerFilter}
-                  onChange={(event) => setWorkerFilter(event.target.value)}
+                  onChange={(event) =>
+                    writeFilters({
+                      worker: event.target.value === WORKER_ALL ? null : Number(event.target.value),
+                    })
+                  }
                 >
                   <option value={WORKER_ALL}>{t('allWorkers')}</option>
                   {(snapshot?.workers ?? []).map((worker) => (
@@ -673,7 +819,11 @@ export default function ShiftsPage() {
                 <select
                   id={locationFilterId}
                   value={locationFilter}
-                  onChange={(event) => setLocationFilter(event.target.value)}
+                  onChange={(event) =>
+                    writeFilters({
+                      location: event.target.value === LOCATION_ALL ? null : event.target.value,
+                    })
+                  }
                 >
                   <option value={LOCATION_ALL}>{t('allLocations')}</option>
                   {(snapshot?.locations ?? []).map((location) => (
@@ -783,8 +933,22 @@ export default function ShiftsPage() {
                     const state = shiftState(shift)
                     return (
                       <tr key={shift.id} className={ROW_CLASS[state]}>
-                        <th scope="row">{shift.worker_name}</th>
-                        <td>{shift.location_name}</td>
+                        {/* The two names are the cross-links, so the row gains no column:
+                            at 390px a `.data-table` row is a card and a sixth action pushes
+                            it sideways. Each carries its own object's id — this is the
+                            „read the name here, find it again over there" loop, closed. */}
+                        <th scope="row">
+                          <Link href={filterHref('/workers/', { worker: shift.worker_id })}>
+                            {shift.worker_name}
+                            <span className="visually-hidden"> {t('openWorker')}</span>
+                          </Link>
+                        </th>
+                        <td>
+                          <Link href={filterHref('/', { location: shift.location_id })}>
+                            {shift.location_name}
+                            <span className="visually-hidden"> {t('openLocation')}</span>
+                          </Link>
+                        </td>
                         <td>{showDateTime(shift.start_time)}</td>
                         <td>
                           {shift.end_time === null ? (

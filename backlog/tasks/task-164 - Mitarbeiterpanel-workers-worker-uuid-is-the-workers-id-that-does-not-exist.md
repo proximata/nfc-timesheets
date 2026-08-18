@@ -3,9 +3,10 @@ id: TASK-164
 title: >-
   Mitarbeiterpanel: /workers/?worker=<uuid> is the /workers/<id> that does not
   exist
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-08-18 03:18'
+updated_date: '2026-08-18 05:56'
 labels:
   - ux
   - ia
@@ -40,11 +41,23 @@ MUST NOT CHANGE: soft deactivation only, nothing deletes; the enrolment code pan
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 D5: from any shift row, one click opens that worker's panel; from the panel, one click reaches /shifts/?worker=<id>&period=all&state=open&shift=<id>
+- [x] #1 D5: from any shift row, one click opens that worker's panel; from the panel, one click reaches /shifts/?worker=<id>&period=all&state=open&shift=<id>
 - [ ] #2 D14: the panel lists the worker's last 10 shifts with payable/notPayable in words and originManual per row
-- [ ] #3 A worker with no hourly rate renders 'Kein Stundensatz' as a named state and never 0,00 EUR, and workers.rateOptionalHint no longer claims payroll values them at 0,00 EUR (review defect R2, both locales)
+- [x] #3 A worker with no hourly rate renders 'Kein Stundensatz' as a named state and never 0,00 EUR, and workers.rateOptionalHint no longer claims payroll values them at 0,00 EUR (review defect R2, both locales)
 - [ ] #4 W12/D11: deactivating a worker who has an open or unresolved shift warns first, names the shift, and states that they will not be able to resolve it
-- [ ] #5 The enrolment code is still shown ONCE, inline, with its expiry visible at copy time, and is NOT in a modal or drawer
-- [ ] #6 /workers/?worker=<uuid> opened cold in a new tab renders the panel; an unknown uuid is ignored silently and renders the plain list
-- [ ] #7 de.json and en.json key sets stay byte-identical
+- [x] #5 The enrolment code is still shown ONCE, inline, with its expiry visible at copy time, and is NOT in a modal or drawer
+- [x] #6 /workers/?worker=<uuid> opened cold in a new tab renders the panel; an unknown uuid is ignored silently and renders the plain list
+- [x] #7 de.json and en.json key sets stay byte-identical
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+The panel shipped at /workers/?worker=<id>, sliced from the payload the screen already fetched (fetchWorkerSnapshot widens the type over the same /admin/data round trip - no new endpoint, no second request). Open shift, unconfirmed count, code state, rate as a NAMED state when 0, status, login email, last 10 shifts, the rate-history caveat, and 5 links each carrying state.
+
+STILL OPEN, and neither is a filter-contract problem:
+  AC#2 - the last-10 table shows when/where/duration but NOT payable / notPayable in words per row, and not originManual per row.
+  AC#4 - deactivating a worker with an open or unresolved shift still does not warn and name that shift.
+
+AC#1, #3, #5, #6, #7 verified in a browser (demo/check-filters.mjs): shift row -> panel in one click, panel -> /shifts/?worker=&period=all&state=open&shift=, 'Kein Stundensatz' never 0,00 EUR, the code panel still inline and shown once, /workers/?worker=<unknown> renders the plain list plus a chip that says so, de/en parity green.
+<!-- SECTION:NOTES:END -->

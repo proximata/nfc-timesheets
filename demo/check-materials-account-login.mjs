@@ -534,9 +534,14 @@ async function main() {
           scroll.w <= scroll.v + 1,
           JSON.stringify(scroll),
         )
+        // NINE, not twelve, since decision-39: `/contracts/`, `/analytics/` and
+        // `/inventory/` left the sidebar and are reached from the objects that need them.
+        // Still an EXACT count — the failure this guards is a phone losing its navigation,
+        // and `>= 9` would also pass a sidebar that quietly grew back.
         assert(
-          `nav[${label}@${w}]: the sidebar is still a reachable strip, all 12 routes`,
-          (await page.eval(`document.querySelectorAll('nav.sidebar a.nav-link').length`)) === 12,
+          `nav[${label}@${w}]: the sidebar is still a reachable strip, all 9 routes`,
+          (await page.eval(`document.querySelectorAll('nav.sidebar a.nav-link').length`)) === 9,
+          `${await page.eval(`document.querySelectorAll('nav.sidebar a.nav-link').length`)} links`,
         )
         if (w === 390) {
           await page.screenshot(`${SHOTS}/${label}-dark-390.png`)

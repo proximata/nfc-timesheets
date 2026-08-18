@@ -7,18 +7,22 @@ import { ConfirmModal } from '@/components/ConfirmModal'
 import { Drawer } from '@/components/Drawer'
 import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
+import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
 import { PageHeader } from '@/components/PageHeader'
+import { WorkerPanel } from '@/components/WorkerPanel'
 import {
   ApiError,
   type FreshEnrolmentCode,
-  fetchWorkers,
+  fetchWorkerSnapshot,
   issueEnrolmentCode,
   revokeEnrolmentCode,
   saveWorker,
   type Worker,
+  type WorkerSnapshot,
 } from '@/lib/api'
 import { codeStateOf } from '@/lib/enrolment'
+import { useFilters } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
 import { centsToPlainEuros, parseEuroToCents } from '@/lib/money'
 import { LOGIN_PATH } from '@/lib/nav'
@@ -105,6 +109,7 @@ type Pending = { kind: 'revoke' | 'reissue' | 'deactivate'; worker: Worker }
 
 export default function WorkersPage() {
   const t = useTranslations('workers')
+  const tFilter = useTranslations('filters')
   const tError = useTranslations('error')
   const format = useFormatter()
   const router = useRouter()
@@ -120,9 +125,15 @@ export default function WorkersPage() {
   const codeOnceId = useId()
   const codePanelRef = useRef<HTMLElement>(null)
 
-  // null = still loading. [] = loaded and genuinely empty, which is the first-run state.
-  const [workers, setWorkers] = useState<Worker[] | null>(null)
+  // null = still loading. An empty worker list is the genuine first-run state, not an error.
+  const [snapshot, setSnapshot] = useState<WorkerSnapshot | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
+  /**
+   * `?worker=<id>` opens the Mitarbeiterpanel; `?state=noEmail` narrows the list to the
+   * people the dashboard's triage row names. Both are read from the URL so the dashboard's
+   * „Adresse eintragen" lands on those people and not on the whole roster (decision-38).
+   */
+  const [filters, setFilters] = useFilters()
   /** null = the drawer is closed. There is no half-open form on this screen any more. */
   const [draft, setDraft] = useState<Draft | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
@@ -165,7 +176,7 @@ export default function WorkersPage() {
   const load = useCallback(
     async (signal?: AbortSignal) => {
       try {
-        setWorkers(await fetchWorkers(signal))
+        setSnapshot(await fetchWorkerSnapshot(signal))
         setLoadError(null)
       } catch (cause) {
         if (cause instanceof DOMException && cause.name === 'AbortError') return
@@ -398,6 +409,56 @@ export default function WorkersPage() {
     return worker.email === null ? 'is-unres' : undefined
   }
 
+  const all = snapshot?.workers ?? null
+  /**
+   * `?state=noEmail` — the only state this screen understands. Every other value in the
+   * vocabulary is IGNORED silently (decision-38 §4): `/workers/?state=noTag` is not an
+   * error, it is the worker list.
+   *
+   * The filter is applied over ACTIVE people only, exactly as the dashboard counts them: a
+   * deactivated worker with no address cannot sign in either, but that is a decision
+   * somebody made and not a thing to fix this morning.
+   */
+  const noEmailOnly = filters.state === 'noEmail'
+  const workers =
+    all === null
+      ? null
+      : noEmailOnly
+        ? all.filter((worker) => worker.active && worker.email === null)
+        : all
+
+  /**
+   * `?worker=<id>` resolved against the loaded roster. A well-formed id naming nobody keeps
+   * the panel shut and says so in the chip — rendering the list as though no panel had been
+   * asked for would leave the reader believing they are looking at that person.
+   */
+  const panelWorker =
+    filters.worker === null ? null : (all?.find((worker) => worker.id === filters.worker) ?? null)
+  const panelUnknown = filters.worker !== null && all !== null && panelWorker === null
+
+  const openPanel = (id: number) => setFilters({ worker: id }, 'push')
+  const closePanel = () => setFilters({ worker: null }, 'replace')
+
+  const chips = [
+    filters.worker === null
+      ? null
+      : {
+          key: 'worker',
+          label: tFilter('worker'),
+          value: panelWorker?.name ?? tFilter('unknownWorker'),
+          unknown: panelUnknown,
+          onRemove: closePanel,
+        },
+    noEmailOnly
+      ? {
+          key: 'state',
+          label: tFilter('state'),
+          value: tFilter('stateNoEmail'),
+          onRemove: () => setFilters({ state: null }, 'replace'),
+        }
+      : null,
+  ].filter((chip) => chip !== null)
+
   const drawerTitle = draft?.id === undefined ? t('createHeading') : t('editHeading')
   const editedName = draft?.id === undefined ? undefined : draft.name
   // A server error during a save is shown inside the drawer as well, because the drawer
@@ -427,6 +488,11 @@ export default function WorkersPage() {
       <p className={notice?.ok === false ? 'form-error' : 'form-status'} role="status">
         {notice === null ? '' : notice.text}
       </p>
+
+      {/* The filter, echoed and removable (decision-38 rule 3). Without it a list narrowed
+          to two people by a link is indistinguishable from a roster of two people. */}
+      <FilterChips chips={chips} />
+      {panelUnknown ? <p className="notice bad">{tFilter('unknownNotice')}</p> : null}
 
       {/* THE WARNING COMES FIRST. "Shown only once" is useless underneath a code that has
           already scrolled past, so it stands here permanently, above the buttons that
@@ -474,7 +540,10 @@ export default function WorkersPage() {
         {workers === null ? (
           <p role="status">{t('loading')}</p>
         ) : workers.length === 0 ? (
-          <EmptyState>{t('emptyBodyNew')}</EmptyState>
+          /* An empty FILTER and an empty ROSTER are two different sentences. Saying „noch
+             keine Mitarbeiter angelegt" to a company with six of them is the misreading
+             this whole contract exists to prevent. */
+          <EmptyState>{noEmailOnly ? t('filterNoEmail') : t('emptyBodyNew')}</EmptyState>
         ) : (
           <table className="data-table" aria-busy={busy}>
             <caption className="visually-hidden">{t('tableCaption')}</caption>
@@ -492,7 +561,18 @@ export default function WorkersPage() {
             <tbody>
               {workers.map((worker) => (
                 <tr key={worker.id} className={rowState(worker)}>
-                  <th scope="row">{worker.name}</th>
+                  {/* The name opens that person's panel. No extra column: the row already
+                      carries five actions, and at 390px a sixth pushes the card sideways. */}
+                  <th scope="row">
+                    <button
+                      type="button"
+                      className="btn btn-quiet"
+                      onClick={() => openPanel(worker.id)}
+                    >
+                      {worker.name}
+                      <span className="visually-hidden"> {t('panelOpen')}</span>
+                    </button>
+                  </th>
                   <td>
                     {worker.email === null ? (
                       <span className="cell-muted">{t('noEmail')}</span>
@@ -749,6 +829,17 @@ export default function WorkersPage() {
         }
         destructive
         busy={busy}
+      />
+
+      {/* THE MITARBEITERPANEL — the `/workers/<id>` route that cannot exist under a static
+          export. Driven by the URL, so it can be linked to from the shift log, the payroll
+          table, the material queue and the building panel. */}
+      <WorkerPanel
+        worker={panelWorker}
+        shifts={snapshot?.shifts ?? []}
+        truncated={snapshot !== null && snapshot.shifts.length >= snapshot.shift_limit}
+        now={now}
+        onClose={closePanel}
       />
     </>
   )

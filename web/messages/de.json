@@ -80,7 +80,43 @@
     "badgeNoEmail": "Zugang fehlt",
     "badgeDeadTag": "Tag prüfen",
     "onSiteSince": "{name}, seit {time}",
-    "onSiteMore": "{count, plural, one {und # weitere Person} other {und # weitere Personen}}"
+    "onSiteMore": "{count, plural, one {und # weitere Person} other {und # weitere Personen}}",
+    "panelStep": "Objekt",
+    "panelOpen": "Objektpanel öffnen",
+    "panelOnSite": "Gerade vor Ort",
+    "panelOnSiteEmpty": "Zurzeit ist niemand eingestempelt.",
+    "panelPoints": "Offene Punkte hier",
+    "panelPointsUnresolved": "{count, plural, one {# Schicht nicht bestätigt} other {# Schichten nicht bestätigt}}",
+    "panelPointsNoUnresolved": "keine Schicht zu bestätigen",
+    "panelPointsOpen": "{count, plural, one {# offene Schicht} other {# offene Schichten}}",
+    "panelPointsNoOpen": "keine offene Schicht",
+    "panelPointsMaterial": "{count, plural, one {# offene Materialanforderung} other {# offene Materialanforderungen}}",
+    "panelPointsNoMaterial": "keine Materialanforderung",
+    "panelPointsMaterialLoading": "Material wird geladen …",
+    "panelLastCleaned": "Zuletzt gereinigt",
+    "panelLastCleanedNever": "Noch nie – für dieses Objekt ist keine abgeschlossene Schicht erfasst.",
+    "panelLastCleanedValue": "{date} · {name} · {duration} Std.",
+    "panelHours": "Stunden diesen Monat",
+    "panelHoursNoTarget": "{actual} Std. · kein Monatsziel vereinbart",
+    "panelHoursTarget": "{actual} von {target} Std.",
+    "panelHoursPending": "{count, plural, one {# Schicht ist noch nicht gezählt} other {# Schichten sind noch nicht gezählt}}",
+    "panelContract": "Vertrag",
+    "panelContractNone": "Kein Vertrag hinterlegt",
+    "panelContractValue": "{amount} / Monat",
+    "panelClientNone": "kein Kunde hinterlegt",
+    "panelTruncated": "Es wurden nur die neuesten Schichten geladen. Die Zahlen oben sind daher Mindestwerte, keine Summen.",
+    "panelLinksHeading": "Weiter zu",
+    "panelLinkShifts": "Schichten dieses Objekts · dieser Monat",
+    "panelLinkUnresolved": "{count, plural, one {# Schicht bestätigen · alle Zeiträume} other {# Schichten bestätigen · alle Zeiträume}}",
+    "panelLinkClose": "Offene Schicht von {name} schließen",
+    "panelLinkPayroll": "Lohn · nur Stunden in diesem Objekt · Vormonat",
+    "panelLinkPl": "Ergebnis dieses Objekts · Vormonat",
+    "panelLinkContract": "Vertragsverlauf dieses Objekts",
+    "panelLinkAnalytics": "Zeitverlauf dieses Objekts",
+    "panelLinkMaterials": "{count, plural, one {# offene Materialanforderung ansehen} other {# offene Materialanforderungen ansehen}}",
+    "panelLinkNoMaterials": "Keine offene Materialanforderung für dieses Objekt.",
+    "panelLinkEdit": "Objekt bearbeiten · Tag-URL",
+    "panelLinkClient": "Kunde: {name}"
   },
   "payroll": {
     "heading": "Lohnabrechnung",
@@ -147,7 +183,12 @@
     "rowNoRate": "Kein Stundensatz",
     "amountNoRate": "Nicht bewertet",
     "excludedNoRate": "Kein Stundensatz",
-    "howHeading": "Wie diese Seite funktioniert"
+    "howHeading": "Wie diese Seite funktioniert",
+    "scopedLocation": "Diese Ansicht ist auf ein Objekt eingeschränkt: {name}.",
+    "scopedWorker": "Diese Ansicht ist auf eine Person eingeschränkt: {name}.",
+    "scopedNote": "Solange ein Filter aktiv ist, werden weder der Serverabgleich noch der CSV-Export angeboten: beide gelten immer für den ganzen Zeitraum, und eine gefilterte Datei sähe wie eine vollständige Lohnliste aus.",
+    "scopedBuildingLink": "Objektpanel öffnen",
+    "openWorker": "Mitarbeiterpanel öffnen"
   },
   "login": {
     "heading": "Anmelden",
@@ -228,7 +269,32 @@
     "reissueConfirmTitle": "Neuen Zugangscode für {name} erstellen?",
     "reissueConfirmBody": "Der bisherige Code funktioniert ab diesem Moment nicht mehr, auch wenn er bereits weitergegeben wurde. Der neue Code wird nur ein einziges Mal angezeigt.",
     "deactivateConfirmTitle": "{name} deaktivieren?",
-    "deactivateConfirmBody": "Diese Person kann sich danach nicht mehr anmelden und keine Stunden mehr erfassen. Bereits erfasste Schichten bleiben unverändert erhalten, und die Person kann jederzeit wieder aktiviert werden."
+    "deactivateConfirmBody": "Diese Person kann sich danach nicht mehr anmelden und keine Stunden mehr erfassen. Bereits erfasste Schichten bleiben unverändert erhalten, und die Person kann jederzeit wieder aktiviert werden.",
+    "panelStep": "Mitarbeiter",
+    "panelOpen": "Details",
+    "panelOpenShift": "Offene Schicht",
+    "panelOpenShiftNone": "Keine offene Schicht.",
+    "panelOpenShiftValue": "{location}, seit {since}",
+    "panelUnresolved": "Nicht bestätigte Schichten",
+    "panelUnresolvedNone": "Keine – es hält nichts die Lohnabrechnung dieser Person auf.",
+    "panelUnresolvedSome": "{count, plural, one {# Schicht, nicht auszahlbar bis sie bestätigt ist} other {# Schichten, nicht auszahlbar bis sie bestätigt sind}}",
+    "panelStatus": "Status",
+    "panelTruncated": "Es wurden nur die neuesten Schichten geladen. Die Liste unten kann daher unvollständig sein.",
+    "panelRecentHeading": "Zuletzt erfasste Schichten (die letzten {count})",
+    "panelRecentEmpty": "Für diese Person ist noch keine abgeschlossene Schicht erfasst.",
+    "panelRecentCaption": "Die zuletzt abgeschlossenen Schichten von {name}, neueste zuerst.",
+    "panelColWhen": "Beginn",
+    "panelColLocation": "Objekt",
+    "panelColDuration": "Dauer (Std:Min)",
+    "panelRateHistory": "Es wird nur ein Stundensatz pro Mitarbeiter gespeichert. Wird er geändert, werden auch vergangene Stunden zum neuen Satz bewertet.",
+    "panelLinksHeading": "Weiter zu",
+    "panelLinkShifts": "Alle Schichten dieser Person · alle Zeiträume",
+    "panelLinkUnresolved": "{count, plural, one {# Schicht bestätigen · alle Zeiträume} other {# Schichten bestätigen · alle Zeiträume}}",
+    "panelLinkClose": "Offene Schicht schließen",
+    "panelLinkWhere": "Objekt öffnen: {name}",
+    "panelLinkPayroll": "Lohn dieser Person · Vormonat",
+    "panelLinkNoUnresolved": "Keine Schicht wartet auf Bestätigung.",
+    "filterNoEmail": "Nur Mitarbeiter ohne E-Mail-Adresse."
   },
   "locations": {
     "heading": "Objekte",
@@ -342,7 +408,11 @@
     "stepBack": "Zurück",
     "stepTwoNote": "Vertragswert und Sollzeit können jederzeit nachgetragen werden. Für die erste Schicht wird nichts davon gebraucht.",
     "deactivateConfirmTitle": "{name} deaktivieren?",
-    "deactivateConfirmBody": "Der NFC-Tag an diesem Objekt startet danach keine Schicht mehr, und ein bestehender Kundenlink auf dieses Objekt wird im selben Moment ungültig. Erfasste Schichten bleiben unverändert erhalten, und das Objekt kann jederzeit wieder aktiviert werden."
+    "deactivateConfirmBody": "Der NFC-Tag an diesem Objekt startet danach keine Schicht mehr, und ein bestehender Kundenlink auf dieses Objekt wird im selben Moment ungültig. Erfasste Schichten bleiben unverändert erhalten, und das Objekt kann jederzeit wieder aktiviert werden.",
+    "openPanel": "Objektpanel öffnen",
+    "contractLink": "Vertragsverlauf öffnen",
+    "filterNoTag": "Nur Objekte ohne erfasste Schicht.",
+    "filterClientEmpty": "Für diesen Kunden ist hier kein Objekt hinterlegt."
   },
   "clients": {
     "heading": "Kunden",
@@ -401,7 +471,8 @@
     "empty": "Noch keine Kunden erfasst. Rechts oben „Kunden anlegen“ wählen – oder einen Kunden direkt beim Anlegen eines Objekts erfassen.",
     "confirmDeactivateTitle": "{name} deaktivieren?",
     "confirmDeactivateBody": "Die Person wird als inaktiv geführt, und alle ihr gegebenen Links auf die Reinigungshistorie werden sofort beendet. Ein späteres Wiederaktivieren stellt diese Links nicht wieder her.",
-    "confirmDeactivateConfirm": "Deaktivieren und Links beenden"
+    "confirmDeactivateConfirm": "Deaktivieren und Links beenden",
+    "buildingsLinkFiltered": "Objekte dieses Kunden"
   },
   "shifts": {
     "heading": "Schichten",
@@ -490,7 +561,10 @@
     "answerBlocked": "Halten die Abrechnung auf",
     "answerShown": "Angezeigt",
     "rowOpen": "{location} · eingestempelt um {time}",
-    "rowUnresolved": "{location} · vom 8-Stunden-Timer beendet, {date}"
+    "rowUnresolved": "{location} · vom 8-Stunden-Timer beendet, {date}",
+    "linkedShiftMissing": "Die verlinkte Schicht ist in den geladenen Daten nicht vorhanden. Möglicherweise wurde sie inzwischen korrigiert.",
+    "openWorker": "Mitarbeiterpanel öffnen",
+    "openLocation": "Objektpanel öffnen"
   },
   "inventory": {
     "heading": "Produkte & Geräte",
@@ -620,7 +694,9 @@
     "answerDeliverSub": "bestellt, noch nicht geliefert",
     "refusedClosed": "Endgültig – nichts mehr zu ändern",
     "confirmRejectTitle": "Anforderung von {worker} ablehnen?",
-    "confirmRejectBody": "Die Ablehnung ist endgültig: Danach lässt sich an dieser Anforderung nichts mehr ändern, auch keine Kosten. Der Mitarbeiter sieht die Ablehnung beim nächsten Öffnen der App und muss bei Bedarf neu anfordern."
+    "confirmRejectBody": "Die Ablehnung ist endgültig: Danach lässt sich an dieser Anforderung nichts mehr ändern, auch keine Kosten. Der Mitarbeiter sieht die Ablehnung beim nächsten Öffnen der App und muss bei Bedarf neu anfordern.",
+    "openWorker": "Mitarbeiterpanel öffnen",
+    "openLocation": "Objektpanel öffnen"
   },
   "pl": {
     "heading": "Gewinn & Verlust",
@@ -715,7 +791,10 @@
     "answerBaseline": "Zielmarge {percent}",
     "answerNoBaseline": "Keine Zielmarge gesetzt",
     "baselineOpen": "Zielmarge festlegen",
-    "cancel": "Abbrechen"
+    "cancel": "Abbrechen",
+    "flaggedBuildingLink": "Objektpanel öffnen",
+    "flaggedMaterialsLink": "Material dieses Objekts",
+    "scopedNote": "Diese Ansicht ist auf ein Objekt eingeschränkt. Die Angaben unter „Wie diese Seite rechnet“ beziehen sich weiterhin auf den ganzen Zeitraum und alle Objekte."
   },
   "contracts": {
     "heading": "Vertragsverwaltung",
@@ -788,7 +867,8 @@
     "errorRejected": "Der Server hat diese Angaben abgelehnt. Bitte die Felder prüfen und erneut versuchen.",
     "question": "Was ist vereinbart, und seit wann?",
     "confirmUndoTitle": "Periode ab {from} entfernen?",
-    "confirmUndoBody": "Die aktuelle Vertragsperiode wird entfernt; danach gilt wieder der Preis davor. Das lässt sich nicht rückgängig machen."
+    "confirmUndoBody": "Die aktuelle Vertragsperiode wird entfernt; danach gilt wieder der Preis davor. Das lässt sich nicht rückgängig machen.",
+    "preselected": "Aus dem Objektpanel geöffnet: die Auswahl unten steht bereits auf diesem Objekt."
   },
   "analytics": {
     "heading": "Objektauswertung",
@@ -886,7 +966,8 @@
     "answerNoTarget": "Ohne Sollzeit",
     "answerNoTargetSub": "Kein Vertrag mit vereinbarter Zeit",
     "answerBuildings": "Objekte",
-    "answerPinnedSub": "{pinned, plural, =0 {keines auf der Karte} one {# auf der Karte} other {# auf der Karte}}"
+    "answerPinnedSub": "{pinned, plural, =0 {keines auf der Karte} one {# auf der Karte} other {# auf der Karte}}",
+    "panelObjectLink": "Objektpanel öffnen"
   },
   "portal": {
     "heading": "Reinigungsnachweis",
@@ -955,5 +1036,31 @@
   },
   "field": {
     "optional": "optional"
+  },
+  "filters": {
+    "activeHeading": "Aktive Filter:",
+    "remove": "Filter „{filter}: {value}“ entfernen",
+    "location": "Objekt",
+    "worker": "Mitarbeiter",
+    "client": "Kunde",
+    "shift": "Schicht",
+    "period": "Zeitraum",
+    "state": "Zustand",
+    "status": "Status",
+    "unknownLocation": "unbekannt – dieses Objekt ist hier nicht vorhanden",
+    "unknownWorker": "unbekannt – diese Person ist hier nicht vorhanden",
+    "unknownClient": "unbekannt – dieser Kunde ist hier nicht vorhanden",
+    "unknownShift": "unbekannt – diese Schicht ist hier nicht vorhanden",
+    "unknownNotice": "Ein Filter aus der Adresse verweist auf einen Datensatz, den es hier nicht gibt. Deshalb ist diese Ansicht leer – es fehlen keine Daten. Filter entfernen, um wieder alles zu sehen.",
+    "stateOpen": "Offen",
+    "stateUnresolved": "Nicht bestätigt",
+    "stateManual": "Von Hand erfasst",
+    "stateNoEmail": "Ohne E-Mail-Adresse",
+    "stateNoTag": "Ohne erfasste Schicht",
+    "statusOpen": "Offene Anforderungen",
+    "statusAll": "Alle",
+    "statusDecide": "Zu entscheiden",
+    "statusOrder": "Zu bestellen",
+    "statusDeliver": "Zu liefern"
   }
 }

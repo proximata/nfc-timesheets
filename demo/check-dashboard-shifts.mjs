@@ -182,7 +182,10 @@ async function main() {
     await page.waitFor(`location.pathname === '/shifts/'`, { label: "the shift log" });
     assert(
       "dashboard row → /shifts/?period=all (an unresolved shift is usually older than 30 days)",
-      (await page.eval(`location.search`)) === "?period=all",
+      // The period is still mandatory and for the same reason. It now travels with the
+      // CONDITION the row was about (decision-38): the row says „3 Schichten zu bestätigen",
+      // so the screen it opens shows those three rather than the whole log with them in it.
+      (await page.eval(`location.search`)) === "?period=all&state=unresolved",
       `row "${rowLabel}" → ${await page.eval("location.href")}`,
     );
     await page.waitFor(`document.querySelector('.filter-bar select')`, { label: "the filters" });
@@ -380,10 +383,19 @@ async function main() {
       console.log(
         `       count probe: ${probe.count}/${probe.cells} cells labelled in ${probe.tables} table(s)`,
       );
+      // NINE, not twelve: `/contracts/`, `/analytics/` and `/inventory/` left the sidebar
+      // (decision-39) and are reached from the objects that need them. Asserted as an exact
+      // count and not `>= 9`, because the failure this line was written for is a phone
+      // losing its navigation entirely, and `>= 9` would also pass a nav that grew back to
+      // twelve. `demo/check-filters.mjs` holds the other half: each demoted route still has
+      // a way in.
+      const navLinks = await page.eval(
+        `[...document.querySelectorAll('.sidebar a')].map((a) => new URL(a.href).pathname)`,
+      );
       assert(
         `${name} @390: the navigation strip is still there`,
-        (await page.eval(`document.querySelectorAll('.sidebar a').length`)) >= 12,
-        `${await page.eval(`document.querySelectorAll('.sidebar a').length`)} links`,
+        navLinks.length === 9 && navLinks.includes("/") && navLinks.includes("/shifts/"),
+        navLinks.join(" "),
       );
       await shoot(page, `${name}-390-dark`);
 

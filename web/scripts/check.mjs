@@ -104,7 +104,13 @@ function argumentsOf(value) {
  * Keys whose `{count}` is a FIXED cap written into the source, not a tally, so it can never
  * be 1 and needs no plural form. Every other `{count}` must select on it — see below.
  */
-const FIXED_COUNT_KEYS = new Set(['home.recentHeading', 'home.recentScope'])
+const FIXED_COUNT_KEYS = new Set([
+  'home.recentHeading',
+  'home.recentScope',
+  // Same hard cap, in the Mitarbeiterpanel: `RECENT_SHIFTS` is the constant 10, never a
+  // tally, so "die letzten 10" can never read "die letzten 1".
+  'workers.panelRecentHeading',
+])
 
 /**
  * Is `{count}` interpolated as a bare argument anywhere in this message, rather than being
@@ -300,6 +306,43 @@ check('lib/api.ts sends the session cookie', () => {
   assert.match(api.text, /credentials: 'include'/, "fetch must use credentials: 'include'")
 })
 
+// --- 3b. the URL filter contract (decision-38 / decision-39) ------------------------------
+//
+// Two mechanical rules that the browser probe (demo/check-filters.mjs) cannot see, because
+// they are about what is NOT there.
+
+check('every screen reads its filters through lib/filters.ts, never a raw parameter name', () => {
+  // ONE VOCABULARY OR NONE. A screen that reaches into `searchParams.get('location')` on its
+  // own is a screen that will still be reading `?loc=` after the contract is renamed, and a
+  // link that looks like it carries a filter and does not is worse than no link at all.
+  const offenders = sources
+    .filter(({ path }) => path.startsWith('app/') && path.endsWith('page.tsx'))
+    // `/reinigung/` is a stated exception and not an admin screen: it is read by a person
+    // who works for another company, it takes a TOKEN and no filter, and it deliberately
+    // shares nothing with the admin — not the shell, not the nav, not this vocabulary.
+    .filter(({ path }) => !path.startsWith('app/reinigung/'))
+    .flatMap(({ path, text }) => {
+      const reads = [...text.matchAll(/searchParams|URLSearchParams|window\.location\.search/g)]
+      return reads.length === 0 ? [] : [`${path}: reads the query string directly`]
+    })
+  assert.deepEqual(offenders, [], `bypasses lib/filters.ts:\n- ${offenders.join('\n- ')}`)
+})
+
+check('/login/ and /reinigung/ are still NOT linked from the admin', () => {
+  // The other side of the same coin, and it is a privacy rule rather than a navigation one.
+  // `/reinigung/` is read by a person who works for another company; a link to it from the
+  // admin is a link a director can click into by accident and a URL that ends up in a
+  // referrer. `/login/` is a redirect target and is reached through LOGIN_PATH.
+  const offenders = sources.flatMap(({ path, text }) =>
+    path === 'lib/nav.ts' || path.startsWith('app/reinigung/')
+      ? []
+      : [...text.matchAll(/href=\{?["'`]\/(reinigung|login)\//g)].map(
+          (match) => `${path}: href to /${match[1]}/`,
+        ),
+  )
+  assert.deepEqual(offenders, [], `forbidden link:\n- ${offenders.join('\n- ')}`)
+})
+
 // --- 4. Vienna period boundaries (lib/period.ts) ----------------------------------------
 //
 // `web/lib/*.ts` is imported and RUN here rather than pattern-matched, because the thing
@@ -318,6 +361,125 @@ registerHooks({
 const { businessMidnight, periodRange, withinRange } = await import(
   pathToFileURL(join(ROOT, 'lib/period.ts')).href
 )
+
+const { NAV_GROUPS, OFF_NAV_ROUTES } = await import(pathToFileURL(join(ROOT, 'lib/nav.ts')).href)
+
+check('every route that left the sidebar keeps a way in (decision-39)', () => {
+  // A route nobody can reach is a deleted feature that still costs a build. `/contracts/`,
+  // `/analytics/` and `/inventory/` are reached from the objects that need them, and this is
+  // what says so out loud when the last of those links is removed.
+  //
+  // A link counts when the route literal appears in a file that is NOT the route's own page
+  // — either as an `href` or as a constant that is then used at least once more, so a dead
+  // `const CONTRACTS_PATH` left behind by a deletion does not pass for a way in.
+  const navHrefs = new Set(NAV_GROUPS.flatMap((group) => group.items).map((item) => item.href))
+  const missing = []
+  for (const route of OFF_NAV_ROUTES) {
+    assert.ok(!navHrefs.has(route), `${route} is in the sidebar AND in OFF_NAV_ROUTES`)
+    const own = `app${route}page.tsx`
+    const inbound = sources.filter(({ path, text }) => {
+      if (path === own || path === 'lib/nav.ts') return false
+      if (!text.includes(`'${route}'`) && !text.includes(`"${route}"`)) return false
+      // Named constant? Then it must be referenced somewhere besides its own definition.
+      const named = text.match(new RegExp(`const (\\w+) = '${route}'`))
+      if (named === null) return true
+      return text.split(named[1]).length - 1 > 1
+    })
+    if (inbound.length === 0) missing.push(route)
+  }
+  assert.deepEqual(
+    missing,
+    [],
+    `off-nav routes with no inbound link: ${missing.join(', ')} - a route nobody can reach is a deleted feature`,
+  )
+})
+
+// --- 4b. lib/filters.ts: the parser is the trust boundary --------------------------------
+//
+// RUN, not pattern-matched. Every value below is a URL a person can type, and the rule is
+// that a malformed one degrades to the screen's default and NEVER crashes a screen or
+// silently shows the wrong object's data. This project has returned a 500 for a malformed
+// URL once already.
+
+const { EMPTY_FILTERS, FILTER_KEYS, filterHref, filterQuery, parseFilters } = await import(
+  pathToFileURL(join(ROOT, 'lib/filters.ts')).href
+)
+
+check('lib/filters.ts: a hand-typed or stale URL degrades, never throws', () => {
+  const junk = [
+    '',
+    '?',
+    '?location=',
+    '?location=nope',
+    '?location=../../etc/passwd',
+    '?location=%ZZ',
+    '?location=<script>alert(1)</script>',
+    '?worker=0',
+    '?worker=-3',
+    '?worker=1.5',
+    '?worker=01',
+    '?worker=1e3',
+    '?worker=99999999999999999999',
+    '?worker=abc',
+    '?shift=0',
+    '?client=0',
+    '?period=letzterMonat',
+    '?period=ALL',
+    '?state=nonsense',
+    '?status=nonsense',
+    '?open=nope',
+    '?unknownparam=1&another=2',
+    '?location=a&location=b',
+  ]
+  for (const search of junk) {
+    const parsed = parseFilters(search)
+    assert.deepEqual(
+      parsed,
+      EMPTY_FILTERS,
+      `${search} must parse to no filters at all, not to a filter nobody can name`,
+    )
+  }
+})
+
+check('lib/filters.ts: every well-formed value survives a round trip', () => {
+  const uuid = '729b9c2a-98e2-4fb6-91d1-889fc8b561cc'
+  const full = {
+    location: uuid,
+    worker: 7,
+    client: 3,
+    shift: 41,
+    period: 'lastMonth',
+    state: 'unresolved',
+    status: 'open',
+    open: uuid.toUpperCase(),
+  }
+  assert.deepEqual(parseFilters(filterQuery(full)), full)
+  // A UUID is case-insensitive on the wire and is kept verbatim: rewriting the case would
+  // make two links to the same building compare unequal.
+  assert.equal(parseFilters(`?open=${uuid.toUpperCase()}`).open, uuid.toUpperCase())
+  // Fixed key order, so the same filter set is always the same string.
+  assert.equal(filterQuery(full), filterQuery({ ...full }))
+  assert.equal(filterQuery({}), '')
+  assert.equal(filterHref('/shifts/', {}), '/shifts/')
+  assert.equal(
+    filterHref('/shifts/', { location: uuid, period: 'all' }),
+    `/shifts/?location=${uuid}&period=all`,
+  )
+})
+
+const { PERIODS } = await import(pathToFileURL(join(ROOT, 'lib/period.ts')).href)
+
+check('lib/filters.ts: period ids are lib/period.ts ids, verbatim', () => {
+  // The defect this contract removes is a link that says one month and opens another. It
+  // returns the moment these two vocabularies drift.
+  for (const period of PERIODS) {
+    assert.equal(parseFilters(`?period=${period}`).period, period, `${period} must round-trip`)
+  }
+  assert.deepEqual(
+    FILTER_KEYS.filter((key) => key === 'period'),
+    ['period'],
+  )
+})
 
 check('lib/period.ts: a period boundary is Vienna midnight, not UTC midnight', () => {
   // Summer, +02:00. Get this wrong and 31 July 23:59 is paid in August.

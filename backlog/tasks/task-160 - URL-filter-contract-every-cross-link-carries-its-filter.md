@@ -1,9 +1,10 @@
 ---
 id: TASK-160
 title: 'URL filter contract: every cross-link carries its filter'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 03:16'
+updated_date: '2026-08-18 05:55'
 labels:
   - ux
   - ia
@@ -44,11 +45,23 @@ MUST NOT CHANGE: /shifts/ keeps its UNBOUNDED client-side snapshot. Parameters s
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 All six reading screens accept the vocabulary in backlog/docs/IA-PLAN.md section 3; a parameter a screen does not understand is ignored silently, renders no error and does not 404
-- [ ] #2 D7: clicking payroll's '{n} Schichten muessen bestaetigt werden' lands on /shifts/ showing exactly those shifts, in payroll's OWN period, with state=unresolved - proven by asserting the source period id equals the target period id
-- [ ] #3 D4: the dashboard's unresolved triage bullet links with period=all, and an unresolved shift older than 30 days is still on screen after the jump
-- [ ] #4 Every filtered screen renders a removable chip naming the filter, and removing it restores the unfiltered view without a reload
-- [ ] #5 No link is rendered to a target that would show zero rows; the zero is stated in words in the same place
-- [ ] #6 /shifts/ still fetches an UNBOUNDED snapshot (no from/to on the request) and still offers the 'latestRecorded' escape from an empty period
-- [ ] #7 de.json and en.json key sets stay byte-identical; the parity check is green
+- [x] #1 All six reading screens accept the vocabulary in backlog/docs/IA-PLAN.md section 3; a parameter a screen does not understand is ignored silently, renders no error and does not 404
+- [x] #2 D7: clicking payroll's '{n} Schichten muessen bestaetigt werden' lands on /shifts/ showing exactly those shifts, in payroll's OWN period, with state=unresolved - proven by asserting the source period id equals the target period id
+- [x] #3 D4: the dashboard's unresolved triage bullet links with period=all, and an unresolved shift older than 30 days is still on screen after the jump
+- [x] #4 Every filtered screen renders a removable chip naming the filter, and removing it restores the unfiltered view without a reload
+- [x] #5 No link is rendered to a target that would show zero rows; the zero is stated in words in the same place
+- [x] #6 /shifts/ still fetches an UNBOUNDED snapshot (no from/to on the request) and still offers the 'latestRecorded' escape from an empty period
+- [x] #7 de.json and en.json key sets stay byte-identical; the parity check is green
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+web/lib/filters.ts is the one place that knows the parameter names and their types; ten screens parse through it and build every cross-link with filterHref(). 37 links now carry state. Chips echo the filter on every filtered screen and remove it without a reload.
+
+Deviations from the written vocabulary, both stated in the file header: worker/client/shift are INTEGER (workers.id is a serial, the plan wrote <uuid>), and status gains 'all' because /material-requests/ already ships an 'alle' control and a filter the URL cannot express reverts silently when shared.
+
+History: filter writes are 'replace' (a control on the screen you are on - four dropdown twiddles must not cost four back presses), panel opens are 'push' (back closes what appeared over what you were reading), cross-screen links are ordinary Link pushes.
+
+Verified in a browser, not by reading code: demo/check-filters.mjs, 81 assertions green - every panel link followed and the target counted (71 of 351 shift rows), 11 hand-mangled URLs (one per parameter) rendering with no alert, an unknown uuid saying 'unbekannt' rather than showing the dashboard, back closing a pushed panel, four filter changes adding zero history entries. RED proved by mutation on five of them: dropping the uuid guard, making a panel link bare, no-oping the chip's remove, opening with 'replace', and zeroing outsideCount. web pnpm verify green (25 node checks incl. 3 new ones on the parser); audit-band 234 measurements / 7776 control positions clean.
+<!-- SECTION:FINAL_SUMMARY:END -->

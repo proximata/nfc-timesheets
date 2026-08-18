@@ -80,7 +80,43 @@
     "badgeNoEmail": "No sign-in",
     "badgeDeadTag": "Check tag",
     "onSiteSince": "{name}, since {time}",
-    "onSiteMore": "{count, plural, one {and # more person} other {and # more people}}"
+    "onSiteMore": "{count, plural, one {and # more person} other {and # more people}}",
+    "panelStep": "Building",
+    "panelOpen": "Open building panel",
+    "panelOnSite": "On site now",
+    "panelOnSiteEmpty": "Nobody is clocked in right now.",
+    "panelPoints": "Open points here",
+    "panelPointsUnresolved": "{count, plural, one {# shift unconfirmed} other {# shifts unconfirmed}}",
+    "panelPointsNoUnresolved": "no shift to confirm",
+    "panelPointsOpen": "{count, plural, one {# open shift} other {# open shifts}}",
+    "panelPointsNoOpen": "no open shift",
+    "panelPointsMaterial": "{count, plural, one {# open material request} other {# open material requests}}",
+    "panelPointsNoMaterial": "no material request",
+    "panelPointsMaterialLoading": "loading material requests …",
+    "panelLastCleaned": "Last cleaned",
+    "panelLastCleanedNever": "Never — no completed shift has been recorded for this building.",
+    "panelLastCleanedValue": "{date} · {name} · {duration} h",
+    "panelHours": "Hours this month",
+    "panelHoursNoTarget": "{actual} h · no monthly target agreed",
+    "panelHoursTarget": "{actual} of {target} h",
+    "panelHoursPending": "{count, plural, one {# shift is not counted yet} other {# shifts are not counted yet}}",
+    "panelContract": "Contract",
+    "panelContractNone": "No contract on file",
+    "panelContractValue": "{amount} / month",
+    "panelClientNone": "no client on file",
+    "panelTruncated": "Only the most recent shifts were loaded. The numbers above are therefore floors, not totals.",
+    "panelLinksHeading": "Go to",
+    "panelLinkShifts": "This building’s shifts · this month",
+    "panelLinkUnresolved": "{count, plural, one {Confirm # shift · all periods} other {Confirm # shifts · all periods}}",
+    "panelLinkClose": "Close {name}’s open shift",
+    "panelLinkPayroll": "Payroll · only hours in this building · last month",
+    "panelLinkPl": "This building’s P&L · last month",
+    "panelLinkContract": "This building’s contract history",
+    "panelLinkAnalytics": "This building’s time trend",
+    "panelLinkMaterials": "{count, plural, one {View # open material request} other {View # open material requests}}",
+    "panelLinkNoMaterials": "No open material request for this building.",
+    "panelLinkEdit": "Edit building · tag URL",
+    "panelLinkClient": "Client: {name}"
   },
   "payroll": {
     "heading": "Payroll",
@@ -147,7 +183,12 @@
     "rowNoRate": "No hourly rate",
     "amountNoRate": "Not priced",
     "excludedNoRate": "No hourly rate",
-    "howHeading": "How this page works"
+    "howHeading": "How this page works",
+    "scopedLocation": "This view is restricted to one building: {name}.",
+    "scopedWorker": "This view is restricted to one person: {name}.",
+    "scopedNote": "While a filter is active neither the server reconciliation nor the CSV export is offered: both always describe the whole period, and a filtered file would look like a complete payroll run.",
+    "scopedBuildingLink": "Open building panel",
+    "openWorker": "Open worker panel"
   },
   "login": {
     "heading": "Sign in",
@@ -228,7 +269,32 @@
     "reissueConfirmTitle": "Create a new enrolment code for {name}?",
     "reissueConfirmBody": "The previous code stops working from this moment, even if it has already been passed on. The new code is shown only once.",
     "deactivateConfirmTitle": "Deactivate {name}?",
-    "deactivateConfirmBody": "This person can no longer sign in or record hours. Shifts already recorded stay exactly as they are, and the person can be reactivated at any time."
+    "deactivateConfirmBody": "This person can no longer sign in or record hours. Shifts already recorded stay exactly as they are, and the person can be reactivated at any time.",
+    "panelStep": "Worker",
+    "panelOpen": "Details",
+    "panelOpenShift": "Open shift",
+    "panelOpenShiftNone": "No open shift.",
+    "panelOpenShiftValue": "{location}, since {since}",
+    "panelUnresolved": "Unconfirmed shifts",
+    "panelUnresolvedNone": "None — nothing is holding up this person’s pay.",
+    "panelUnresolvedSome": "{count, plural, one {# shift, not payable until confirmed} other {# shifts, not payable until confirmed}}",
+    "panelStatus": "Status",
+    "panelTruncated": "Only the most recent shifts were loaded, so the list below may be incomplete.",
+    "panelRecentHeading": "Most recent shifts (the last {count})",
+    "panelRecentEmpty": "No completed shift has been recorded for this person yet.",
+    "panelRecentCaption": "The most recently completed shifts of {name}, newest first.",
+    "panelColWhen": "Start",
+    "panelColLocation": "Building",
+    "panelColDuration": "Duration (h:mm)",
+    "panelRateHistory": "Only one hourly rate is stored per worker. Changing it re-values past hours at the new rate.",
+    "panelLinksHeading": "Go to",
+    "panelLinkShifts": "All shifts of this person · all periods",
+    "panelLinkUnresolved": "{count, plural, one {Confirm # shift · all periods} other {Confirm # shifts · all periods}}",
+    "panelLinkClose": "Close the open shift",
+    "panelLinkWhere": "Open building: {name}",
+    "panelLinkPayroll": "This person’s payroll · last month",
+    "panelLinkNoUnresolved": "No shift is waiting to be confirmed.",
+    "filterNoEmail": "Only workers without an email address."
   },
   "locations": {
     "heading": "Locations",
@@ -342,7 +408,11 @@
     "stepBack": "Back",
     "stepTwoNote": "Contract value and target time can be filled in later. None of it is needed to record the first shift.",
     "deactivateConfirmTitle": "Deactivate {name}?",
-    "deactivateConfirmBody": "The NFC tag at this building stops starting shifts, and any live client link to this building becomes invalid at the same moment. Shifts already recorded stay exactly as they are, and the building can be reactivated at any time."
+    "deactivateConfirmBody": "The NFC tag at this building stops starting shifts, and any live client link to this building becomes invalid at the same moment. Shifts already recorded stay exactly as they are, and the building can be reactivated at any time.",
+    "openPanel": "Open building panel",
+    "contractLink": "Open contract history",
+    "filterNoTag": "Only buildings with no shift recorded.",
+    "filterClientEmpty": "No building here is filed under this client."
   },
   "clients": {
     "heading": "Clients",
@@ -401,7 +471,8 @@
     "empty": "No clients yet. Choose “Add a company” at the top right — or record one straight from the building form.",
     "confirmDeactivateTitle": "Deactivate {name}?",
     "confirmDeactivateBody": "The person is marked inactive, and every link they were given to the cleaning history stops working immediately. Reactivating them later does not bring those links back.",
-    "confirmDeactivateConfirm": "Deactivate and end links"
+    "confirmDeactivateConfirm": "Deactivate and end links",
+    "buildingsLinkFiltered": "This client’s buildings"
   },
   "shifts": {
     "heading": "Shifts",
@@ -490,7 +561,10 @@
     "answerBlocked": "Holding up payroll",
     "answerShown": "Shown",
     "rowOpen": "{location} · clocked in at {time}",
-    "rowUnresolved": "{location} · closed by the 8-hour timer, {date}"
+    "rowUnresolved": "{location} · closed by the 8-hour timer, {date}",
+    "linkedShiftMissing": "The linked shift is not in the loaded data. It may have been corrected in the meantime.",
+    "openWorker": "Open worker panel",
+    "openLocation": "Open building panel"
   },
   "inventory": {
     "heading": "Products & Equipment",
@@ -620,7 +694,9 @@
     "answerDeliverSub": "ordered, not delivered yet",
     "refusedClosed": "Final – nothing left to change",
     "confirmRejectTitle": "Refuse {worker}'s request?",
-    "confirmRejectBody": "Refusing is final: nothing on this request can be changed afterwards, cost included. The worker sees the refusal the next time they open the app and has to ask again if they still need it."
+    "confirmRejectBody": "Refusing is final: nothing on this request can be changed afterwards, cost included. The worker sees the refusal the next time they open the app and has to ask again if they still need it.",
+    "openWorker": "Open worker panel",
+    "openLocation": "Open building panel"
   },
   "pl": {
     "heading": "Profit and loss",
@@ -715,7 +791,10 @@
     "answerBaseline": "Target margin {percent}",
     "answerNoBaseline": "No target margin set",
     "baselineOpen": "Set target margin",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "flaggedBuildingLink": "Open building panel",
+    "flaggedMaterialsLink": "This building’s material",
+    "scopedNote": "This view is restricted to one building. The notes under “How this page calculates” still describe the whole period and every building."
   },
   "contracts": {
     "heading": "Contract management",
@@ -788,7 +867,8 @@
     "errorRejected": "The server refused these values. Please check the fields and try again.",
     "question": "What was agreed, and since when?",
     "confirmUndoTitle": "Remove the period starting {from}?",
-    "confirmUndoBody": "The current contract period is removed and the price before it applies again. This cannot be undone."
+    "confirmUndoBody": "The current contract period is removed and the price before it applies again. This cannot be undone.",
+    "preselected": "Opened from the building panel: the selection below is already on this building."
   },
   "analytics": {
     "heading": "Building analytics",
@@ -886,7 +966,8 @@
     "answerNoTarget": "No agreed time",
     "answerNoTargetSub": "No contract with an agreed time",
     "answerBuildings": "Buildings",
-    "answerPinnedSub": "{pinned, plural, =0 {none on the map} one {# on the map} other {# on the map}}"
+    "answerPinnedSub": "{pinned, plural, =0 {none on the map} one {# on the map} other {# on the map}}",
+    "panelObjectLink": "Open building panel"
   },
   "portal": {
     "heading": "Cleaning record",
@@ -955,5 +1036,31 @@
   },
   "field": {
     "optional": "optional"
+  },
+  "filters": {
+    "activeHeading": "Active filters:",
+    "remove": "Remove filter “{filter}: {value}”",
+    "location": "Building",
+    "worker": "Worker",
+    "client": "Client",
+    "shift": "Shift",
+    "period": "Period",
+    "state": "State",
+    "status": "Status",
+    "unknownLocation": "unknown — this building is not in the loaded data",
+    "unknownWorker": "unknown — this person is not in the loaded data",
+    "unknownClient": "unknown — this client is not in the loaded data",
+    "unknownShift": "unknown — this shift is not in the loaded data",
+    "unknownNotice": "A filter in the address points at a record that does not exist here. That is why this view is empty — no data is missing. Remove the filter to see everything again.",
+    "stateOpen": "Open",
+    "stateUnresolved": "Unconfirmed",
+    "stateManual": "Entered by hand",
+    "stateNoEmail": "Without an email address",
+    "stateNoTag": "With no shift recorded",
+    "statusOpen": "Open requests",
+    "statusAll": "All",
+    "statusDecide": "To decide",
+    "statusOrder": "To order",
+    "statusDeliver": "To deliver"
   }
 }

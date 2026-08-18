@@ -8,6 +8,7 @@ import { AnswerBand } from '@/components/AnswerBand'
 import { Drawer } from '@/components/Drawer'
 import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
+import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
 import { PageHeader } from '@/components/PageHeader'
 import {
@@ -20,6 +21,7 @@ import {
   type PlReport,
   saveSetting,
 } from '@/lib/api'
+import { filterHref, useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { LOGIN_PATH } from '@/lib/nav'
 import { isPeriod, PAYROLL_PERIODS, type Period, periodRange } from '@/lib/period'
@@ -79,9 +81,12 @@ const MATERIALS_PATH = '/material-requests/'
 const CONTRACTS_PATH = '/contracts/'
 const SHIFTS_PATH = '/shifts/'
 const WORKERS_PATH = '/workers/'
+/** The building's object surface. `/?location=<uuid>` — there is no `/locations/<id>`. */
+const HOME_PATH = '/'
 
 export default function PlPage() {
   const t = useTranslations('pl')
+  const tFilter = useTranslations('filters')
   const tError = useTranslations('error')
   const format = useFormatter()
   const locale = useLocale()
@@ -109,8 +114,16 @@ export default function PlPage() {
 
   const [report, setReport] = useState<PlReport | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
+  /**
+   * `?location=` narrows the report to one building; `?period=` is read so the object
+   * panel's „Ergebnis dieses Objekts · Vormonat" opens in the month its own label named
+   * (decision-38). The URL is the period — no second copy in state.
+   */
+  const [filters, setFilters] = useFilters()
   /** The month that has ENDED is the one a P&L is run for. Same vocabulary as /payroll/. */
-  const [period, setPeriod] = useState<Period>('lastMonth')
+  const period: Period =
+    filters.period !== null && filters.period !== 'all' ? filters.period : 'lastMonth'
+  const setPeriod = (next: Period) => setFilters({ period: next }, 'replace')
   // Frozen at mount: "this month" must not change meaning halfway through a re-render.
   const [now] = useState(() => new Date())
   const range = useMemo(() => periodRange(period, now), [period, now])
@@ -236,8 +249,30 @@ export default function PlPage() {
           to: dayFormat.format(new Date(new Date(range.to).getTime() - 1)),
         })
 
-  const totals = report === null ? null : plTotals(report.buildings)
-  const flagged = report === null ? [] : report.buildings.filter((b) => b.below_baseline === true)
+  /**
+   * `?location=` — one building's row, its flagged argument and a total scoped to it.
+   *
+   * The totals row is recomputed over the VISIBLE set rather than left whole: a table of one
+   * row under a total of six buildings is a screen contradicting itself. `totalScope` already
+   * names how many buildings it counted, so the recomputed total says what it is.
+   *
+   * The methodology callout below is NOT scoped — the material pool, the unpriced counts and
+   * the rate basis are period-wide facts, and a scoped copy of them would be a different
+   * number wearing the same label. `scopedNote` says so where they are.
+   */
+  const allBuildings = report?.buildings ?? []
+  const scopedBuilding =
+    filters.location === null
+      ? null
+      : (allBuildings.find((b) => b.location_id === filters.location) ?? null)
+  const scopeUnknown = filters.location !== null && report !== null && scopedBuilding === null
+  const buildings =
+    filters.location === null
+      ? allBuildings
+      : allBuildings.filter((b) => b.location_id === filters.location)
+
+  const totals = report === null ? null : plTotals(buildings)
+  const flagged = buildings.filter((b) => b.below_baseline === true)
   // Hoisted out of the JSX: narrowing `report.baseline_margin_bp` inside a `.map()` callback
   // is lost, and the alternative would be a non-null assertion on the one number the whole
   // flagging argument rests on.
@@ -360,6 +395,24 @@ export default function PlPage() {
         {baselineNotice === null ? '' : baselineNotice.text}
       </p>
 
+      {/* The filter, echoed and removable (decision-38 rule 3). */}
+      <FilterChips
+        chips={
+          filters.location === null
+            ? []
+            : [
+                {
+                  key: 'location',
+                  label: tFilter('location'),
+                  value: scopedBuilding?.name ?? tFilter('unknownLocation'),
+                  unknown: scopeUnknown,
+                  onRemove: () => setFilters({ location: null }, 'replace'),
+                },
+              ]
+        }
+      />
+      {scopeUnknown ? <p className="notice bad">{tFilter('unknownNotice')}</p> : null}
+
       {/* The answer first, above the control that changes it. `flagged` leads because it is
           the only cell that asks for something; everything else here is context. */}
       {report === null || totals === null ? null : (
@@ -393,7 +446,7 @@ export default function PlPage() {
               v: money(totals.revenueCents),
               calm: true,
               sub: t('totalScope', {
-                buildings: report.buildings.length - totals.unpricedBuildings,
+                buildings: buildings.length - totals.unpricedBuildings,
               }),
             },
           ]}
@@ -455,18 +508,55 @@ export default function PlPage() {
                       <li key={line}>{line}</li>
                     ))}
                   </ul>
-                  <p>
-                    <Link href={CONTRACTS_PATH}>{t('flaggedContractLink')}</Link>
-                    {' · '}
-                    <Link href={SHIFTS_PATH}>{t('flaggedShiftsLink')}</Link>
-                  </p>
+                  {/* Every link out of a flagged building carries THAT building and THIS
+                      period. They used to be bare navigations: the director read a
+                      paragraph about Handelskai and landed on an unfiltered contract list. */}
+                  <ul className="panel-links">
+                    <li>
+                      <Link href={filterHref(HOME_PATH, { location: building.location_id })}>
+                        {t('flaggedBuildingLink')}
+                      </Link>
+                    </li>
+                    <li>
+                      <Link href={filterHref(CONTRACTS_PATH, { location: building.location_id })}>
+                        {t('flaggedContractLink')}
+                      </Link>
+                    </li>
+                    <li>
+                      {/* L24: that building's shifts, in the month this argument was made
+                          about — not „the shifts screen" on its own default period. */}
+                      <Link
+                        href={filterHref(SHIFTS_PATH, {
+                          location: building.location_id,
+                          period,
+                        })}
+                      >
+                        {t('flaggedShiftsLink')}
+                      </Link>
+                    </li>
+                    {/* Rule 1: only when this building actually carries material cost. A
+                        link to an empty material queue is the „nichts gefunden" landing
+                        this contract exists to stop. */}
+                    {building.material_cents > 0 ? (
+                      <li>
+                        <Link
+                          href={filterHref(MATERIALS_PATH, {
+                            location: building.location_id,
+                            status: 'all',
+                          })}
+                        >
+                          {t('flaggedMaterialsLink')}
+                        </Link>
+                      </li>
+                    ) : null}
+                  </ul>
                 </div>
               ))
             )}
           </ListPanel>
 
           <ListPanel title={t('resultHeading')}>
-            {report.buildings.length === 0 ? (
+            {buildings.length === 0 ? (
               /* Empty is not an error and must not read like one. There is genuinely
                  nothing to report when no building is active and none was worked in. */
               <div className="list-body">
@@ -502,7 +592,7 @@ export default function PlPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {report.buildings.map((building) => (
+                  {buildings.map((building) => (
                     <tr
                       key={building.location_id}
                       className={
@@ -514,7 +604,11 @@ export default function PlPage() {
                       }
                     >
                       <th scope="row">
-                        {building.name}
+                        {/* The name opens the building's panel, carrying its id. */}
+                        <Link href={filterHref(HOME_PATH, { location: building.location_id })}>
+                          {building.name}
+                          <span className="visually-hidden"> {t('flaggedBuildingLink')}</span>
+                        </Link>
                         {building.active ? null : (
                           <span className="shift-state-note">{t('buildingInactive')}</span>
                         )}
@@ -596,7 +690,7 @@ export default function PlPage() {
                       {t('totalLabel')}
                       <span className="shift-state-note">
                         {t('totalScope', {
-                          buildings: report.buildings.length - totals.unpricedBuildings,
+                          buildings: buildings.length - totals.unpricedBuildings,
                         })}
                       </span>
                     </th>
@@ -636,6 +730,10 @@ export default function PlPage() {
           <div className="callout">
             <h3>{t('methodHeading')}</h3>
             <ul>
+              {/* The pool, the unpriced counts and the rate basis are PERIOD-wide facts.
+                  They are not re-scoped when one building is selected, and pretending they
+                  were would be a different number under the same label. */}
+              {filters.location === null ? null : <li>{t('scopedNote')}</li>}
               {/* The old lede's second sentence: every number on this page is the server's
                   SQL over exactly the chosen days. The lede is gone, the fact is not. */}
               <li>{t('intro')}</li>

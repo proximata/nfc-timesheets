@@ -8,6 +8,7 @@ import { ConfirmModal } from '@/components/ConfirmModal'
 import { Drawer } from '@/components/Drawer'
 import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
+import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
 import { PageHeader } from '@/components/PageHeader'
 import {
@@ -21,6 +22,7 @@ import {
   saveClient,
   saveContact,
 } from '@/lib/api'
+import { filterHref, useFilters } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
 import { LOGIN_PATH } from '@/lib/nav'
 
@@ -82,7 +84,9 @@ type ErrorMessage =
 
 export default function ClientsPage() {
   const t = useTranslations('clients')
+  const tFilter = useTranslations('filters')
   const tError = useTranslations('error')
+  const [filters, setFilters] = useFilters()
   const router = useRouter()
 
   const clientFormId = useId()
@@ -323,14 +327,25 @@ export default function ClientsPage() {
    * the payload keeps its own group rather than vanishing from the screen — an invisible
    * row is how a person nobody can see keeps a link nobody remembers giving them.
    */
-  const groups = clients.map((client) => ({
-    client,
-    people: contacts.filter((contact) => contact.client_id === client.id),
-    buildings: locations.filter((row) => row.client_id === client.id).map((row) => row.name),
-  }))
-  const orphans = contacts.filter(
-    (contact) => !clients.some((client) => client.id === contact.client_id),
-  )
+  const groups = clients
+    // `?client=<id>` — the Objektpanel's „Kunde: …" link (decision-38). Narrows to that
+    // company and its people; the chip says so and takes it off again.
+    .filter((client) => filters.client === null || client.id === filters.client)
+    .map((client) => ({
+      client,
+      people: contacts.filter((contact) => contact.client_id === client.id),
+      buildings: locations.filter((row) => row.client_id === client.id),
+    }))
+  const orphans =
+    filters.client !== null
+      ? []
+      : contacts.filter((contact) => !clients.some((client) => client.id === contact.client_id))
+
+  const filterClientName =
+    filters.client === null
+      ? null
+      : (clients.find((client) => client.id === filters.client)?.name ?? null)
+  const clientUnknown = filters.client !== null && snapshot !== null && filterClientName === null
 
   /** The cell exists so the columns keep lining up; a person has no buildings of their own. */
   const notApplicable = <span className="cell-muted">{t('notApplicable')}</span>
@@ -410,6 +425,23 @@ export default function ClientsPage() {
         {t('intro')} <Link href="/locations/">{t('buildingsLink')}</Link>
       </p>
 
+      <FilterChips
+        chips={
+          filters.client === null
+            ? []
+            : [
+                {
+                  key: 'client',
+                  label: tFilter('client'),
+                  value: filterClientName ?? tFilter('unknownClient'),
+                  unknown: clientUnknown,
+                  onRemove: () => setFilters({ client: null }, 'replace'),
+                },
+              ]
+        }
+      />
+      {clientUnknown ? <p className="notice bad">{tFilter('unknownNotice')}</p> : null}
+
       {/* Permanent live regions: a text change inside an existing region is announced far
           more reliably than a node that appears and disappears. */}
       <p className="form-error" role="alert">
@@ -461,10 +493,15 @@ export default function ClientsPage() {
                       )}
                     </th>
                     <td>
+                      {/* Rule 1: no link to an empty target — a company with no buildings
+                          gets the words, not a link that lands on „nichts gefunden". */}
                       {buildings.length === 0 ? (
                         <span className="cell-muted">{t('noBuildings')}</span>
                       ) : (
-                        buildings.join(', ')
+                        <Link href={filterHref('/locations/', { client: client.id })}>
+                          {buildings.map((row) => row.name).join(', ')}
+                          <span className="visually-hidden"> {t('buildingsLinkFiltered')}</span>
+                        </Link>
                       )}
                     </td>
                     <td>

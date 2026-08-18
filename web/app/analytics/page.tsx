@@ -8,6 +8,7 @@ import { AnswerBand } from '@/components/AnswerBand'
 import { Drawer } from '@/components/Drawer'
 import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
+import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
 import { PageHeader } from '@/components/PageHeader'
 import {
@@ -20,6 +21,7 @@ import {
   TREND_MONTHS_DEFAULT,
   TREND_MONTHS_MAX,
 } from '@/lib/api'
+import { filterHref, useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import {
   failureOf,
@@ -79,6 +81,7 @@ const TREND_CHOICES = [3, 6, 12, TREND_MONTHS_MAX] as const
 
 export default function AnalyticsPage() {
   const t = useTranslations('analytics')
+  const tFilter = useTranslations('filters')
   const tError = useTranslations('error')
   const locale = useLocale()
   const router = useRouter()
@@ -90,12 +93,34 @@ export default function AnalyticsPage() {
 
   const [report, setReport] = useState<AnalyticsReport | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
-  const [period, setPeriod] = useState<Period>('lastMonth')
+  /**
+   * `?location=` opens this screen's building panel on that building, and `?period=` puts
+   * it in the period the link's label promised (decision-38). The building panel on `/`
+   * links here; so does a flagged row on `/pl/`.
+   */
+  const [filters, setFilters] = useFilters()
+  const period: Period =
+    filters.period !== null && filters.period !== 'all' ? filters.period : 'lastMonth'
+  const setPeriod = (next: Period) => setFilters({ period: next }, 'replace')
   const [months, setMonths] = useState<number>(TREND_MONTHS_DEFAULT)
   const [now] = useState(() => new Date())
   const range = useMemo(() => periodRange(period, now), [period, now])
 
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  /**
+   * THE URL IS THE SELECTION. A pin click and a table button write it; back closes the
+   * panel because back pops the entry that opened it. That is only true because opening is
+   * a 'push' and closing is a 'replace' — see lib/filters.ts.
+   */
+  const selectedId = filters.location
+  /**
+   * STABLE, and that is not a style point: it goes in the map effect's dependency list, and
+   * an identity that changes every render would reconstruct the Google map on every render.
+   * `setFilters` is already `useCallback`-stable, so this is too.
+   */
+  const setSelectedId = useCallback(
+    (id: string | null) => setFilters({ location: id }, id === null ? 'replace' : 'push'),
+    [setFilters],
+  )
   const [mapStatus, setMapStatus] = useState<MapStatus>('loading')
   const [mapFailure, setMapFailure] = useState<MapFailure | null>(null)
   /** Buildings whose Street View image 404ed after we asked for it. Second line of defence. */
@@ -240,7 +265,10 @@ export default function AnalyticsPage() {
       cancelled = true
       for (const marker of markers) marker.setMap(null)
     }
-  }, [report, pinned])
+    // `setSelectedId` is stable by construction (useCallback over a useCallback), so listing
+    // it costs nothing. If it ever stops being stable, this effect rebuilds the map on every
+    // render and every rebuild is a billed Maps load.
+  }, [report, pinned, setSelectedId])
 
   const selected = buildings.find((b) => b.location_id === selectedId) ?? null
 
@@ -354,6 +382,28 @@ export default function AnalyticsPage() {
       <p className={notice?.ok === false ? 'form-error' : 'form-status'} role="status">
         {notice === null ? '' : notice.text}
       </p>
+
+      {/* The panel selection IS a filter and it is echoed like every other one, so a link
+          that opened a panel on a building this report does not cover says so rather than
+          silently doing nothing (decision-38 rule 3). */}
+      <FilterChips
+        chips={
+          selectedId === null
+            ? []
+            : [
+                {
+                  key: 'location',
+                  label: tFilter('location'),
+                  value: selected?.name ?? tFilter('unknownLocation'),
+                  unknown: report !== null && selected === null,
+                  onRemove: () => setSelectedId(null),
+                },
+              ]
+        }
+      />
+      {selectedId !== null && report !== null && selected === null ? (
+        <p className="notice bad">{tFilter('unknownNotice')}</p>
+      ) : null}
 
       {/* The answer first, above the controls that change it. It counts BUILDINGS and
           not pins: the map is the optional part. */}
@@ -698,13 +748,32 @@ export default function AnalyticsPage() {
               </tbody>
             </table>
 
-            <p>
-              <Link href={CONTRACTS_PATH}>{t('panelContractLink')}</Link>
-              {' · '}
-              <Link href={SHIFTS_PATH}>{t('panelShiftsLink')}</Link>
-              {' · '}
-              <Link href={BUILDINGS_PATH}>{t('panelBuildingLink')}</Link>
-            </p>
+            {/* Every one of these used to be a bare navigation: the director read a panel
+                about Handelskai and landed on an unfiltered list of everything. The fourth
+                is new — the building's own object surface, which is where the numbers and
+                the rest of its links live. */}
+            <ul className="panel-links">
+              <li>
+                <Link href={filterHref('/', { location: selected.location_id })}>
+                  {t('panelObjectLink')}
+                </Link>
+              </li>
+              <li>
+                <Link href={filterHref(CONTRACTS_PATH, { location: selected.location_id })}>
+                  {t('panelContractLink')}
+                </Link>
+              </li>
+              <li>
+                <Link href={filterHref(SHIFTS_PATH, { location: selected.location_id, period })}>
+                  {t('panelShiftsLink')}
+                </Link>
+              </li>
+              <li>
+                <Link href={filterHref(BUILDINGS_PATH, { open: selected.location_id })}>
+                  {t('panelBuildingLink')}
+                </Link>
+              </li>
+            </ul>
           </>
         )}
       </Drawer>

@@ -3,9 +3,10 @@ id: TASK-165
 title: >-
   Nav 12 to 9: three object-scoped routes leave the sidebar and keep their
   routes
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 03:18'
+updated_date: '2026-08-18 05:56'
 labels:
   - ux
   - ia
@@ -42,9 +43,24 @@ MUST NOT CHANGE: group labels are <p class=nav-heading>, NOT headings (a heading
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 PRIMARY_NAV has 9 entries; /contracts/, /analytics/ and /inventory/ are absent from it and all three routes still resolve
-- [ ] #2 A check asserts that every admin route outside PRIMARY_NAV has at least one inbound link in the built export, and it goes RED when that link is removed
-- [ ] #3 At 390 px the sidebar is still a scrollable strip with display:flex, never display:none, and all 9 entries are reachable
-- [ ] #4 Group labels are still <p>, not headings; aria-current='page' still marks the active route
-- [ ] #5 D12: a director reaches a building's contract periods from the Objektpanel in one click without using the sidebar
+- [x] #1 PRIMARY_NAV has 9 entries; /contracts/, /analytics/ and /inventory/ are absent from it and all three routes still resolve
+- [x] #2 A check asserts that every admin route outside PRIMARY_NAV has at least one inbound link in the built export, and it goes RED when that link is removed
+- [x] #3 At 390 px the sidebar is still a scrollable strip with display:flex, never display:none, and all 9 entries are reachable
+- [x] #4 Group labels are still <p>, not headings; aria-current='page' still marks the active route
+- [x] #5 D12: a director reaches a building's contract periods from the Objektpanel in one click without using the sidebar
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+NAV_GROUPS is 9 entries. /contracts/, /analytics/ and /inventory/ left the sidebar and kept their routes - the build still emits all three.
+
+How each stays reachable, recorded as DATA in lib/nav.ts (OFF_NAV_ROUTES) rather than as a comment, because web/scripts/check.mjs reads it:
+  /contracts/  <- Objektpanel - /pl/ flagged row - /pl/ methodNoContract - /locations/ contract cell (both branches: an unpriced building links too, because that screen is what states what it does to the P&L) - /analytics/ panel
+  /analytics/  <- Objektpanel
+  /inventory/  <- /material-requests/ panel action (moved OUT of the paperwork drawer: a link only reachable by opening something else is not a way in) - the drawer hint
+
+The check 'every route that left the sidebar keeps a way in' counts a link only in a file that is not the route's own page, and a named constant only when it is referenced beyond its definition, so a dead const left by a deletion does not pass for a way in. RED proved twice: pointing the panel's analytics link elsewhere, and putting /contracts/ back in the sidebar.
+
+@390 the strip still carries all nine (check-dashboard-shifts, check-materials-account-login, both now asserting exactly 9 - an exact count, because >= 9 would also pass a sidebar that grew back).
+<!-- SECTION:FINAL_SUMMARY:END -->

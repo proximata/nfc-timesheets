@@ -21,6 +21,7 @@ import {
   fetchClientsSnapshot,
   fetchContracts,
 } from '@/lib/api'
+import { useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { parseEuroToCents } from '@/lib/money'
 import { LOGIN_PATH } from '@/lib/nav'
@@ -106,6 +107,7 @@ type FieldErrors = { validFrom?: ErrorMessage; monthly?: ErrorMessage; targetHou
 
 export default function ContractsPage() {
   const t = useTranslations('contracts')
+  const tFilter = useTranslations('filters')
   const tError = useTranslations('error')
   const format = useFormatter()
   const locale = useLocale()
@@ -214,12 +216,38 @@ export default function ContractsPage() {
   const building = locations.find((location) => location.id === selected) ?? null
   const current = contracts?.find((contract) => contract.valid_to === null) ?? null
 
+  /**
+   * `?location=<uuid>` — pre-select the building (decision-38). `/contracts/` left the
+   * sidebar (decision-39) and is now reached from the object that needs it: the Objektpanel,
+   * a flagged row on `/pl/`, the contract cell on `/locations/` and the analytics panel.
+   * Every one of them names a building, so arriving at an empty select would throw the
+   * context away and make the director find it again in a list of forty.
+   *
+   * Applied ONCE per id: re-applying would fight the select the moment somebody used it.
+   */
+  const [filters, setFilters] = useFilters()
+  const [preselectedFor, setPreselectedFor] = useState<string | null>(null)
+  useEffect(() => {
+    if (filters.location === null || filters.location === preselectedFor) return
+    setPreselectedFor(filters.location)
+    setSelected(filters.location)
+  }, [filters.location, preselectedFor])
+
+  /** A well-formed building id that is in no row here. Said, never silently ignored. */
+  const preselectUnknown =
+    filters.location !== null &&
+    snapshot !== null &&
+    !locations.some((location) => location.id === filters.location)
+
   function select(locationId: string) {
     setSelected(locationId)
     setDraft(null)
     setFieldErrors({})
     setFormError(null)
     setNotice(null)
+    // Keep the URL and the selection in step, so a chosen building is linkable too.
+    // 'replace': this is a control on the screen you are already on.
+    setFilters({ location: locationId === '' ? null : locationId }, 'replace')
   }
 
   /**
@@ -368,6 +396,13 @@ export default function ContractsPage() {
         </EmptyState>
       ) : (
         <>
+          {/* Arriving pre-selected is the point of the link; saying so is what stops it
+              reading as a screen that remembered something it should not have. */}
+          {filters.location !== null && !preselectUnknown ? (
+            <p className="notice">{t('preselected')}</p>
+          ) : null}
+          {preselectUnknown ? <p className="notice bad">{tFilter('unknownNotice')}</p> : null}
+
           {/* A select AND the table below it: the table is how a director spots the building
               with no price at all, the select is how they get to one of forty without
               scrolling. Both drive the same state. */}

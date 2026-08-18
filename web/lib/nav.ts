@@ -24,16 +24,28 @@ export type NavGroup = {
 }
 
 /**
- * Twelve flat entries became three visible groups plus two unlabelled blocks. ALL TWELVE
- * SURVIVE — nothing is hidden, nothing is behind a "more". Grouping is the fix for a
- * sidebar you read; hiding routes would be a different, worse screen.
- *
- * Order is still the order the director works through them: what is happening now, then the
- * records behind it, then the money, then himself.
+ * NINE destinations, down from twelve (decision-39). Order is still the order the director
+ * works through them: what is happening now, then the records behind it, then the money,
+ * then himself.
  *
  * /material-requests/ stays TOP-LEVEL and is deliberately not filed under Stammdaten: a
  * worker is standing in a building WAITING on that queue, which makes it a today problem,
  * not a catalogue one.
+ *
+ * THREE ROUTES LEFT THIS LIST AND NONE OF THEM WAS DELETED. `/contracts/`, `/analytics/`
+ * and `/inventory/` are object-scoped or catalogue-scoped: no ranked journey starts by
+ * opening one of them cold, and every one of them is now reached from the object that needs
+ * it, carrying that object's id. A route nobody can reach is a deleted feature, so the ways
+ * in are named here and asserted by `pnpm check` ("every non-nav route keeps a way in"),
+ * which goes red if the last one is removed:
+ *
+ *   /contracts/   ← Objektpanel · /pl/ flagged row · /pl/ methodNoContract ·
+ *                   /locations/ contract cell · /analytics/ panel
+ *   /analytics/   ← Objektpanel
+ *   /inventory/   ← /material-requests/ panel action · /material-requests/ drawer hint
+ *
+ * REVERSIBLE IN A MINUTE: this is one array, and putting an entry back is one line. It is
+ * taste, and it is recorded as taste in IA-PLAN §2.2.
  */
 export const NAV_GROUPS: readonly NavGroup[] = [
   {
@@ -51,8 +63,6 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/workers/', labelKey: 'workers' },
       { href: '/locations/', labelKey: 'locations' },
       { href: '/clients/', labelKey: 'clients' },
-      { href: '/contracts/', labelKey: 'contractManagement' },
-      { href: '/inventory/', labelKey: 'inventory' },
     ],
   },
   {
@@ -60,7 +70,6 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     items: [
       { href: '/payroll/', labelKey: 'payroll' },
       { href: '/pl/', labelKey: 'plDashboard' },
-      { href: '/analytics/', labelKey: 'buildingAnalytics' },
     ],
   },
   {
@@ -70,6 +79,14 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     items: [{ href: '/account/', labelKey: 'account' }],
   },
 ]
+
+/**
+ * Routes that exist, are reachable, and are deliberately NOT in the sidebar (decision-39).
+ *
+ * Kept as data, not as a comment, because `pnpm check` reads it: each of these must keep at
+ * least one inbound link from a screen that is not itself.
+ */
+export const OFF_NAV_ROUTES: readonly string[] = ['/contracts/', '/analytics/', '/inventory/']
 
 /**
  * Derived, and kept so nothing that imports the flat list breaks. One line, and it removes

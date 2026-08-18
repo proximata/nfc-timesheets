@@ -7,9 +7,11 @@ import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { AnswerBand } from '@/components/AnswerBand'
 import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
+import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
 import { PageHeader } from '@/components/PageHeader'
 import { type AdminSnapshot, ApiError, fetchPayrollSnapshot } from '@/lib/api'
+import { filterHref, useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { centsToPlainEuros } from '@/lib/money'
 import { LOGIN_PATH } from '@/lib/nav'
@@ -80,6 +82,7 @@ import { toBusinessInput } from '@/lib/shifts'
 
 const SHIFTS_PATH = '/shifts/'
 const WORKERS_PATH = '/workers/'
+const HOME_PATH = '/'
 
 /**
  * `YYYY-MM-DD` for the export filename, in VIENNA time and not the browser's.
@@ -94,6 +97,7 @@ function businessDate(iso: string): string {
 
 export default function PayrollPage() {
   const t = useTranslations('payroll')
+  const tFilter = useTranslations('filters')
   const tError = useTranslations('error')
   const format = useFormatter()
   const locale = useLocale()
@@ -123,8 +127,20 @@ export default function PayrollPage() {
   // null = still loading. Never rendered as "no hours yet".
   const [snapshot, setSnapshot] = useState<AdminSnapshot | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
+  /**
+   * `?location=` / `?worker=` / `?period=` (decision-38). The period is read from the URL so
+   * the building panel's „Lohn · nur Stunden hier · Vormonat" lands in the period its label
+   * promised — the defect this contract exists to remove is a link that says one month and
+   * opens another.
+   *
+   * THE URL IS THE PERIOD. No second copy in `useState`: two sources for the period on the
+   * screen where money is decided is exactly the disagreement lib/period.ts was written to
+   * end.
+   */
+  const [filters, setFilters] = useFilters()
   /** Payroll is run for the month that has ENDED. Same vocabulary as /shifts/ (lib/period.ts). */
-  const [period, setPeriod] = useState<Period>('lastMonth')
+  const period: Period = filters.period ?? 'lastMonth'
+  const setPeriod = (next: Period) => setFilters({ period: next }, 'replace')
   const [exported, setExported] = useState(false)
   const [exportFailed, setExportFailed] = useState(false)
   // Frozen at mount: "this month" must not change meaning halfway through a re-render.
@@ -160,13 +176,72 @@ export default function PayrollPage() {
     return () => controller.abort()
   }, [handleAuthLoss, range])
 
+  /**
+   * A SCOPED VIEW, and it says so. `?location=` / `?worker=` narrow the rows to one
+   * building or one person, which is what the two object panels link here for: „who did I
+   * pay for hours in THIS building last month".
+   *
+   * WHAT SCOPING COSTS, stated because getting it wrong costs somebody their wages:
+   * `hours` — the server's own aggregate, the thing the reconciliation compares against —
+   * carries a `worker_id` and NO `location_id`, so a building-scoped reconciliation is not
+   * computable at all. Rather than compute it for one filter and not the other, no object
+   * filter reconciles and no object filter exports. Both facts are stated on screen in
+   * `scopedNote`, and the filter is one click from removal.
+   *
+   * ponytail: CEILING — a scoped payroll cannot be exported, so „send the accountant just
+   * this building's hours" is still a manual job. UPGRADE PATH: a `location_id` on the
+   * server's `hours` aggregate, which makes both the reconciliation and the export scopable
+   * without a browser sum over a capped list. Not built now: `/admin/data` is the route
+   * every screen shares.
+   */
+  const scoped = filters.location !== null || filters.worker !== null
+  const scopedShifts =
+    snapshot === null
+      ? []
+      : snapshot.shifts.filter(
+          (shift) =>
+            (filters.location === null || shift.location_id === filters.location) &&
+            (filters.worker === null || shift.worker_id === filters.worker),
+        )
+  /**
+   * The people this scope is about. A worker filter narrows to that person; a building
+   * filter keeps only people who actually have hours there, which is what makes the link
+   * „nur Mitarbeiter mit Stunden hier" true rather than a table of everybody with zeros.
+   */
+  const scopedWorkers =
+    snapshot === null
+      ? []
+      : snapshot.workers.filter((worker) => {
+          if (filters.worker !== null && worker.id !== filters.worker) return false
+          if (filters.location === null) return true
+          return scopedShifts.some((shift) => shift.worker_id === worker.id)
+        })
+
   // No client-side period filter: the server already applied one, and a second opinion here
   // is precisely the disagreement this screen exists to have eliminated.
-  const totals = snapshot === null ? null : payrollFor(snapshot.workers, snapshot.shifts)
+  const totals =
+    snapshot === null
+      ? null
+      : scoped
+        ? payrollFor(scopedWorkers, scopedShifts)
+        : payrollFor(snapshot.workers, snapshot.shifts)
   const coverage = snapshot === null ? null : coverageOf(snapshot.shifts, snapshot.shift_limit)
   const incomplete = coverage !== null && periodExceedsCoverage(range, coverage)
+  /** null while scoped: not „reconciled", not „failed" — NOT COMPUTED, and stated as such. */
   const reconciliation =
-    snapshot === null ? null : reconcile(snapshot.workers, snapshot.shifts, snapshot.hours)
+    snapshot === null || scoped
+      ? null
+      : reconcile(snapshot.workers, snapshot.shifts, snapshot.hours)
+
+  const scopedLocationName =
+    filters.location === null
+      ? null
+      : (snapshot?.locations.find((location) => location.id === filters.location)?.name ?? null)
+  const scopedWorkerName =
+    filters.worker === null
+      ? null
+      : (snapshot?.workers.find((worker) => worker.id === filters.worker)?.name ?? null)
+
   /**
    * 0 cents is not a rate anybody agreed (`/workers/` says so on the row too). Their hours
    * are real and are in the hours column; NO amount is computed for them at all — not zero,
@@ -335,7 +410,11 @@ export default function PayrollPage() {
         title={t('heading')}
         question={t('question')}
         action={
-          totals !== null && totals.lines.length > 0 ? (
+          /* NOT OFFERED WHILE SCOPED. A CSV named `payroll-2026-07.csv` that silently holds
+             one building's hours is indistinguishable from a complete payroll run in the
+             folder the accountant keeps, and the file outlives the screen that explained
+             it. The reason is stated below, next to the filter that caused it. */
+          totals !== null && totals.lines.length > 0 && !scoped ? (
             <button type="button" className="btn btn-primary" onClick={downloadCsv}>
               {t('exportCsv')}
             </button>
@@ -359,6 +438,55 @@ export default function PayrollPage() {
       <p className="form-error" role="alert">
         {exportFailed ? t('exportFailed') : ''}
       </p>
+
+      {/* The filter, echoed and removable (decision-38 rule 3). On the payroll screen this
+          is not a nicety: a scoped total under the heading „Auszuzahlen" that does not say
+          it is scoped is a wrong number about somebody's wages. */}
+      <FilterChips
+        chips={[
+          filters.location === null
+            ? null
+            : {
+                key: 'location',
+                label: tFilter('location'),
+                value: scopedLocationName ?? tFilter('unknownLocation'),
+                unknown: snapshot !== null && scopedLocationName === null,
+                onRemove: () => setFilters({ location: null }, 'replace'),
+              },
+          filters.worker === null
+            ? null
+            : {
+                key: 'worker',
+                label: tFilter('worker'),
+                value: scopedWorkerName ?? tFilter('unknownWorker'),
+                unknown: snapshot !== null && scopedWorkerName === null,
+                onRemove: () => setFilters({ worker: null }, 'replace'),
+              },
+        ].filter((chip) => chip !== null)}
+      />
+
+      {/* What a scope DOES to this screen, in words, next to the number it changed. */}
+      {scoped && snapshot !== null ? (
+        <div className="note bad">
+          {scopedLocationName === null ? null : (
+            <p>
+              {t('scopedLocation', { name: scopedLocationName })}{' '}
+              <Link href={filterHref(HOME_PATH, { location: filters.location })}>
+                {t('scopedBuildingLink')}
+              </Link>
+            </p>
+          )}
+          {scopedWorkerName === null ? null : (
+            <p>
+              {t('scopedWorker', { name: scopedWorkerName })}{' '}
+              <Link href={filterHref(WORKERS_PATH, { worker: filters.worker })}>
+                {t('openWorker')}
+              </Link>
+            </p>
+          )}
+          <p>{t('scopedNote')}</p>
+        </div>
+      ) : null}
 
       {/* THE ANSWER FIRST, above the control that changes it: one amount, and what it does
           not include. Every figure here comes from the SAME `totals` the table below is
@@ -413,13 +541,13 @@ export default function PayrollPage() {
         </Field>
       </div>
 
-      {snapshot === null || totals === null || coverage === null || reconciliation === null ? (
+      {snapshot === null || totals === null || coverage === null ? (
         <p role="status">{t('loading')}</p>
       ) : (
         <>
           {/* THE TOTAL MAY BE WRONG, not merely incomplete. Two sentences, above everything,
               and neither of them is ever a tooltip or a hover. */}
-          {incomplete || reconciliation.missingCents !== 0 ? (
+          {incomplete || (reconciliation !== null && reconciliation.missingCents !== 0) ? (
             <div className="note bad">
               {incomplete && coverage.earliestStart !== null ? (
                 <p>
@@ -429,7 +557,7 @@ export default function PayrollPage() {
                   })}
                 </p>
               ) : null}
-              {reconciliation.missingCents !== 0 ? (
+              {reconciliation !== null && reconciliation.missingCents !== 0 ? (
                 <p>
                   {t('caveatReconcile', {
                     server: money(reconciliation.serverCents),
@@ -446,16 +574,38 @@ export default function PayrollPage() {
           <div className="callout">
             <h3>{t('caveatHeading')}</h3>
             <ul>
+              {/* EVERY caveat link now carries THIS screen's period and the condition it is
+                  about. It used to point at a bare `/shifts/`, which opens on the last 30
+                  days while payroll runs last month: the three shifts named here were
+                  routinely not on the screen the sentence sent the director to. */}
               {totals.unresolvedShifts > 0 ? (
                 <li>
                   {t('caveatUnresolved', { count: totals.unresolvedShifts })}{' '}
-                  <Link href={SHIFTS_PATH}>{t('caveatUnresolvedLink')}</Link>
+                  <Link
+                    href={filterHref(SHIFTS_PATH, {
+                      period,
+                      state: 'unresolved',
+                      location: filters.location,
+                      worker: filters.worker,
+                    })}
+                  >
+                    {t('caveatUnresolvedLink')}
+                  </Link>
                 </li>
               ) : null}
               {totals.openShifts > 0 ? (
                 <li>
                   {t('caveatOpen', { count: totals.openShifts })}{' '}
-                  <Link href={SHIFTS_PATH}>{t('caveatOpenLink')}</Link>
+                  <Link
+                    href={filterHref(SHIFTS_PATH, {
+                      period,
+                      state: 'open',
+                      location: filters.location,
+                      worker: filters.worker,
+                    })}
+                  >
+                    {t('caveatOpenLink')}
+                  </Link>
                 </li>
               ) : null}
               {totals.unresolvedShifts === 0 && totals.openShifts === 0 ? (
@@ -467,20 +617,46 @@ export default function PayrollPage() {
               {noRateLines.length > 0 ? (
                 <li>
                   {t('caveatNoRate', { count: noRateLines.length })}{' '}
-                  <Link href={WORKERS_PATH}>{t('caveatNoRateLink')}</Link>
+                  <Link
+                    href={
+                      // One unpriced person → straight to their panel, where the rate is.
+                      // Several → the roster, unfiltered: there is no „no rate" state in the
+                      // vocabulary and inventing one for a single link would be a parameter
+                      // only this screen writes and only that screen reads.
+                      noRateLines.length === 1 && noRateLines[0] !== undefined
+                        ? filterHref(WORKERS_PATH, { worker: noRateLines[0].worker.id })
+                        : WORKERS_PATH
+                    }
+                  >
+                    {t('caveatNoRateLink')}
+                  </Link>
                 </li>
               ) : null}
               {/* The row list is capped; the server aggregate is not. The failing branch is
                   in the warning above, and the reconciled branch is stated here, because
                   silence would read as "not checked". */}
-              {reconciliation.missingCents === 0 ? <li>{t('caveatReconcileOk')}</li> : null}
+              {reconciliation !== null && reconciliation.missingCents === 0 ? (
+                <li>{t('caveatReconcileOk')}</li>
+              ) : null}
+              {/* NOT COMPUTED is a third answer and it is not silence. While a scope is on,
+                  saying „nichts fehlt" would be a claim nobody checked. */}
+              {reconciliation === null ? <li>{t('scopedNote')}</li> : null}
               {/* Paid, not excluded — but a payslip dispute has to be able to find the
                   hours that no tag stands behind. Same fact the shift log shows in its
                   "how it was recorded" column, and a column in the CSV. */}
               {totals.manualShifts > 0 ? (
                 <li>
                   {t('caveatManual', { count: totals.manualShifts })}{' '}
-                  <Link href={SHIFTS_PATH}>{t('caveatManualLink')}</Link>
+                  <Link
+                    href={filterHref(SHIFTS_PATH, {
+                      period,
+                      state: 'manual',
+                      location: filters.location,
+                      worker: filters.worker,
+                    })}
+                  >
+                    {t('caveatManualLink')}
+                  </Link>
                 </li>
               ) : null}
               {totals.orphanShifts > 0 ? <li>{t('caveatOrphan')}</li> : null}
@@ -546,7 +722,15 @@ export default function PayrollPage() {
                       // are the first, their position is the second; desaturate this table
                       // and it still reads.
                       <tr key={line.worker.id} className={attention ? 'is-unres' : undefined}>
-                        <th scope="row">{line.worker.name}</th>
+                        {/* The name opens that person's panel, where their rate, their open
+                            shift and their unconfirmed ones are. Reading a name off this
+                            table and hunting for it on `/workers/` was the loop. */}
+                        <th scope="row">
+                          <Link href={filterHref(WORKERS_PATH, { worker: line.worker.id })}>
+                            {line.worker.name}
+                            <span className="visually-hidden"> {t('openWorker')}</span>
+                          </Link>
+                        </th>
                         <td className="col-numeric">{hours(line.payableMs)}</td>
                         <td className="col-numeric">
                           {noRate ? (

@@ -9,6 +9,7 @@ import { ConfirmModal } from '@/components/ConfirmModal'
 import { Drawer } from '@/components/Drawer'
 import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
+import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
 import { PageHeader } from '@/components/PageHeader'
 import { type BadgeState, StateBadge } from '@/components/StateBadge'
@@ -23,6 +24,7 @@ import {
   type MaterialStatus,
   patchMaterialRequest,
 } from '@/lib/api'
+import { filterHref, useFilters } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
 import {
   isAcknowledged,
@@ -70,13 +72,27 @@ import { BUSINESS_TIME_ZONE } from '@/lib/shifts'
 
 const PL_PATH = '/pl/'
 const INVENTORY_PATH = '/inventory/'
+const WORKERS_PATH = '/workers/'
+/** The building's object surface. `/?location=<uuid>` — there is no `/locations/<id>`. */
+const HOME_PATH = '/'
 
-/** What the row filter offers. `open` first: the queue is the reason to be here. */
-const FILTERS = ['open', 'all'] as const
+/**
+ * What the row filter offers, and it is the `status=` vocabulary of decision-38 rather than
+ * a private one: `open` is the queue, `all` is the history, and the three stage values let a
+ * link say „show me what is waiting to be ORDERED" without inventing a second parameter.
+ */
+const FILTERS = ['open', 'all', 'decide', 'order', 'deliver'] as const
 type Filter = (typeof FILTERS)[number]
 
 function isFilter(value: string): value is Filter {
   return (FILTERS as readonly string[]).includes(value)
+}
+
+/** The `submitted|approved|ordered` a stage filter keeps. `open`/`all` are handled apart. */
+const STAGE_STATUS: Record<'decide' | 'order' | 'deliver', string> = {
+  decide: 'submitted',
+  order: 'approved',
+  deliver: 'ordered',
 }
 
 /** The paperwork form. Everything optional — none of it gates a lifecycle move. */
@@ -130,6 +146,7 @@ const ROW_CLASS_OF: Record<MaterialStage, string | undefined> = {
 
 export default function MaterialRequestsPage() {
   const t = useTranslations('materials')
+  const tFilter = useTranslations('filters')
   const tError = useTranslations('error')
   const format = useFormatter()
   const router = useRouter()
@@ -146,7 +163,18 @@ export default function MaterialRequestsPage() {
   // null = still loading. Never rendered as "no requests".
   const [snapshot, setSnapshot] = useState<MaterialSnapshot | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
-  const [filter, setFilter] = useState<Filter>('open')
+  /**
+   * `?status=` / `?location=` / `?worker=` (decision-38). The building panel links here with
+   * `status=open` and a building, so „2 offene Materialanforderungen" opens THOSE two.
+   *
+   * THE URL IS THE FILTER: no second copy in state, so the address bar and the queue cannot
+   * disagree and the back button moves the list.
+   */
+  const [filters, setFilters] = useFilters()
+  const filter: Filter = filters.status ?? 'open'
+  const setFilter = (next: Filter) =>
+    // 'replace': a select on the screen you are already on. See lib/filters.ts.
+    setFilters({ status: next }, 'replace')
   const [draft, setDraft] = useState<Draft | null>(null)
   const [rejecting, setRejecting] = useState<MaterialRequestRow | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
@@ -306,9 +334,23 @@ export default function MaterialRequestsPage() {
     }
   }
 
-  const requests = snapshot?.material_requests ?? []
-  const visible = filter === 'open' ? requests.filter((r) => isOpen(r.status)) : requests
-  const truncated = snapshot !== null && requests.length >= snapshot.material_request_limit
+  /**
+   * The object filters narrow the queue BEFORE the stage filter, so the summary counts and
+   * the „show everything" escape below still describe the same slice the table shows.
+   */
+  const requests = (snapshot?.material_requests ?? []).filter(
+    (request) =>
+      (filters.location === null || request.location_id === filters.location) &&
+      (filters.worker === null || request.worker_id === filters.worker),
+  )
+  const visible =
+    filter === 'all'
+      ? requests
+      : filter === 'open'
+        ? requests.filter((r) => isOpen(r.status))
+        : requests.filter((r) => r.status === STAGE_STATUS[filter])
+  const truncated =
+    snapshot !== null && snapshot.material_requests.length >= snapshot.material_request_limit
 
   const waiting = {
     decide: requests.filter((r) => r.status === 'submitted').length,
@@ -316,6 +358,22 @@ export default function MaterialRequestsPage() {
     deliver: requests.filter((r) => r.status === 'ordered').length,
   }
   const unpriced = requests.filter(isUnpriced).length
+
+  /**
+   * The names behind the two object filters. `null` = a well-formed id naming nothing in
+   * this payload; the chip says „unbekannt" rather than the screen quietly showing the whole
+   * queue as though nothing had been asked for. The worker name is taken from the requests
+   * themselves because this screen never loads the roster.
+   */
+  const locationName =
+    filters.location === null
+      ? null
+      : (snapshot?.locations.find((l) => l.id === filters.location)?.name ?? null)
+  const workerName =
+    filters.worker === null
+      ? null
+      : ((snapshot?.material_requests ?? []).find((r) => r.worker_id === filters.worker)
+          ?.worker_name ?? null)
 
   const dayTime = (iso: string) =>
     format.dateTime(new Date(iso), {
@@ -411,6 +469,31 @@ export default function MaterialRequestsPage() {
             ]}
           />
 
+          {/* The object filters, echoed and removable (decision-38 rule 3). Without them a
+              queue narrowed to one building reads as a company with one open request. */}
+          <FilterChips
+            chips={[
+              filters.location === null
+                ? null
+                : {
+                    key: 'location',
+                    label: tFilter('location'),
+                    value: locationName ?? tFilter('unknownLocation'),
+                    unknown: locationName === null,
+                    onRemove: () => setFilters({ location: null }, 'replace'),
+                  },
+              filters.worker === null
+                ? null
+                : {
+                    key: 'worker',
+                    label: tFilter('worker'),
+                    value: workerName ?? tFilter('unknownWorker'),
+                    unknown: workerName === null,
+                    onRemove: () => setFilters({ worker: null }, 'replace'),
+                  },
+            ].filter((chip) => chip !== null)}
+          />
+
           {unpriced > 0 ? (
             <p className="note bad">
               {t('unpricedWarning', { unpriced })} <Link href={PL_PATH}>{t('plLink')}</Link>
@@ -436,13 +519,28 @@ export default function MaterialRequestsPage() {
             >
               <option value="open">{t('filterOpen')}</option>
               <option value="all">{t('filterAll')}</option>
+              {/* The three stage values a link can carry. Offered as options too, so a
+                  filter that arrived by URL is a control the reader can also reach. */}
+              <option value="decide">{tFilter('statusDecide')}</option>
+              <option value="order">{tFilter('statusOrder')}</option>
+              <option value="deliver">{tFilter('statusDeliver')}</option>
             </select>
             <p className="field-hint" id={filterHintId}>
               {t('filterHint')}
             </p>
           </div>
 
-          <ListPanel title={t('queueHeading')}>
+          <ListPanel
+            title={t('queueHeading')}
+            /* /inventory/ left the sidebar (decision-39) and this is its permanent way in:
+               the catalogue link used to exist only inside the paperwork drawer, which is a
+               route reachable only by opening something else first. */
+            action={
+              <Link className="btn btn-quiet" href={INVENTORY_PATH}>
+                {t('itemCatalogueLink')}
+              </Link>
+            }
+          >
             {visible.length === 0 ? (
               /* Empty is NOT an error and must never read as one. Which empty it is
                  matters: an empty queue is the good day, an empty history is a feature
@@ -484,7 +582,12 @@ export default function MaterialRequestsPage() {
                     return (
                       <tr key={request.id} className={ROW_CLASS_OF[stage]}>
                         <th scope="row">
-                          {request.worker_name}
+                          {/* The person who is standing in a building waiting for this,
+                              one click from their own panel. */}
+                          <Link href={filterHref(WORKERS_PATH, { worker: request.worker_id })}>
+                            {request.worker_name}
+                            <span className="visually-hidden"> {t('openWorker')}</span>
+                          </Link>
                           <span className="shift-state-note">
                             {t('askedAt', { when: dayTime(request.created_at) })}
                           </span>
@@ -501,9 +604,19 @@ export default function MaterialRequestsPage() {
                                 they are not ours. */}
                             <q>{request.body}</q>
                             <span className="shift-state-note">
-                              {request.location_name === null
-                                ? t('noLocationNamed')
-                                : t('locationNamed', { name: request.location_name })}
+                              {request.location_name === null || request.location_id === null ? (
+                                t('noLocationNamed')
+                              ) : (
+                                /* CONTEXT, not cost attribution (decision-6) — the link
+                                   changes nothing about that; it opens the building the
+                                   worker NAMED. */
+                                <Link
+                                  href={filterHref(HOME_PATH, { location: request.location_id })}
+                                >
+                                  {t('locationNamed', { name: request.location_name })}
+                                  <span className="visually-hidden"> {t('openLocation')}</span>
+                                </Link>
+                              )}
                             </span>
                             {request.item_name === null ? (
                               <span className="shift-state-note">{t('itemUnmapped')}</span>

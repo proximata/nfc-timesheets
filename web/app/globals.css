@@ -1087,6 +1087,125 @@ a {
   margin-bottom: var(--s5);
 }
 
+/* --- Filter chips: the screen echoing the filter it was sent (decision-38 rule 3) ------ */
+
+/*
+ * A filtered screen and an empty database look identical without these. They sit directly
+ * under the page header so the slice is stated ABOVE the fold at 390px — before any table,
+ * because the table is the thing being misread.
+ *
+ * No colour carries meaning here. `is-unknown` adds a border and a weight; the WORD
+ * „unbekannt" is inside the chip's text, put there by the screen that could not resolve the
+ * id. Greyscale the whole row and it still says which filter is on.
+ */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s2) var(--s3);
+  margin: 0 0 var(--s4);
+}
+
+.filter-chips-label {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.filter-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  padding: 2px 2px 2px var(--s3);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+
+.filter-chip.is-unknown {
+  border-color: var(--state-unres);
+  color: var(--state-unres);
+  font-weight: 600;
+}
+
+.filter-chip-text {
+  white-space: nowrap;
+}
+
+/* 44px of TARGET without 44px of chip: the pill stays the size of its text and the button
+   grows its hit area outwards, which is what decision-28's phone pass asks for. */
+.filter-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  margin: -11px -8px -11px 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.filter-chip-remove:hover {
+  color: var(--accent);
+}
+
+/* --- Panel cross-links: every one carries its filter ---------------------------------- */
+
+/*
+ * The list of links out of an object panel. One per line, not a wrapped paragraph of
+ * separators: each label states its own filter („Schichten dieses Objekts · November") and
+ * two of those run together read as one sentence about neither.
+ */
+/* The object panels put a heading between the numbers and the links. Without a top margin
+   it sits on the caveat line above it and the two read as one paragraph. */
+.drawer .body h3 {
+  margin: var(--s5) 0 var(--s2);
+  font-size: 0.9375rem;
+}
+
+.panel-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin: var(--s2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.panel-links li {
+  margin: 0;
+}
+
+.panel-links a {
+  display: inline-block;
+  min-height: 44px;
+  padding: var(--s2) 0;
+}
+
+/* Stated in words where a link would be, when the target is empty. decision-38 rule 1: a
+   link that lands on „nichts gefunden" is the misreading this product already produced. */
+.panel-links .panel-link-empty {
+  display: inline-block;
+  padding: var(--s2) 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
 /* --- Overlays: where every WRITE happens --------------------------------------------- */
 
 /*

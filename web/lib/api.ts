@@ -153,6 +153,30 @@ export function fetchWorkers(signal?: AbortSignal): Promise<Worker[]> {
 }
 
 /**
+ * What `/workers/` needs now that it hosts the Mitarbeiterpanel (decision-38): the same
+ * request it has always made, with the shifts it was throwing away.
+ *
+ * `/admin/data` has returned the shifts alongside the workers since it existed, so this is
+ * strictly a wider TYPE over the same round trip — no second request, no new endpoint. The
+ * panel names a person's open shift, their unconfirmed ones and their last ten, and it does
+ * it from a payload the screen was already paying for.
+ *
+ * The server's row cap applies, as everywhere. `shift_limit` comes back so the panel can
+ * say when its counts are floors rather than totals.
+ */
+export type WorkerSnapshot = {
+  workers: Worker[]
+  shifts: Shift[]
+  shift_limit: number
+}
+
+export function fetchWorkerSnapshot(signal?: AbortSignal): Promise<WorkerSnapshot> {
+  // Same page size as every other screen that counts shift rows: a shorter list here would
+  // make the panel disagree with `/shifts/` about how many shifts a person has.
+  return apiFetch<WorkerSnapshot>(`/admin/data?limit=${ADMIN_SHIFT_LIMIT}`, { signal })
+}
+
+/**
  * A row of `locations` as `/admin/data` returns it.
  *
  * `id` is a server-generated UUID and is the ONLY identity that exists: it is what the NFC

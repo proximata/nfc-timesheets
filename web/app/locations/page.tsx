@@ -8,6 +8,7 @@ import { ConfirmModal } from '@/components/ConfirmModal'
 import { Drawer } from '@/components/Drawer'
 import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
+import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
 import { PageHeader } from '@/components/PageHeader'
 import {
@@ -24,6 +25,7 @@ import {
   saveContact,
   saveLocation,
 } from '@/lib/api'
+import { filterHref, useFilters } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
 import { centsToPlainEuros, parseEuroToCents } from '@/lib/money'
 import { LOGIN_PATH } from '@/lib/nav'
@@ -240,6 +242,7 @@ function timeInMonth(shifts: readonly Shift[], range: PeriodRange): Map<string, 
 
 export default function LocationsPage() {
   const t = useTranslations('locations')
+  const tFilter = useTranslations('filters')
   const tError = useTranslations('error')
   const format = useFormatter()
   const router = useRouter()
@@ -361,10 +364,36 @@ export default function LocationsPage() {
   const latestMonth = latestStart === null ? null : businessMonthOf(latestStart)
   const monthIsEmpty = monthValid && monthTime.size === 0
 
-  const locations = snapshot?.locations ?? []
+  const allLocations = snapshot?.locations ?? []
   const clients = snapshot?.clients ?? []
   const contacts = snapshot?.contacts ?? []
   const grants = snapshot?.portal_grants ?? []
+
+  /**
+   * THE FILTER CONTRACT (decision-38). Three parameters land here:
+   *
+   *   `?state=noTag`  the dashboard's „Tag-URLs prüfen" row — the buildings with no shift
+   *                   on record, which usually means no working tag on the wall
+   *   `?client=<id>`  a company's buildings, from `/clients/`
+   *   `?open=<uuid>`  open the edit drawer on that building, from the Objektpanel
+   *
+   * `noTag` is computed the same way the dashboard computes it — no shift in the loaded
+   * payload — and the payload is capped, so the truncation note below applies to it too.
+   */
+  const [filters, setFilters] = useFilters()
+  const seenLocationIds = new Set((snapshot?.shifts ?? []).map((shift) => shift.location_id))
+  const noTagOnly = filters.state === 'noTag'
+  const locations = allLocations.filter((location) => {
+    if (noTagOnly && !(location.active && !seenLocationIds.has(location.id))) return false
+    if (filters.client !== null && location.client_id !== filters.client) return false
+    return true
+  })
+
+  const filterClientName =
+    filters.client === null
+      ? null
+      : (clients.find((client) => client.id === filters.client)?.name ?? null)
+  const clientUnknown = filters.client !== null && snapshot !== null && filterClientName === null
 
   /** Contacts of the chosen company only: a contact belongs to exactly one company. */
   const contactsForClient: Contact[] =
@@ -396,7 +425,36 @@ export default function LocationsPage() {
     setFieldErrors({})
     setFormError(null)
     setSaveError(null)
+    // `?open=` is what put the drawer here; leaving it in the URL would reopen the drawer
+    // on the next render and make the close button do nothing. 'replace', so leaving the
+    // screen still takes one back press.
+    if (filters.open !== null) setFilters({ open: null }, 'replace')
   }
+
+  /**
+   * `?open=<uuid>` — the Objektpanel's „Objekt bearbeiten · Tag-URL" link, which is how the
+   * director reaches the one control on this screen a wrong sticker costs a site visit for.
+   * Runs once per id: reopening on every render would make the drawer impossible to close.
+   */
+  const [openedFor, setOpenedFor] = useState<string | null>(null)
+  useEffect(() => {
+    if (snapshot === null || filters.open === null || filters.open === openedFor) return
+    setOpenedFor(filters.open)
+    const wanted = snapshot.locations.find((location) => location.id === filters.open)
+    if (wanted !== undefined) {
+      setDraft(draftOf(wanted))
+      setStep(1)
+      setFieldErrors({})
+      setFormError(null)
+      setSaveError(null)
+    }
+  }, [snapshot, filters.open, openedFor])
+
+  /** A well-formed building id in `?open=` that no row matches. Said, never swallowed. */
+  const openUnknown =
+    snapshot !== null &&
+    filters.open !== null &&
+    !snapshot.locations.some((location) => location.id === filters.open)
 
   /** Changing the company invalidates the contact choice — a stale one belongs elsewhere. */
   function chooseClient(value: string) {
@@ -780,6 +838,33 @@ export default function LocationsPage() {
         {notice === null ? '' : notice.text}
       </p>
 
+      {/* The filter, echoed and removable (decision-38 rule 3): a list of three buildings
+          because a link narrowed it must not read as a company with three buildings. */}
+      <FilterChips
+        chips={[
+          noTagOnly
+            ? {
+                key: 'state',
+                label: tFilter('state'),
+                value: tFilter('stateNoTag'),
+                onRemove: () => setFilters({ state: null }, 'replace'),
+              }
+            : null,
+          filters.client === null
+            ? null
+            : {
+                key: 'client',
+                label: tFilter('client'),
+                value: filterClientName ?? tFilter('unknownClient'),
+                unknown: clientUnknown,
+                onRemove: () => setFilters({ client: null }, 'replace'),
+              },
+        ].filter((chip) => chip !== null)}
+      />
+      {clientUnknown || openUnknown ? (
+        <p className="notice bad">{tFilter('unknownNotice')}</p>
+      ) : null}
+
       {/* The tag rule, permanently: the URI goes on the sticker exactly as printed, the
           identity is the UUID, and the slug is never on the tag (decision-21). */}
       <p className="note">{t('tagExplainer')}</p>
@@ -881,7 +966,18 @@ export default function LocationsPage() {
         {snapshot === null ? (
           <p role="status">{t('loading')}</p>
         ) : locations.length === 0 ? (
-          <EmptyState>{t('emptyBodyNew')}</EmptyState>
+          /* THREE different sentences, and they are not interchangeable. „Noch keine
+             Objekte angelegt" said to a company with forty of them is the misreading this
+             contract exists to stop — and so is „nur Objekte ohne erfasste Schicht" when
+             what actually emptied the list was a client filter. The empty state names the
+             filter that caused it, or says the portfolio is genuinely empty. */
+          <EmptyState>
+            {noTagOnly
+              ? t('filterNoTag')
+              : filters.client !== null
+                ? t('filterClientEmpty')
+                : t('emptyBodyNew')}
+          </EmptyState>
         ) : (
           <table className="data-table" aria-busy={busy}>
             <caption className="visually-hidden">{t('tableCaption')}</caption>
@@ -905,7 +1001,12 @@ export default function LocationsPage() {
                 return (
                   <tr key={location.id} className={location.active ? undefined : 'is-muted'}>
                     <th scope="row">
-                      {location.name}
+                      {/* The name opens the building's object surface, where the five
+                          numbers and the eleven links live. */}
+                      <Link href={filterHref('/', { location: location.id })}>
+                        {location.name}
+                        <span className="visually-hidden"> {t('openPanel')}</span>
+                      </Link>
                       <span className="tag-uuid">
                         {' '}
                         <code className="code-inline">{location.slug}</code>
@@ -929,15 +1030,24 @@ export default function LocationsPage() {
                       </span>
                     </td>
                     <td>
+                      {/* /contracts/ left the sidebar (decision-39). This is one of its
+                          permanent ways in, and it carries the building — the price shown
+                          here is a MIRROR of the current period, and the history behind it
+                          is what says what March was billed at. Linked in both branches:
+                          „Kein Vertrag hinterlegt" is not an empty target, it is exactly
+                          the screen that states what an unpriced building does to the P&L. */}
                       <span className="num">
-                        {location.monthly_contract_cents === null
-                          ? t('contractNone')
-                          : t('contractValue', {
-                              amount: format.number(location.monthly_contract_cents / 100, {
-                                style: 'currency',
-                                currency: 'EUR',
-                              }),
-                            })}
+                        <Link href={filterHref('/contracts/', { location: location.id })}>
+                          {location.monthly_contract_cents === null
+                            ? t('contractNone')
+                            : t('contractValue', {
+                                amount: format.number(location.monthly_contract_cents / 100, {
+                                  style: 'currency',
+                                  currency: 'EUR',
+                                }),
+                              })}
+                          <span className="visually-hidden"> {t('contractLink')}</span>
+                        </Link>
                       </span>
                       <span className="shift-state-note num">
                         {t('timeActual', { actual: formatDuration(time.minutes) })}{' '}

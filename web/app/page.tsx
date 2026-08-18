@@ -6,12 +6,22 @@ import { useFormatter, useTranslations } from 'next-intl'
 import { useCallback, useEffect, useState } from 'react'
 import { AnswerBand } from '@/components/AnswerBand'
 import { type AttentionItem, AttentionList } from '@/components/AttentionList'
+import { BuildingPanel } from '@/components/BuildingPanel'
 import { EmptyState } from '@/components/EmptyState'
+import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
 import { PageHeader } from '@/components/PageHeader'
 import { StateBadge } from '@/components/StateBadge'
-import { type AdminSnapshot, ApiError, fetchAdminSnapshot, type Shift } from '@/lib/api'
+import {
+  type AdminSnapshot,
+  ApiError,
+  fetchAdminSnapshot,
+  fetchMaterialSnapshot,
+  type Shift,
+} from '@/lib/api'
+import { filterHref, useFilters } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
+import { isOpen as isOpenMaterial } from '@/lib/materials'
 import { LOGIN_PATH } from '@/lib/nav'
 import {
   BUSINESS_TIME_ZONE,
@@ -70,14 +80,22 @@ const SHIFTS_PATH = '/shifts/'
  * Unresolved shifts are frequently OLDER than 30 days — that is what makes them unresolved —
  * and `/shifts/` defaults to the last 30 days. Jumping without a period would land the
  * director on an empty table, which is the one reading this whole product must never
- * produce. `/shifts/` reads this parameter on mount.
+ * produce. `/shifts/` reads these parameters on mount.
+ *
+ * `state=unresolved` was added with the filter contract (decision-38): the triage row says
+ * „3 Schichten zu bestätigen", so the screen it opens must show those three and not the
+ * whole log with them somewhere in it.
  */
-const SHIFTS_ALL_PATH = '/shifts/?period=all'
-const WORKERS_PATH = '/workers/'
-const LOCATIONS_PATH = '/locations/'
+const SHIFTS_UNRESOLVED_PATH = filterHref(SHIFTS_PATH, {
+  period: 'all',
+  state: 'unresolved',
+})
+const WORKERS_NO_EMAIL_PATH = filterHref('/workers/', { state: 'noEmail' })
+const LOCATIONS_NO_TAG_PATH = filterHref('/locations/', { state: 'noTag' })
 
 export default function DashboardPage() {
   const t = useTranslations('home')
+  const tFilter = useTranslations('filters')
   const tError = useTranslations('error')
   const format = useFormatter()
   const router = useRouter()
@@ -85,6 +103,21 @@ export default function DashboardPage() {
   const [snapshot, setSnapshot] = useState<AdminSnapshot | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
   const [busy, setBusy] = useState(false)
+  /**
+   * `?location=<uuid>` — the Objektpanel. This route is the building's object surface
+   * (decision-38): no `/locations/<id>` page exists and none can, because the admin is a
+   * static export. Read from the URL, so the panel can be bookmarked and sent to somebody.
+   */
+  const [filters, setFilters] = useFilters()
+  /**
+   * The open-material count the panel needs, fetched ONCE, LAZILY, on the first time a
+   * panel is opened. Not on page load: the dashboard is the screen the director leaves open
+   * all day, and it would pay for a list nobody asked for on every refresh. Null = not
+   * fetched yet, which the panel renders as „wird geladen" rather than as a zero — a zero
+   * would suppress the material link under decision-38's „no link to an empty target" rule
+   * and hide a queue somebody is standing in a building waiting for.
+   */
+  const [openMaterials, setOpenMaterials] = useState<Record<string, number> | null>(null)
   /**
    * "How long has this person been on site" is read against the clock at load time, not a
    * ticking one: a per-second re-render of a live region is a screen-reader denial of
@@ -126,6 +159,31 @@ export default function DashboardPage() {
     void load(controller.signal)
     return () => controller.abort()
   }, [load])
+
+  /**
+   * Materials, on demand. A failure here is deliberately SILENT and leaves the count null:
+   * the panel then says the material line is still loading and offers no link, which is the
+   * honest state. Turning a failed side fetch into a page-level error would make the
+   * dashboard look broken because of a panel nobody may have opened.
+   */
+  useEffect(() => {
+    if (filters.location === null || openMaterials !== null) return
+    const controller = new AbortController()
+    void (async () => {
+      try {
+        const material = await fetchMaterialSnapshot(controller.signal)
+        const counts: Record<string, number> = {}
+        for (const request of material.material_requests) {
+          if (request.location_id === null || !isOpenMaterial(request.status)) continue
+          counts[request.location_id] = (counts[request.location_id] ?? 0) + 1
+        }
+        setOpenMaterials(counts)
+      } catch {
+        /* stays null: „noch nicht geladen", never a false zero */
+      }
+    })()
+    return () => controller.abort()
+  }, [filters.location, openMaterials])
 
   const asOf = loadedAt ?? new Date()
 
@@ -223,7 +281,7 @@ export default function DashboardPage() {
         state: 'unres',
         trailing: <StateBadge state="unres" label={t('badgeUnresolved')} />,
         openLabel: t('unresolvedLink'),
-        onOpen: () => router.push(SHIFTS_ALL_PATH),
+        onOpen: () => router.push(SHIFTS_UNRESOLVED_PATH),
       }),
     ),
     ...workersWithoutEmail.map(
@@ -234,7 +292,7 @@ export default function DashboardPage() {
         state: 'muted',
         trailing: <StateBadge state="muted" label={t('badgeNoEmail')} />,
         openLabel: t('noEmailLink'),
-        onOpen: () => router.push(WORKERS_PATH),
+        onOpen: () => router.push(WORKERS_NO_EMAIL_PATH),
       }),
     ),
     ...locationsWithoutShifts.map(
@@ -245,7 +303,7 @@ export default function DashboardPage() {
         state: 'muted',
         trailing: <StateBadge state="muted" label={t('badgeDeadTag')} />,
         openLabel: t('deadTagLink'),
-        onOpen: () => router.push(LOCATIONS_PATH),
+        onOpen: () => router.push(LOCATIONS_NO_TAG_PATH),
       }),
     ),
   ]
@@ -290,6 +348,23 @@ export default function DashboardPage() {
           .filter((part) => part !== null)
           .join(' · ')
 
+  /**
+   * `?location=` resolved against the data actually on screen. A well-formed uuid naming no
+   * building is NOT ignored: the panel stays shut and the chip says „unbekannt", because
+   * silently showing the dashboard as though no filter had been asked for is how a director
+   * reads one building's state as another's.
+   */
+  const panelBuilding =
+    filters.location === null
+      ? null
+      : (snapshot?.locations.find((location) => location.id === filters.location) ?? null)
+  const panelUnknown = filters.location !== null && snapshot !== null && panelBuilding === null
+
+  const openPanel = (id: string) => setFilters({ location: id }, 'push')
+  // 'replace', not 'push': closing already removed the surface, and a second history entry
+  // would mean pressing back TWICE to leave a screen you have already left.
+  const closePanel = () => setFilters({ location: null }, 'replace')
+
   return (
     <>
       <PageHeader
@@ -312,6 +387,26 @@ export default function DashboardPage() {
       <p className="form-error" role="alert">
         {loadError === null ? '' : tError(loadError)}
       </p>
+
+      {/* The filter, echoed by the screen it landed on (decision-38 rule 3). On `/` the only
+          filter is the panel itself, so the chip is also the way to close it with the
+          keyboard from anywhere on the page. */}
+      <FilterChips
+        chips={
+          filters.location === null
+            ? []
+            : [
+                {
+                  key: 'location',
+                  label: tFilter('location'),
+                  value: panelBuilding?.name ?? tFilter('unknownLocation'),
+                  unknown: panelUnknown,
+                  onRemove: closePanel,
+                },
+              ]
+        }
+      />
+      {panelUnknown ? <p className="notice bad">{tFilter('unknownNotice')}</p> : null}
 
       {snapshot === null ? (
         <p role="status">{t('loading')}</p>
@@ -339,7 +434,7 @@ export default function DashboardPage() {
           <ListPanel
             title={t('triageHeading')}
             action={
-              <Link className="btn btn-quiet" href={SHIFTS_ALL_PATH}>
+              <Link className="btn btn-quiet" href={SHIFTS_UNRESOLVED_PATH}>
                 {t('unresolvedLink')}
               </Link>
             }
@@ -395,8 +490,25 @@ export default function DashboardPage() {
                     const minutes = minutesOnSite(shift.start_time)
                     return (
                       <tr key={shift.id} className="is-open">
-                        <th scope="row">{shift.worker_name}</th>
-                        <td>{shift.location_name}</td>
+                        {/* The NAME is the link — no extra action column. Both panels are
+                            one click from the row that named the person and the building,
+                            which is the loop this admin did not have: read a name off one
+                            table, find it again on another. */}
+                        <th scope="row">
+                          <Link href={filterHref('/workers/', { worker: shift.worker_id })}>
+                            {shift.worker_name}
+                          </Link>
+                        </th>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn btn-quiet"
+                            onClick={() => openPanel(shift.location_id)}
+                          >
+                            {shift.location_name}
+                            <span className="visually-hidden"> {t('panelOpen')}</span>
+                          </button>
+                        </td>
                         <td>{clockTime(shift.start_time)}</td>
                         {/* Text, not colour: the warning has to survive greyscale. */}
                         <td>
@@ -439,8 +551,21 @@ export default function DashboardPage() {
                   {recentShifts.map((shift) => (
                     <tr key={shift.id}>
                       <th scope="row">{dayTime(shift.start_time)}</th>
-                      <td>{shift.worker_name}</td>
-                      <td>{shift.location_name}</td>
+                      <td>
+                        <Link href={filterHref('/workers/', { worker: shift.worker_id })}>
+                          {shift.worker_name}
+                        </Link>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-quiet"
+                          onClick={() => openPanel(shift.location_id)}
+                        >
+                          {shift.location_name}
+                          <span className="visually-hidden"> {t('panelOpen')}</span>
+                        </button>
+                      </td>
                       <td>{formatDuration(durationMinutes(shift.start_time, shift.end_time))}</td>
                     </tr>
                   ))}
@@ -450,6 +575,22 @@ export default function DashboardPage() {
           </ListPanel>
         </>
       )}
+
+      {/* THE OBJEKTPANEL. Rendered last so it is the last thing in the DOM, like every other
+          overlay in this admin; <Drawer> moves focus in, traps it and restores it on close.
+          It is driven entirely by the URL, which is what makes it linkable at all. */}
+      <BuildingPanel
+        building={panelBuilding}
+        shifts={snapshot?.shifts ?? []}
+        openMaterials={
+          filters.location === null || openMaterials === null
+            ? null
+            : (openMaterials[filters.location] ?? 0)
+        }
+        truncated={snapshot !== null && snapshot.shifts.length >= snapshot.shift_limit}
+        asOf={asOf}
+        onClose={closePanel}
+      />
     </>
   )
 }
