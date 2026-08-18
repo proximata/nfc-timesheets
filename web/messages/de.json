@@ -140,7 +140,7 @@
     "answerExcluded": "Nicht gezählt",
     "answerExcludedNone": "Keine Schicht offen oder unbestätigt",
     "answerExcludedNoRate": "{count, plural, one {# Mitarbeiter ohne Stundensatz} other {# Mitarbeiter ohne Stundensatz}}",
-    "caveatNoRate": "{count, plural, one {Für # Mitarbeiter ist kein Stundensatz hinterlegt. Die Stunden sind erfasst, der Betrag wird mit null bewertet und fehlt daher in der Summe.} other {Für # Mitarbeiter ist kein Stundensatz hinterlegt. Ihre Stunden sind erfasst, die Beträge werden mit null bewertet und fehlen daher in der Summe.}}",
+    "caveatNoRate": "{count, plural, one {Für # Mitarbeiter ist kein Stundensatz hinterlegt. Die Stunden sind erfasst und stehen namentlich in der Tabelle unten; ein Betrag wird nicht berechnet – auch nicht 0,00 €. Die Auszahlungssumme ist daher um diesen Lohn zu niedrig.} other {Für # Mitarbeiter ist kein Stundensatz hinterlegt. Ihre Stunden sind erfasst und stehen namentlich in der Tabelle unten; Beträge werden nicht berechnet – auch nicht 0,00 €. Die Auszahlungssumme ist daher um diese Löhne zu niedrig.}}",
     "caveatNoRateLink": "Stundensatz hinterlegen",
     "rowNoRate": "Kein Stundensatz",
     "amountNoRate": "Nicht bewertet",

@@ -9,6 +9,18 @@
 //
 // It reads `display` off a real <tbody> <tr>, and it refuses to pass a screen where it found
 // no rows at all — "no rows" is how a shape check reports success on a blank page.
+//
+// AND IT READS THE CAPTIONS, which is the half that was missing. A card is only readable
+// because each cell prints its column heading (`data-label` -> `::before`, written by
+// components/ResponsiveTableLabels.tsx walking `row.children` POSITIONALLY because every row
+// leads with a `<th>`). Map those labels off the `td`s alone instead and every caption slides
+// one column left: a rate is captioned "Telefon", which is not unreadable, it is READABLE AND
+// FALSE. That exact mutation once passed every probe in demo/ — audit-band, this file's shape
+// half, audit-table-words, audit-german, audit-keyboard, audit-focus-ring — because each of
+// them counted labelled cells and none of them read one. So the assertion below is TEXT
+// against TEXT, per cell, per column index, and never a count: the count is what stayed green.
+// R1 widened the blast radius from a phone to every window under 1280px, which is an iPad and
+// half a monitor, so it is asserted at all six card widths.
 import { attach, launchChrome, sleep } from './cdp.mjs'
 
 const BASE = process.env.AUDIT_BASE ?? 'http://127.0.0.1:8082'
@@ -84,8 +96,54 @@ const SHAPE = `(() => {
   }
 })()`
 
+// Every card cell on the screen, compared against the heading of the column it is IN.
+//
+// Two readings per cell, because the caption exists twice and both can be wrong on their own:
+// the `data-label` ATTRIBUTE (what the header association and any future probe reads) and the
+// PAINTED `::before` (what the director's eye reads). Chrome resolves `content: attr(...)` to
+// a quoted string, and gives `none` where nothing is drawn — `.cell-actions::before` is
+// deliberately `none`, so an actions cell is checked on its attribute only.
+//
+// Comparison is exact after `trim()`, deliberately: the labels are COPIED from the same
+// `thead th` textContent, so anything that needs fuzzing to match is already a mismatch. No
+// backslash regex lives in this template string — `\s` inside a template literal collapses to
+// a plain `s` and silently matches nothing, which is how the last verifier's own probe lied.
+const LABELS = `(() => {
+  const out = { cells: 0, painted: 0, bad: [] }
+  for (const table of document.querySelectorAll('table.data-table')) {
+    const headings = [...table.querySelectorAll('thead th')].map((th) => (th.textContent || '').trim())
+    if (headings.length === 0) continue
+    for (const row of table.querySelectorAll('tbody tr')) {
+      const title = (row.children[0] ? row.children[0].textContent : '').trim().slice(0, 22)
+      ;[...row.children].forEach((cell, i) => {
+        out.cells++
+        const want = (headings[i] || '').trim()
+        const attr = cell.getAttribute('data-label')
+        const raw = getComputedStyle(cell, '::before').content
+        const painted = raw === 'none' || raw === 'normal' ? null : raw.replace(/^"|"$/g, '').trim()
+        if (painted !== null) out.painted++
+        const bad = (why, got) => out.bad.push({ row: title, col: i, why, want, got })
+        if (cell.tagName !== 'TD') {
+          // The row header IS the card's title. A caption on it is the historical off-by-one.
+          if (attr !== null || painted !== null) bad('row header carries a caption', attr || painted)
+          return
+        }
+        if (want === '') {
+          if (attr !== null) bad('cell in a headingless column carries a caption', attr)
+          return
+        }
+        if (attr !== want) bad('data-label is not this column heading', attr)
+        else if (painted !== null && painted !== want) bad('painted caption is not this column heading', painted)
+      })
+    }
+  }
+  return out
+})()`
+
 let failed = 0
 let seenRows = 0
+let seenCells = 0
+let seenPainted = 0
 const say = (ok, msg) => {
   if (!ok) failed++
   console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${msg}`)
@@ -105,15 +163,37 @@ for (const path of SCREENS) {
       r.rows > 0 && r.display === want,
       `${String(width).padStart(4)}px — ${want === 'block' ? 'one row is one CARD' : 'a real TABLE row'} — display=${r.display} rows=${r.rows}`,
     )
+    if (want !== 'block') continue
+    const l = await page.eval(LABELS)
+    seenCells += l.cells
+    seenPainted += l.painted
+    say(
+      l.bad.length === 0,
+      `${String(width).padStart(4)}px — every caption is its own column's heading — ${l.cells} cells, ${l.painted} captioned`,
+    )
+    // The PAIRS, not the tally: "605 mismatches" says a probe fired, `Stundensatz` captioned
+    // `Telefon` says what shipped. Capped so one broken screen cannot bury the next.
+    for (const b of l.bad.slice(0, 8)) {
+      console.log(`       col ${b.col} of "${b.row}" — ${b.why}: want "${b.want}", got "${b.got}"`)
+    }
+    if (l.bad.length > 8) console.log(`       …and ${l.bad.length - 8} more`)
   }
 }
 
-// A run that saw no rows checked nothing, and would print all-ok.
+// A run that saw no rows checked nothing, and would print all-ok. Same for a run in which no
+// caption was ever PAINTED: `content: none` everywhere compares equal to nothing and passes.
+// These are vacuity guards on the run, not the assertion — the assertion above is text.
 if (seenRows < 100) {
   console.log(`\nFAILED — only ${seenRows} rows seen; this check cannot have run.`)
   failed++
 }
+if (seenPainted < 200) {
+  console.log(`\nFAILED — only ${seenPainted} painted captions seen; the caption check cannot have run.`)
+  failed++
+}
 
-console.log(`\n${failed === 0 ? 'shape: OK' : `${failed} FAILED`} — ${seenRows} rows inspected.`)
+console.log(
+  `\n${failed === 0 ? 'shape: OK' : `${failed} FAILED`} — ${seenRows} rows inspected, ${seenCells} card cells, ${seenPainted} captions read.`,
+)
 shutdown()
 process.exit(failed === 0 ? 0 : 1)

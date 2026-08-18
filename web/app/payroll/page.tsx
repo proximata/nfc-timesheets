@@ -154,8 +154,10 @@ export default function PayrollPage() {
     snapshot === null ? null : reconcile(snapshot.workers, snapshot.shifts, snapshot.hours)
   /**
    * 0 cents is not a rate anybody agreed (`/workers/` says so on the row too). Their hours
-   * are real and are in the hours column; their money is priced at zero and is therefore
-   * MISSING from the amount. Counted and named, never shown as a confident EUR 0,00.
+   * are real and are in the hours column; NO amount is computed for them at all — not zero,
+   * no amount — so the payout total is short by a sum this screen cannot know. Counted and
+   * named, never shown as a confident EUR 0,00, and `payroll.caveatNoRate` says exactly that
+   * in the same words /workers/ uses.
    */
   const noRateLines =
     totals === null ? [] : totals.lines.filter((l) => l.worker.hourly_rate_cents === 0)

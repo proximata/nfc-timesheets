@@ -140,7 +140,7 @@
     "answerExcluded": "Not counted",
     "answerExcludedNone": "No shift is open or unconfirmed",
     "answerExcludedNoRate": "{count, plural, one {# worker with no hourly rate} other {# workers with no hourly rate}}",
-    "caveatNoRate": "{count, plural, one {# worker has no hourly rate on file. The hours are recorded, but the amount is priced at zero and is therefore missing from the total.} other {# workers have no hourly rate on file. Their hours are recorded, but the amounts are priced at zero and are therefore missing from the total.}}",
+    "caveatNoRate": "{count, plural, one {# worker has no hourly rate on file. The hours are recorded and the name is in the table below; no amount is calculated at all — not even €0.00. The payout total is therefore short by that pay.} other {# workers have no hourly rate on file. Their hours are recorded and their names are in the table below; no amounts are calculated at all — not even €0.00. The payout total is therefore short by that pay.}}",
     "caveatNoRateLink": "Add an hourly rate",
     "rowNoRate": "No hourly rate",
     "amountNoRate": "Not priced",

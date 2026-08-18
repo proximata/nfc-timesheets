@@ -4,8 +4,13 @@ import { useEffect } from 'react'
 
 /**
  * Copies each table's column headings onto its own cells as `data-label`, so the CSS
- * row-to-card transform (`globals.css`, `@media (max-width: 767px)`) can print the heading
- * beside each value. A card reading `08:15` twice is not a card, it is a riddle.
+ * row-to-card transform (`globals.css`, `@media (max-width: 1279px)` since R1 — an iPad and a
+ * half-width monitor window, not only a phone) can print the heading beside each value. A card
+ * reading `08:15` twice is not a card, it is a riddle.
+ *
+ * The positional walk below is guarded by `demo/audit-band-shape.mjs`, which compares each
+ * caption's TEXT with its column's heading TEXT at all six card widths. Map the labels off the
+ * `td`s alone and it goes red with the pairs; every count-based probe stayed green.
  *
  * ponytail: fifteen lines here instead of hand-adding `data-label` to several hundred `<td>`
  * elements across eleven screens — and it covers screens nobody has written yet, which is the
