@@ -67,11 +67,24 @@ try {
     return true
   })()`)
   if (!found) fail(`no control containing "${OPENER}" on ${SCREEN}`)
-  await sleep(400)
 
-  if (!failure && !(await page.eval(`!!document.querySelector('.drawer, .modal')`))) {
-    fail('the overlay never opened')
+  // BOUNDED WAIT, not a fixed 400 ms. A <button> that opens a create drawer mounts it in the
+  // same tick; a LINK that opens a URL-driven panel (`?worker=`, `?location=` — the surface
+  // decision-38 introduced) has to round-trip through history + a state read first, measured
+  // at ~1.4 s. At 400 ms the link cases reported „the overlay never opened", which is a
+  // green-adjacent lie: it looks like a probe limitation, so it gets ignored, and the panel
+  // whose focus handling is actually broken is never measured.
+  if (!failure) {
+    try {
+      await page.waitFor(`!!document.querySelector('.drawer, .modal')`, {
+        timeout: 6000,
+        label: 'the overlay opened',
+      })
+    } catch {
+      fail('the overlay never opened within 6 s')
+    }
   }
+  await sleep(250)
 
   // Move focus off the first control so a "restoration" that is really just "focus never
   // left" cannot pass. Tab twice: still inside the trap, but no longer on the ✕.
