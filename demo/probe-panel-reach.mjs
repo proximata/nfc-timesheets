@@ -110,6 +110,15 @@ export const REACH = `(() => {
     linksVisibleNow: visible.length,
     crossLinksVisibleNow: visible.filter((a) =>
       linksAfterHeading.includes(a)).length,
+    // The LABELS, not just the count. A panel whose link list is data-dependent (the worker
+     // panel grows from 2 links to 5 when the person has an open shift and an unconfirmed
+     // one) can satisfy every count-based assertion in its SHORTEST form and still bury the
+     // one link the journey is about. Naming them is what lets a caller ask for the link by
+     // its job — „Offene Schicht schließen“, JOURNEYS D5 — instead of by its index.
+    crossLinkTexts: linksAfterHeading.map((a) => a.textContent.replace(/\s+/g, ' ').trim()),
+    crossLinkTextsVisible: linksAfterHeading
+      .filter((a) => visible.includes(a))
+      .map((a) => a.textContent.replace(/\s+/g, ' ').trim()),
     firstCrossLinkTop: firstAfter
       ? Math.round(firstAfter.getBoundingClientRect().top - s.top + scroller.scrollTop)
       : null,

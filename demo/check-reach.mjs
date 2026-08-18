@@ -189,6 +189,13 @@ const SAID = `(() => {
   }
 })()`;
 
+// JOURNEYS D5's worker: somebody with an OPEN shift, which is what puts „Offene Schicht
+// schließen“ in the panel. Read out of the database rather than hardcoded, because which
+// row that is depends on the seed.
+const D5_WORKER = sql(
+  "SELECT w.id FROM workers w JOIN shifts s ON s.worker_id = w.id WHERE s.end_time IS NULL ORDER BY w.id LIMIT 1",
+);
+
 const OPEN_UNPINNED = `(() => {
   const row = [...document.querySelectorAll('table.objects-table tbody tr')]
     .find((tr) => /Keine Koordinaten/.test(tr.textContent || ''))
@@ -288,6 +295,44 @@ async function seededPass(cfg, page) {
       worker.linksBeforeHistory === true,
     );
     await shoot(page, `worker-panel-${cfg.w}-${cfg.theme}`);
+  }
+
+  // THE SAME PANEL IN THE STATE THE FIX WAS WRITTEN FOR. worker=1 has no open shift and
+  // nothing unconfirmed, so its list is the SHORTEST the component can render: two links.
+  // JOURNEYS D5 is the other one — „ich konnte nicht ausstempeln“ — and it needs the panel
+  // of somebody who has an open shift, which grows the list to five and pushes the last
+  // link 200px further down. Measuring only worker=1 would have reported this surface green
+  // for a state the director never opens it in. The person is chosen by their DATA, so
+  // reseeding cannot silently turn this back into the short case; if nobody is in that
+  // state the fixture assertion below fails rather than skipping.
+  if (D5_WORKER !== "") {
+    const d5 = await panel(page, `${tag} worker panel · D5`, `/workers/?worker=${D5_WORKER}`);
+    if (d5 !== null) {
+      console.log(
+        `  · worker panel D5 (worker ${D5_WORKER}): ${d5.crossLinksVisibleNow}/${d5.linksAfterHeading} on screen — ` +
+          d5.crossLinkTexts.join(" | "),
+      );
+      // The one link the journey exists for. Named, not counted: a count cannot tell the
+      // difference between five links and the right five links.
+      const closer = d5.crossLinkTexts.find((s) => /Offene Schicht/i.test(s)) ?? null;
+      assert(
+        `${tag} worker panel · D5: the open shift has a „Offene Schicht schließen“ link at all`,
+        closer !== null,
+        closer ?? d5.crossLinkTexts.join(" | "),
+      );
+      assert(
+        `${tag} worker panel · D5: …and it is on screen WITHOUT scrolling`,
+        closer !== null && d5.crossLinkTextsVisible.includes(closer),
+        `visible: ${d5.crossLinkTextsVisible.join(" | ")}`,
+      );
+      // The long list must not push the history off the surface either.
+      assert(
+        `${tag} worker panel · D5: the ten-row history survives the longer link list`,
+        d5.historyRows === 10 && d5.linksBeforeHistory === true,
+        `${d5.historyRows} rows, links first=${d5.linksBeforeHistory}`,
+      );
+      await shoot(page, `worker-panel-d5-${cfg.w}-${cfg.theme}`);
+    }
   }
 
   const drawer = await panel(page, `${tag} building drawer`, "/", { open: OPEN_UNPINNED });
