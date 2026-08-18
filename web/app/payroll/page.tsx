@@ -89,6 +89,8 @@ import { toBusinessInput } from '@/lib/shifts'
 
 const SHIFTS_PATH = '/shifts/'
 const WORKERS_PATH = '/workers/'
+/** Where a building (and its tag URL) is created. The day-zero empty state links to it. */
+const BUILDINGS_PATH = '/locations/'
 const HOME_PATH = '/'
 
 /**
@@ -708,11 +710,24 @@ export default function PayrollPage() {
               <div className="list-body">
                 <EmptyState>
                   {t('emptyBody')}{' '}
-                  {latestStart === null
-                    ? t('emptyNeverRecorded')
-                    : t('emptyLatestRecorded', {
-                        date: monthDayFormat.format(new Date(latestStart)),
-                      })}
+                  {latestStart === null ? (
+                    /* DAY ZERO. „Es hat nur noch niemand einen Tag gescannt“ names a
+                       precondition, and the two things it needs — a building with a tag
+                       URL, a person who can sign in — are on other screens. The jump button
+                       below is the escape hatch for the OTHER empty state (a period with
+                       nothing in it) and cannot exist here, because there is no period to
+                       jump to; without these links this branch offered nothing at all. */
+                    <>
+                      {t('emptyNeverRecorded')}{' '}
+                      <Link href={BUILDINGS_PATH}>{t('emptyLinkBuilding')}</Link>
+                      {' · '}
+                      <Link href={WORKERS_PATH}>{t('emptyLinkWorker')}</Link>
+                    </>
+                  ) : (
+                    t('emptyLatestRecorded', {
+                      date: monthDayFormat.format(new Date(latestStart)),
+                    })
+                  )}
                 </EmptyState>
                 {latestStart !== null && latestPeriod !== null && latestPeriod !== period ? (
                   <p className="form-actions">

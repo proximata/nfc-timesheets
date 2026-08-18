@@ -5,7 +5,8 @@
   },
   "app": {
     "brand": "NFC TimeSheets",
-    "brandSuffix": "Admin"
+    "brandSuffix": "Admin",
+    "settings": "Settings"
   },
   "a11y": {
     "skipToContent": "Skip to main content"
@@ -39,7 +40,7 @@
   "home": {
     "heading": "Dashboard",
     "loading": "Loading…",
-    "allClear": "{count, plural, =0 {Nothing needs attention. Nobody is clocked in right now.} one {Nothing needs attention. # person is on site.} other {Nothing needs attention. # people are on site.}}",
+    "allClear": "{count, plural, =0 {Nothing needs attention.} one {Nothing needs attention. # person is on site.} other {Nothing needs attention. # people are on site.}}",
     "onSiteHeading": "On site right now",
     "onSiteEmpty": "Nobody is clocked in right now.",
     "onSiteCaption": "Workers with an open shift, the longest-running one first.",
@@ -123,6 +124,7 @@
     "mapHide": "Hide map",
     "mapCollapsed": "The map is collapsed. The list below carries every building — on a phone it is the faster answer.",
     "mapNoKey": "This build carries no map key. That is a property of the deployment, not a fault — the list below is unaffected.",
+    "mapNoBuildings": "No building has been created yet, so there is nothing to draw. The map appears as soon as the first building has coordinates.",
     "mapNoPins": "{count, plural, one {# building has no coordinates, so there is nothing to draw. The list below is complete.} other {# buildings have no coordinates, so there is nothing to draw. The list below is complete.}}",
     "mapLoading": "Loading the map. The list below is already complete.",
     "mapReady": "On the map: {pinned}. Without coordinates: {unpinned}. The list below carries every building.",
@@ -138,6 +140,7 @@
     "objectsNote": "Every active building, whether or not the map could be drawn. Sorted: what needs checking first, then where somebody is, then by name.",
     "objectsCaption": "All active buildings with occupancy, last cleaning and open points.",
     "objectsEmpty": "No active building has been created yet. As soon as one is, it appears here and on the map.",
+    "objectsEmptyLink": "Create the first building",
     "colOnSite": "On site",
     "colLastCleaned": "Last cleaned",
     "colToCheck": "To check",
@@ -187,6 +190,8 @@
     "caveatRateHistory": "Known limitation: only one hourly rate per worker is stored, so past hours are priced at today's rate. Changing a rate changes what earlier periods appear to have cost.",
     "emptyBody": "No hours were recorded in this period.",
     "emptyNeverRecorded": "No shift has ever been recorded, in any period. Nothing is missing — nobody has tapped a tag yet.",
+    "emptyLinkBuilding": "Create a building and get its tag URL",
+    "emptyLinkWorker": "Create a worker",
     "emptyLatestRecorded": "Your records are intact: the most recent shift is from {date}. This period simply contains none of them.",
     "emptyJump": "Show {period} instead",
     "tableCaption": "Hours and pay per worker for {period}",
@@ -569,6 +574,8 @@
     "listHeading": "Shift log",
     "loading": "Loading shifts…",
     "emptyBody": "No shifts recorded yet. A shift appears here as soon as a worker taps a tag.",
+    "emptyLinkBuilding": "Create a building and get its tag URL",
+    "emptyLinkWorker": "Create a worker",
     "emptyFiltered": "No shifts match this filter. Try a longer period or another worker.",
     "emptyOutside": "{count, plural, one {No shift falls in the selected period, but # shift is recorded outside it. Nothing has been lost — the period is hiding it.} other {No shift falls in the selected period, but # shifts are recorded outside it. Nothing has been lost — the period is hiding them.}}",
     "latestRecorded": "The most recent recorded shift starts on {date}.",
@@ -781,6 +788,7 @@
     "methodNoContractLink": "Record a contract",
     "emptyBody": "There is nothing to report for this period: no building is active and none was worked in.",
     "emptyHint": "Nothing has been lost. Add a building, or choose a period in which work was recorded.",
+    "emptyLink": "Create a building",
     "tableCaption": "Revenue, cost and margin per building for {period}",
     "colBuilding": "Building",
     "colClient": "Client",
@@ -968,6 +976,7 @@
     "panelExcluded": "Not counted",
     "excludedNone": "Nothing — every shift in this period has a confirmed end time",
     "excludedSome": "{shifts, plural, =0 {No shift is waiting for a confirmed end time} one {# shift is waiting for a confirmed end time, {hours} in all} other {# shifts are waiting for a confirmed end time, {hours} in all}}; {open, plural, =0 {none is still running} one {# is still running} other {# are still running}}.",
+    "panelLinksHeading": "Go to",
     "panelTrendHeading": "{months, plural, one {The last # month} other {The last # months}}",
     "trendCaption": "Time worked per month at {name}",
     "colMonth": "Month",

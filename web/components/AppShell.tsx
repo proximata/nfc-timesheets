@@ -4,10 +4,8 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import type { ReactNode } from 'react'
-import { LocaleSwitcher } from '@/components/LocaleSwitcher'
-import { LogoutButton } from '@/components/LogoutButton'
+import { HeaderTools } from '@/components/HeaderTools'
 import { SidebarNav } from '@/components/SidebarNav'
-import { ThemeSwitcher } from '@/components/ThemeSwitcher'
 import { LOGIN_PATH } from '@/lib/nav'
 import { isClientPortalPath } from '@/lib/portal'
 
@@ -43,16 +41,18 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="brand-name">{t('app.brand')}</span>
           <span className="brand-suffix">{t('app.brandSuffix')}</span>
         </Link>
-        <div className="header-actions">
-          {/* System / Dunkel / Hell. The attribute it writes is already on <html> before
-              first paint — the inline script in app/layout.tsx. */}
-          <ThemeSwitcher />
-          <LocaleSwitcher />
-          <LogoutButton />
-        </div>
       </header>
 
       <SidebarNav />
+
+      {/* Darstellung, Sprache and Abmelden. A SIBLING of the header rather than a child of
+          it, because the two have to occupy different grid areas at the two widths: the
+          top-right of the header at the desk, and the right of the NAVIGATION row on a
+          phone, where they cost no vertical pixels at all. It comes after <SidebarNav /> in
+          the DOM so the tab and reading order match the phone layout, which is the one that
+          was broken — at desktop width the header row is a single visual line either way.
+          See components/HeaderTools.tsx for the measurement that moved it. */}
+      <HeaderTools />
 
       {/* tabIndex -1 so the skip link actually moves focus, not just the scroll position. */}
       <main id="main-content" className="content" tabIndex={-1}>

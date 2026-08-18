@@ -96,6 +96,8 @@ const MATERIALS_PATH = '/material-requests/'
 const CONTRACTS_PATH = '/contracts/'
 const SHIFTS_PATH = '/shifts/'
 const WORKERS_PATH = '/workers/'
+/** Where a building is created. The empty state names that action, so it links to it. */
+const BUILDINGS_PATH = '/locations/'
 /** The building's object surface. `/?location=<uuid>` — there is no `/locations/<id>`. */
 const HOME_PATH = '/'
 
@@ -586,10 +588,16 @@ export default function PlPage() {
           <ListPanel title={t('resultHeading')}>
             {buildings.length === 0 ? (
               /* Empty is not an error and must not read like one. There is genuinely
-                 nothing to report when no building is active and none was worked in. */
+                 nothing to report when no building is active and none was worked in — and
+                 the hint says
+                 „Legen Sie ein Objekt an“, so it carries the link that does it. /analytics/
+                 has offered exactly this link from exactly this sentence since it was
+                 written; /pl/ is its twin and did not, which is the same day-zero dead end
+                 TASK-178 found on the dashboard. */
               <div className="list-body">
                 <EmptyState>
-                  {t('emptyBody')} {t('emptyHint')}
+                  {t('emptyBody')} {t('emptyHint')}{' '}
+                  <Link href={BUILDINGS_PATH}>{t('emptyLink')}</Link>
                 </EmptyState>
               </div>
             ) : (

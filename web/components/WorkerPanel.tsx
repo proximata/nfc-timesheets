@@ -168,6 +168,33 @@ export function WorkerPanel({ worker, shifts, truncated, now, onClose }: WorkerP
 
       {truncated ? <p className="notice bad">{t('panelTruncated')}</p> : null}
 
+      {/* THE LINKS COME BEFORE THE HISTORY, and the ordering is the whole fix for TASK-177.
+          They used to sit under a ten-row shift table: 0 of 3 reachable without scrolling at
+          1680, and 950px of scrolling away on a 390px phone — measured, demo/probe-panel-
+          reach.mjs. That is defect V1 of the map round (an info box hiding all eight of its
+          links) repeated in the drawer, on the surface JOURNEYS D5 lands on: the director in
+          a stairwell being told „ich konnte nicht ausstempeln“, whose one action is
+          „Offene Schicht … abschließen“ down there. <BuildingFacts> has always put „Weiter zu“
+          before its own history and reports 6 of 6; this is the same order.
+
+          THE HISTORY IS NOT TRUNCATED AND NOT REMOVED. It is how a payslip dispute (D14) is
+          answered, and it stays complete — it is simply second, because reading it is a
+          deliberate act and closing somebody's shift is not. */}
+      <h3>{t('panelLinksHeading')}</h3>
+      <ul className="panel-links">
+        {links.map((link) => (
+          <li key={link.key}>
+            <Link href={link.href}>{link.label}</Link>
+          </li>
+        ))}
+        {/* Rule 1: the zero is stated, not linked to. */}
+        {unresolved.length === 0 ? (
+          <li>
+            <span className="panel-link-empty">{t('panelLinkNoUnresolved')}</span>
+          </li>
+        ) : null}
+      </ul>
+
       <h3>{t('panelRecentHeading', { count: RECENT_SHIFTS })}</h3>
       {recent.length === 0 ? (
         <p className="empty-state">{t('panelRecentEmpty')}</p>
@@ -209,21 +236,6 @@ export function WorkerPanel({ worker, shifts, truncated, now, onClose }: WorkerP
           fact /payroll/ and /contracts/ state; a third copy, because this is where a
           director looks before changing it. */}
       <p className="field-hint">{t('panelRateHistory')}</p>
-
-      <h3>{t('panelLinksHeading')}</h3>
-      <ul className="panel-links">
-        {links.map((link) => (
-          <li key={link.key}>
-            <Link href={link.href}>{link.label}</Link>
-          </li>
-        ))}
-        {/* Rule 1: the zero is stated, not linked to. */}
-        {unresolved.length === 0 ? (
-          <li>
-            <span className="panel-link-empty">{t('panelLinkNoUnresolved')}</span>
-          </li>
-        ) : null}
-      </ul>
     </Drawer>
   )
 }

@@ -593,6 +593,40 @@ export default function AnalyticsPage() {
               </dd>
             </dl>
 
+            {/* THE LINKS COME BEFORE THE TREND TABLE, for the reason TASK-177 measured one
+                drawer over: a cross-link under a twelve-row table is a cross-link nobody
+                reaches. This panel has the same shape as <WorkerPanel> had — facts, a long
+                table, then the links — and it was never measured either. The heading is new
+                and is the same word the building and worker panels use, so the three drawers
+                that carry links out all announce them the same way. */}
+            <h3>{t('panelLinksHeading')}</h3>
+            {/* Every one of these used to be a bare navigation: the director read a panel
+                about Handelskai and landed on an unfiltered list of everything. The fourth
+                is new — the building's own object surface, which is where the numbers and
+                the rest of its links live. */}
+            <ul className="panel-links">
+              <li>
+                <Link href={filterHref('/', { location: selected.location_id })}>
+                  {t('panelObjectLink')}
+                </Link>
+              </li>
+              <li>
+                <Link href={filterHref(CONTRACTS_PATH, { location: selected.location_id })}>
+                  {t('panelContractLink')}
+                </Link>
+              </li>
+              <li>
+                <Link href={filterHref(SHIFTS_PATH, { location: selected.location_id, period })}>
+                  {t('panelShiftsLink')}
+                </Link>
+              </li>
+              <li>
+                <Link href={filterHref(BUILDINGS_PATH, { open: selected.location_id })}>
+                  {t('panelBuildingLink')}
+                </Link>
+              </li>
+            </ul>
+
             <h3>{t('panelTrendHeading', { months: report?.trend_months ?? months })}</h3>
             <table className="data-table">
               <caption className="visually-hidden">
@@ -630,33 +664,6 @@ export default function AnalyticsPage() {
                 ))}
               </tbody>
             </table>
-
-            {/* Every one of these used to be a bare navigation: the director read a panel
-                about Handelskai and landed on an unfiltered list of everything. The fourth
-                is new — the building's own object surface, which is where the numbers and
-                the rest of its links live. */}
-            <ul className="panel-links">
-              <li>
-                <Link href={filterHref('/', { location: selected.location_id })}>
-                  {t('panelObjectLink')}
-                </Link>
-              </li>
-              <li>
-                <Link href={filterHref(CONTRACTS_PATH, { location: selected.location_id })}>
-                  {t('panelContractLink')}
-                </Link>
-              </li>
-              <li>
-                <Link href={filterHref(SHIFTS_PATH, { location: selected.location_id, period })}>
-                  {t('panelShiftsLink')}
-                </Link>
-              </li>
-              <li>
-                <Link href={filterHref(BUILDINGS_PATH, { open: selected.location_id })}>
-                  {t('panelBuildingLink')}
-                </Link>
-              </li>
-            </ul>
           </>
         )}
       </Drawer>

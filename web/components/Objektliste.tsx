@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useFormatter, useTranslations } from 'next-intl'
 import { EmptyState } from '@/components/EmptyState'
 import type { BuildingSummary } from '@/lib/objects'
@@ -46,7 +47,17 @@ export function Objektliste({ buildings, selectedId, onOpen, onGeocode, busy }: 
   if (buildings.length === 0) {
     // „Kein aktives Objekt" is a real answer for a company that has not been set up yet, and
     // it must never read as a table that failed to load.
-    return <EmptyState>{t('objectsEmpty')}</EmptyState>
+    //
+    // AND IT CARRIES THE ACTION IT NAMES. The sentence says „sobald ein Objekt angelegt ist“
+    // and offered no way to create one: this is the FIRST SCREEN of a new account,
+    // it is the state the Vienna client is onboarded into next week (JOURNEYS D1), and a
+    // precondition with no route to satisfying it is a dead end dressed as an explanation.
+    // An empty state is not an error — it is the first instruction.
+    return (
+      <EmptyState>
+        {t('objectsEmpty')} <Link href="/locations/">{t('objectsEmptyLink')}</Link>
+      </EmptyState>
+    )
   }
 
   const day = (iso: string) =>

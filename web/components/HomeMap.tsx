@@ -521,7 +521,14 @@ export function HomeMap({
     state === 'noKey'
       ? t('mapNoKey')
       : state === 'noPins'
-        ? t('mapNoPins', { count: unpinned })
+        ? // ZERO BUILDINGS IS NOT „ZERO BUILDINGS WITHOUT COORDINATES". Reusing `mapNoPins`
+          // for the empty database printed „0 Objekte haben keine Koordinaten, daher gibt es
+          // nichts zu zeichnen" — a sentence that contradicts itself, and the one production
+          // will print the day after the backfill runs on a portfolio of nothing. It is also
+          // the first screen the new client sees next week.
+          buildings.length === 0
+          ? t('mapNoBuildings')
+          : t('mapNoPins', { count: unpinned })
         : state === 'loading'
           ? t('mapLoading')
           : state === 'ready'
@@ -554,8 +561,19 @@ export function HomeMap({
       </div>
 
       {/* The sentence that makes the list not-optional, permanently visible and never a
-          tooltip. Inherited verbatim in intent from `/analytics/`'s noteMapEquivalent. */}
-      <p className="note" role="status">
+          tooltip. Inherited verbatim in intent from `/analytics/`'s noteMapEquivalent.
+
+          ONE EXCEPTION, and it is the only place on a phone where this sentence is not
+          drawn: the map COLLAPSED on a phone. It is still rendered, still a live region and
+          still read out — `visually-hidden`, never removed — because both halves of it are
+          already on the screen in words. „Karte ist eingeklappt" is the button 20px above it
+          („Karte anzeigen", aria-expanded="false"); „die Liste unten führt jedes Objekt" is
+          the Objektliste's own note 60px below it. Printing it here as well cost 87px of an
+          844px phone before the first building name (TASK-179), and saying one true thing
+          three times is the defect TASK-178 is fixing two panels away. Every OTHER state —
+          noKey, noBuildings, noPins, blocked, failed, timeout, ready — stays visible at
+          every width: they are things the reader cannot find out any other way. */}
+      <p className={hidden ? 'note visually-hidden' : 'note'} role="status">
         {hidden ? t('mapCollapsed') : statusText}
       </p>
 

@@ -578,7 +578,14 @@ export default function DashboardPage() {
           >
             {todo.length === 0 ? (
               /* „Leer heißt: nichts zu tun." Never a dash, never a blank panel: an empty
-                 exception view is what a director once read as data loss. */
+                 exception view is what a director once read as data loss.
+
+                 Its `=0` branch used to append „Zurzeit ist niemand eingestempelt." — the
+                 THIRD printing of that one sentence on an empty dashboard, after the answer
+                 band's sub and the „Gerade im Einsatz" panel that owns it. Two statements of
+                 a fact is a summary and its detail; four is a screen that has nothing to say
+                 and says it anyway. The sentence is not gone, it is stated twice instead of
+                 three times, and the branches that carry a COUNT are untouched. */
               <EmptyState>{t('allClear', { count: openShifts.length })}</EmptyState>
             ) : (
               <AttentionList items={todo.slice(0, TRIAGE_ROWS)} />

@@ -226,22 +226,51 @@ a {
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   grid-template-areas:
-    "header header"
+    "header tools"
     "sidebar content"
     "footer footer";
   min-height: 100dvh;
 }
 
+/*
+ * THE HEADER IS THE BRAND. The three settings controls are a SEPARATE grid item
+ * (`.header-tools`) sharing the same row, because at =<767px they have to leave this row
+ * entirely and sit in the navigation one instead — which a child of the header cannot do.
+ * At desktop width the two cells carry identical padding, background and bottom border, so
+ * the row is the same single line it always was.
+ */
 .app-header {
   grid-area: header;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: var(--s4);
   flex-wrap: wrap;
   padding: var(--s3) var(--s5);
   background: var(--bg-base);
   border-bottom: 1px solid var(--border);
+}
+
+.header-tools {
+  grid-area: tools;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: var(--s3) var(--s5);
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border);
+}
+
+/* The phone's disclosure. Not drawn at all above 767px: there is nothing to disclose when
+   the three controls are already on screen, and a button that expands what is already
+   expanded is a control with no state.
+
+   Written as `.header-tools .header-tools-toggle` and not as the bare class, because `.btn`
+   is declared further down this file at the same specificity and therefore WINS: the first
+   version of this rule was overridden and the button shipped visible at 1680px, which the
+   1680 header-height assertion in demo/check-reach.mjs caught at 69px against 60px. */
+.header-tools .header-tools-toggle {
+  display: none;
 }
 
 .brand {
@@ -2106,6 +2135,7 @@ a {
 
   .sidebar,
   .app-header,
+  .header-tools,
   .skip-link,
   .scrim {
     display: none;
@@ -2309,15 +2339,63 @@ a {
  * standing in a building, and the prototype offers no replacement control.
  */
 @media (max-width: 767px) {
-  /* Shell: one column. The sidebar becomes a horizontal strip under the header, so
-     navigation stays reachable without a hamburger and its state machine. */
+  /* Shell: the nav strip under the header, so navigation stays reachable without a
+     hamburger and its state machine — and the SETTINGS RIDE IN THE NAV ROW.
+
+     Measured before: header 169px (brand, Darstellung, Sprache, Abmelden, wrapped onto
+     three lines) + nav strip 61px = 230px of chrome, and the first building name at y=759
+     of an 844px phone. After: header 48px (the brand alone) + a 60px row holding the nav
+     strip AND one 44px „Einstellungen“ button. Nothing was removed — TASK-179 is explicit
+     that neither control may be deleted — it moved and, on a phone, it collapsed. */
   .app-shell {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
-      "header"
-      "sidebar"
-      "content"
-      "footer";
+      "header  header"
+      "sidebar tools"
+      "content content"
+      "footer  footer";
+  }
+
+  /* Brand only, and it keeps the header's own padding. */
+  .app-header {
+    padding: var(--s3);
+  }
+
+  /* Same row as the nav strip, same background, same border, so the two read as one bar.
+     `position: relative` is the anchor for the panel below. */
+  .header-tools {
+    padding: var(--s2) var(--s3);
+    background: var(--bg-sunken);
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+
+  .header-tools .header-tools-toggle {
+    display: inline-flex;
+  }
+
+  /* Closed: gone from the layout, the tab order and the accessibility tree. */
+  .header-actions[data-open="no"] {
+    display: none;
+  }
+
+  /* Open: a panel hanging off the button, NOT a row that pushes the page down. The reader
+     pressed a settings button; the answer they were reading must not move. */
+  .header-actions[data-open="yes"] {
+    position: absolute;
+    top: calc(100% + var(--s1));
+    right: var(--s3);
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--s3);
+    padding: var(--s3);
+    width: max-content;
+    max-width: calc(100vw - 2 * var(--s3));
+    background: var(--bg-overlay);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-card);
   }
 
   .sidebar {
@@ -2363,11 +2441,16 @@ a {
     white-space: nowrap;
   }
 
-  .app-header,
   .content,
   .app-footer {
     padding-left: var(--s3);
     padding-right: var(--s3);
+  }
+
+  /* 24px of blank above the h1 is a desk affordance. On a phone it is 3 % of the fold,
+     spent before the screen has said anything. */
+  .content {
+    padding-top: var(--s3);
   }
 
   /* A phone has no hover, so a hover-only tooltip is an invisible control. */
@@ -2399,6 +2482,32 @@ a {
   .callout > summary,
   .locale-switcher select,
   .theme-switcher select {
+    min-height: 44px;
+  }
+
+  /* AN EMPTY STATE'S LINK IS THE ACTION THE EMPTY STATE NAMES — on day zero it is the only
+     control on the screen (TASK-178), so it is a touch target and not a word in a sentence.
+     `inline-flex` rather than vertical padding: padding on an inline box grows the hit
+     rectangle without growing the line, so two links on adjacent lines would overlap by a
+     few pixels and a tap could land on the wrong one. */
+  .empty-state a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  /* A LINK INSIDE A TABLE CELL IS A TOUCH TARGET, and it was the largest single population
+     of undersized ones in the product: 174 of them on /shifts/ at 390px, and 11 on `/`,
+     every one 17–20px tall (demo/shoot-ia.mjs). WCAG 2.5.8's inline exception does not
+     apply — these are not links inside a sentence, they are the row's own controls, one
+     per cell, stacked in a card. `inline-flex` and not `block`, so the link is still only
+     as wide as its own text and two links in one cell do not become one 44px slab that
+     cannot be told apart. Scoped to `.data-table`: `.map-info .panel-links a` keeps its
+     deliberate 26px, because the info box has ~300px of map to live in. */
+  .data-table th a,
+  .data-table td a {
+    display: inline-flex;
+    align-items: center;
     min-height: 44px;
   }
 

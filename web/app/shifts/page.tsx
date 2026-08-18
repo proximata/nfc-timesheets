@@ -148,6 +148,11 @@ const LOCATION_ALL = 'all'
  * tied together by `form=` rather than by nesting. Constant ids, not `useId()`: only one
  * drawer is ever open, and an IDREF is easier to read in a DOM inspector than `:r7:`.
  */
+/** Where a building (and its tag URL) is created, and where a worker is. The day-zero
+ *  empty state names both preconditions, so it links to both. */
+const BUILDINGS_PATH = '/locations/'
+const WORKERS_PATH = '/workers/'
+
 const CORRECT_FORM_ID = 'shift-correct-form'
 const CREATE_FORM_ID = 'shift-create-form'
 
@@ -875,7 +880,18 @@ export default function ShiftsPage() {
 
           <ListPanel title={t('listHeading')} padded={!hasTable}>
             {shifts.length === 0 && latestStart === null ? (
-              <EmptyState>{t('emptyBody')}</EmptyState>
+              /* DAY ZERO, and the only empty state on this screen that is not about a
+                 filter: no shift has ever been recorded, in any period. The sentence names
+                 its precondition — „sobald ein Mitarbeiter einen Tag scannt“ — and that
+                 needs two things nobody can do from here: a building with a tag URL, and a
+                 person who can sign in. So both are offered. Every other empty state below
+                 is a FILTER emptying the table and already carries its own way out; this
+                 one had none, and it is the screen `/`'s most-used link lands on. */
+              <EmptyState>
+                {t('emptyBody')} <Link href={BUILDINGS_PATH}>{t('emptyLinkBuilding')}</Link>
+                {' · '}
+                <Link href={WORKERS_PATH}>{t('emptyLinkWorker')}</Link>
+              </EmptyState>
             ) : visible.length === 0 ? (
               /* The empty state that started all of this. It states, in words, how many
                  shifts exist just outside the chosen period and when the most recent one
