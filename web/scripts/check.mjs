@@ -566,7 +566,8 @@ check('lib/period.ts: a period that has not finished says how much of it has not
   // THE NEGATIVE CASES, which are the ones that decide whether the sentence appears at all.
   assert.equal(days('lastMonth'), 0, 'a closed period has no unhappened days')
   assert.equal(isPartElapsed(periodRange('lastMonth', august), august), false)
-  assert.equal(isPartElapsed(periodRange('all', august), august), false, 'unbounded is not "running"')
+  const unbounded = periodRange('all', august)
+  assert.equal(isPartElapsed(unbounded, august), false, 'unbounded is not "running"')
   assert.equal(days('all'), 0)
   // `last30Days` ends at TOMORROW's midnight: still running, but by less than a whole day.
   // The =0 plural branch exists for exactly this, and printing „0 Tage" would be the bug
