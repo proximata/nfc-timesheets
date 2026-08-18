@@ -611,6 +611,25 @@ a {
   overflow-wrap: break-word;
 }
 
+/* R1: 8px gutters instead of 12px between 1280 and 1439.
+   A gutter is paid TWICE PER COLUMN, so on /locations/'s nine columns 4px of it is 72px of
+   table — measured 1022 → 958 min-content, which is the difference between 66px of slack at
+   1280 and 2px. It is the cheapest 64px in this file: no word is broken, no column is
+   dropped, and nothing moves at 1440 and up where the room already exists.
+
+   `hyphens: auto` was tried here first and REJECTED on the measurement: it does lower the
+   floor (/locations/ 1022 → 622) but it lowers it everywhere, and `table-layout: auto` then
+   squeezes columns it did not need to squeeze — at 1440, with 31px of room to spare, STATUS
+   rendered as "STA-TUS" and Aktiv as "Ak-tiv" in a 33px column. Fitting must not be paid for
+   at a width that already fits. */
+@media (min-width: 1280px) and (max-width: 1439px) {
+  .data-table th,
+  .data-table td {
+    padding-left: var(--s2);
+    padding-right: var(--s2);
+  }
+}
+
 .data-table thead th {
   font-size: 0.75rem;
   font-weight: 500;
@@ -678,9 +697,28 @@ a {
    `nowrap` keeps a PAIR of actions on one line in a wide table. It is switched back off
    below 768px, where the same pair overflowed the card and the page scrolled sideways:
    "Zugangscode erste…" was cut at the viewport edge with no scrollbar to reveal the rest
-   (REDESIGN-VISUAL.md D2). */
-.cell-actions {
-  white-space: nowrap;
+   (REDESIGN-VISUAL.md D2).
+
+   "IN A WIDE TABLE" is now MEASURED instead of assumed (R1), and it turned out to mean 1600
+   and not 768. `nowrap` pins the column's min-content to BOTH labels on one line — 231px of
+   /locations/'s 1225px min-content, 264px of /workers/'s 1112px, 292px of /inventory/'s 717px
+   (`BAND_DIAG=1 node demo/audit-band.mjs` at 3211e32). At 1440 those 231px were exactly what
+   pushed `Deaktivieren` out of a 1162px panel and under `section.list`'s `overflow: hidden`,
+   where it was sliced to "Deakti…" with no scrollbar and no way to reach it — the page did NOT
+   scroll, so every probe that only subtracts clientWidth reported it clean
+   (docs/media/redesign/r1/locations-1440-before.png).
+
+   Below 1600 the pair wraps onto two lines instead, which costs one line of row height and
+   returns the width to the columns that hold the data. 1600 is MEASURED, and 1560 was tried
+   first and was WRONG: /workers/ is the widest table with `nowrap` on at 1278px, and the
+   panel is 1262px at 1599 and 1296px at 1600, so at 1560 the table sat 16px past its panel's
+   content box with a button 5px into the padding. Nothing was cut and nothing scrolled, so
+   the first two checks in demo/audit-band.mjs both passed it; the third one — a table against
+   its panel's content box — exists because of that miss and goes RED at 1560. */
+@media (min-width: 1600px) {
+  .cell-actions {
+    white-space: nowrap;
+  }
 }
 
 .cell-actions > button + button,
@@ -1203,11 +1241,27 @@ a {
   padding: var(--s1) var(--s2);
   margin-bottom: var(--s2);
   user-select: all;
-  /* A floor on the column, not a fixed width. With `overflow-wrap: anywhere` the URI's
-     min-content is ONE character, so an auto-layout table happily squeezed the tag column
-     to a seven-line ribbon the moment the neighbouring columns stopped breaking mid-word.
-     This is the string a wall tag is written from and it is read character by character. */
-  min-width: 24ch;
+}
+
+/* A floor on the column, not a fixed width. With `overflow-wrap: anywhere` the URI's
+   min-content is ONE character, so an auto-layout table happily squeezed the tag column to a
+   seven-line ribbon the moment the neighbouring columns stopped breaking mid-word. This is
+   the string a wall tag is written from and it is read character by character.
+
+   20ch from 1440 up, not 24ch unconditionally (R1). A hard floor is width the other eight
+   columns cannot have: at 24ch this column alone claimed 212px of /locations/'s 1225px
+   min-content, second only to the action pair. Put that floor back at every width and
+   demo/audit-band.mjs goes RED at 1280 — all four `Deaktivieren` buttons end at 1291px inside
+   a 1280px table — which is the mutation that proves this line is load-bearing. 20ch leaves
+   /locations/ at 1100px min-content inside a 1162px panel at 1440, 62px to spare, and still
+   prints the URI four lines to a cell; between 1280 and 1439 the column takes its share of
+   the row instead, and below 1280 the row is a card where the URI gets the full card width on
+   one line. What it must never do is truncate — a URI shortened for layout is one somebody
+   copies by hand and gets wrong — and it never does. */
+@media (min-width: 1440px) {
+  .code-block {
+    min-width: 20ch;
+  }
 }
 
 .tag-uuid {
@@ -1588,109 +1642,38 @@ a {
   }
 }
 
-/* --- Phone (decision-28) ------------------------------------------------------------- *
- * Supersedes decision-7. Below 768px the panel does not shrink, it CHANGES SHAPE: the
- * sidebar becomes a scrolling strip and every data table becomes a list of cards. Nothing
- * above 768px is touched by anything in this block, which is what keeps the risk one-sided.
+/* --- The narrow band, up to 1279px (R1) ------------------------------------------------ *
+ * The row-to-card transform is NOT phone-only, and where it stops is MEASURED, not chosen.
  *
- * The prototype's `.side { display: none }` under 860px is a PROTOTYPE ARTEFACT and is not
- * implemented: deleting navigation on a phone would regress the screen the director uses
- * standing in a building, and the prototype offers no replacement control.
+ * A German admin table has a hard floor: the longest word in a column is the narrowest that
+ * column can ever be. Summed across the columns, with the two levers above already pulled
+ * (action pairs wrap, no fixed floor under the tag URI) and 8px gutters, that floor measures
+ * 958px on /locations/, 853 on /shifts/, 822 on /workers/. The rail and the page gutters take
+ * a further 256px. So the widest screen in this panel needs 1214px of viewport before one
+ * honest row can be drawn — and the two ways a table has of pretending otherwise are both
+ * failures the owner has already met: the DOCUMENT scrolls sideways (31 of 156 measurements
+ * did at 3211e32, from 768 to 1366; decision-28 forbids it outright), or the table silently
+ * overflows `section.list`'s `overflow: hidden` and the Aktionen column is CUT OFF THE SCREEN
+ * with no scrollbar at all, which is what /locations/ did at 1439 and 1440 and what no
+ * document-overflow probe saw.
+ *
+ * 1280 is therefore the boundary, and this block holds the table rules while the ≤767 block
+ * below keeps the phone's own shell, nav strip and 44px touch targets.
+ *
+ * WHAT IT COSTS, plainly, because it is not free: between 768 and 1279 — iPad in either
+ * orientation, a half-width window on a 1920 monitor — one building is a card of nine
+ * labelled lines instead of one row. Scanning twenty of them is about five screens of
+ * scrolling instead of one, and no column can be read DOWN the page any more, which is a real
+ * loss on /payroll/ where comparing amounts is the job. It is the lesser loss, and the
+ * alternative is not hypothetical — put this breakpoint back at 767 and the probe measures it:
+ * /shifts/ scrolls 60px sideways at 1024 and cuts four `Korrigieren` buttons, /workers/ cuts
+ * four `Bearbeiten`, /locations/ scrolls 167px. The cards show every field and every control
+ * at every width, which is the thing the table cannot do here.
+ *
+ * Guard: `node demo/audit-band.mjs` — 13 screens x 12 widths, 0px of document overflow AND
+ * nothing clipped outside its panel. It fails on one pixel of either.
  */
-@media (max-width: 767px) {
-  /* Shell: one column. The sidebar becomes a horizontal strip under the header, so
-     navigation stays reachable without a hamburger and its state machine. */
-  .app-shell {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      "header"
-      "sidebar"
-      "content"
-      "footer";
-  }
-
-  .sidebar {
-    flex-direction: row;
-    align-items: center;
-    gap: var(--s2);
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    padding: var(--s2) var(--s3);
-    /* The strip scrolls sideways; the PAGE never does. A horizontally scrolling page is the
-       failure decision-7 predicted, and it is confined to this one element. */
-    overflow-x: auto;
-  }
-
-  .nav-group {
-    display: flex;
-    align-items: center;
-    gap: var(--s2);
-  }
-
-  /* Never `display: none`: a hidden heading is still the group's accessible name, and the
-     <ul> is aria-labelledby it. Visually hidden only. */
-  .nav-group-heading {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
-  /* margin-top:auto means nothing in a row; Konto simply comes last in the strip. */
-  .nav-group-bottom {
-    margin-top: 0;
-  }
-
-  .nav-list {
-    display: flex;
-    gap: var(--s2);
-    flex-wrap: nowrap;
-    white-space: nowrap;
-  }
-
-  .app-header,
-  .content,
-  .app-footer {
-    padding-left: var(--s3);
-    padding-right: var(--s3);
-  }
-
-  /* A phone has no hover, so a hover-only tooltip is an invisible control. */
-  .nav-tooltip {
-    display: none;
-  }
-
-  /* Touch targets. 44px is the floor, not the aspiration.
-     biome-ignore-start lint/style/noDescendingSpecificity: bare element selectors after the
-     class-scoped ones is the point — this is a floor applied to every control on a phone,
-     and min-height is the only property it sets, so nothing above it is overridden. */
-  .nav-link,
-  button,
-  .button,
-  input,
-  select,
-  textarea {
-    min-height: 44px;
-  }
-  /* biome-ignore-end lint/style/noDescendingSpecificity: end of the touch-target floor */
-
-  /* The comment above was WRONG and the measurement proved it: a bare `button` (0,0,1)
-     loses to a class (0,1,0), so every row action rendered at 35px and both header
-     selects at 36px on a phone (REDESIGN-A11Y.md M3). These are the same floor, restated
-     at class specificity. .btn-quiet's desktop exception is "the row is the target" — on
-     a phone the row IS a card and the button is the only target in it. */
-  .btn-quiet,
-  .skip-link,
-  .callout > summary,
-  .locale-switcher select,
-  .theme-switcher select {
-    min-height: 44px;
-  }
-
+@media (max-width: 1279px) {
   /* Tables become cards. `display: block` on the table parts, one card per row, and the
      column heading printed beside each value via data-label (ResponsiveTableLabels). */
   .data-table {
@@ -1821,6 +1804,114 @@ a {
     padding: 0;
     border: none;
     white-space: nowrap;
+  }
+}
+
+/* --- Phone (decision-28) ------------------------------------------------------------- *
+ * Supersedes decision-7. Below 768px the panel does not shrink, it CHANGES SHAPE: the
+ * sidebar becomes a scrolling strip and every data table becomes a list of cards. Nothing
+ * above 768px is touched by anything in this block, which is what keeps the risk one-sided.
+ *
+ * The row-to-card half of that now lives in the ≤1279 block ABOVE and applies here too — a
+ * phone is simply the narrow end of it. What stays here is what only a phone needs: the
+ * one-column shell, the nav strip, and the 44px touch floor.
+ *
+ * The prototype's `.side { display: none }` under 860px is a PROTOTYPE ARTEFACT and is not
+ * implemented: deleting navigation on a phone would regress the screen the director uses
+ * standing in a building, and the prototype offers no replacement control.
+ */
+@media (max-width: 767px) {
+  /* Shell: one column. The sidebar becomes a horizontal strip under the header, so
+     navigation stays reachable without a hamburger and its state machine. */
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "header"
+      "sidebar"
+      "content"
+      "footer";
+  }
+
+  .sidebar {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--s2);
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: var(--s2) var(--s3);
+    /* The strip scrolls sideways; the PAGE never does. A horizontally scrolling page is the
+       failure decision-7 predicted, and it is confined to this one element. */
+    overflow-x: auto;
+  }
+
+  .nav-group {
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+  }
+
+  /* Never `display: none`: a hidden heading is still the group's accessible name, and the
+     <ul> is aria-labelledby it. Visually hidden only. */
+  .nav-group-heading {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* margin-top:auto means nothing in a row; Konto simply comes last in the strip. */
+  .nav-group-bottom {
+    margin-top: 0;
+  }
+
+  .nav-list {
+    display: flex;
+    gap: var(--s2);
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+
+  .app-header,
+  .content,
+  .app-footer {
+    padding-left: var(--s3);
+    padding-right: var(--s3);
+  }
+
+  /* A phone has no hover, so a hover-only tooltip is an invisible control. */
+  .nav-tooltip {
+    display: none;
+  }
+
+  /* Touch targets. 44px is the floor, not the aspiration.
+     biome-ignore-start lint/style/noDescendingSpecificity: bare element selectors after the
+     class-scoped ones is the point — this is a floor applied to every control on a phone,
+     and min-height is the only property it sets, so nothing above it is overridden. */
+  .nav-link,
+  button,
+  .button,
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+  }
+  /* biome-ignore-end lint/style/noDescendingSpecificity: end of the touch-target floor */
+
+  /* The comment above was WRONG and the measurement proved it: a bare `button` (0,0,1)
+     loses to a class (0,1,0), so every row action rendered at 35px and both header
+     selects at 36px on a phone (REDESIGN-A11Y.md M3). These are the same floor, restated
+     at class specificity. .btn-quiet's desktop exception is "the row is the target" — on
+     a phone the row IS a card and the button is the only target in it. */
+  .btn-quiet,
+  .skip-link,
+  .callout > summary,
+  .locale-switcher select,
+  .theme-switcher select {
+    min-height: 44px;
   }
 
   /* Toolbars and forms stack rather than squeezing side by side. */
