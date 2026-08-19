@@ -3460,6 +3460,82 @@ try {
       assert.equal(zoneA.location_id, plA);
     });
 
+    await test("zone_state is a GREY PIN, and locations.active is the tag — they never merge", async () => {
+      // The owner's rule "a building with no zones is INACTIVE" is about the MAP. Read
+      // operationally it kills the card on the wall. So the two words are reported
+      // SEPARATELY and this case is what keeps them apart:
+      //
+      //   locations.active   OPERATIONAL. The tag resolves iff true.
+      //   zone_state         PRESENTATION. A grey pin and a sentence, and nothing else.
+      const grey = await newLocation("greyhaus", "Grauhaus");
+      // A period around NOW, not October 2025: `reportableLocations` returns a building
+      // that is active OR was worked in the period, so a DEACTIVATED building only stays
+      // visible through a period that contains its shift. The tap below is that shift, and
+      // it is deliberately not deleted until the last assertion has read it.
+      const now = Date.now();
+      const period = window({
+        from: new Date(now - 86_400_000).toISOString(),
+        to: new Date(now + 86_400_000).toISOString(),
+      });
+
+      const inPl = (payload) => payload.buildings.find((b) => b.location_id === grey);
+      const analyticsOf = async () => inPl(await (await asAdmin(`/admin/analytics?${period}`)).json());
+
+      assert.equal((await analyticsOf()).zone_state, "unzoned", "no zones -> grey, and the map says so in words");
+      // EVERY surface that reports `active` must keep reporting the OPERATIONAL one. A
+      // single `active: l.active && zoned` anywhere is the whole mistake, so all three are
+      // asserted rather than one and a hope.
+      for (const [where, row] of [
+        ["/admin/analytics", await analyticsOf()],
+        ["/admin/pl", inPl(await pl(VIENNA_OCT_2025))],
+        ["/admin/data", (await (await asAdmin("/admin/data")).json()).locations.find((l) => l.id === grey)],
+      ]) {
+        assert.equal(row.active, true, `${where} must report the OPERATIONAL active, not "has zones"`);
+      }
+      assert.equal(inPl(await pl(VIENNA_OCT_2025)).area_unknown_reason, "no_zones");
+
+      // AND THE TAG STILL RESOLVES WHILE IT IS GREY. This is the line that must never be
+      // deleted for tidiness: it is the difference between a grey pin and a dead building.
+      const tap = await asWorker("/shifts/open", {
+        method: "POST",
+        body: { client_uuid: uuid(66), location_uuid: grey, start_time: new Date().toISOString() },
+      });
+      assert.equal(tap.status, 201, "an UNZONED building is grey on the map and fully tappable at the wall");
+      await expect(
+        await asWorker("/shifts/close", {
+          method: "POST",
+          body: { client_uuid: uuid(66), end_time: new Date(Date.now() + 60_000).toISOString() },
+        }),
+        200,
+      );
+
+      // One zone flips the presentation and changes nothing else.
+      await expect(
+        await asAdmin("/admin/zones", { method: "POST", body: { location_id: grey, name: "Eingang" } }),
+        201,
+      );
+      assert.equal((await analyticsOf()).zone_state, "zoned");
+      assert.equal((await analyticsOf()).active, true);
+
+      // A DEACTIVATED building with zones is the opposite corner, and proves the two are
+      // genuinely independent rather than two names for one thing.
+      await expect(await asAdmin(`/admin/locations/${grey}`, { method: "DELETE" }), 200);
+      const gone = await analyticsOf();
+      assert.equal(gone.active, false, "deactivated: the tag stops resolving");
+      assert.equal(gone.zone_state, "unzoned", "...and its zones went with it (decision-43)");
+      assert.equal(
+        (
+          await asWorker("/shifts/open", {
+            method: "POST",
+            body: { client_uuid: uuid(67), location_uuid: grey, start_time: new Date().toISOString() },
+          })
+        ).status,
+        422,
+        "and THIS is what an inactive building does — which 'unzoned' must never do",
+      );
+      await admin.query("DELETE FROM shifts WHERE client_uuid = $1", [uuid(66)]);
+    });
+
     // GREP PIN · NO PER-ZONE COST, EVER, AND THE REFUSAL IS THE DELIVERABLE.
     //
     // A shift is building-level (decision-43 §4), so no duration is attributable to a zone.

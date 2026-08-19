@@ -255,6 +255,25 @@ async function contractedForMonths(monthStarts) {
  * NUMERIC out of SQL, carried as a STRING to the caller: `area_sqm` is exact decimal in the
  * column precisely so it never goes near binary floating point.
  */
+/**
+ * The four facts every caller needs about a building's area, derived ONCE so the P&L and
+ * /analytics/ cannot drift into disagreeing about the same building.
+ *
+ * `areaSqm` is NULL whenever the sum would be a FLOOR rather than a total, and the reason
+ * says which kind of nothing it is. That is the guard rail: a denominator that is silently
+ * too small inflates every per-m2 figure computed from it, and "420 m2" printed for a
+ * building with an unmeasured Tiefgarage is a confidently wrong benchmark rather than an
+ * approximately right one.
+ */
+function areaFacts(area) {
+  const zonesTotal = area === null ? 0 : area.zones_total;
+  const zonesUnmeasured = area === null ? 0 : area.zones_unmeasured;
+  const areaReason = zonesTotal === 0 ? "no_zones" : zonesUnmeasured > 0 ? "area_incomplete" : null;
+  // `area_sqm` is NUMERIC in the column so the stored value is exact decimal, and it is
+  // only ever divided INTO an integer here, never multiplied by a float.
+  return { zonesTotal, zonesUnmeasured, areaReason, areaSqm: areaReason === null ? Number(area.area_sqm) : null };
+}
+
 async function areaByLocation() {
   return all(
     `SELECT z.location_id,
@@ -363,10 +382,28 @@ async function materialPool(from, to) {
   );
 }
 
+/**
+ * *** THE TWO WORDS THAT MUST STAY APART (decision-43 §3). ***
+ *
+ *   locations.active   OPERATIONAL. A building tag resolves if and only if this is true.
+ *   zone_state         PRESENTATION. 'zoned' | 'unzoned'. A grey pin and a sentence.
+ *
+ * The owner's rule "a building with no zones is inactive" is about the MAP. Wired into
+ * resolution it would 422 the card physically on the wall at HOIV — a building uuid, at a
+ * building with zero zones — on the day migration 006 lands, and no site visit could fix
+ * it, because the tag cannot be rewritten from Vienna.
+ *
+ * So this is DERIVED, it is reported, and it touches nothing else. It must never appear in
+ * tap resolution (lib/validate.js activePlace), in payroll, in the P&L's money, or in the
+ * portal. Grey is the SECOND signal; the words are the first.
+ */
+const ZONE_STATE = `CASE WHEN EXISTS (SELECT 1 FROM zones z WHERE z.location_id = l.id AND z.active)
+                        THEN 'zoned' ELSE 'unzoned' END AS zone_state`;
+
 /** Every building that either still exists or was worked in the period. */
 async function reportableLocations(from, to) {
   return all(
-    `SELECT l.id, l.slug, l.name, l.address, l.active, l.lat, l.lng,
+    `SELECT l.id, l.slug, l.name, l.address, l.active, l.lat, l.lng, ${ZONE_STATE},
             l.geocoded_at, l.geocode_status, l.street_view_status,
             l.client_id, c.name AS client_name,
             l.contact_id, ct.name AS contact_name
@@ -483,12 +520,7 @@ export async function profitAndLoss(from, to) {
     // would assert that time is proportional to floor area, which is false in the obvious
     // direction: a Tiefgarage is fast per m2 and an office floor is slow. Same failure
     // decision-6 already refused for materials.
-    const zonesTotal = area === null ? 0 : area.zones_total;
-    const zonesUnmeasured = area === null ? 0 : area.zones_unmeasured;
-    const areaReason = zonesTotal === 0 ? "no_zones" : zonesUnmeasured > 0 ? "area_incomplete" : null;
-    // Exact decimal all the way: `area_sqm` is NUMERIC in the column and arrives as a
-    // string, and it is only ever divided INTO an integer, never multiplied by a float.
-    const areaSqm = areaReason === null ? Number(area.area_sqm) : null;
+    const { zonesTotal, zonesUnmeasured, areaReason, areaSqm } = areaFacts(area);
     const perArea = (value) =>
       areaSqm === null || value === null ? null : Math.round((value * 100) / areaSqm) / 100;
 
@@ -497,6 +529,9 @@ export async function profitAndLoss(from, to) {
       slug: l.slug,
       name: l.name,
       active: l.active,
+      // PRESENTATION, never operational. `active` above is what decides whether this
+      // building's tag resolves; this decides whether its pin is grey.
+      zone_state: l.zone_state,
       client_id: l.client_id,
       client_name: l.client_name,
 
@@ -631,12 +666,13 @@ export async function profitAndLoss(from, to) {
  * day-series machinery, N times.
  */
 export async function buildingAnalytics(from, to, months) {
-  const [locations, contracts, labour, exclusions, days, trendRows] = await Promise.all([
+  const [locations, contracts, labour, exclusions, days, areas, trendRows] = await Promise.all([
     reportableLocations(from, to),
     contractSlice(from, to),
     labourByLocation(from, to),
     exclusionsByLocation(from, to),
     periodDays(from, to),
+    areaByLocation(),
     all(
       // $1 is `to` and $2 the bucket count: the trend window is derived from the END of
       // the reported period and its own length, never from `from`. Numbered from 1 rather
@@ -671,6 +707,7 @@ export async function buildingAnalytics(from, to, months) {
   const contractOf = byId(contracts);
   const labourOf = byId(labour);
   const exclusionOf = byId(exclusions);
+  const areaOf = byId(areas);
 
   const trendOf = new Map();
   for (const r of trendRows) {
@@ -718,6 +755,17 @@ export async function buildingAnalytics(from, to, months) {
       lng: l.lng,
       geocoded_at: l.geocoded_at,
       geocode_state: l.lat !== null ? "pinned" : l.geocoded_at === null ? "never_attempted" : "failed",
+      // PRESENTATION ONLY, and beside `active` rather than folded into it on purpose: the
+      // map renders an unzoned building grey with a named next action, and its tag keeps
+      // resolving the whole time. See ZONE_STATE above for what happens if these two are
+      // ever collapsed into one.
+      zone_state: l.zone_state,
+      ...(({ zonesTotal, zonesUnmeasured, areaReason, areaSqm }) => ({
+        zones_total: zonesTotal,
+        zones_unmeasured: zonesUnmeasured,
+        building_m2: areaSqm,
+        area_unknown_reason: areaReason,
+      }))(areaFacts(areaOf.get(l.id) ?? null)),
       geocode_status: l.geocode_status,
       // The building photo is rendered ONLY on 'OK'. The static Street View endpoint
       // answers 200 with a grey "no imagery" tile, so anything looser ships a grey box.
