@@ -3,7 +3,7 @@ id: TASK-174
 title: >-
   An uppercased UUID in the address bar says 'unbekannt' instead of finding the
   building
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 09:37'
 labels:

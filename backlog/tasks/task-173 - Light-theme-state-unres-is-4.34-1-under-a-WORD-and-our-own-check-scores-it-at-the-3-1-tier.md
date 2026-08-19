@@ -3,7 +3,7 @@ id: TASK-173
 title: >-
   Light-theme --state-unres is 4.34:1 under a WORD, and our own check scores it
   at the 3:1 tier
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 09:37'
 labels:

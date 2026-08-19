@@ -1,7 +1,7 @@
 ---
 id: TASK-171
 title: Closing a URL-driven panel with Escape dumps keyboard focus on <body>
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 09:36'
 labels:

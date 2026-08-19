@@ -3,7 +3,7 @@ id: TASK-172
 title: >-
   The map info box takes no Escape and focus never follows the control that
   opened it
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 09:37'
 labels:
