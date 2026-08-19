@@ -674,7 +674,14 @@ export default function PlPage() {
             },
             {
               k: t('answerRevenue'),
-              v: money(totals.revenueCents),
+              // „Nicht eingetragen", NEVER 0,00 € — the same branch the per-building cell
+              // below already had, on the cell a director reads FIRST. With no figure typed
+              // anywhere (production, day one) this printed a confident 0,00 €, and the
+              // sub-line naming the empty scope is a caption, not the number.
+              v:
+                totals.revenueCents === null
+                  ? t('revenueUnknown')
+                  : money(totals.revenueCents),
               // NOT calm while months are missing: this is a PARTIAL SUM wearing the
               // label of a total, and the number that is too small is the one a director
               // would take to mean a bad quarter.
@@ -1105,9 +1112,31 @@ export default function PlPage() {
                       </span>
                     </th>
                     <td />
-                    <td className="col-numeric">{money(totals.revenueCents)}</td>
-                    <td className="col-numeric">{money(totals.labourCentsPriced)}</td>
-                    <td className="col-numeric">{money(totals.materialCentsPriced)}</td>
+                    {/* All three are sums over the PRICED buildings only, so all three are
+                        refusals when that subset is empty. A „Gesamt" row reading 0,00 € of
+                        labour above six rows that each show real labour is not a small
+                        number, it is a wrong one. */}
+                    <td className="col-numeric">
+                      {totals.revenueCents === null ? (
+                        <span className="cell-muted">{t('revenueUnknown')}</span>
+                      ) : (
+                        money(totals.revenueCents)
+                      )}
+                    </td>
+                    <td className="col-numeric">
+                      {totals.labourCentsPriced === null ? (
+                        <span className="cell-muted">{t('totalNoPricedBuildings')}</span>
+                      ) : (
+                        money(totals.labourCentsPriced)
+                      )}
+                    </td>
+                    <td className="col-numeric">
+                      {totals.materialCentsPriced === null ? (
+                        <span className="cell-muted">{t('totalNoPricedBuildings')}</span>
+                      ) : (
+                        money(totals.materialCentsPriced)
+                      )}
+                    </td>
                     <td className="col-numeric">
                       {totals.profitCents === null ? (
                         <span className="cell-muted">{t('profitUnknown')}</span>

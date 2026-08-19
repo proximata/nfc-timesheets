@@ -95,8 +95,22 @@ export function shortfallBp(marginBp: number | null, baselineBp: number | null):
 }
 
 export type PlTotals = {
-  /** Sum over buildings that have a TYPED figure for at least one month of the period. */
-  revenueCents: number
+  /**
+   * Sum over buildings that have a TYPED figure for at least one month of the period,
+   * or NULL when that subset is EMPTY.
+   *
+   * NULL FOR THE SAME REASON `profitCents` IS, and this is the state production is in on
+   * day one: one building, no revenue row, so the sum of nothing is 0 and `money(0)`
+   * printed a confident „0,00 €" at the top of the screen the director opens first. The
+   * sub-line said „0 Objekte mit eingetragenem Umsatz", but a reader takes the number and
+   * leaves the caption, and „we billed nothing" is a different fact from „nobody has told
+   * me yet" — which is the entire content of decision-42.
+   *
+   * It is `number | null` rather than a companion boolean SO THE COMPILER FINDS THE READ
+   * SITES. Both misses were unguarded `money(totals.revenueCents)` calls; a flag beside
+   * the number would have left them compiling.
+   */
+  revenueCents: number | null
   /** How many buildings have none. Their cost is real; what they were paid is unknown. */
   unpricedBuildings: number
   /**
@@ -108,9 +122,14 @@ export type PlTotals = {
   /** Labour and materials for EVERY building in the period, priced or not. */
   labourCents: number
   materialCents: number
-  /** ...and for the priced ones alone, which is the only subset a profit can be taken of. */
-  labourCentsPriced: number
-  materialCentsPriced: number
+  /**
+   * ...and for the priced ones alone, which is the only subset a profit can be taken of.
+   * NULL when there are none, for the same reason as `revenueCents`: a total row reading
+   * „0,00 €" of labour beside six rows that each show real labour is not a small number,
+   * it is a wrong one.
+   */
+  labourCentsPriced: number | null
+  materialCentsPriced: number | null
   /** Cost carried by buildings with no revenue typed. Not a loss - an unknown. */
   costCentsUnpriced: number
   /** Revenue minus cost, OVER THE PRICED BUILDINGS ONLY. Null when there are none. */
@@ -134,14 +153,19 @@ export type PlTotals = {
 }
 
 export function plTotals(buildings: readonly PlBuilding[]): PlTotals {
+  // Accumulated as plain integers and only PUBLISHED at the end: summing into a nullable
+  // field is how a `+= null` becomes a NaN that formats as „NaN €".
+  let revenueCents = 0
+  let labourCentsPriced = 0
+  let materialCentsPriced = 0
   const totals: PlTotals = {
-    revenueCents: 0,
+    revenueCents: null,
     unpricedBuildings: 0,
     monthsMissingRevenue: 0,
     labourCents: 0,
     materialCents: 0,
-    labourCentsPriced: 0,
-    materialCentsPriced: 0,
+    labourCentsPriced: null,
+    materialCentsPriced: null,
     costCentsUnpriced: 0,
     profitCents: null,
     marginBp: null,
@@ -166,16 +190,21 @@ export function plTotals(buildings: readonly PlBuilding[]): PlTotals {
       totals.unpricedBuildings += 1
       totals.costCentsUnpriced += building.labour_cents + building.material_cents
     } else {
-      totals.revenueCents += building.revenue_cents
-      totals.labourCentsPriced += building.labour_cents
-      totals.materialCentsPriced += building.material_cents
+      revenueCents += building.revenue_cents
+      labourCentsPriced += building.labour_cents
+      materialCentsPriced += building.material_cents
     }
   }
 
+  // ONE gate, and every priced-subset figure is behind it. `priced === 0` is not „a small
+  // portfolio“ — it is a portfolio nobody has priced, and there is no total to state.
   const priced = buildings.length - totals.unpricedBuildings
   if (priced > 0) {
-    totals.profitCents = totals.revenueCents - totals.labourCentsPriced - totals.materialCentsPriced
-    totals.marginBp = shareBp(totals.profitCents, totals.revenueCents)
+    totals.revenueCents = revenueCents
+    totals.labourCentsPriced = labourCentsPriced
+    totals.materialCentsPriced = materialCentsPriced
+    totals.profitCents = revenueCents - labourCentsPriced - materialCentsPriced
+    totals.marginBp = shareBp(totals.profitCents, revenueCents)
   }
   return totals
 }

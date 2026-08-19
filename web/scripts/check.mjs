@@ -766,13 +766,53 @@ check(
     )
     assert.equal(unzoned.flagged, 1, 'an unzoned building is still assessed')
 
-    // Nothing entered at all => no bottom line is claimed.
-    const none = plTotals([building({ location_id: 'c', labour_cents: 900 })])
+    // NOTHING ENTERED AT ALL => NO BOTTOM LINE, AND NO TOTAL EITHER.
+    //
+    // THIS IS THE STATE PRODUCTION IS IN ON DAY ONE: one building, no revenue row. It
+    // shipped printing „Umsatz 0,00 €" in the answer band and „0,00 € · 0,00 € · 0,00 €"
+    // in the „Gesamt" row, above rows that each showed real labour. `profitCents` and
+    // `marginBp` were guarded from the start; the three sums beside them were not, because
+    // a sum over an empty set is 0 and 0 formats perfectly.
+    //
+    // ALL FIVE, not just revenue: `labourCentsPriced` and `materialCentsPriced` are sums
+    // over the SAME empty subset, and a total row claiming EUR 0,00 of labour for a
+    // portfolio that worked is the identical lie wearing a different column heading.
+    const none = plTotals([building({ location_id: 'c', labour_cents: 900, material_cents: 5 })])
     assert.equal(none.profitCents, null)
     assert.equal(none.marginBp, null)
+    assert.equal(none.revenueCents, null, 'a sum over NO priced building is not 0,00 €')
+    assert.equal(none.labourCentsPriced, null, '...and neither is its labour')
+    assert.equal(none.materialCentsPriced, null, '...nor its materials')
+    // The WHOLE-PERIOD cost is still a real number and must not have been nulled with them:
+    // the methodology note names it, and „0 €" there would hide the cost the director is
+    // carrying while nobody has typed what was billed for it.
+    assert.equal(none.labourCents, 900, 'the unpriced cost is still reported, not discarded')
+    assert.equal(none.costCentsUnpriced, 905)
     assert.deepEqual(plTotals([]).profitCents, null)
+    assert.equal(plTotals([]).revenueCents, null, 'and an empty period claims no revenue')
   },
 )
+
+// A REFUSAL IS ONLY A REFUSAL IF THE SCREEN PRINTS IT. `plTotals` returning null is half
+// the fix; the other half is that every read site branches on it. Both misses were bare
+// `money(totals.x)` calls that compiled and rendered „0,00 €", so this reads the JSX and
+// requires the guard to be textually present beside each one.
+//
+// Source-level and not a browser assertion ON PURPOSE: demo/probe-money-unknown.mjs proves
+// the rendered result against a real database, but it needs Postgres, a build and Chrome.
+// This one runs in `pnpm verify`, which is what actually gates a commit.
+check('/pl/: every priced-subset total is a REFUSAL when nothing is priced', () => {
+  const src = readFileSync(join(ROOT, 'app/pl/page.tsx'), 'utf8')
+  for (const field of ['revenueCents', 'labourCentsPriced', 'materialCentsPriced']) {
+    const uses = [...src.matchAll(new RegExp(`money\\(totals\\.${field}\\)`, 'g'))].length
+    const guards = [...src.matchAll(new RegExp(`totals\\.${field} === null`, 'g'))].length
+    assert.ok(
+      guards >= uses,
+      `app/pl/page.tsx formats totals.${field} ${uses}x but guards it ${guards}x — an unguarded one prints 0,00 € for a portfolio nobody has priced`,
+    )
+    assert.ok(uses > 0, `totals.${field} is no longer rendered at all — this check is stale`)
+  }
+})
 
 // --- 7. material lifecycle (lib/materials.ts) -------------------------------------------
 

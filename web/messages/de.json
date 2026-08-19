@@ -873,6 +873,7 @@
     "assessNoBaseline": "Nicht beurteilbar – keine Zielmarge gesetzt",
     "totalLabel": "Gesamt",
     "totalScope": "{buildings, plural, one {# Objekt mit eingetragenem Umsatz} other {# Objekte mit eingetragenem Umsatz}}",
+    "totalNoPricedBuildings": "Kein Objekt mit eingetragenem Umsatz",
     "totalNotAssessable": "{buildings, plural, one {# Objekt ist nicht beurteilbar} other {# Objekte sind nicht beurteilbar}}",
     "totalAllAssessed": "Alle Objekte konnten beurteilt werden",
     "flaggedHeading": "Objekte unter der Zielmarge",

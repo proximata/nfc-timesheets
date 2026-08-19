@@ -873,6 +873,7 @@
     "assessNoBaseline": "Cannot be assessed — no target margin set",
     "totalLabel": "Total",
     "totalScope": "{buildings, plural, one {# building with revenue entered} other {# buildings with revenue entered}}",
+    "totalNoPricedBuildings": "No building with revenue entered",
     "totalNotAssessable": "{buildings, plural, one {# building cannot be assessed} other {# buildings cannot be assessed}}",
     "totalAllAssessed": "Every building could be assessed",
     "flaggedHeading": "Buildings below the target margin",
