@@ -1,6 +1,6 @@
 // Input validation. Trust boundary: NFC tags are left UNLOCKED (decision-15), so the
 // location id on the wire is attacker-controllable. Nothing here trusts the client.
-import { one } from "./db.js";
+import { all, one } from "./db.js";
 import { fail } from "./http.js";
 
 // Sane timestamp window: nothing before the company started tracking, nothing far ahead.
@@ -120,6 +120,44 @@ export function cents(value, field = "hourly_rate_cents") {
 }
 
 /**
+ * A WAGE. Required, and strictly positive (decision-41).
+ *
+ * `cents()` above defaults an absent value to 0, and `001_init.sql` defaulted the column to
+ * 0 as well, so a worker created without a rate silently became a worker who costs
+ * EUR 0,00/h. Eleven lines below, `optionalCents` carries the comment that names the whole
+ * defect: NULL = "nobody has told me", 0 = "free of charge". Contract money got that
+ * distinction. Wages never did, and every rate-less defect in this system descends from it.
+ *
+ * A wage has NO "free of charge" reading. The Austrian collective agreement for building
+ * cleaning sets a floor well above zero, and an employee who costs nothing does not exist.
+ * So 0 is refused here and is unrepresentable in the column (`workers_rate_positive`),
+ * which is what lets the named `Kein Stundensatz` exclusion be DELETED rather than kept.
+ *
+ *   absent / null / ""   422 rate_required   detail "hourly_rate_cents"
+ *   0                    422 rate_required   detail "hourly_rate_cents"
+ *   junk / negative      400 invalid_field   detail "hourly_rate_cents"   (unchanged)
+ *
+ * 422 and not 400 because the house line is already drawn: 400 is a malformed shape
+ * (`invalid_field`, `invalid_uuid`), 422 is a well-formed request the business refuses
+ * (`unknown_location`, `end_before_start`). "You did not tell me the wage" is the second
+ * kind. The one existing inconsistency — `requiredRange` uses `400 missing_field` — is
+ * LEFT ALONE on purpose: churning a live wire contract for symmetry is not worth it, and
+ * the divergence is recorded in decision-41 rather than rediscovered.
+ *
+ * ponytail: ONE code for both absent and zero. CEILING — the UI cannot phrase "you typed
+ * nothing" differently from "you typed zero". Two codes would mean two message keys in two
+ * locales carrying one instruction, and the director does exactly one thing about either.
+ * UPGRADE PATH: split into `rate_required` / `rate_must_be_positive` the day somebody
+ * reports the message is confusing.
+ */
+export function requiredRate(value, field = "hourly_rate_cents") {
+  if (value === undefined || value === null || value === "") fail(422, "rate_required", field);
+  const n = cents(value, field); // shape only: junk and negatives stay 400 invalid_field
+  if (n === 0) fail(422, "rate_required", field);
+  return n;
+}
+
+/**
  * Money the director has not entered yet. NULL and 0 are different answers here:
  * NULL = "nobody has told me the contract volume", 0 = "this building is free of charge".
  * A profitability report has to be able to stay silent about the first case rather than
@@ -141,6 +179,36 @@ export function optionalMinutes(value, field) {
   const n = typeof value === "string" ? Number(value) : value;
   if (!Number.isSafeInteger(n) || n < 0 || n > 446_400) fail(400, "invalid_field", field);
   return n;
+}
+
+/**
+ * A zone's floor area in SQUARE METRES (decision-43). NULL = nobody has measured it, and
+ * that is a real, permanent state — "Stiege 3, there is no floor plan".
+ *
+ * NULL IS NOT 0 AND MUST NEVER BECOME IT. This number is the DENOMINATOR of every EUR/m2
+ * and minutes/m2 figure the director quotes a new building from, so an invented area does
+ * not produce a slightly wrong benchmark, it produces a confident wrong one. A building
+ * with any unmeasured active zone reports every per-m2 figure as NULL with a reason.
+ *
+ * Two decimals, matching `NUMERIC(8,2)` in the column, and validated as a string of digits
+ * rather than by rounding a float: `parseFloat` would silently accept `12.345` and store
+ * `12.35`, turning a typo into a measurement. Strictly positive for the same reason 0 is
+ * refused on a wage — a zone with no floor is not a zone.
+ */
+const AREA_RE = /^\d{1,6}([.,]\d{1,2})?$/;
+
+export function optionalArea(value, field = "area_sqm") {
+  if (value === undefined || value === null || value === "") return null;
+  // Numbers are accepted so a JSON client need not stringify, but they go through the same
+  // two-decimal gate: 12.345 is a typo, not a measurement.
+  const s = typeof value === "number" ? String(value) : str(value, field, { max: 12, min: 1 });
+  if (!AREA_RE.test(s)) fail(400, "invalid_field", field);
+  const normalised = s.replace(",", ".");
+  if (Number(normalised) <= 0) fail(400, "invalid_field", field);
+  // Returned as a STRING and handed to Postgres as `numeric`. Passing a JS number here
+  // would route an exact decimal through binary floating point on the way to the column
+  // that is deliberately NOT a float.
+  return normalised;
 }
 
 /**
@@ -284,13 +352,109 @@ export function shiftWindow(startValue, endValue) {
 }
 
 /**
- * Resolve an untrusted location UUID to a real, ACTIVE location.
+ * A Vienna CALENDAR MONTH on the wire, `YYYY-MM` (decision-42).
+ *
+ * Returns the STRING `'YYYY-MM-01'`, not a Date, for `isoDate`'s exact reason: turning it
+ * into a JS Date re-introduces the timezone question the DATE type exists to avoid
+ * (`new Date("2026-03-01")` is UTC midnight, which is 01:00 or 02:00 in Vienna depending
+ * on the month). Postgres takes it as a `date` parameter.
+ *
+ * FUTURE MONTHS are accepted up to the NEXT Vienna calendar month and refused beyond with
+ * `422 month_too_far_ahead`. Prepaid cleaning contracts are real, so a hard "no future"
+ * would refuse a legitimate entry; a cap of +1 still catches the realistic typo, which is
+ * the wrong YEAR. A judgement call, named as one.
+ */
+const ISO_MONTH_RE = /^\d{4}-\d{2}$/;
+
+export function isoMonth(value, field = "month") {
+  const s = str(value, field, { max: 7, min: 7 });
+  if (!ISO_MONTH_RE.test(s)) fail(400, "invalid_month", field);
+  const year = Number(s.slice(0, 4));
+  const month = Number(s.slice(5, 7));
+  if (month < 1 || month > 12) fail(400, "invalid_month", field);
+  if (year < 2000 || year > 2100) fail(422, "timestamp_out_of_range", field);
+
+  // "Which month is it in Vienna right now" — asked of the tz database via Intl, not of the
+  // process's own zone. A server running in UTC is one hour behind Vienna, so on the last
+  // evening of a month it would otherwise compute the previous month as "now" and refuse an
+  // entry that is legitimately +1.
+  const nowVienna = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Vienna",
+    year: "numeric",
+    month: "2-digit",
+  }).format(new Date());
+  const nowIndex = Number(nowVienna.slice(0, 4)) * 12 + Number(nowVienna.slice(5, 7));
+  if (year * 12 + month > nowIndex + 1) fail(422, "month_too_far_ahead", field);
+
+  return `${s}-01`;
+}
+
+/**
+ * Resolve an untrusted location UUID to a real, ACTIVE BUILDING.
  * Unguessable is not authenticated (decision-15): the id still has to be checked.
+ *
+ * BUILDING ONLY, deliberately, and it is NOT the tap path any more — see `activePlace`.
+ * The callers left here are the ones where a building is the only sensible answer: an
+ * admin typing a shift picks a building from a dropdown, and a material request is
+ * building-level by decision-6. A zone id posted to either of those is a mistake and must
+ * be refused, not silently widened.
  */
 export async function activeLocation(value, field = "location_uuid") {
   const row = await one("SELECT id, slug, name FROM locations WHERE id = $1 AND active", [uuid(value, field)]);
   if (!row) fail(422, "unknown_location");
   return row;
+}
+
+/**
+ * THE TAP PATH. Resolve one untrusted UUID off a tag to the PLACE it names (decision-43).
+ *
+ * The `l` in `/t?l=<uuid>` means "the id of the place that was tapped", and the id space is
+ * shared between buildings and zones:
+ *
+ *   an ACTIVE zone of an ACTIVE building  -> { location_id, zone_id }
+ *   an ACTIVE building                    -> { location_id, zone_id: null }
+ *   neither                               -> 422 unknown_location
+ *
+ * *** THE SECOND LINE IS LOAD-BEARING AND MUST NOT ACQUIRE A ZONE PREDICATE. ***
+ * The card physically on the wall at HOIV carries a BUILDING uuid, and that building has
+ * zero zones. "A building with no zones is inactive" is a PRESENTATION rule about a grey
+ * pin on the map; implemented here it would 422 that card on the day migration 006 lands,
+ * and no site visit could fix it — the tag cannot be rewritten from Vienna. `locations.active`
+ * ALONE decides whether a building tag resolves, zoned or not, for ever.
+ *
+ * A building UUID never resolves to "the first zone" or "a default zone" either: that
+ * fabricates a tap location and silently changes meaning the day a second zone is added.
+ *
+ * THE ERROR CODE STAYS `unknown_location`. The APK in the field maps exactly that string to
+ * a translated message; any NEW code renders as "unknown status from a newer server".
+ *
+ * Unguessable is not authenticated (decision-15) and a serial is not a credential
+ * (decision-44): everything arriving here is untrusted and shape-checked before it reaches
+ * SQL, and it is resolved server-side rather than believed.
+ */
+export async function activePlace(value, field = "location_uuid") {
+  const placeId = uuid(value, field);
+  // ONE round trip over both tables. UNION ALL and not UNION: an id cannot be both, and
+  // making the impossible case collapse silently is exactly what the length check below
+  // exists to prevent.
+  const rows = await all(
+    `SELECT l.id AS location_id, NULL::uuid AS zone_id, l.slug, l.name, NULL::text AS zone_name
+       FROM locations l
+      WHERE l.id = $1 AND l.active
+     UNION ALL
+     SELECT z.location_id, z.id AS zone_id, l.slug, l.name, z.name AS zone_name
+       FROM zones z
+       JOIN locations l ON l.id = z.location_id
+      WHERE z.id = $1 AND z.active AND l.active`,
+    [placeId],
+  );
+  // Only reachable by a UUIDv4 collision across two tables, i.e. never. One line, and it is
+  // the difference between a refusal and silently picking a building. ponytail: it refuses
+  // with the SAME code rather than a new one, so the field build renders a message it has.
+  // CEILING: a collision is indistinguishable from a miss in the log. UPGRADE PATH: a
+  // distinct code once both clients understand new ones.
+  if (rows.length !== 1) fail(422, "unknown_location");
+  return rows[0];
 }
 
 export async function activeWorkerById(value) {

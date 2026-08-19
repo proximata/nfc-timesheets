@@ -77,6 +77,53 @@ const CONTRACT_COLS =
   "id, location_id, client_id, monthly_contract_cents, target_minutes_per_month, " +
   "valid_from, valid_to, note, created_at";
 
+// A zone (decision-43). `area_sqm` is NULLable and that is the point: a zone nobody has
+// measured is real, and a required area would be an invented one poisoning the EUR/m2
+// benchmark that is the only reason the column exists. `tag_serial` is ADOPTED hardware
+// only (decision-44) — a tag we wrote carries this zone's id in its URL and has no serial
+// on file. Neither is a credential and neither is ever authenticated on.
+const ZONE_COLS = "id, location_id, name, note, area_sqm, tag_serial, tag_deployed_at, active, created_at";
+
+// A typed monthly payment (decision-42). APPEND-ONLY: `superseded_at IS NULL` is the
+// figure in force, and a superseded row keeps its amount so a correction stays visible.
+const REVENUE_COLS =
+  "id, location_id, month, amount_cents, note, entered_by, entered_at, superseded_at, superseded_by";
+
+// An adopted tag's serial as the hardware broadcasts it and as `KnownTags.locationIdFor`
+// already spells it: uppercase hex, colon-separated. Normalised on the way in so any
+// casing or separator style the director pastes lands in one shape and the database CHECK
+// never fires on a human.
+const TAG_SERIAL_RE = /^[0-9A-F]{2}(:[0-9A-F]{2})+$/;
+
+/**
+ * An adopted tag's serial, as a HUMAN types it, turned into the one shape stored.
+ *
+ * The director reads `04:A1:A8:52:AE:5C:80` off NFC Tools, or `04-a1-a8-52-ae-5c-80` off
+ * another reader, or pastes `04 A1 A8 52 AE 5C 80`. All three are the same tag. Normalising
+ * means the database CHECK never fires on somebody who typed the truth in a different
+ * style, and the unique index actually catches a duplicate instead of storing two spellings
+ * of one serial.
+ *
+ * A SERIAL IS NOT A CREDENTIAL (decision-15, decision-44). It is broadcast in the clear and
+ * is trivially clonable. It is stored so an admin can ADOPT a tag someone else mounted; it
+ * is never authenticated on, and it never arrives from a phone — it only ever travels
+ * server -> phone, inside GET /roster.
+ *
+ * NULL is a real, ordinary answer: almost every zone carries a tag WE wrote, which holds
+ * the zone's id in its URL and has no serial on file at all.
+ */
+function normaliseSerial(value) {
+  if (value === undefined || value === null || (typeof value === "string" && value.trim() === "")) return null;
+  const s = v.str(value, "tag_serial", { max: 64 });
+  const hex = s.replace(/[\s:-]/g, "").toUpperCase();
+  // Even-length hex only, and at least four bytes: a NFC serial is 4, 7 or 10 bytes.
+  if (!/^[0-9A-F]+$/.test(hex) || hex.length % 2 !== 0 || hex.length < 8) fail(400, "invalid_field", "tag_serial");
+  const serial = (hex.match(/../g) ?? []).join(":");
+  // The database CHECK is the backstop; this asserts the normaliser and the column agree.
+  if (!TAG_SERIAL_RE.test(serial)) fail(400, "invalid_field", "tag_serial");
+  return serial;
+}
+
 // Vienna's own idea of "today". Contract validity is a CALENDAR DATE, so `now()::date`
 // in whatever zone the server runs in would move a price change by a day for anything
 // entered between midnight UTC and midnight Vienna — i.e. every evening.
@@ -106,7 +153,8 @@ const PORTAL_TOKEN_HASH_RE = /^[0-9a-f]{64}$/;
 // One shift shape for both admin write routes, so a field can never be returned by one and
 // silently missing from the other.
 const ADMIN_SHIFT_COLS =
-  "id, worker_id, location_id, start_time, end_time, auto_closed, corrected_at, client_uuid, created_at";
+  "id, worker_id, location_id, start_zone_id, end_zone_id, " +
+  "start_time, end_time, auto_closed, corrected_at, client_uuid, created_at";
 
 // Bounds on the login payload. The upper limits are not a password policy, they cap
 // how much work an unauthenticated caller can make scrypt do per request.
@@ -238,6 +286,7 @@ async function adminData({ query }) {
   const [
     workers,
     locations,
+    zones,
     shifts,
     hours,
     clients,
@@ -260,14 +309,29 @@ async function adminData({ query }) {
          LEFT JOIN contacts ct ON ct.id = l.contact_id
         ORDER BY l.active DESC, l.name`,
     ),
+    // Zones, with `last_tap_at` DERIVED and never stored (decision-43): "when was this tag
+    // last tapped" is answerable from shifts, and a stored copy would drift the first time
+    // a shift was corrected. NOT bounded by from/to — "the Tiefgarage tag has not been
+    // tapped since 14 May" is precisely the answer a period filter would hide.
+    // Inactive zones ride along like inactive buildings do: history has to keep naming them.
+    all(
+      `SELECT ${ZONE_COLS.split(", ").map((c) => `z.${c}`).join(", ")},
+              (SELECT max(s.start_time) FROM shifts s WHERE s.start_zone_id = z.id) AS last_tap_at
+         FROM zones z
+         JOIN locations l ON l.id = z.location_id
+        ORDER BY l.name, z.active DESC, z.name`,
+    ),
     all(
       `SELECT s.id, s.worker_id, w.name AS worker_name,
               s.location_id, l.slug AS location_slug, l.name AS location_name,
+              s.start_zone_id, s.end_zone_id, sz.name AS start_zone_name, ez.name AS end_zone_name,
               s.start_time, s.end_time, s.auto_closed, s.corrected_at,
               s.client_uuid, s.created_at
        FROM shifts s
        JOIN workers w ON w.id = s.worker_id
        JOIN locations l ON l.id = s.location_id
+       LEFT JOIN zones sz ON sz.id = s.start_zone_id
+       LEFT JOIN zones ez ON ez.id = s.end_zone_id
        WHERE ${inRange}
        ORDER BY s.start_time DESC
        LIMIT $3`,
@@ -334,6 +398,7 @@ async function adminData({ query }) {
     body: {
       workers,
       locations,
+      zones,
       shifts,
       hours,
       clients,
@@ -371,7 +436,11 @@ async function adminData({ query }) {
  */
 async function upsertWorker({ body }) {
   const name = v.str(body.name, "name", { max: 120 });
-  const rate = v.cents(body.hourly_rate_cents);
+  // decision-41. ONE variable feeds BOTH branches below, which is the point: a worker
+  // created WITH a rate can be edited back to empty from /workers/, so the UPDATE branch
+  // needs the same gate as the INSERT. `v.cents` defaulted an absent value to 0 and
+  // silently made somebody cost EUR 0,00/h.
+  const rate = v.requiredRate(body.hourly_rate_cents);
   const active = v.bool(body.active, "active", true);
   const email = v.optionalEmail(body.email); // normalised to lower case, or null
   // The director asked for exactly two fields for a cleaner: name and phone. Optional,
@@ -850,7 +919,109 @@ async function deleteLocation({ params }) {
   await query("UPDATE portal_grants SET revoked_at = now() WHERE location_id = $1 AND revoked_at IS NULL", [
     locationId,
   ]);
+  // And its zones (decision-43). `activePlace` requires BOTH the zone and its building to
+  // be active, so an active zone under an inactive building is already unresolvable — it
+  // would just sit in the panel looking live while its tag answered 422 at the wall. This
+  // makes the row say what is true. Soft, like every other delete here: history keeps
+  // naming the zone a shift was tapped at.
+  await query("UPDATE zones SET active = false WHERE location_id = $1 AND active", [locationId]);
   return { status: 200, body: { location: row } };
+}
+
+// ---- zones (decision-43) ----------------------------------------------------------
+//
+// A ZONE IS A PLACE INSIDE A BUILDING THAT GETS CLEANED AND CAN CARRY A TAG.
+// A ZONE IS NOT A COSTING UNIT. A shift is billed to the BUILDING, and the contract and
+// the revenue stay on the BUILDING (decision-42). There is no zone-level contract, target,
+// revenue or margin, and there must never be one: a shift is building-level, so no
+// duration is attributable to a zone, and splitting a building's labour by area share
+// would assert that time is proportional to floor area — false in the obvious direction,
+// since a Tiefgarage is fast per m2 and an office floor is slow. Same failure decision-6
+// already refused for materials.
+
+/**
+ * POST /admin/zones -> create (no id) or update (id). Same upsert idiom as everything else
+ * here: one route, one form, one submit handler.
+ *
+ * 409 duplicate_zone_name  another LIVE zone of this building already has that name. Two
+ *                          live "Stiege 1"s is a director about to tag the wrong door.
+ * 409 serial_taken         another zone already claims that adopted serial, and the answer
+ *                          NAMES that zone — otherwise the director is told "no" with
+ *                          nowhere to go.
+ *
+ * The partial unique indexes are the backstop; these are the gates. Both exist because a
+ * 23505 surfacing as a 500 with an index name in it is not something a director can act on.
+ */
+async function upsertZone({ body }) {
+  const locationId = v.uuid(body.location_id, "location_id");
+  if (!(await one("SELECT id FROM locations WHERE id = $1", [locationId]))) fail(422, "unknown_location");
+
+  const name = v.str(body.name, "name", { max: 120 });
+  const note = v.optionalStr(body.note, "note", { max: 500 });
+  const areaSqm = v.optionalArea(body.area_sqm, "area_sqm");
+  const tagSerial = normaliseSerial(body.tag_serial);
+  const tagDeployedAt =
+    body.tag_deployed_at === undefined || body.tag_deployed_at === null || body.tag_deployed_at === ""
+      ? null
+      : v.timestamp(body.tag_deployed_at, "tag_deployed_at");
+  const active = v.bool(body.active, "active", true);
+  const targetId = body.id === undefined || body.id === null ? null : v.uuid(body.id, "id");
+
+  // Checked here rather than left to 23505 so the refusal can NAME the other zone. The
+  // index still backs it up, because two admins could interleave past this.
+  if (tagSerial !== null) {
+    const claimed = await one("SELECT id, name, location_id FROM zones WHERE tag_serial = $1", [tagSerial]);
+    if (claimed && claimed.id !== targetId) {
+      return {
+        status: 409,
+        body: { error: "serial_taken", zone: { id: claimed.id, name: claimed.name, location_id: claimed.location_id } },
+      };
+    }
+  }
+
+  try {
+    if (targetId === null) {
+      const row = await one(
+        `INSERT INTO zones (location_id, name, note, area_sqm, tag_serial, tag_deployed_at, active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING ${ZONE_COLS}`,
+        [locationId, name, note, areaSqm, tagSerial, tagDeployedAt, active],
+      );
+      return { status: 201, body: { zone: row } };
+    }
+
+    // location_id is NOT patchable. Moving a zone between buildings would strand every
+    // shift that names it (the composite FK would raise 23503) and would silently re-point
+    // a physical tag on a wall at a different address.
+    const row = await one(
+      `UPDATE zones SET name = $2, note = $3, area_sqm = $4, tag_serial = $5, tag_deployed_at = $6, active = $7
+        WHERE id = $1 AND location_id = $8
+        RETURNING ${ZONE_COLS}`,
+      [targetId, name, note, areaSqm, tagSerial, tagDeployedAt, active, locationId],
+    );
+    if (!row) fail(404, "unknown_zone");
+    return { status: 200, body: { zone: row } };
+  } catch (err) {
+    if (err?.code === "23505") {
+      fail(409, err?.constraint === "zones_tag_serial_idx" ? "serial_taken" : "duplicate_zone_name");
+    }
+    throw err;
+  }
+}
+
+/**
+ * DELETE /admin/zones/:id -> SOFT deactivate. Never a delete.
+ *
+ * A shift that was tapped here has to keep naming the door it was tapped at, and the
+ * composite FK would refuse the delete anyway. Deactivating also stops the zone's own tag
+ * resolving (`activePlace` requires an active zone), which is the actual thing the director
+ * means when a tag comes off a wall.
+ */
+async function deleteZone({ params }) {
+  const zoneId = v.uuid(params.id, "id");
+  const row = await one(`UPDATE zones SET active = false WHERE id = $1 RETURNING ${ZONE_COLS}`, [zoneId]);
+  if (!row) fail(404, "unknown_zone");
+  return { status: 200, body: { zone: row } };
 }
 
 // ---- clients, contacts, inventory -------------------------------------------------
@@ -1153,12 +1324,26 @@ async function patchShift({ params, body }) {
   const resolvesFlagged = current.auto_closed && current.corrected_at === null && end !== null;
   const correctedAt = resolvesFlagged ? new Date() : current.corrected_at;
 
+  // MOVING A SHIFT TO ANOTHER BUILDING CLEARS BOTH ZONE COLUMNS (decision-43).
+  //
+  // Not optional: the composite FKs are (zone_id, location_id) -> zones (id, location_id),
+  // so leaving a zone from the OLD building attached raises 23503 and the director's
+  // correction dies as a 500 they cannot act on.
+  //
+  // Clearing is also the correct SEMANTICS, which is why it is not a workaround. The zone
+  // columns are TAP FACTS — "this door was held to this phone". A human re-pointing a shift
+  // at a different building is saying the tap record was wrong, and the honest replacement
+  // for a wrong fact is no fact, not the nearest-looking zone in the new building.
+  const movedBuilding = locationId !== current.location_id;
+
   const row = await one(
     `UPDATE shifts
-     SET worker_id = $2, location_id = $3, start_time = $4, end_time = $5, corrected_at = $6
+     SET worker_id = $2, location_id = $3, start_time = $4, end_time = $5, corrected_at = $6,
+         start_zone_id = CASE WHEN $7 THEN NULL ELSE start_zone_id END,
+         end_zone_id   = CASE WHEN $7 THEN NULL ELSE end_zone_id   END
      WHERE id = $1
      RETURNING ${ADMIN_SHIFT_COLS}`,
-    [shiftId, workerId, locationId, start, end, correctedAt],
+    [shiftId, workerId, locationId, start, end, correctedAt, movedBuilding],
   );
   return { status: 200, body: { shift: row } };
 }
@@ -1248,6 +1433,176 @@ async function patchMaterialRequest({ params, body, session }) {
     ],
   );
   return { status: 200, body: { request: row } };
+}
+
+// ---- revenue: what the client actually PAID (decision-42) --------------------------
+//
+// TWO FACTS THAT HAD BEEN COLLAPSED INTO ONE:
+//   CONTRACT   what was AGREED.  A rate, valid from a date until a date.   location_contracts
+//   REVENUE    what was RECEIVED. A scalar, for one named Vienna month.    location_revenue
+//
+// The P&L used to derive revenue by DAILY ACCRUAL from the contract: careful arithmetic
+// about a number nobody received. The director wants to type what the client actually paid.
+//
+// THE ABSENCE OF A ROW IS THE UNKNOWN, and 0 is a real, different answer meaning "they paid
+// nothing this month" — a credit month, a dispute, a free trial. Nothing here ever writes a
+// row on its own: auto-creating one from the contract is the rejected accrual wearing a
+// different hat, and it fabricates a payment a human then reads as confirmed.
+//
+// APPEND-ONLY. Hand-typed money that changes invisibly is an opinion, not a fact.
+
+/**
+ * GET /admin/revenue?from&to -> the /pl/ month grid.
+ *
+ * `entries` are the figures IN FORCE plus, for each, the previous figure it replaced (so
+ * the screen can print "geändert 11.09 · vorher 1.250,00" — "this was changed" without
+ * "from what" sends the director to the database). `suggestions` are the CONTRACT value in
+ * force for each building-month: a pre-fill for the form, visibly labelled, and stored only
+ * when a human presses save.
+ *
+ * The grid is over WHOLE VIENNA MONTHS overlapping the period, because the entry ritual is
+ * monthly and a per-building modal reopened twelve times is not a ritual anybody performs.
+ */
+async function listRevenue({ query: q }) {
+  const { from, to } = v.requiredRange(q.get("from"), q.get("to"));
+
+  // Every Vienna calendar month the period TOUCHES. `date_trunc` in Vienna, not in the
+  // process's zone: a period starting at 2026-03-01T00:00+01:00 is 23:00 on 28 February in
+  // UTC, and a server running in UTC would offer February as the first month of a March
+  // period.
+  const months = await all(
+    `SELECT to_char(gs, 'YYYY-MM') AS month, gs::date AS month_start
+       FROM generate_series(
+              date_trunc('month', $1::timestamptz AT TIME ZONE 'Europe/Vienna'),
+              date_trunc('month', ($2::timestamptz - interval '1 microsecond') AT TIME ZONE 'Europe/Vienna'),
+              interval '1 month') AS gs`,
+    [from, to],
+  );
+  const monthStarts = months.map((m) => m.month_start);
+
+  const [entries, suggestions] = await Promise.all([
+    all(
+      `SELECT r.location_id, to_char(r.month, 'YYYY-MM') AS month, r.amount_cents, r.note,
+              r.entered_at, a.email AS entered_by_email,
+              prev.amount_cents AS previous_cents, prev.superseded_at AS changed_at,
+              prevby.email      AS changed_by_email
+         FROM location_revenue r
+         LEFT JOIN admins a ON a.id = r.entered_by
+         LEFT JOIN LATERAL (
+           SELECT p.amount_cents, p.superseded_at, p.superseded_by
+             FROM location_revenue p
+            WHERE p.location_id = r.location_id AND p.month = r.month AND p.superseded_at IS NOT NULL
+            ORDER BY p.superseded_at DESC, p.id DESC
+            LIMIT 1
+         ) prev ON true
+         LEFT JOIN admins prevby ON prevby.id = prev.superseded_by
+        WHERE r.superseded_at IS NULL AND r.month = ANY ($1::date[])
+        ORDER BY r.month, r.location_id`,
+      [monthStarts],
+    ),
+    // The AGREED figure for each building-month, from the contract in force on the FIRST of
+    // that month. A suggestion, never a stored value — and it is also what makes
+    // "vereinbart vs erhalten" answerable, which is the argument for keeping the contract
+    // alive at all (decision-28 is amended by decision-42, not superseded).
+    all(
+      `SELECT c.location_id, to_char(m.month_start, 'YYYY-MM') AS month,
+              c.monthly_contract_cents AS contract_cents
+         FROM unnest($1::date[]) AS m(month_start)
+         JOIN location_contracts c
+           ON c.valid_from <= m.month_start
+          AND (c.valid_to IS NULL OR m.month_start < c.valid_to)
+        ORDER BY m.month_start, c.location_id`,
+      [monthStarts],
+    ),
+  ]);
+
+  return {
+    status: 200,
+    body: {
+      range: { from: from.toISOString(), to: to.toISOString() },
+      timezone: "Europe/Vienna",
+      months: months.map((m) => m.month),
+      entries,
+      // Named `suggestions` and not `defaults` on purpose. Nothing applies them.
+      suggestions,
+    },
+  };
+}
+
+/**
+ * POST /admin/locations/:id/revenue {month, amount_cents, note?} -> file, or CORRECT, a
+ * month's payment.
+ *
+ * A CORRECTION IS AN INSERT, NEVER AN UPDATE IN PLACE. The previous row keeps its amount
+ * and gains `superseded_at` + `superseded_by`, so /pl/ can print what the figure used to be
+ * and who changed it. Same idiom the schema already runs twice
+ * (`location_contracts_one_current_idx`, `portal_grants_one_live_idx`), so no new concept.
+ *
+ * `entered_by` comes from the SESSION and is never read from the body — decision-22's rule
+ * applied to the admin side. An audit trail a caller can name themselves in is not one.
+ *
+ * ponytail: the stored row does not record whether the figure was ACCEPTED from the
+ * contract suggestion or typed over it. CEILING: those two are indistinguishable
+ * afterwards. Pressing save is the assertion either way, and the audit question is WHO and
+ * WHEN, which is answered. UPGRADE PATH: `source TEXT CHECK (source IN ('typed','suggested'))`.
+ */
+async function putRevenue({ params, body, session }) {
+  const locationId = v.uuid(params.id, "id");
+  if (!(await one("SELECT id FROM locations WHERE id = $1", [locationId]))) fail(404, "unknown_location");
+
+  const month = v.isoMonth(body.month, "month");
+  // NOT `optionalCents`: a revenue entry with no amount is not an entry. 0 IS accepted and
+  // means "they paid nothing this month", which is why this is `cents` and not a positive
+  // check — unlike a wage, "free of charge" is a real thing a client month can be.
+  if (body.amount_cents === undefined || body.amount_cents === null || body.amount_cents === "") {
+    fail(422, "amount_required", "amount_cents");
+  }
+  const amountCents = v.cents(body.amount_cents, "amount_cents");
+  const note = v.optionalStr(body.note, "note", { max: 500 });
+
+  // Supersede first, then insert: the partial unique index admits exactly one live row per
+  // (building, month), so the other order would collide with itself.
+  const previous = await one(
+    `UPDATE location_revenue SET superseded_at = now(), superseded_by = $3
+      WHERE location_id = $1 AND month = $2 AND superseded_at IS NULL
+      RETURNING id, amount_cents`,
+    [locationId, month, session.adminId],
+  );
+  const entry = await one(
+    `INSERT INTO location_revenue (location_id, month, amount_cents, note, entered_by)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING ${REVENUE_COLS}`,
+    [locationId, month, amountCents, note, session.adminId],
+  );
+  return {
+    status: previous ? 200 : 201,
+    body: { entry, previous_cents: previous === null ? null : previous.amount_cents },
+  };
+}
+
+/**
+ * DELETE /admin/locations/:id/revenue/:month -> RETRACT. The month reverts to UNKNOWN.
+ *
+ * NOT OPTIONAL, and not the same as entering 0. If a figure lands on the wrong building the
+ * only other way back would be "set it to 0", which asserts that a paying client paid
+ * nothing — inside a report that drives conversations with that client.
+ *
+ * The retracted row is kept and stamped, like a correction: what was believed, and when it
+ * stopped being believed, are both facts.
+ */
+async function retractRevenue({ params, session }) {
+  const locationId = v.uuid(params.id, "id");
+  const month = v.isoMonth(params.month, "month");
+  const row = await one(
+    `UPDATE location_revenue SET superseded_at = now(), superseded_by = $3
+      WHERE location_id = $1 AND month = $2 AND superseded_at IS NULL
+      RETURNING ${REVENUE_COLS}`,
+    [locationId, month, session.adminId],
+  );
+  if (!row) fail(404, "unknown_revenue_entry");
+  // The body states the RESULTING state: this month is now unknown, which is what the
+  // screen has to render. Not "deleted: true" — nothing was deleted.
+  return { status: 200, body: { retracted: row, revenue_cents: null, revenue_unknown_reason: "not_entered" } };
 }
 
 // ---- reports (005) ----------------------------------------------------------------
@@ -1351,6 +1706,11 @@ export const adminRoutes = [
   { method: "GET", path: "/admin/locations/:id/contracts", auth: "admin", handler: listContracts },
   { method: "POST", path: "/admin/locations/:id/contracts", auth: "admin", handler: createContract },
   { method: "DELETE", path: "/admin/contracts/:id", auth: "admin", handler: deleteContract },
+  { method: "POST", path: "/admin/zones", auth: "admin", handler: upsertZone },
+  { method: "DELETE", path: "/admin/zones/:id", auth: "admin", handler: deleteZone },
+  { method: "GET", path: "/admin/revenue", auth: "admin", handler: listRevenue },
+  { method: "POST", path: "/admin/locations/:id/revenue", auth: "admin", handler: putRevenue },
+  { method: "DELETE", path: "/admin/locations/:id/revenue/:month", auth: "admin", handler: retractRevenue },
   { method: "GET", path: "/admin/pl", auth: "admin", handler: plReport },
   { method: "GET", path: "/admin/analytics", auth: "admin", handler: analyticsReport },
   { method: "POST", path: "/admin/settings", auth: "admin", handler: putSetting },

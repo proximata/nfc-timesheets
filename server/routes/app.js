@@ -48,10 +48,17 @@ function recordShift(event, attributes) {
 // Every shift response has the same shape. `auto_closed` + `corrected_at` are the two
 // decision-10 facts; the client derives "needs resolution" as
 // `auto_closed && corrected_at === null`. No third flag exists to disagree with them.
+//
+// start_zone_id / end_zone_id are the two decision-43 TAP FACTS. Both NULLable, and NULL
+// means "a building-level tag was tapped, or this shift predates zones" — it is never a
+// missing value to be filled in. They are additive on the wire: the APK in the field reads
+// the fields it knows and ignores these.
 const SHIFT_FIELDS = [
   "id",
   "worker_id",
   "location_id",
+  "start_zone_id",
+  "end_zone_id",
   "start_time",
   "end_time",
   "auto_closed",
@@ -60,6 +67,13 @@ const SHIFT_FIELDS = [
 ];
 const SHIFT_COLS = SHIFT_FIELDS.join(", ");
 const S_SHIFT_COLS = SHIFT_FIELDS.map((c) => `s.${c}`).join(", "); // for the joined queries
+
+// The zone a shift STARTED at, by name, for the three worker-facing reads. NULLABLE and
+// additive: a building-level tap has no zone, and the shipped APK ignores the field.
+// LEFT JOIN and not JOIN — an inner join here would make every pre-zones shift, and every
+// building-level tap, vanish from the worker's own history.
+const ZONE_NAME_COL = "z.name AS zone_name";
+const ZONE_NAME_JOIN = "LEFT JOIN zones z ON z.id = s.start_zone_id";
 
 // Unique/exclusion violations. `ON CONFLICT DO NOTHING` swallows these on the insert
 // path, so this is a belt-and-braces map: whatever raises them, the caller gets a 409
@@ -77,11 +91,44 @@ const CONFLICT_CODES = new Set(["23505", "23P01"]);
 async function roster({ session }) {
   // `id` is the UUID the tag carries (decision-21). `slug` rides along for display
   // and log lines only and must never be put back into a tag URI.
-  const locations = await all(
-    "SELECT id, slug, name, address, lat, lng FROM locations WHERE active ORDER BY name",
-  );
+  const [locations, zones] = await Promise.all([
+    all("SELECT id, slug, name, address, lat, lng FROM locations WHERE active ORDER BY name"),
+    // decision-44 — THE ADOPTED-TAG MAP, AND WHY IT RIDES HERE INSTEAD OF ON A NEW ROUTE.
+    //
+    // A foreign tag with no URL cannot wake a closed app: there is no universal link for
+    // the OS to match. So the ONLY path a serial is ever read on is the in-app Scan screen,
+    // by which point the app is open and this worker is authenticated — and `/roster` is
+    // already fetched on launch and already persisted to SQLite, so it already works
+    // offline in a stairwell. Adding a lookup endpoint would build a second mechanism to
+    // answer a question this payload answers on the way past.
+    //
+    // THE SERIAL THEREFORE NEVER TRAVELS TOWARDS THE SERVER. The phone matches it locally
+    // and posts the RESOLVED place UUID, which the server resolves itself, with the worker
+    // taken from the session (decision-22). A cloned serial buys a clock-in at that
+    // building AS YOURSELF — exactly what a cloned URL tag already buys (decision-15). No
+    // new attack surface, and it is a stronger statement than any rate limit.
+    //
+    // NOT AN ENUMERATION RISK: a signed-in worker is already entitled to the active
+    // building list, and their workplaces' zone names are strictly less than that. Bounded
+    // by `active` on both sides, and carrying no area, rate, contract or client.
+    //
+    // ponytail: the roster grows linearly with zones — ~50 buildings x 6 zones is ~30 KB
+    // per launch. CEILING: at a few hundred buildings this becomes a real payload on a
+    // phone's first request. UPGRADE PATH: a targeted `GET /tags/:serial`, session-gated,
+    // `checkLoginRate`-bucketed, 404 with no detail on a miss — built the day this crosses
+    // ~100 KB, and not before.
+    all(
+      `SELECT z.id, z.location_id, z.name, z.tag_serial
+         FROM zones z
+         JOIN locations l ON l.id = z.location_id
+        WHERE z.active AND l.active
+        ORDER BY l.name, z.name`,
+    ),
+  ]);
   // hourly_rate_cents deliberately omitted: pay data is admin-only.
-  return { status: 200, body: { worker: { id: session.workerId, name: session.name }, locations } };
+  // `zones` is PURELY ADDITIVE. Api.kt:92 reads getJSONArray("locations") and ignores
+  // everything else, so the build in the field parses this response unchanged.
+  return { status: 200, body: { worker: { id: session.workerId, name: session.name }, locations, zones } };
 }
 
 /**
@@ -102,7 +149,17 @@ async function roster({ session }) {
 async function openShift({ body, session }) {
   const clientUuid = v.clientUuid(body.client_uuid);
   const workerId = session.workerId;
-  const location = await v.activeLocation(body.location_uuid);
+  // THE FIELD NAME IS UNCHANGED AND ITS VALUE MAY NOW BE A ZONE ID (decision-43). The
+  // shipped APK posts a building UUID and keeps getting a 201 with `start_zone_id: null`;
+  // a zone-aware build posts a zone UUID and gets the zone recorded. Same route, same
+  // field, same error codes — nothing in a pocket starts failing the moment this deploys.
+  //
+  // ponytail: `location_uuid` now carries a zone id, so the name is a lie. CEILING named:
+  // it is the cheapest correct thing while an APK is in the field and cannot be force-
+  // updated. UPGRADE PATH: accept `place_uuid` as the preferred spelling once both clients
+  // send it, and keep accepting `location_uuid` FOR EVER — a tag on a wall outlives a
+  // field name.
+  const place = await v.activePlace(body.location_uuid);
   const start = v.timestamp(body.start_time, "start_time");
 
   // No conflict TARGET on purpose. Two unique indexes can fire here — client_uuid and
@@ -113,11 +170,11 @@ async function openShift({ body, session }) {
   let inserted;
   try {
     inserted = await one(
-      `INSERT INTO shifts (worker_id, location_id, start_time, client_uuid)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO shifts (worker_id, location_id, start_zone_id, start_time, client_uuid)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT DO NOTHING
        RETURNING ${SHIFT_COLS}`,
-      [workerId, location.id, start, clientUuid],
+      [workerId, place.location_id, place.zone_id, start, clientUuid],
     );
   } catch (err) {
     if (!CONFLICT_CODES.has(err?.code)) throw err;
@@ -127,7 +184,7 @@ async function openShift({ body, session }) {
     recordShift("shift open", {
       "ts.shift.client_uuid": clientUuid,
       "ts.shift.outcome": "created",
-      "ts.location.id": location.id,
+      "ts.location.id": place.location_id,
     });
     return { status: 201, body: { shift: inserted, duplicate: false } };
   }
@@ -139,7 +196,7 @@ async function openShift({ body, session }) {
     recordShift("shift open", {
       "ts.shift.client_uuid": clientUuid,
       "ts.shift.outcome": "duplicate",
-      "ts.location.id": location.id,
+      "ts.location.id": place.location_id,
     });
     return { status: 200, body: { shift: existing, duplicate: true } };
   }
@@ -154,7 +211,7 @@ async function openShift({ body, session }) {
     recordShift("shift open", {
       "ts.shift.client_uuid": clientUuid,
       "ts.shift.outcome": "already_open",
-      "ts.location.id": location.id,
+      "ts.location.id": place.location_id,
     });
     return { status: 409, body: { error: "shift_already_open", shift: open } };
   }
@@ -177,10 +234,25 @@ async function openShift({ body, session }) {
  * Flagging it routes the shift through the same resolution screen as an 8h timeout, so
  * the invariant holds: no shift reaches payroll with an end time nobody confirmed.
  * A normal tap-out omits the field and stays a clean, already-confirmed close.
+ *
+ * `location_uuid` is NEW and OPTIONAL (decision-43): the place that was tapped to close.
+ * The shipped APK never sends it, so the build in the field never reaches a line of this
+ * and never sees a new refusal. A zone-aware build sends it and gets `end_zone_id`
+ * recorded — two columns and not one, because a single zone_id cannot answer "which door
+ * do people actually leave by", which is the maintenance question `zones.note` exists for.
+ *
+ * A place in a DIFFERENT building is `422 wrong_building` rather than a silent close: the
+ * app's own rule is that a different building CLOSES this shift and OPENS a new one there,
+ * so a close naming somewhere else is a client bug, and recording it would put an end time
+ * from one building's door onto another building's shift.
  */
 async function closeShift({ body, session }) {
   const clientUuid = v.clientUuid(body.client_uuid);
   const autoClosed = v.bool(body.auto_closed, "auto_closed");
+  const endPlace =
+    body.location_uuid === undefined || body.location_uuid === null || body.location_uuid === ""
+      ? null
+      : await v.activePlace(body.location_uuid);
 
   // Scoped to the session's worker. client_uuid is a random UUID and so not practically
   // guessable, but "hard to guess" is not authorisation — one worker must not be able to
@@ -205,14 +277,22 @@ async function closeShift({ body, session }) {
     return { status: 200, body: { shift: current, duplicate: true } };
   }
 
+  // Checked AFTER the idempotent-retry branch above, so a retry of a close that already
+  // landed still answers 200 rather than being re-judged against a building the worker has
+  // meanwhile left.
+  if (endPlace !== null && endPlace.location_id !== current.location_id) fail(422, "wrong_building");
+
   const { end } = v.shiftWindow(current.start_time, body.end_time);
 
   // auto_closed is only ever raised, never cleared: a client that omits the flag must not
   // silently downgrade a shift the 8h timer already flagged.
+  // end_zone_id is COALESCEd for the same reason: a later retry that omits the place must
+  // not erase the door the worker actually tapped.
   const updated = await one(
-    `UPDATE shifts SET end_time = $2, auto_closed = auto_closed OR $3
+    `UPDATE shifts SET end_time = $2, auto_closed = auto_closed OR $3,
+            end_zone_id = COALESCE($5::uuid, end_zone_id)
       WHERE client_uuid = $1 AND worker_id = $4 AND end_time IS NULL RETURNING ${SHIFT_COLS}`,
-    [clientUuid, end, autoClosed, session.workerId],
+    [clientUuid, end, autoClosed, session.workerId, endPlace?.zone_id ?? null],
   );
   if (updated) {
     recordShift("shift close", {
@@ -266,9 +346,10 @@ async function closeShift({ body, session }) {
  */
 async function currentOpenShift({ session }) {
   const shift = await one(
-    `SELECT ${S_SHIFT_COLS}, l.slug AS location_slug, l.name AS location_name
+    `SELECT ${S_SHIFT_COLS}, l.slug AS location_slug, l.name AS location_name, ${ZONE_NAME_COL}
        FROM shifts s
        JOIN locations l ON l.id = s.location_id
+       ${ZONE_NAME_JOIN}
       WHERE s.worker_id = $1 AND s.end_time IS NULL`,
     [session.workerId],
   );
@@ -288,9 +369,10 @@ async function currentOpenShift({ session }) {
  */
 async function unresolvedShifts({ session }) {
   const shifts = await all(
-    `SELECT ${S_SHIFT_COLS}, l.slug AS location_slug, l.name AS location_name
+    `SELECT ${S_SHIFT_COLS}, l.slug AS location_slug, l.name AS location_name, ${ZONE_NAME_COL}
        FROM shifts s
        JOIN locations l ON l.id = s.location_id
+       ${ZONE_NAME_JOIN}
       WHERE s.worker_id = $1 AND s.auto_closed AND s.corrected_at IS NULL
       ORDER BY s.start_time`,
     [session.workerId],
@@ -319,9 +401,10 @@ const MINE_LIMIT = 500;
 async function myShifts({ query, session }) {
   const since = v.timestamp(query.get("since"), "since");
   const shifts = await all(
-    `SELECT ${S_SHIFT_COLS}, l.slug AS location_slug, l.name AS location_name
+    `SELECT ${S_SHIFT_COLS}, l.slug AS location_slug, l.name AS location_name, ${ZONE_NAME_COL}
        FROM shifts s
        JOIN locations l ON l.id = s.location_id
+       ${ZONE_NAME_JOIN}
       WHERE s.worker_id = $1 AND s.start_time >= $2
       ORDER BY s.start_time DESC
       LIMIT ${MINE_LIMIT}`,
