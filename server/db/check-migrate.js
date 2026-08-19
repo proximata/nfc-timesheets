@@ -615,6 +615,42 @@ try {
   // that writes a number nobody chose into a payroll column, and better than one that
   // deactivates people to avoid the question (decision-41 §3).
   liveQuery("INSERT INTO workers (name, hourly_rate_cents, active) VALUES ('Rateless Leftover', 0, false);");
+
+  // --- THE DEPLOY GATE: the refusal must be discoverable BEFORE anything moves ---
+  //
+  // ops/deploy.sh step 0b runs `migrate.js --dry-run` against the live database as its FIRST
+  // remote action. Before that existed, the first thing to touch the database was step 5 of
+  // 7 — and steps 3 and 4 had already rsynced the new admin bundle into $DEST/public, which
+  // the RUNNING API serves immediately (a static export needs no restart). A refusal at step
+  // 5 therefore left new screens sitting on an old schema: the window in which /workers/ and
+  // /payroll/, having deleted their „no hourly rate" copy because 006 makes that state
+  // unrepresentable, would render this very row as a confident EUR 0,00 wage.
+  //
+  // Asserted from BOTH sides, because a gate that cannot fail is not a gate.
+  //
+  // This harness applied 001-005 with psql DIRECTLY (`apply()` above) rather than through
+  // the runner, so the runner's own bookkeeping table does not exist here. Told the truth
+  // once, explicitly: without it --dry-run would start again at 001 and fail on "relation
+  // workers already exists", which is a harness artefact and not a property of anything.
+  liveQuery(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    INSERT INTO schema_migrations (filename) VALUES
+      ('001_init.sql'), ('002_worker_identity.sql'), ('003_clients_contracts_inventory.sql'),
+      ('004_worker_enrolment_codes.sql'), ('005_v2_features.sql')
+    ON CONFLICT DO NOTHING;`);
+
+  const dryRun = () => run("node", [MIGRATE, "--dry-run"], { DATABASE_URL: LIVE_URL });
+  assert.throws(
+    dryRun,
+    /have no hourly rate; refusing to invent one/,
+    "--dry-run must REFUSE exactly as the real run does, and for the same stated reason",
+  );
+  assert.equal(
+    liveQuery("SELECT to_regclass('public.zones') IS NULL;"),
+    "t",
+    "a refused --dry-run must have written nothing",
+  );
+
   assert.throws(
     () => apply("006_zones_revenue_rates.sql"),
     /1 worker\(s\) have no hourly rate; refusing to invent one/,
@@ -642,6 +678,22 @@ try {
 
   // Deal with it the way the ops step says to, then re-run: it applies.
   liveQuery("DELETE FROM workers WHERE name = 'Rateless Leftover';");
+
+  // The other side of the gate: it now says the file WOULD apply, and it still writes
+  // nothing. A dry run that quietly committed would be worse than no dry run — it would
+  // migrate production from a step whose whole promise is that it does not.
+  assert.match(dryRun(), /would apply 006_zones_revenue_rates\.sql/, "--dry-run must clear once the rate is real");
+  assert.equal(
+    liveQuery("SELECT to_regclass('public.zones') IS NULL;"),
+    "t",
+    "...and a CLEARED --dry-run must still have written nothing — BEGIN/ROLLBACK, never -1",
+  );
+  assert.equal(
+    liveQuery("SELECT count(*) FROM schema_migrations;"),
+    "5",
+    "...and must record nothing in schema_migrations either",
+  );
+
   apply("006_zones_revenue_rates.sql");
   assert.equal(
     liveQuery("SELECT to_regclass('public.zones') IS NOT NULL AND to_regclass('public.location_revenue') IS NOT NULL;"),

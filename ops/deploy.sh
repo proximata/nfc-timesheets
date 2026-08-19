@@ -33,14 +33,38 @@ cd "$REPO"
 # rebrand and then deploys the new operator's code to the OLD operator's box.
 HOST="${1:-$(node -e 'process.stdout.write(require("./ops/branding.json").apiHost)')}"
 
-echo "==> 0/7 operator identity (ops/branding.json is the source of truth)"
+echo "==> 0/8 operator identity (ops/branding.json is the source of truth)"
 # BEFORE the build and before any rsync. Both are cheap and both gate the one failure in this
 # product that costs a site visit: a served association file that does not name this app.
 # Nothing further down can fix that, so nothing further down runs until it holds.
 node ops/gen-wellknown.mjs
 node ops/check-branding.mjs
 
-echo "==> 1/7 build the admin export (web/out)"
+echo "==> 0b/8 will the pending migrations even apply? (nothing has moved yet)"
+# A MIGRATION IS ALLOWED TO REFUSE. 006 raises rather than inventing an hourly wage for a
+# rate-less worker (decision-41) and production carries exactly such a row, so this deploy
+# WILL stop here until a human sets or removes it.
+#
+# WHY IT MOVED TO THE TOP. Step 5 was the first thing that touched the database, and by then
+# steps 3 and 4 had already rsynced the new admin bundle into $DEST/public, where the RUNNING
+# API serves it immediately — no restart needed for a static export. A refusal at step 5 then
+# left the box holding new screens on an old schema: the exact window in which /workers/ and
+# /payroll/, having deleted their „no hourly rate" copy because 006 makes that state
+# unrepresentable, render a leftover zero as a confident EUR 0,00 wage.
+#
+# It uses the migration files themselves (`--dry-run` applies each pending file in a
+# transaction and rolls it back), so it gates 007 and everything after it without anyone
+# remembering to update a guard here. It writes NOTHING.
+ssh "$HOST" 'sudo bash -euc "
+  set -a; . /etc/nfc/env; set +a
+  node '"$DEST"'/db/migrate.js --dry-run
+"' || {
+  echo "FATAL: the pending migrations do not apply to the live database. NOTHING was deployed." >&2
+  echo "       Deal with what it printed above (server/db/README.md), then re-run." >&2
+  exit 1
+}
+
+echo "==> 1/8 build the admin export (web/out)"
 # NEXT_PUBLIC_DEFAULT_LOCALE is baked into the bundle at BUILD time, and this build runs on a
 # developer's machine. web/.env.local is gitignored, so whatever locale that untracked file
 # happens to hold would otherwise decide the language the director sees in production. A shell
@@ -48,7 +72,7 @@ echo "==> 1/7 build the admin export (web/out)"
 # (decision-8) regardless of who runs the deploy. English is still one click away in the UI.
 (cd web && pnpm install --frozen-lockfile && NEXT_PUBLIC_DEFAULT_LOCALE=de pnpm verify)
 
-echo "==> 2/7 install server runtime deps (pg + @sentry/node, both pure JS — safe to ship from macOS)"
+echo "==> 2/8 install server runtime deps (pg + @sentry/node, both pure JS — safe to ship from macOS)"
 (cd server && pnpm install --prod --frozen-lockfile)
 
 # node_modules is built HERE (macOS) and rsynced to Linux, which is only safe while every
@@ -63,7 +87,7 @@ fi
 
 [ -d web/out ] || { echo "FATAL: web/out missing — the export did not build" >&2; exit 1; }
 
-echo "==> 3/7 rsync server -> $HOST:$DEST"
+echo "==> 3/8 rsync server -> $HOST:$DEST"
 # --delete prunes removed server files. public/ and ops/ are the OTHER halves of the artifact
 # and live under the same root, so they must be excluded or this wipes them.
 # Test material is excluded on purpose: check-api.js CREATEs and DROPs schemas and
@@ -74,11 +98,11 @@ rsync -az --delete --exclude 'public/' --exclude 'ops/' \
   --exclude '*.test.js' --exclude 'db/seed.sql' \
   ./server/ "$HOST:$DEST/"
 
-echo "==> 4/7 rsync admin export -> $DEST/public  and ops -> $DEST/ops"
+echo "==> 4/8 rsync admin export -> $DEST/public  and ops -> $DEST/ops"
 rsync -az --delete ./web/out/ "$HOST:$DEST/public/"
 rsync -az --delete ./ops/     "$HOST:$DEST/ops/"
 
-echo "==> 5/7 migrate BEFORE restart (new code may need new columns)"
+echo "==> 5/8 migrate BEFORE restart (new code may need new columns)"
 # /etc/nfc/env is 0640 root:app; sudo to read it. Secrets stay on the VM, never echoed.
 # Owner is the DEPLOY user (exedev) so rsync can write; group is the SERVICE user (app),
 # read-only. app is a --system user with no shell and no sudo: if the API is ever popped,
@@ -91,10 +115,10 @@ ssh "$HOST" 'sudo bash -euc "
   node '"$DEST"'/db/migrate.js
 "'
 
-echo "==> 6/7 restart"
+echo "==> 6/8 restart"
 ssh "$HOST" 'sudo systemctl restart nfc-api && sleep 2 && systemctl is-active nfc-api'
 
-echo "==> 7/7 verify association files (an NFC tag is worthless if these regress)"
+echo "==> 7/8 verify association files (an NFC tag is worthless if these regress)"
 # The API host serves the association files too, and it must keep serving the SAME BYTES:
 # it is what iOS is still associated with, and it is the fallback for any tag written before
 # the split. --host-override says "yes, on purpose, this is not the tag host".
