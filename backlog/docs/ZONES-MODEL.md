@@ -1334,3 +1334,40 @@ Worst first.
 - The production facts quoted (1 building, 0 workers, 0 shifts, 5 migrations, the pin at
   48.1761151/16.3953038, the card's UUID, the EV1 serial) are taken from the briefing and
   from IA-PLAN §9's verified read, **not re-verified this run**.
+
+---
+
+# 12 · What the OWNER must decide, and what this design was FORCED to assume
+
+Nothing in §1–§10 is buildable until §12.1 rows 1–4 are answered. Everything in §12.2 is a
+guess this document made on the owner's behalf and marked as one, because refusing to guess
+would have stopped the design; each one names what goes wrong if the guess is wrong.
+
+## 12.1 Owner decisions — blocking, worst first
+
+| # | Question | Why it cannot be deferred | Default if silent |
+| --- | --- | --- | --- |
+| 1 | **Accept or reject decisions 41–44.** 43 SUPERSEDES 37, which is accepted. | Two accepted records would contradict each other on whether a shift carries a zone. A build against a `proposed` record is a build against nothing. | nothing is built; decision-37 stands and there are no zones |
+| 2 | **Does a cleaner tap mid-round to "log progress"?** §3.3 chose (i): *any* zone of the building CLOSES the shift. | If workers will tap mid-round, (i) ends shifts early several times a day and the fix is not a patch — it is rule (ii) plus a separate answer to INCIDENT 1. Changing this after tags are on walls changes what a physical card does. | (i), as designed, with the running-screen sentence |
+| 3 | **Which m² is it — gross floor area, or the area actually cleaned?** | The whole value of the column is comparing €/m² *across* buildings. A benchmark mixing gross at one site with net at another is noise wearing a number's clothes, and it will not be detectable later. | "the area actually cleaned", printed on the input as help text |
+| 4 | **May the first extra physical tag wait for the APK?** Step 6 must follow step 5 (§3.3). | Onboarding starts next week. A second tag on a wall before `adb install -r` turns every intra-building tap into `auto_closed = true` + a new shift — unpaid work until a human resolves each one. | it waits; the admin surface warns until step 5 is confirmed |
+| 5 | **The verification tap** (§5, TASK-203): (a) it stays a real payroll row, (b) a flagged test shift, (c) an app-side test mode that posts nothing. | Every new building creates one. (a) is what happens today and it puts a fake shift in a payroll export. | (a), i.e. the defect stays, with the workaround written down |
+| 6 | **HOIV goes GREY on the map the day 006 lands** — it has zero zones and grey is the unzoned pin (§3.4). | The only live building turning grey during a client's first week is a support call unless it is expected, or unless its first zone is created the same day. Grey is presentation only; the tag keeps resolving. | grey, and the first zone is created in the same session |
+| 7 | **Who enters revenue, from which document, and when?** (decision-42) | A month with no entry is reported as UNKNOWN, for ever, until a human types it. If nobody owns the task, the P&L is permanently blank — honestly blank, but blank. | the director, from the bank statement, after month end |
+| 8 | **Does any existing worker have no rate the owner can state?** (decision-41) | 006 REFUSES to apply rather than invent a wage. Production has 0 workers, so the risk is a restored dump or the demo DB — but the migration stops either way. | none; 006 applies |
+
+## 12.2 Assumptions this design made — each with its failure mode
+
+| # | Assumed | If wrong |
+| --- | --- | --- |
+| 1 | "The building's area is the SUM of its zones" means the sum over **active** zones, and the owner does not also want a separately-typed gross building area to compare against. | a second area column and a reconciliation UI; the derived-not-stored argument (§3.1) survives, the screens do not |
+| 2 | A zone's area is stable enough to be one mutable column — **no area history**, unlike contracts. | a resized zone silently rewrites every past €/m² figure; the fix is a `zone_areas` period table, the same shape 005 gave contracts |
+| 3 | Zone names are unique per building, case-insensitively, and reusable after retirement (`zones_one_live_name_idx`). | "Stiege 1" twice on two floors becomes a 409 in front of the director during onboarding |
+| 4 | `NUMERIC(8,2)` m² is enough precision and range: ≤ 999 999,99 m², half a square metre resolution. | a hall bigger than that, or a client quoting cm², needs a column type change |
+| 5 | The one phone in the field is reachable by `adb`, and `install -r` preserves the worker session (§3.3 step 5). | the worker is signed out and needs a new enrolment code (decision-26) — recoverable, but it is a phone call, and TASK-202 verifies it before anything depends on it |
+| 6 | The mounted EV1 serial `04:A1:A8:52:AE:5C:80` is byte-identical to what a zone row will hold, in that order and that case. | the roster lookup misses, the tag reads as unknown, and only a new APK or a corrected row fixes it — TASK-201 AC#1 gates on exactly this |
+| 7 | New tags carry a **zone** UUID and old cards carrying a **building** UUID keep resolving for ever (§3.4). The URI shape does not change. | every card already on a wall is revisited; from next week that is every client, not one |
+| 8 | The client will never ask for zone-level detail in the portal (§3.7). | it is a decision record and a new grant model, not a field — `portal_grants` references `location_id` by design |
+| 9 | The Austrian German strings quoted throughout are **drafts**, not client-approved copy. | copy churn across de/en with exact key parity; cheap while it is the only change |
+| 10 | Per-zone duration is not wanted **now** — `shift_zone_visits` is named as the upgrade path (§3.6). | 2N taps per visit and a re-argued W3/W5, which is the trade §3.2 exists to refuse |
+| 11 | The production facts in §11 are true as briefed and were not re-verified this run. | a zone, a shift or a worker nobody expected changes what 006 does on contact with the real database — `check-prod-restore` is the gate |
