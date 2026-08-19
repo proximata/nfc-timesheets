@@ -406,15 +406,11 @@ export default function PayrollPage() {
   /**
    * EXCLUSIONS OF EVERY KIND, which is what the cell above them is labelled.
    *
-   * It used to be `excludedShifts` alone. A worker with hours and no rate is not a shift, so
-   * the one cell whose entire purpose is to name what is missing read „Nicht gezählt 0" on a
-   * screen that was 810,30 € short — the reassuring number in the large type, the truth in
-   * the small print under it. The count is now the count of things left out; the sub-line
-   * says which are shifts and which are people, in the same words the rows use.
-   *
-   * `noRateLines.length` and not „people with hours and no rate": it is the SAME number the
-   * caveat bullet and the CSV's total note already carry, and three counts of one condition
-   * is how a screen and the file the accountant keeps come to disagree again.
+   * There is no separate no-rate term to add here — see the deletion note above
+   * (`reconciliation`): decision-41 made a rate-less worker unrepresentable, so the only
+   * things left out of payroll are decision-10's shift exclusions, and `excludedCount` is
+   * exactly `excludedShifts`. If decision-41 is ever reverted, a rate-less-worker count has
+   * to come back into this sum too, not just into the sub-line below.
    */
   const excludedCount = excludedShifts
   /** What is excluded, in the words the rows use. Never empty: „nothing" is a branch. */
