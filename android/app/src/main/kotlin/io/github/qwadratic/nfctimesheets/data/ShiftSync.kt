@@ -54,16 +54,21 @@ class ShiftSync(private val api: Api, private val store: ShiftStore) {
         }
     }
 
-    /** GET /roster -> cache the location names. Failure is silent and harmless (see below). */
+    /**
+     * GET /roster -> cache the location names AND the adopted-tag zone table
+     * (decision-44). Failure is silent and harmless (see below).
+     */
     suspend fun refreshRoster() {
-        val locations = try {
+        val roster = try {
             api.roster()
         } catch (_: ApiFailure) {
-            // A stale or empty name cache costs a label. It must never cost a shift, and
-            // nothing in this app branches on a location being in the cache.
+            // A stale or empty name/zone cache costs a label, or a scan that falls back
+            // to the compiled KnownTags table. It must never cost a shift, and nothing
+            // in this app branches on a location or zone being in the cache to allow a
+            // tap through.
             return
         }
-        store.replaceLocations(locations)
+        store.replaceRoster(roster.locations, roster.zones)
     }
 
     /** decision-19: the server, not the phone, is authoritative for "who is clocked in". */

@@ -8,7 +8,7 @@ import io.github.qwadratic.nfctimesheets.core.EnrolmentRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
 import io.github.qwadratic.nfctimesheets.core.Wire
-import io.github.qwadratic.nfctimesheets.core.WireLocation
+import io.github.qwadratic.nfctimesheets.core.WireRoster
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.core.WireWorker
 import kotlinx.coroutines.Dispatchers
@@ -87,11 +87,11 @@ class Api(
         cookies.clear()
     }
 
-    /** GET /roster -> the locations that resolve. The `workers` array is deliberately not read. */
-    suspend fun roster(): List<WireLocation> {
-        val array = get("/roster").getJSONArray("locations")
-        return (0 until array.length()).map { Wire.location(array.getJSONObject(it)) }
-    }
+    /**
+     * GET /roster -> the locations that resolve, plus the zones riding along additively
+     * (decision-44). The `workers` array is deliberately not read (decision-22).
+     */
+    suspend fun roster(): WireRoster = Wire.roster(get("/roster"))
 
     /**
      * POST /shifts/open — decision-19: the shift is posted at clock-IN, end_time NULL.
