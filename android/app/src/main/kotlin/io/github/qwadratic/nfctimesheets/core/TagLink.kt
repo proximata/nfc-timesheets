@@ -24,9 +24,28 @@ import java.net.URLDecoder
  * `host` is a constructor argument, not a constant, for two reasons: it comes from the
  * white-label surface (BuildConfig.TAG_HOST <- branding.properties), and it keeps this
  * file free of every Android import so the check can compile and run it on a plain JVM.
+ *
+ * A SET OF HOSTS, NOT ONE. A hostname written onto a physical tag cannot be renamed the way
+ * a server can. The VM was renamed once; every tag written before that day kept carrying the
+ * old host, this class compared against a single host, and the app began refusing tags that
+ * were physically fine. So `legacyHosts` carries every host we ever wrote onto a tag, it
+ * comes from branding.properties like the live one, and the accepted set only ever GROWS.
+ *
+ * A SECOND HOST IS NOT A SECOND SHAPE. Everything else below stays exactly as strict:
+ * https only, our exact path, a canonical uuid, and authority compared with URI.getHost()
+ * so userinfo tricks still lose. Tags are unlocked (decision-15); widening the host set is
+ * the only thing widened.
  */
-class TagLink(host: String) {
+class TagLink(host: String, legacyHosts: List<String> = emptyList()) {
     private val host = host.lowercase()
+
+    /**
+     * Every host a tag may legitimately name. Membership, never a prefix or suffix test:
+     * a suffix test would accept `evil-<our host>` and a prefix test `<our host>.evil.example`,
+     * and either is a tag anyone can write with a phone.
+     */
+    private val acceptedHosts: Set<String> =
+        (listOf(this.host) + legacyHosts.map { it.trim().lowercase() }).filter { it.isNotEmpty() }.toSet()
 
     /**
      * Location UUID carried by a tag link, lowercased. `null` = not one of our tags.
@@ -47,8 +66,8 @@ class TagLink(host: String) {
         if (uri.scheme?.lowercase() != "https") return null
         // URI.getHost() strips any userinfo, so https://<our host>@evil.example.com/t
         // compares as "evil.example.com" and is rejected. Never switch this to a string
-        // prefix test — that is the whole trick.
-        if (uri.host?.lowercase() != host) return null
+        // prefix test — that is the whole trick. A null host (opaque URI) is not in the set.
+        if (uri.host?.lowercase() !in acceptedHosts) return null
 
         // The server serves both /t and /t/ rather than redirecting (a redirect breaks
         // the App-Link/universal-link handoff), so accept both here too.
@@ -67,6 +86,9 @@ class TagLink(host: String) {
      * null for anything that is not a well-formed UUID, so a bad table entry cannot inject
      * a URL: round-tripping through [locationId] must give the same value back, and if it
      * would not, this returns nothing at all.
+     *
+     * Always the CURRENT host, never a legacy one: this synthesises a link, and nothing new
+     * should ever be minted under a host we have stopped using.
      */
     fun uriFor(locationId: String?): URI? {
         val id = normalizedUuid(locationId) ?: return null

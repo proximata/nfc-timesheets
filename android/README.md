@@ -523,7 +523,9 @@ produce a dead `applinks:` entitlement.
 | `ts.applicationId` | Play identity | **IMMUTABLE after the first upload**, and it is what `server/wellknown/assetlinks.json` already publishes |
 | `ts.namespace` | `R` / `BuildConfig` package | **do not change on a rebrand** — see below |
 | `ts.appName` | launcher label | |
-| `ts.tagHost` | manifest `${tagHost}` + `BuildConfig.TAG_HOST` | must equal `ops/branding.json` `host` |
+| `ts.tagHost` | manifest `${tagHost}` + `BuildConfig.TAG_HOST` | **PERMANENT** — it is written on physical cards. Must equal `ops/branding.json` `tagHost` |
+| `ts.apiHost` | `BuildConfig.API_HOST` → `Api.kt` base URL | renameable. Must equal `ops/branding.json` `apiHost`, and must **never** reach the manifest |
+| `ts.legacyTagHosts` | `BuildConfig.LEGACY_TAG_HOSTS` — **parser only** | hosts we once wrote onto tags. Key must be present; empty value is legal |
 | `ts.appKey` | `X-App-Key` | not a secret; must equal `APP_KEY` in `/etc/nfc/env` |
 | `ts.versionName` / `ts.versionCode` | Play | |
 
@@ -542,9 +544,36 @@ is actually visible is `ts.applicationId`, and that one *is* configurable. Renam
 package is a find-and-replace plus a `git mv`, it is optional cosmetics, and it should never
 ride along with a rebrand you are about to ship.
 
-**Changing `ts.tagHost` is only half the job.** The other half is `ops/branding.json` and
-the generated well-known files. And it does not re-point tags already glued to walls: a
-new operator picks the host **at zero tags** (decision-15).
+### Two hosts, and why they are not one (decision-40)
+
+`ts.tagHost` is a string the OS reads off a card and matches against the manifest.
+`ts.apiHost` is a machine the app makes requests to. They were one value, the VM was renamed
+`timesheets` → `schimmer-glanz`, and a card already written and given to a client went dead
+without an error anywhere. So:
+
+- **`ts.tagHost` is treated as immutable.** Its box serves three static files and nothing
+  else, so there is never a reason to rename it. `ops/tag-host/` is the whole deployment.
+- **`ts.apiHost` is renameable at will.** Nothing physical points at it. `Api.kt` is the only
+  code that reads it, and it is deliberately absent from `AndroidManifest.xml`.
+
+**Changing `ts.tagHost` is only half the job.** The other half is `ops/branding.json`
+(`tagHost`), `web/lib/tag.ts`, the three iOS files, and `ops/tag-host/`. And it does not
+re-point tags already glued to walls: a new operator picks the host **at zero tags**
+(decision-15). `checks/run.sh` pins the exact URI on the HOIV card, so getting this wrong is
+a red check rather than a silent dead tap.
+
+### legacy hosts
+
+`ts.legacyTagHosts` widens the **parser** (`TagLink`) to accept hosts we have written onto
+tags before. It buys **manual scan** on such a tag — the app never fetches the tag URL, it
+parses the uuid out and talks to `ts.apiHost`.
+
+It does **not** buy **passive tap**, and the fix for that is not "add it to the manifest".
+App Link verification is **all-or-nothing** across every host in an `autoVerify`
+intent-filter: one host that stops serving `assetlinks.json` and Android marks the app
+unverified for the *live* host too. Adding a host to rescue old tags would break the tags
+that currently work. `checks/core-check.kt` asserts no legacy host and no API host is in the
+manifest.
 
 ---
 

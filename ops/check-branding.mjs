@@ -70,7 +70,22 @@ try {
   process.exit(1)
 }
 
-process.stdout.write(`branding: host=${branding.host} team=${branding.apple.teamId}\n\n`)
+process.stdout.write(
+  `branding: tagHost=${branding.tagHost} (permanent) apiHost=${branding.apiHost} (renameable) team=${branding.apple.teamId}\n\n`,
+)
+
+// 0. THE TWO HOSTS ARE TWO HOSTS. Collapsing them back into one value is the regression
+//    decision-40 exists to stop: the moment they are equal, renaming the API box renames the
+//    host printed on every tag, which is the failure that already happened once. They are
+//    allowed to be equal only for an operator who genuinely runs one box - and that operator
+//    has to say so out loud by setting `singleHost: true`, not by leaving two fields the same.
+check('tagHost != apiHost (or singleHost is declared)', () => {
+  assert.ok(
+    branding.tagHost !== branding.apiHost || branding.singleHost === true,
+    `both are ${branding.tagHost}. A tag carries the tag host in ink; the API box gets renamed. ` +
+      'Split them, or set "singleHost": true in ops/branding.json to accept the coupling.',
+  )
+})
 
 // 1. The two association files ARE what branding.json says. Delegated to the generator so
 //    there is exactly one renderer; a second copy of the AASA shape is a second thing to get
@@ -82,22 +97,61 @@ for (const { path, body } of targets(branding)) {
   })
 }
 
-// 2. THE AMENDMENT. The Associated Domains entitlement cannot be templated: an undefined
-//    Xcode build setting expands to the EMPTY STRING, so `applinks:$(TS_TAG_HOST)` with the
-//    xcconfig detached becomes `applinks:` and universal links die on the next build - green,
-//    silent, shippable to TestFlight. So the entitlement keeps a literal and this assertion
-//    is what keeps the literal honest. Editing it is a manual step in ops/REBRAND.md.
-check('NFCTimeSheets.entitlements applinks host == branding.host', () => {
-  const text = read('NFCTimeSheets/NFCTimeSheets/NFCTimeSheets.entitlements')
-  const found = Array.from(text.matchAll(/<string>applinks:([^<]*)<\/string>/g), (m) => m[1])
-  assert.deepStrictEqual(found, [branding.host], `entitlement lists ${JSON.stringify(found)}`)
+// 2-4. THE iOS SURFACE, WHICH IS STILL ON ONE HOST.
+//
+//    Three files name the host iOS parses and associates: the entitlement (a literal - an
+//    undefined Xcode build setting expands to the EMPTY STRING, so `applinks:$(TS_TAG_HOST)`
+//    with the xcconfig detached becomes `applinks:` and universal links die on the next
+//    build, green and silent), Branding.xcconfig, and the Branding.swift fallback.
+//
+//    They all say apiHost today. That is not yet a bug - the API host still serves both
+//    association files, so iOS universal links still work - but it is the coupling
+//    decision-40 removes, and moving it is an iOS build's job, not a config edit.
+//
+//    So what is asserted is what can be true right now and still fail on a real mistake:
+//    the three files AGREE with each other, and the host they agree on is a host this
+//    project actually serves. A typo, a half-migration, or a stale operator's host all go
+//    red. The remaining move is printed, not assumed.
+const iosHosts = {}
+check('iOS names ONE host across entitlement, xcconfig and Branding.swift', () => {
+  const entitlement = Array.from(
+    read('NFCTimeSheets/NFCTimeSheets/NFCTimeSheets.entitlements').matchAll(
+      /<string>applinks:([^<]*)<\/string>/g,
+    ),
+    (m) => m[1],
+  )
+  assert.strictEqual(entitlement.length, 1, `entitlement lists ${JSON.stringify(entitlement)}`)
+  iosHosts.entitlement = entitlement[0]
+  iosHosts.xcconfig = xcconfigValue(read('NFCTimeSheets/Branding.xcconfig'), 'TS_TAG_HOST')
+  const m = read('NFCTimeSheets/NFCTimeSheets/Branding.swift').match(/static let defaultTagHost = "([^"]*)"/)
+  assert.ok(m, 'Branding.swift has no defaultTagHost')
+  iosHosts.swift = m[1]
+
+  assert.strictEqual(iosHosts.xcconfig, iosHosts.entitlement, 'TS_TAG_HOST != entitlement applinks host')
+  assert.strictEqual(iosHosts.swift, iosHosts.entitlement, 'Branding.swift defaultTagHost != entitlement applinks host')
 })
 
-// 3. The iOS knob. Values here are what a rebuild picks up once the xcconfig is attached.
+check('the host iOS names is one this project serves (tagHost or apiHost)', () => {
+  assert.ok(
+    [branding.tagHost, branding.apiHost].includes(iosHosts.entitlement),
+    `iOS names ${iosHosts.entitlement}, which is neither tagHost ${branding.tagHost} nor apiHost ${branding.apiHost}`,
+  )
+})
+
+if (iosHosts.entitlement !== undefined && iosHosts.entitlement !== branding.tagHost) {
+  process.stdout.write(
+    `  TODO iOS is still associated with the RENAMEABLE host ${iosHosts.entitlement}, not the ` +
+      `permanent tag host ${branding.tagHost}.\n` +
+      '       Universal links work today because the API host also serves the association files.\n' +
+      '       Moving it is an iOS build: entitlement + Branding.xcconfig + Branding.swift, then Xcode.\n',
+  )
+}
+
+// 3. The rest of the iOS knob. Values here are what a rebuild picks up once the xcconfig is
+//    attached; the host is handled above.
 check('Branding.xcconfig matches ops/branding.json', () => {
   const xc = read('NFCTimeSheets/Branding.xcconfig')
   assert.strictEqual(xcconfigValue(xc, 'TS_TEAM_ID'), branding.apple.teamId, 'TS_TEAM_ID')
-  assert.strictEqual(xcconfigValue(xc, 'TS_TAG_HOST'), branding.host, 'TS_TAG_HOST')
   assert.strictEqual(xcconfigValue(xc, 'TS_APP_NAME'), branding.appName, 'TS_APP_NAME')
   assert.ok(
     branding.apple.bundleIds.includes(xcconfigValue(xc, 'TS_BUNDLE_ID')),
@@ -105,21 +159,14 @@ check('Branding.xcconfig matches ops/branding.json', () => {
   )
 })
 
-// 4. The iOS FALLBACKS - what an unconfigured build uses, i.e. what is live on TestFlight
-//    today. These must track branding.json too, or "inert by default" quietly means "wrong
+// 4. The iOS FALLBACK bundle id - what an unconfigured build uses, i.e. what is live on
+//    TestFlight today. Must track branding.json, or "inert by default" quietly means "wrong
 //    by default" after the first rebrand.
-check('Branding.swift fallbacks match ops/branding.json', () => {
+check('Branding.swift fallback bundle id matches ops/branding.json', () => {
   const swift = read('NFCTimeSheets/NFCTimeSheets/Branding.swift')
-  const value = (name) => {
-    const m = swift.match(new RegExp(`static let ${name} = "([^"]*)"`))
-    assert.ok(m, `Branding.swift has no ${name}`)
-    return m[1]
-  }
-  assert.strictEqual(value('defaultTagHost'), branding.host, 'defaultTagHost')
-  assert.ok(
-    branding.apple.bundleIds.includes(value('defaultBundleId')),
-    `defaultBundleId ${value('defaultBundleId')} is not in apple.bundleIds`,
-  )
+  const m = swift.match(/static let defaultBundleId = "([^"]*)"/)
+  assert.ok(m, 'Branding.swift has no defaultBundleId')
+  assert.ok(branding.apple.bundleIds.includes(m[1]), `defaultBundleId ${m[1]} is not in apple.bundleIds`)
 })
 
 // 5. Trust boundary. `aud` on the Apple identity token is checked against this constant; if
@@ -134,11 +181,13 @@ check('server/lib/apple.js APPLE_AUDIENCE is one of apple.bundleIds', () => {
 })
 
 // 6. The URI the admin panel prints onto a PHYSICAL TAG. Wrong here and the tag is dead on
-//    the wall - the only failure in this product whose fix is a site visit.
-check('web/lib/tag.ts default origin == https://branding.host', () => {
+//    the wall - the only failure in this product whose fix is a site visit. It is the TAG
+//    host, never the API host: the admin panel is served BY the API host, and a tag written
+//    with the host you happen to be looking at is the exact mistake decision-40 removes.
+check('web/lib/tag.ts default origin == https://branding.tagHost', () => {
   const m = read('web/lib/tag.ts').match(/NEXT_PUBLIC_TAG_BASE_URL\s*\?\?\s*'([^']+)'/)
   assert.ok(m, 'default for NEXT_PUBLIC_TAG_BASE_URL not found')
-  assert.strictEqual(m[1], `https://${branding.host}`)
+  assert.strictEqual(m[1], `https://${branding.tagHost}`)
 })
 
 // 7. Android. Absent until the android/ skeleton lands; a skip is honest, a pass is not.
@@ -146,8 +195,27 @@ if (has('android/branding.properties')) {
   check('android/branding.properties matches ops/branding.json', () => {
     const p = read('android/branding.properties')
     assert.strictEqual(propertiesValue(p, 'ts.applicationId'), branding.android.packageName)
-    assert.strictEqual(propertiesValue(p, 'ts.tagHost'), branding.host)
+    assert.strictEqual(propertiesValue(p, 'ts.tagHost'), branding.tagHost, 'ts.tagHost')
+    assert.strictEqual(propertiesValue(p, 'ts.apiHost'), branding.apiHost, 'ts.apiHost')
     assert.strictEqual(propertiesValue(p, 'ts.appName'), branding.appName)
+  })
+
+  // The split, on the Android side, asserted as text because the only alternative is
+  // building the app. Api.kt must reach the API host and the manifest must claim the TAG
+  // host; swapping them is invisible until a worker taps a card at a door.
+  check('android talks to apiHost and claims tagHost', () => {
+    assert.match(
+      read('android/app/src/main/kotlin/io/github/qwadratic/nfctimesheets/net/Api.kt'),
+      /val base = "https:\/\/\$\{BuildConfig\.API_HOST\}"/,
+      'Api.kt must build its base from BuildConfig.API_HOST, never TAG_HOST',
+    )
+    const manifest = read('android/app/src/main/AndroidManifest.xml')
+    assert.match(manifest, /android:host="\$\{tagHost\}"/, 'the intent filters must use ${tagHost}')
+    assert.ok(
+      !manifest.includes('${apiHost}'),
+      'the API host must NOT be in an autoVerify intent filter - it is renameable, and App Link ' +
+        'verification is all-or-nothing across the hosts in a filter',
+    )
   })
 } else {
   skip('android/branding.properties matches ops/branding.json', 'android/ not present yet')
@@ -186,7 +254,7 @@ check(`team id ${branding.apple.teamId} appears in no source file`, () => {
 //    second one is how half the app ends up pointed at a host whose AASA does not name it.
 //    checks/*.swift are excluded on purpose: those fixtures PIN the unconfigured default and
 //    are the contract that an unconfigured build behaves exactly like today's TestFlight one.
-check(`host ${branding.host} has one home in Swift (Branding.swift)`, () => {
+check(`the iOS host ${iosHosts.entitlement} has one home in Swift (Branding.swift)`, () => {
   const stripComments = (text) =>
     text
       .split('\n')
@@ -194,7 +262,7 @@ check(`host ${branding.host} has one home in Swift (Branding.swift)`, () => {
       .join('\n')
   const hits = sourceFiles()
     .filter((f) => f.endsWith('.swift') && !f.endsWith('Branding.swift'))
-    .filter((f) => stripComments(read(f)).includes(branding.host))
+    .filter((f) => stripComments(read(f)).includes(iosHosts.entitlement))
   assert.deepStrictEqual(hits, [], 'read Branding.tagHost / TagLink.host instead')
 })
 

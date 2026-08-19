@@ -22,7 +22,12 @@ private fun check(name: String, actual: Any?, expected: Any?) {
     failures++
 }
 fun main() {
-    val host = "schimmer-glanz.exe.xyz"
+    // The TAG host, read from branding.properties rather than typed here (decision-40): a
+    // check carrying its own copy of the host stops checking anything the day the host
+    // moves, and this file's whole subject is a URL that has to survive that day.
+    val host = java.util.Properties()
+        .apply { java.io.File("branding.properties").inputStream().use { load(it) } }
+        .getProperty("ts.tagHost").trim()
     val link = TagLink(host)
     val hoiv = "c3c37d4a-ca0a-42c5-b248-9704b9907ec7"
     val serial = "04:A1:A8:52:AE:5C:80"
@@ -47,8 +52,12 @@ fun main() {
     check(
         "synthesised URL is exactly the tag format",
         synthesised.toString(),
-        "https://schimmer-glanz.exe.xyz/t?l=$hoiv",
+        "https://$host/t?l=$hoiv",
     )
+    // And it is the host that is physically on the HOIV card. This literal is a FIELD FACT,
+    // deliberately not derived from branding: a check that reads the value it is checking
+    // cannot fail. Move ts.tagHost and this goes red, which is the point.
+    check("the synthesised URL uses the host on the wall", synthesised.toString(), "https://timesheets.exe.xyz/t?l=$hoiv")
     // THE ONE THAT MATTERS: what we synthesise, we must also accept.
     check("round trip parses back", link.locationId(synthesised.toString()), hoiv)
     // uriFor must refuse anything that is not a UUID, or a bad table entry becomes a URL.

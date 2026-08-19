@@ -62,7 +62,18 @@ export function readBranding(path = BRANDING_PATH) {
     }
   };
 
-  str(b.host, "host", HOST_RE);
+  // TWO HOSTS (decision-40). `host` was ONE value that meant both, and that coupling is what
+  // let a server rename kill a tag on a wall. A leftover `host` key is therefore a HARD ERROR
+  // and never a silent fallback: a config file that is quietly half-read is exactly how the
+  // old value survives a migration and points half the surface at the wrong place.
+  if ("host" in b) {
+    bad.push(
+      'host: removed in favour of tagHost + apiHost (decision-40). tagHost is written onto ' +
+        "physical tags and is PERMANENT; apiHost serves the admin panel and API and may be renamed.",
+    );
+  }
+  str(b.tagHost, "tagHost", HOST_RE);
+  str(b.apiHost, "apiHost", HOST_RE);
   if (typeof b.appName !== "string" || b.appName.trim() === "") bad.push("appName: must be a non-empty string");
 
   str(b.apple?.teamId, "apple.teamId", TEAM_RE);

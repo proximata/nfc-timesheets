@@ -29,8 +29,13 @@
  * out of shell history and out of `ps`.
  */
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
-const API = process.env.API_BASE ?? "https://schimmer-glanz.exe.xyz";
+// The API host from ops/branding.json (decision-40), never the tag host: the tag host
+// serves three static files and has no /auth, no database and no admin.
+const API =
+  process.env.API_BASE ??
+  `https://${JSON.parse(readFileSync(new URL("./branding.json", import.meta.url), "utf8")).apiHost}`;
 
 function arg(name, fallback = undefined) {
   const i = process.argv.indexOf(`--${name}`);

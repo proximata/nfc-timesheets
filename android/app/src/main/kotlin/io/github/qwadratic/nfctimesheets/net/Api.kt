@@ -39,7 +39,17 @@ class Api(
     private val cookies: CookieJar,
     private val onSessionRejected: () -> Unit,
 ) {
-    private val base = "https://${BuildConfig.TAG_HOST}"
+    /**
+     * THE API HOST, NEVER THE TAG HOST (decision-40).
+     *
+     * These were one value. A tag carries a hostname in ink on a wall and cannot be renamed;
+     * a server can, and was — timesheets -> schimmer-glanz — which killed a tag that had
+     * already been written and handed to a client. So the app PARSES the tag host (TagLink,
+     * the manifest intent filter) and TALKS to the API host, and the two move independently.
+     *
+     * Nothing physical points here, so this host may be renamed, moved or replaced.
+     */
+    private val base = "https://${BuildConfig.API_HOST}"
 
     // ---- endpoints ---------------------------------------------------------------
 

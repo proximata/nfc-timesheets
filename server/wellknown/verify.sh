@@ -17,7 +17,12 @@
 # in ops/branding.json (see ops/REBRAND.md); a literal here would be one more place to
 # forget during a handover.
 #
-# usage: ./verify.sh [host]        default host: from ops/branding.json
+# TWO HOSTS (decision-40). ops/branding.json carries `tagHost` (PERMANENT - what is written
+# onto physical tags) and `apiHost` (renameable - admin panel + API). Both serve these files
+# and both must serve the SAME BYTES, but only the tag host is the one a wall depends on, so
+# it is the DEFAULT here. Probing the API host is legitimate and says so with --host-override.
+#
+# usage: ./verify.sh [host]        default host: `tagHost` from ops/branding.json
 #        SCHEME=http ./verify.sh 127.0.0.1:8080     (local pre-deploy smoke test)
 #        ./verify.sh some.host --host-override      (deliberately probing another host)
 set -uo pipefail
@@ -54,8 +59,10 @@ for a in "$@"; do [ "$a" = "--host-override" ] && OVERRIDE=1; done
 
 SCHEME="${SCHEME:-https}"
 CONFIGURED_HOST=""
+API_HOST=""
 if [ -n "$BRANDING" ] && command -v node >/dev/null 2>&1; then
-  CONFIGURED_HOST="$(brand host)"
+  CONFIGURED_HOST="$(brand tagHost)"
+  API_HOST="$(brand apiHost)"
 fi
 
 HOST="${HOST_ARG:-${CONFIGURED_HOST:-timesheets.exe.xyz}}"
@@ -119,14 +126,19 @@ if [ -z "$BRANDING" ]; then
   warn "ops/branding.json not found - host and config checks skipped (byte comparison still runs)"
 elif ! command -v node >/dev/null 2>&1; then
   warn "node not on PATH - host and config checks skipped (byte comparison still runs)"
-elif [ "$OVERRIDE" = "1" ]; then
-  warn "--host-override: not checking $HOST against branding.json host $CONFIGURED_HOST"
 elif [ "$SCHEME" != "https" ]; then
   warn "SCHEME=$SCHEME: treated as a local smoke test, host not checked against branding.json"
 elif [ "$HOST" = "$CONFIGURED_HOST" ]; then
-  ok "host $HOST is the configured tag host"
+  ok "host $HOST is the configured TAG host (ops/branding.json tagHost) - this is what tags carry"
+elif [ "$OVERRIDE" = "1" ] && [ "$HOST" = "$API_HOST" ]; then
+  # The API host serves the same files on purpose: iOS is still associated with it, and any
+  # tag written before the split points at it. Same bytes, different job.
+  ok "host $HOST is the configured API host (ops/branding.json apiHost), probed deliberately"
+  warn "this is the RENAMEABLE host. Tags carry $CONFIGURED_HOST. Green here proves nothing about a wall."
+elif [ "$OVERRIDE" = "1" ]; then
+  warn "--host-override: not checking $HOST against branding.json tagHost $CONFIGURED_HOST"
 else
-  fail "host $HOST is NOT the configured tag host $CONFIGURED_HOST (ops/branding.json). Tags carry $CONFIGURED_HOST."
+  fail "host $HOST is NOT the configured tag host $CONFIGURED_HOST (ops/branding.json tagHost). Tags carry $CONFIGURED_HOST."
 fi
 
 # 0b. Do the committed files still match ops/branding.json? Runs only in the repo layout,

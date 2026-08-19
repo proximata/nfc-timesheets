@@ -30,11 +30,14 @@
 // messages/de.json — see backlog/docs/REDESIGN-REPORT.md §"what is missing". Segment 3
 // therefore films what the drawer DOES carry, and its caption says so.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { captionDrawtexts, fitFontSize } from "./burnin.mjs";
 import { attach, launchChrome, record, sleep } from "./cdp.mjs";
 
 const BASE = process.env.DEMO_BASE ?? "http://127.0.0.1:8082";
+// The TAG host, not the host the panel is served from (decision-40). Read, never typed: an
+// assertion holding its own copy of the host would go on passing after the host moved.
+const TAG_HOST = JSON.parse(readFileSync(new URL("../ops/branding.json", import.meta.url), "utf8")).tagHost;
 const OUT = new URL("../docs/media/redesign-demo/", import.meta.url).pathname;
 const WORK = "/tmp/ts-demo/redesign";
 const PORT = Number(process.env.DEMO_PORT ?? 9361);
@@ -475,7 +478,7 @@ await segment({
       throw new Error(`MISSING: no tag URL of the shape https://…/t?l=<uuid> on ${LOCATION}'s row`);
     }
     console.log(`    ok  tag URI carries a UUID (decision-21): ${tagUrl}`);
-    await must("schimmer-glanz.exe.xyz", "the tag host is the operator's, from ops/branding.json");
+    await must(TAG_HOST, "the tag host is the operator's permanent one, from ops/branding.json tagHost");
     await sleep(2600);
 
     say("Die Identität eines Objekts ist seine UUID — nie das Kürzel für Menschen.");

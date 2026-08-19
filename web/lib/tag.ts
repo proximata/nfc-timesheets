@@ -8,13 +8,19 @@
  * admin panel can legitimately be opened on localhost during a build, and a tag written from
  * that page would be dead on the wall.
  *
- * The default below is the operator's tag host and its source of truth is `ops/branding.json`.
- * It is repeated here rather than imported because this string is baked into a static export
- * at build time and `web/` must stay buildable on its own; `node ops/check-branding.mjs`
- * fails if the two ever disagree.
+ * THE TAG HOST IS NOT THE HOST THIS PAGE IS SERVED FROM (decision-40). The admin panel and
+ * the API live on a RENAMEABLE host; the tag host is permanent and serves nothing but the two
+ * association files and /t. They were one value once, the box got renamed, and a tag that had
+ * already been written and given to a client went dead. So this default is `tagHost`, never
+ * `apiHost`, and never `window.location`.
+ *
+ * The default below is the operator's tag host and its source of truth is `ops/branding.json`
+ * (`tagHost`). It is repeated here rather than imported because this string is baked into a
+ * static export at build time and `web/` must stay buildable on its own;
+ * `node ops/check-branding.mjs` fails if the two ever disagree.
  */
 const TAG_BASE_URL = (
-  process.env.NEXT_PUBLIC_TAG_BASE_URL ?? 'https://schimmer-glanz.exe.xyz'
+  process.env.NEXT_PUBLIC_TAG_BASE_URL ?? 'https://timesheets.exe.xyz'
 ).replace(/\/+$/, '')
 
 export function tagUri(locationId: string): string {

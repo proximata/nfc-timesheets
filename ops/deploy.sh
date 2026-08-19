@@ -2,7 +2,12 @@
 #
 # Build locally, rsync to the VM, migrate, restart. decision-16: no Docker, no CI, no registry.
 #
-#   ./ops/deploy.sh [host]        # host defaults to ops/branding.json `host`
+#   ./ops/deploy.sh [host]        # host defaults to ops/branding.json `apiHost`
+#
+# THIS DEPLOYS THE API HOST ONLY. The TAG host (ops/branding.json `tagHost`) is a separate,
+# deliberately boring box that serves three static files and is deployed by
+# ops/tag-host/deploy.sh (decision-40). Renaming or rebuilding the API box is safe; the tag
+# host is written onto physical NFC tags and is permanent.
 #
 # ponytail: a shell script, not a Makefile and not a CI pipeline. Ladder step 5/6 — this is
 #   four rsyncs and two ssh commands. It exists as a script rather than a README paragraph for
@@ -26,7 +31,7 @@ cd "$REPO"
 
 # Default host comes from ops/branding.json, not a literal here. A literal survives a
 # rebrand and then deploys the new operator's code to the OLD operator's box.
-HOST="${1:-$(node -e 'process.stdout.write(require("./ops/branding.json").host)')}"
+HOST="${1:-$(node -e 'process.stdout.write(require("./ops/branding.json").apiHost)')}"
 
 echo "==> 0/7 operator identity (ops/branding.json is the source of truth)"
 # BEFORE the build and before any rsync. Both are cheap and both gate the one failure in this
@@ -90,6 +95,14 @@ echo "==> 6/7 restart"
 ssh "$HOST" 'sudo systemctl restart nfc-api && sleep 2 && systemctl is-active nfc-api'
 
 echo "==> 7/7 verify association files (an NFC tag is worthless if these regress)"
-./server/wellknown/verify.sh "$HOST"
+# The API host serves the association files too, and it must keep serving the SAME BYTES:
+# it is what iOS is still associated with, and it is the fallback for any tag written before
+# the split. --host-override says "yes, on purpose, this is not the tag host".
+./server/wellknown/verify.sh "$HOST" --host-override
+
+echo "==> and the TAG host, which is what is actually on the walls"
+# Not deployed by this script and deliberately not restarted by it - only checked. If this
+# fails, tags are dead and no amount of redeploying the API fixes it.
+./server/wellknown/verify.sh
 
 echo "deploy ok: $HOST"

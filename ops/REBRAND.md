@@ -4,17 +4,59 @@ Operator runbook. Both platforms, end to end. Follow it in order.
 
 ---
 
-## READ THIS FIRST
+## READ THIS FIRST: THERE ARE TWO HOSTS
+
+They used to be one value, and that is how a tag died. The VM was renamed
+`timesheets` → `schimmer-glanz`; the server moved in one command; the card already written
+and handed to a client kept pointing at a hostname that no longer existed. Nothing errored.
+The tag simply stopped working (decision-40).
+
+| | `tagHost` | `apiHost` |
+|---|---|---|
+| today | `timesheets.exe.xyz` | `schimmer-glanz.exe.xyz` |
+| serves | `/.well-known/apple-app-site-association`, `/.well-known/assetlinks.json`, `/t` — and **nothing else** | admin panel, REST API, Postgres |
+| written onto | **physical NFC cards, on walls** | nothing |
+| **may it be renamed?** | **NO. NEVER.** | **Yes, freely, from a keyboard.** |
+| cost of moving it | a site visit **per building**, rewriting every tag by hand | a redeploy |
+| deployed by | `ops/tag-host/deploy.sh` | `ops/deploy.sh` |
+
+The app **parses** the tag host and **talks to** the API host. Those are different jobs and
+they are now different values.
 
 > **The tag host is chosen once, at zero tags.**
 >
-> Every NFC tag carries `https://<host>/t?l=<location uuid>`. The host is written into the
+> Every NFC tag carries `https://<tagHost>/t?l=<location uuid>`. The host is written into the
 > physical tag. Changing it after tags are on walls means **walking to every building and
 > rewriting every tag by hand** — tags are left unlocked precisely so that is possible
 > (decision-15), but it is a site visit per building, not a deploy.
 >
-> Pick your host before you write your first tag. Everything else in this document is
+> Pick your tag host before you write your first tag. Everything else in this document is
 > reversible from a keyboard. This is not.
+
+> **An exe.dev name is not owned by the company.** `timesheets.exe.xyz` is permanent by
+> *policy*, not by contract — it lives in somebody else's namespace. A domain the company
+> actually owns is the right long-term answer, and moving to one is still a site visit per
+> building. This split is the cheap version: it removes the reason a rename would ever be
+> wanted.
+
+### If the tag host ever does have to move
+
+All of these change **together**, and tags are rewritten by hand afterwards. Anything left
+behind is a silent dead tap, never an error:
+
+| File | What it holds |
+|---|---|
+| `ops/branding.json` | `tagHost` — the source of truth |
+| `android/branding.properties` | `ts.tagHost`, and the OLD value appended to `ts.legacyTagHosts` |
+| `web/lib/tag.ts` | the default the admin panel prints onto tags |
+| `NFCTimeSheets/NFCTimeSheets/NFCTimeSheets.entitlements` | `applinks:` literal (hand-edited; see step 4) |
+| `NFCTimeSheets/Branding.xcconfig` | `TS_TAG_HOST` |
+| `NFCTimeSheets/NFCTimeSheets/Branding.swift` | `defaultTagHost` |
+| `ops/tag-host/nginx.conf` | the box that serves the three files |
+| exe.dev | the VM name, and `share set-public` on the new one |
+
+Gates: `node ops/check-branding.mjs`, `android/checks/run.sh` (it pins the URI physically on
+the HOIV card), and `./server/wellknown/verify.sh`.
 
 Second thing, and it is the failure mode this whole surface exists to prevent:
 
@@ -34,7 +76,8 @@ repo is allowed to disagree with it:
 
 | Field | What it is |
 |---|---|
-| `host` | tag host + API host + the host that serves the association files |
+| `tagHost` | **permanent.** Written onto tags; serves the association files and `/t` |
+| `apiHost` | **renameable.** Admin panel, API, database |
 | `appName` | home-screen name on both platforms |
 | `apple.teamId` | your 10-character Apple Developer Team ID |
 | `apple.bundleIds` | **array, append-only** — see the handover note below |
@@ -61,8 +104,27 @@ generator refuses to drop a published appID unless you pass `--allow-removal`.
 
 ### 1. Edit `ops/branding.json`
 
-Set `host`, `appName`, `apple.teamId`, and append your bundle id / set your
+Set `tagHost`, `apiHost`, `appName`, `apple.teamId`, and append your bundle id / set your
 `android.packageName`. Leave `sha256CertFingerprints` empty for now — step 8 fills it.
+
+If you genuinely run one box for both jobs, set them to the same value **and** add
+`"singleHost": true` — `check-branding` refuses the coupling until you say so out loud,
+because two fields that quietly happen to be equal is exactly what the split undid.
+
+Then provision and deploy the tag host, which is its own box and is not touched by
+`ops/deploy.sh`:
+
+```
+ssh exe.dev "new --name=<your tag host name>"
+ssh exe.dev "share set-public <your tag host name>"    # MANDATORY - see below
+./ops/tag-host/deploy.sh
+```
+
+> **The tag host's HTTP proxy must be PUBLIC.** exe.dev proxies are private by default and
+> answer an unauthenticated request with `401` and a redirect to a login page. Android and
+> iOS fetch the association files with no credentials and no cookie jar: a private proxy
+> means App Links and universal links **silently never verify**, on every phone, forever.
+> `./server/wellknown/verify.sh` catches it (`status 401`, `2 redirect hops`).
 
 ### 2. Regenerate and review the association files
 
@@ -155,8 +217,15 @@ the server flips.
 
 ### 8. Android: `android/branding.properties`
 
-Set `ts.applicationId`, `ts.appName`, `ts.tagHost` to match `ops/branding.json`, and
-`ts.appKey` to the value from step 7.
+Set `ts.applicationId`, `ts.appName`, `ts.tagHost`, `ts.apiHost` to match
+`ops/branding.json`, and `ts.appKey` to the value from step 7.
+
+`ts.tagHost` is the manifest `${tagHost}` placeholder **and** `BuildConfig.TAG_HOST`, which
+is what `TagLink` parses. `ts.apiHost` is `BuildConfig.API_HOST`, which is the only thing
+`Api.kt` ever calls, and it must **never** appear in an `autoVerify` intent-filter: App Link
+verification is all-or-nothing across the hosts in a filter, so one host that stops serving
+`assetlinks.json` un-verifies the app for the *other* host too. Hosts you have written onto
+tags in the past go in `ts.legacyTagHosts` — a **parser** widening, not a manifest host.
 
 **Leave `ts.namespace` alone.** It is the Kotlin package that `R` and `BuildConfig` are
 generated into, and it is hard-wired in three places tooling cannot follow: the `package`
@@ -211,7 +280,7 @@ git diff server/wellknown/assetlinks.json
 ./ops/deploy.sh
 ```
 
-### 10. Serve it from your host
+### 10. Serve it from your TAG host
 
 `ops/deploy.sh` pushes `server/wellknown/` to the VM and restarts the unit. Requirements the
 server already satisfies and that you must not break if you put anything in front of it:
@@ -225,7 +294,8 @@ server already satisfies and that you must not break if you put anything in fron
 ### 11. VERIFY, BEFORE WRITING ANY TAG
 
 ```
-./server/wellknown/verify.sh              # host defaults to ops/branding.json
+./server/wellknown/verify.sh                                   # the TAG host (the default)
+./server/wellknown/verify.sh <apiHost> --host-override         # the API host serves them too
 ```
 
 It asserts status, exact content-type and zero redirects on both files; that the **live
@@ -263,7 +333,9 @@ It must report `<your host>: verified`. Anything else and every tap opens Chrome
 ### 12. Then, and only then, write a tag
 
 Admin panel → Locations → the tag URI shown there. It is built from
-`NEXT_PUBLIC_TAG_BASE_URL`, whose default is `https://<branding.host>`.
+`NEXT_PUBLIC_TAG_BASE_URL`, whose default is `https://<branding.tagHost>` — **not** the host
+the admin panel is being served from. Writing the host you happen to be looking at is the
+mistake decision-40 removes.
 
 Tap the first tag with a real phone before writing the rest. NFC does not work on any
 emulator or simulator, so this step cannot be automated and cannot be skipped.
@@ -272,8 +344,9 @@ emulator or simulator, so this step cannot be automated and cannot be skipped.
 
 ## Checklist
 
-- [ ] Host chosen, and **no tags written yet**
-- [ ] `ops/branding.json` edited; bundle id **appended**, not replaced
+- [ ] **Tag host** chosen, and **no tags written yet** — and it is NOT the API host
+- [ ] Tag-host VM provisioned, `share set-public` run, `./ops/tag-host/deploy.sh` green
+- [ ] `ops/branding.json` edited (`tagHost` + `apiHost`); bundle id **appended**, not replaced
 - [ ] `node ops/gen-wellknown.mjs --write`, diff **read**, committed
 - [ ] `Branding.xcconfig` attached to Debug + Release; target-level `PRODUCT_BUNDLE_IDENTIFIER`
       and `DEVELOPMENT_TEAM` rows **deleted** on all three targets
@@ -282,11 +355,11 @@ emulator or simulator, so this step cannot be automated and cannot be skipped.
 - [ ] `server/lib/apple.js` `APPLE_AUDIENCE` **and** `server/check-api.js` `BUNDLE_ID` set to your bundle id
 - [ ] App ID registered; Associated Domains + Sign in with Apple enabled
 - [ ] App key rotated in Swift, Android and `/etc/nfc/env` **together**
-- [ ] `android/branding.properties` set (**`ts.namespace` left alone**); keystore in gitignored `keystore.properties`
+- [ ] `android/branding.properties` set — `ts.tagHost` **and** `ts.apiHost` (**`ts.namespace` left alone**); keystore in gitignored `keystore.properties`
 - [ ] AAB uploaded to Play internal testing; **both** fingerprints copied from Play Console
 - [ ] `node ops/check-branding.mjs` — OK
 - [ ] `./ops/deploy.sh` — green, including step 7/7
-- [ ] `./server/wellknown/verify.sh` — `VERIFY OK`
+- [ ] `./server/wellknown/verify.sh` — `VERIFY OK` on the **tag** host
 - [ ] `codesign -d --entitlements -` shows your host
 - [ ] `adb shell pm get-app-links` reports `verified`
 - [ ] **One** tag written, tapped on a real iPhone and a real Android phone, shift appears
