@@ -12,6 +12,9 @@ migrations/003_clients_contracts_inventory.sql   clients, contacts, inventory_it
 migrations/004_worker_enrolment_codes.sql   workers.enrolment_code_* (decision-26)
 migrations/005_v2_features.sql   material_requests, location_contracts, app_settings,
                           locations.geocoded_at / geocode_status / street_view_status
+migrations/006_zones_revenue_rates.sql   zones (+ area, tag_serial), location_revenue,
+                          shifts.start_zone_id / end_zone_id, a worker rate that cannot be
+                          zero (decisions 41, 42, 43, 44)
 migrate.js                runner: applies migrations/*.sql once each, in lexical order
 seed.sql                  DEV ONLY sample data
 check-migrate.js          runnable check (see bottom)
@@ -175,6 +178,68 @@ so it can never reach production by accident.
   "try again later") and `street_view_status` (whether a photo exists; the static image
   endpoint answers 200 with a grey "no imagery" tile, so this is the only honest signal).
   All NULLable, because geocoding **fails soft** and must never block saving a building.
+
+### 006 — and the one thing to do on the box BEFORE applying it
+
+**006 REFUSES to apply while any worker has `hourly_rate_cents <= 0`.** It raises with a
+count and a hint, `psql -1` aborts the whole file, `migrate.js` records nothing, and the
+database is left exactly as it was. Re-running after the rates are set applies it.
+
+A restored production dump (2026-08-19) carries exactly one such row:
+
+```
+id 6 · 'TTL Test' · hourly_rate_cents 0 · active false · 0 shifts · 0 requests · 0 sessions
+```
+
+So the deploy order is: **deal with that row first, then migrate.** The migration will not
+do it for you, on purpose — a migration does not get to choose somebody's wage, and it does
+not get to deactivate people to avoid the question (decision-41 §3). Either name a real
+figure, or remove the row if it is the leftover test record it looks like:
+
+```sh
+psql "$DATABASE_URL" -c "SELECT id, name, hourly_rate_cents, active FROM workers WHERE hourly_rate_cents <= 0"
+# then ONE of:
+psql "$DATABASE_URL" -c "UPDATE workers SET hourly_rate_cents = 1500 WHERE id = 6"  # a figure a HUMAN chose
+psql "$DATABASE_URL" -c "DELETE FROM workers WHERE id = 6"                           # only while it has no history
+```
+
+`DELETE` is only safe while that worker has **no** shifts, material requests or sessions —
+check first, because the FKs are not `ON DELETE CASCADE` and a row with history will
+(correctly) refuse.
+
+The rest of 006, one line each:
+
+- **`workers.hourly_rate_cents` loses its `DEFAULT 0` and gains `CHECK (> 0)`.** Dropping the
+  default is the load-bearing half: `NOT NULL DEFAULT 0` still lands a zero on every `INSERT`
+  that omits the column, which was the shape of `seed.sql` and of eight `check-api.js`
+  fixtures. `> 0` and not `>= 0`: unlike a client contract a wage has no "free of charge"
+  reading, so **a rate of 0 stops being expressible** and the named `Kein Stundensatz`
+  exclusion goes with it (decision-41).
+- **`location_revenue` is what the client PAID**, one row per (building, Vienna month),
+  `month` always the 1st. **Append-only**: a correction inserts a new row and stamps
+  `superseded_at` on the old one; a retraction stamps `superseded_at` and inserts nothing, so
+  the month reverts to **UNKNOWN, not to 0**. `amount_cents` is `NOT NULL` and 0 is
+  expressible and *means something* — "they paid nothing this month". **The absence of a row
+  is the unknown.** No backfill from `location_contracts`: a contract is what was AGREED, and
+  copying it in would assert a payment that may never have arrived (decision-42).
+- **`zones` is a child of `locations` and carries an area.** `area_sqm` is `NUMERIC(8,2)` and
+  **NULLable on purpose** — a zone nobody has measured is real, and a required area would be
+  an invented one poisoning the €/m² benchmark that is the only reason the column exists. The
+  **building stores no area**: it is `SUM(zones.area_sqm)` at read time, reported as "at least
+  X m², N zones unmeasured" whenever any active zone is NULL (decision-43).
+- **`zones.tag_serial` is for ADOPTED third-party hardware only** (decision-44). A tag we
+  wrote carries the zone's id in its URL and has no row here. A serial is **not a credential**
+  (decision-15) and never reaches the server on a tap: the phone matches it against the cached
+  roster and sends the resolved place UUID.
+- **`shifts.start_zone_id` / `end_zone_id` are nullable TAP FACTS, never an input to money.**
+  `NULL` means "a building-level tag was tapped, or this predates zones" — not a missing value
+  to be backfilled. The **composite** FKs against `zones (id, location_id)` make it impossible
+  for a shift to name another building's zone. Consequence: `PATCH /admin/shifts/:id` must
+  **clear both zone columns when `location_id` changes**, or the update raises `23503`.
+- **006 creates ZERO rows.** No default zone, no revenue backfill. A building with no zones
+  behaves exactly as it does today and **its own UUID keeps resolving for ever** — the card
+  physically on the wall at HOIV carries one, and "unzoned" is a presentation state that must
+  never be wired to tap resolution (decision-43 §3).
 
 ## Backups
 

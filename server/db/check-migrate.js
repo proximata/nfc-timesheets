@@ -211,8 +211,10 @@ try {
     "1",
     "workers_enrolment_code_pair CHECK missing — an enrolment code must always carry an expiry",
   );
+  // hourly_rate_cents is supplied because 006 dropped its DEFAULT (decision-41): a fixture
+  // that omits the column now raises 23502, which is the whole point of dropping it.
   query(
-    "INSERT INTO workers (name, enrolment_code_hash, enrolment_code_expires_at) VALUES ('Coded', 'deadbeef', now() + interval '1 hour');",
+    "INSERT INTO workers (name, hourly_rate_cents, enrolment_code_hash, enrolment_code_expires_at) VALUES ('Coded', 1500, 'deadbeef', now() + interval '1 hour');",
   );
   assert.throws(
     () => query("UPDATE workers SET enrolment_code_expires_at = NULL WHERE name = 'Coded';"),
@@ -342,6 +344,180 @@ try {
     "products/equipment must NOT be separate tables — that would be two admin screens",
   );
 
+  // --- 006 spot-checks: zones, typed revenue, a rate that cannot be zero ----
+  //
+  // decision-41 · THE RATE. 001 shipped `hourly_rate_cents INTEGER NOT NULL DEFAULT 0`,
+  // so a worker created without a rate silently cost EUR 0,00/h. Two halves fix it and
+  // BOTH are asserted, because each one alone still lets a zero through:
+  //   DROP DEFAULT   an INSERT that OMITS the column now raises 23502 at the mistake
+  //   CHECK (> 0)    an INSERT that says 0 out loud raises 23514
+  assert.equal(
+    query(
+      "SELECT count(*) FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum WHERE d.adrelid = 'public.workers'::regclass AND a.attname = 'hourly_rate_cents';",
+    ),
+    "0",
+    "workers.hourly_rate_cents must have NO DEFAULT — a DEFAULT 0 lands a zero wage on every INSERT that omits it",
+  );
+  assert.throws(
+    () => query("INSERT INTO workers (name) VALUES ('No Rate At All');"),
+    /null value in column "hourly_rate_cents"|not-null/i,
+    "omitting the rate must raise 23502, not silently default to 0",
+  );
+  assert.throws(
+    () => query("INSERT INTO workers (name, hourly_rate_cents) VALUES ('Zero Rate', 0);"),
+    /workers_rate_positive/,
+    "a rate of 0 must be unrepresentable — a wage has no 'free of charge' reading (decision-41)",
+  );
+  query("INSERT INTO workers (name, hourly_rate_cents) VALUES ('Real Rate', 1500);");
+  query("DELETE FROM workers WHERE name = 'Real Rate';");
+
+  // decision-42 · REVENUE. A month is a Vienna CALENDAR month, always the 1st. A figure
+  // filed against the 15th would be a payment for half a month that nobody agreed to, and
+  // the partial unique index below would then admit two live rows for one month.
+  assert.equal(query("SELECT to_regclass('public.location_revenue') IS NOT NULL;"), "t", "location_revenue missing");
+  assert.equal(
+    query(
+      "SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.location_revenue'::regclass AND attname = 'amount_cents';",
+    ),
+    "integer",
+    "location_revenue.amount_cents must be INTEGER cents, never a float",
+  );
+  assert.equal(
+    query(
+      "SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.location_revenue'::regclass AND attname = 'month';",
+    ),
+    "date",
+    "location_revenue.month must be DATE — a timestamptz would move a month across midnight twice a year",
+  );
+  assert.throws(
+    () =>
+      query(
+        "INSERT INTO location_revenue (location_id, month, amount_cents) SELECT id, DATE '2026-09-15', 100000 FROM locations LIMIT 1;",
+      ),
+    /location_revenue_month_start/,
+    "a revenue row dated mid-month must be refused by the database",
+  );
+  query(
+    "INSERT INTO location_revenue (location_id, month, amount_cents) SELECT id, DATE '2026-09-01', 100000 FROM locations ORDER BY slug LIMIT 1;",
+  );
+  // 0 is EXPRESSIBLE and means "they paid nothing this month". Row-absence is the unknown.
+  query(
+    "INSERT INTO location_revenue (location_id, month, amount_cents) SELECT id, DATE '2026-10-01', 0 FROM locations ORDER BY slug LIMIT 1;",
+  );
+  // APPEND-ONLY: at most one row IN FORCE per (building, month). A second live row would
+  // make "what did they pay in September" have two answers inside one report.
+  assert.equal(
+    query(
+      "SELECT indisunique AND indpred IS NOT NULL FROM pg_index WHERE indexrelid = 'public.location_revenue_one_live_idx'::regclass;",
+    ),
+    "t",
+    "location_revenue_one_live_idx must be a PARTIAL UNIQUE index",
+  );
+  assert.throws(
+    () =>
+      query(
+        "INSERT INTO location_revenue (location_id, month, amount_cents) SELECT id, DATE '2026-09-01', 90000 FROM locations ORDER BY slug LIMIT 1;",
+      ),
+    /location_revenue_one_live_idx/,
+    "two live figures for one building-month must be impossible",
+  );
+  // ...and superseding the first one is what makes a correction legal.
+  query("UPDATE location_revenue SET superseded_at = now() WHERE month = DATE '2026-09-01';");
+  query(
+    "INSERT INTO location_revenue (location_id, month, amount_cents) SELECT id, DATE '2026-09-01', 90000 FROM locations ORDER BY slug LIMIT 1;",
+  );
+  assert.equal(
+    query("SELECT count(*) FROM location_revenue WHERE month = DATE '2026-09-01';"),
+    "2",
+    "a correction must KEEP the superseded figure — money that changes invisibly is an opinion",
+  );
+  query("DELETE FROM location_revenue;");
+  // NO BACKFILL. 005 backfilled contracts from locations; 006 must NOT do the equivalent
+  // for revenue, because a contract is what was AGREED and copying it in asserts a payment.
+  assert.equal(
+    query("SELECT count(*) FROM location_revenue;"),
+    "0",
+    "006 must create ZERO revenue rows — a contract figure is not a payment",
+  );
+
+  // decision-43 · ZONES. Zero rows created, and the area is NULLable on purpose: a zone
+  // nobody has measured is real, and a required area would be an invented one poisoning
+  // the EUR/m2 benchmark that is the only reason the column exists.
+  assert.equal(query("SELECT to_regclass('public.zones') IS NOT NULL;"), "t", "zones table missing");
+  assert.equal(query("SELECT count(*) FROM zones;"), "0", "006 must create ZERO zones — no default zone, ever");
+  assert.equal(
+    query(
+      "SELECT attnotnull FROM pg_attribute WHERE attrelid = 'public.zones'::regclass AND attname = 'area_sqm';",
+    ),
+    "f",
+    "zones.area_sqm must be NULLable — 'nobody has measured it' is a real, permanent state",
+  );
+  assert.equal(
+    query(
+      "SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.zones'::regclass AND attname = 'area_sqm';",
+    ),
+    "numeric(8,2)",
+    "zones.area_sqm must be NUMERIC — it is the DENOMINATOR of a EUR/m2 figure, so no float",
+  );
+  // THE BUILDING STORES NO AREA. A stored total drifts the first time a zone is resized.
+  assert.equal(
+    query(
+      "SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.locations'::regclass AND attname IN ('area_sqm', 'square_metres', 'total_area_sqm') AND NOT attisdropped;",
+    ),
+    "0",
+    "locations must NOT store an area — it is SUM(zones.area_sqm), derived at read time",
+  );
+  // decision-44: one adopted serial can only ever mean one place.
+  assert.equal(
+    query(
+      "SELECT indisunique AND indpred IS NOT NULL FROM pg_index WHERE indexrelid = 'public.zones_tag_serial_idx'::regclass;",
+    ),
+    "t",
+    "zones_tag_serial_idx must be a PARTIAL UNIQUE index — two zones must never claim one serial",
+  );
+  assert.throws(
+    () => query("INSERT INTO zones (location_id, name, tag_serial) SELECT id, 'Bad Serial', '04-a1-a8' FROM locations LIMIT 1;"),
+    /zones_tag_serial/,
+    "a serial that is not uppercase colon-separated hex must be refused (the form KnownTags produces)",
+  );
+
+  // THE COMPOSITE FK, and it is the whole reason (id, location_id) is UNIQUE on zones:
+  // the DATABASE makes it impossible for a shift to name another building's zone. Without
+  // it a mis-typed patch attributes a tap at Neuhaus to a stairwell in Arsenalstraße.
+  query(`INSERT INTO zones (location_id, name, area_sqm)
+           SELECT id, 'Stiege A', 120.50 FROM locations ORDER BY slug LIMIT 1;
+         INSERT INTO zones (location_id, name)
+           SELECT id, 'Stiege B' FROM locations ORDER BY slug OFFSET 1 LIMIT 1;`);
+  assert.throws(
+    () => query(`INSERT INTO shifts (worker_id, location_id, start_time, end_time, start_zone_id)
+                 SELECT w.id, l.id, now() - interval '2 hours', now() - interval '1 hour', z.id
+                   FROM workers w, locations l, zones z
+                  WHERE w.name = 'Anna Müller' AND l.slug = (SELECT slug FROM locations ORDER BY slug LIMIT 1)
+                    AND z.name = 'Stiege B' LIMIT 1;`),
+    /shifts_start_zone_fk/,
+    "a shift must never be able to name a zone of a DIFFERENT building",
+  );
+  query(`INSERT INTO shifts (worker_id, location_id, start_time, end_time, start_zone_id)
+         SELECT w.id, l.id, now() - interval '2 hours', now() - interval '1 hour', z.id
+           FROM workers w, locations l, zones z
+          WHERE w.name = 'Anna Müller' AND l.id = z.location_id AND z.name = 'Stiege A' LIMIT 1;`);
+  assert.equal(
+    query("SELECT count(*) FROM shifts WHERE start_zone_id IS NOT NULL;"),
+    "1",
+    "a shift naming a zone of its OWN building must be accepted",
+  );
+  // A building-level tap keeps working, for ever: NULL means "a building tag was tapped,
+  // or this predates zones". It is not a missing value to be backfilled.
+  query(`INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+         SELECT w.id, l.id, now() - interval '5 hours', now() - interval '4 hours'
+           FROM workers w, locations l WHERE w.name = 'Ivan Horvat' ORDER BY l.slug LIMIT 1;`);
+  assert.equal(
+    query("SELECT count(*) FROM shifts WHERE start_zone_id IS NULL AND end_zone_id IS NULL;"),
+    "1",
+    "a building-level shift with no zone at all must remain legal",
+  );
+  query("DELETE FROM shifts; DELETE FROM zones;");
+
   // --- 003 + 004 on top of an ALREADY MIGRATED database that holds real rows -
   try {
     run("createdb", [LIVE_DB_NAME]);
@@ -429,9 +605,68 @@ try {
   );
   assert.equal(liveQuery("SELECT count(*) FROM shifts WHERE end_time IS NULL;"), "1", "the open shift must survive");
 
+  // --- 006 on top of live data, and the rate guard REFUSING rather than inventing ---
+  //
+  // THIS IS PRODUCTION'S ACTUAL SHAPE. The live box carries one leftover row — 'TTL Test',
+  // rate 0, inactive, no shifts — so migration 006 REFUSES there until a human deals with
+  // it. Reproduced here so the refusal is a tested property and not a surprise on the box.
+  //
+  // A migration that halts with a COUNT and an instruction is strictly better than one
+  // that writes a number nobody chose into a payroll column, and better than one that
+  // deactivates people to avoid the question (decision-41 §3).
+  liveQuery("INSERT INTO workers (name, hourly_rate_cents, active) VALUES ('Rateless Leftover', 0, false);");
+  assert.throws(
+    () => apply("006_zones_revenue_rates.sql"),
+    /1 worker\(s\) have no hourly rate; refusing to invent one/,
+    "006 must REFUSE while any worker has no rate — and it must say HOW MANY",
+  );
+  // `psql -1` means the RAISE aborted the whole file. Nothing may have landed.
+  assert.equal(
+    liveQuery("SELECT to_regclass('public.zones') IS NULL AND to_regclass('public.location_revenue') IS NULL;"),
+    "t",
+    "a refused 006 must leave the database EXACTLY as it was — no table, no column, no constraint",
+  );
+  assert.equal(
+    liveQuery("SELECT count(*) FROM pg_constraint WHERE conname = 'workers_rate_positive';"),
+    "0",
+    "a refused 006 must not have applied its own constraint either",
+  );
+  // The exemption decision-41 REJECTED: `OR NOT active`. The leftover row above is
+  // inactive, and it still blocks. If someone ever adds that exemption to soften the
+  // refusal, the assertion above stops throwing and this check goes red.
+  assert.equal(
+    liveQuery("SELECT count(*) FROM workers WHERE hourly_rate_cents <= 0 AND NOT active;"),
+    "1",
+    "the blocking row is INACTIVE on purpose — inactivity must not be an exemption",
+  );
+
+  // Deal with it the way the ops step says to, then re-run: it applies.
+  liveQuery("DELETE FROM workers WHERE name = 'Rateless Leftover';");
+  apply("006_zones_revenue_rates.sql");
+  assert.equal(
+    liveQuery("SELECT to_regclass('public.zones') IS NOT NULL AND to_regclass('public.location_revenue') IS NOT NULL;"),
+    "t",
+    "006 must apply once every rate is real",
+  );
+  // The two live shifts — one closed, one OPEN — must survive with both zone columns NULL.
+  // Zero backfill: a default zone would assert a tap that never happened.
+  assert.equal(
+    liveQuery("SELECT count(*) FROM shifts WHERE start_zone_id IS NULL AND end_zone_id IS NULL;"),
+    "2",
+    "006 must add the zone columns NULLable and backfill NOTHING",
+  );
+  assert.equal(liveQuery("SELECT count(*) FROM shifts WHERE end_time IS NULL;"), "1", "the open shift must survive 006");
+  assert.equal(liveQuery("SELECT count(*) FROM zones;"), "0", "006 must invent no zone for a live building");
+  assert.equal(
+    liveQuery("SELECT count(*) FROM location_revenue;"),
+    "0",
+    "006 must invent no revenue row, even for the building that HAS a contract figure",
+  );
+
   console.log(
     "OK check-migrate: migrations apply once, re-run is a no-op, seed is idempotent, " +
-      "003+004+005 apply on top of 001+002 with live data, and 005's contract backfill is idempotent",
+      "003+004+005 apply on top of 001+002 with live data, 005's contract backfill is idempotent, " +
+      "and 006 refuses a rate-less worker before applying cleanly over live rows",
   );
 } finally {
   for (const db of [DB_NAME, LIVE_DB_NAME]) {
