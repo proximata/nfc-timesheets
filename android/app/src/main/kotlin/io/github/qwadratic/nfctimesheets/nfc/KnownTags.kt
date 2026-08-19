@@ -1,5 +1,7 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
+import io.github.qwadratic.nfctimesheets.core.Zones
+
 /**
  * ADOPTED TAGS — third-party tags already stuck to walls, matched by hardware serial.
  *
@@ -34,6 +36,16 @@ package io.github.qwadratic.nfctimesheets.nfc
  * attacker-writable, and the server validates the location and derives the worker from the
  * session on every clock-in. Nothing here is a new trust assumption. It must never become
  * one: do not let a serial authenticate anything.
+ *
+ * NOT DELETED THIS PHASE. decision-44 names this file's deletion condition precisely: only
+ * once a zone in the database actually carries this serial AND that has been verified on the
+ * wire (`GET /roster` -> that serial -> that zone -> HOIV), never against a design document
+ * alone. Production has zero zone rows today (migration 006 unapplied), so the gate has not
+ * fired — deleting this table now would strand the only tag mounted in the field with no
+ * site-visit fix. `nfc/ScanActivity.kt` now tries the roster-cached zone table FIRST
+ * (`core/Zones.zonePlaceIdForSerial`) and falls back to [BY_SERIAL] only when the roster has
+ * no answer, exactly as decision-37's retained consequence requires: "KnownTags.BY_SERIAL
+ * stays as a compiled last-resort fallback... with roster-supplied serials taking priority."
  */
 object KnownTags {
 
@@ -51,15 +63,11 @@ object KnownTags {
     /**
      * Location UUID for a tag serial, or null when the serial is unknown — which is the
      * normal case and never an error. Input is normalised so a caller may pass any casing
-     * or separator style ("04a1a852ae5c80", "04-a1-a8-...").
+     * or separator style ("04a1a852ae5c80", "04-a1-a8-...") through [Zones.normaliseSerial]
+     * — ONE copy of this rule, not a second hand-written one drifting beside it.
      */
     fun locationIdFor(serial: String?): String? {
-        if (serial.isNullOrBlank()) return null
-        val normalised = serial
-            .uppercase()
-            .filter { it.isDigit() || it in 'A'..'F' }
-            .chunked(2)
-            .joinToString(":")
+        val normalised = Zones.normaliseSerial(serial) ?: return null
         return BY_SERIAL[normalised]
     }
 }
