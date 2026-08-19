@@ -477,7 +477,7 @@
     "zonesClose": "Zonenliste schließen",
     "zonesEmpty": "Für dieses Objekt ist noch keine Zone angelegt. Es fehlt nichts, was die Arbeit betrifft: Der Tag dieses Objekts startet weiterhin eine Schicht. Mit Zonen kommen die Fläche des Objekts dazu und die Information, wann welcher Tag zuletzt getippt wurde.",
     "zonesTableCaption": "Zonen von {name}, aktive zuerst, danach nach Name.",
-    "zonesNoneStillWorks": "Ohne Zone – der Tag dieses Objekts startet trotzdem eine Schicht.",
+    "zonesNoneStillWorks": "Noch keine Zone angelegt · der Tag dieses Objekts startet trotzdem eine Schicht.",
     "zonesSecondTagWarning": "Bevor ein ZWEITER Tag in einem Objekt angebracht wird: Auf dem Diensthandy muss eine App-Version laufen, die Zonen kennt. Auf einer älteren Version beendet jeder Tag-Kontakt im selben Objekt die laufende Schicht automatisch und startet eine neue – das ergibt lauter unbestätigte Schichten, die von Hand korrigiert werden müssen. Ein einzelner Tag pro Objekt ist davon nicht betroffen.",
     "zonesTestTapWarning": "Ein Test-Tippen erzeugt eine echte Schicht. Es gibt keine Funktion, die eine Schicht wieder löscht – eine Testschicht muss in der Schichtliste von Hand auf die richtige Zeit korrigiert werden. Am besten testen, wenn ohnehin gearbeitet wird.",
     "colZoneName": "Zone",

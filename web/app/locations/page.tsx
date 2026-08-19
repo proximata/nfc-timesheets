@@ -1646,11 +1646,27 @@ export default function LocationsPage() {
                       <span className="shift-state-note num">
                         {areaSentence(areaOf(location.id))}
                       </span>
-                      {/* The reassurance, on the row that raises the question. A building
-                          with no zones clocks workers in exactly as it did before zones
-                          existed, and the card already on the wall carries its uuid. */}
-                      {liveZonesOf(location.id).length === 0 && location.active ? (
-                        <span className="shift-state-note">{t('zonesNoneStillWorks')}</span>
+                      {/*
+                        THE ZONE STATE LIVES HERE AND NOWHERE ELSE ON THIS ROW.
+
+                        It used to be said twice — once here and once as a note under the
+                        Status cell — and the second copy was the wrong place for two
+                        reasons. It read as a qualifier on the OPERATIONAL word beside it,
+                        which is the merge decision-43 §3 exists to prevent; and the Status
+                        column is 57px wide, so „angelegt" (60px) could not fit in it at
+                        1440px and was cut mid-word (demo/audit-table-words.mjs). One
+                        statement, in the column the reader is already looking at for zones.
+
+                        TWO BRANCHES, because the reassurance is only TRUE for one of them.
+                        An ACTIVE building with no zones clocks workers in exactly as it did
+                        before zones existed and the card already on the wall carries its
+                        uuid — say so. A building that has been stood down does not, and
+                        printing the sentence anyway would be a false promise about a wall.
+                      */}
+                      {zoneStateOf(liveZonesOf(location.id).length) === 'unzoned' ? (
+                        <span className="shift-state-note">
+                          {location.active ? t('zonesNoneStillWorks') : t('statusUnzoned')}
+                        </span>
                       ) : null}
                       {/*
                         THE BUILDING TAG IS NOW A COLLAPSED, READ-ONLY DISCLOSURE
@@ -1694,19 +1710,15 @@ export default function LocationsPage() {
                       Text, not a colour: the status has to survive greyscale and a screen
                       reader.
 
-                      TWO WORDS, KEPT APART PERMANENTLY (decision-43 §3). `tagResolves`
-                      answers the OPERATIONAL question and its parameter type cannot see a
-                      zone count, so it cannot be quietly multiplied by one. The zone state
-                      underneath is PRESENTATION and says what is missing, not that anything
-                      is broken — an unzoned building clocks workers in exactly as it always
-                      did, and the card on the HOIV wall carries its uuid.
+                      TWO WORDS, KEPT APART PERMANENTLY (decision-43 §3), and this cell now
+                      holds exactly ONE of them. `tagResolves` answers the OPERATIONAL
+                      question and its parameter type cannot see a zone count, so it cannot
+                      be quietly multiplied by one. The zone state is PRESENTATION, it lives
+                      in the Zonen column, and it is deliberately NOT repeated here: a
+                      presentational note stacked under the operational word is read as a
+                      qualifier on it, which is the merge this split exists to prevent.
                     */}
-                    <td>
-                      {tagResolves(location) ? t('statusActive') : t('statusInactive')}
-                      {zoneStateOf(liveZonesOf(location.id).length) === 'unzoned' ? (
-                        <span className="shift-state-note">{t('statusUnzoned')}</span>
-                      ) : null}
-                    </td>
+                    <td>{tagResolves(location) ? t('statusActive') : t('statusInactive')}</td>
                     <td className="cell-actions">
                       <button
                         type="button"

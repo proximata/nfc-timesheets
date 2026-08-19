@@ -1534,6 +1534,37 @@ check('/locations/: an unzoned building is a PRESENTATION state, never an operat
     )
   }
 
+  // 3b. THE REASSURANCE IS ONLY TRUE OF AN ACTIVE BUILDING, and the row branches on it.
+  //
+  //     „der Tag dieses Objekts startet trotzdem eine Schicht" printed on a building that
+  //     has been stood down is a false promise about a wall: its tag resolves nothing, and a
+  //     worker sent to it taps and gets a web page. The branch is one ternary and it is
+  //     asserted HERE rather than in the browser for a stated reason — nfc_demo seeds no
+  //     inactive building, and the two ways to make one during a probe both cost more than
+  //     they prove. Deactivating through the UI ALSO revokes the client's live portal link,
+  //     which reactivating does not hand back, so a probe that tidied up after itself would
+  //     still leave the fixture changed. Seeding a seventh building moves every figure on
+  //     /pl/, /payroll/ and the map for one ternary.
+  //
+  //     So: the branch is pinned as source, and the copy is pinned as copy. Delete the
+  //     ternary and the first assertion fails; move the promise into the other string and
+  //     the second one does. Neither is a rendered proof, and this comment is the ceiling.
+  assert.match(
+    page.text,
+    /location\.active \? t\('zonesNoneStillWorks'\) : t\('statusUnzoned'\)/,
+    'a stood-down building must NOT be told its tag still starts a shift',
+  )
+  for (const locale of LOCALES) {
+    const flat = dictionaries[locale]
+    const claim = locale === 'de' ? /Schicht/ : /shift/i
+    assert.match(flat['locations.zonesNoneStillWorks'], claim, `${locale}: the active branch says the tag still works`)
+    assert.doesNotMatch(
+      flat['locations.statusUnzoned'],
+      claim,
+      `${locale}: the branch shown on a stood-down building must promise nothing about a tag`,
+    )
+  }
+
   // 4. The zone tag URI is built by lib/tag.ts, on the PERMANENT tag host (decision-40) —
   //    never from window.location, which on this panel is the RENAMEABLE api host.
   assert.match(page.text, /tagUri\(zone\.id\)/, 'a zone tag carries the ZONE uuid')
