@@ -182,6 +182,31 @@ actually know. The P&L divides materials pro-rata by labour hours and never by t
 
 ---
 
+## Zones (decision-43 / decision-44) — where this build stands
+
+`GET /roster` gained an additive `zones[]` array. `core/Zones.kt` is the pure decision
+logic (`buildingIdOf`, `zonePlaceIdForSerial`, `normaliseSerial`), proven off-device by
+`checks/run.sh`. `data/ShiftStore.kt` moved to database version 2 to cache it
+(`replaceRoster`, `zones()`); the migration only ADDS a table, it never touches `shifts`
+or `locations`. `nfc/ScanActivity.kt` now resolves a scanned serial in this order:
+
+    TagLink URI (a real tag we wrote)  ->  roster-cached zone serial  ->  nfc/KnownTags.kt
+
+`ui/TimeSheetViewModel.kt`'s `writeTap()` compares the BUILDING two taps resolve to
+(`Zones.buildingIdOf`), not the raw tapped id — two zone taps in one building now close
+the shift instead of reading as a building switch. `submitMaterial()` resolves the open
+shift's place through the same function before it can reach `POST /material-requests`,
+which only accepts a building id (decision-6).
+
+**`nfc/KnownTags.kt` is NOT deleted.** decision-44 §4's gate — verified on the wire,
+`GET /roster` actually carrying the mounted serial against a real zone row — has not
+fired: production has zero zone rows (migration 006 unapplied). Deleting the compiled
+fallback before that gate fires strands the only tag mounted in the field with no
+site-visit fix. **Do not remove it** until a future run confirms the gate against the
+running server, not against this document.
+
+---
+
 ## First compile — the three real bugs
 
 All three were configuration, all three were fatal, and none was fixed by weakening
