@@ -80,6 +80,33 @@ object Wire {
         name = o.optString("name", ""),
     )
 
+    /** One row of the `zones` array server/routes/app.js:roster adds (decision-44). */
+    fun zone(o: JSONObject) = WireZone(
+        id = o.getString("id"),
+        locationId = o.getString("location_id"),
+        name = o.optString("name", ""),
+        tagSerial = o.stringOrNull("tag_serial"),
+    )
+
+    /**
+     * GET /roster's whole envelope. `zones` is read with [JSONObject.optJSONArray], NEVER
+     * `getJSONArray`: a server older than this app (pre decision-44) has no `"zones"` key
+     * at all, and `getJSONArray` would throw `JSONException` on every launch against it.
+     * The array is PURELY ADDITIVE (decision-44 §2) — an absent key degrades to an empty
+     * list, never a crash. `workers` is deliberately not read (decision-22).
+     */
+    fun roster(o: JSONObject): WireRoster {
+        val locations = o.getJSONArray("locations")
+        val locationList = (0 until locations.length()).map { location(locations.getJSONObject(it)) }
+        val zonesArray = o.optJSONArray("zones")
+        val zoneList = if (zonesArray == null) {
+            emptyList()
+        } else {
+            (0 until zonesArray.length()).map { zone(zonesArray.getJSONObject(it)) }
+        }
+        return WireRoster(locationList, zoneList)
+    }
+
     fun shift(o: JSONObject) = WireShift(
         id = o.getInt("id"),
         workerId = o.getInt("worker_id"),
@@ -126,6 +153,18 @@ data class WireWorker(val id: Int, val name: String)
  * lines only and must never be put back into a tag URI.
  */
 data class WireLocation(val id: String, val slug: String, val name: String)
+
+/**
+ * One adopted-tag serial, riding on `/roster` (decision-44). `id` is a PLACE id, same id
+ * space as [WireLocation.id] (decision-43) — a shift or a synthesised tag URI may carry
+ * either one. `tagSerial` is nullable in the type only because [Wire.stringOrNull] always
+ * returns a nullable String; the server's CHECK constraint means a present row always has
+ * one.
+ */
+data class WireZone(val id: String, val locationId: String, val name: String, val tagSerial: String?)
+
+/** GET /roster's envelope: the locations that resolve, plus the zones riding along additively. */
+data class WireRoster(val locations: List<WireLocation>, val zones: List<WireZone>)
 
 /** The single shift shape every shift endpoint returns. */
 data class WireShift(
