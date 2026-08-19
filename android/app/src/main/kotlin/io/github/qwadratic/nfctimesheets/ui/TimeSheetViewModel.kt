@@ -15,6 +15,7 @@ import io.github.qwadratic.nfctimesheets.core.TapInbox
 import io.github.qwadratic.nfctimesheets.core.WireMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.core.WireWorker
+import io.github.qwadratic.nfctimesheets.core.Zones
 import io.github.qwadratic.nfctimesheets.data.LocalShift
 import io.github.qwadratic.nfctimesheets.notify.ShiftSignals
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -355,7 +356,7 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
         if (running == null) {
             app.store.startShift(workerId, locationId)
-        } else if (running.locationId == locationId) {
+        } else if (sameBuilding(running.locationId, locationId)) {
             app.store.closeShift(running.clientUuid, Instant.now(), autoClosed = false)
         } else {
             // The worker left the last building without tapping out and is now at a new
@@ -373,6 +374,19 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
         }
 
         return notice
+    }
+
+    /**
+     * Same BUILDING, not same raw id (decision-37's named risk, decision-43 §4). Two
+     * zone taps inside one building must close-and-reopen as a tap-OUT, never be read as
+     * a building switch — comparing the raw ids would do exactly that the day HOIV gets
+     * its first zone. [Zones.buildingIdOf] resolves both ids against the roster-cached
+     * zone table before comparing; a place absent from the cache compares as itself
+     * (identity fallback), which is exactly today's zero-zone behaviour.
+     */
+    private fun sameBuilding(a: String, b: String): Boolean {
+        val zones = app.store.zones()
+        return Zones.buildingIdOf(a, zones) == Zones.buildingIdOf(b, zones)
     }
 
     fun dismissSwitchNotice() {
@@ -452,7 +466,14 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
         val worker = (_session.value as? SessionState.SignedIn)?.worker ?: return false
         val body = MaterialQueue.normalise(typed) ?: return false
         viewModelScope.launch {
-            io { app.materials.enqueue(worker.id, body, locationId = _log.value.open?.locationId) }
+            // THE BUILDING, never the zone. POST /material-requests validates
+            // location_uuid with v.activeLocation (buildings only, decision-6) — a raw
+            // zone id from a shift that started at a zone tag would 422 unknown_location
+            // and MaterialQueue.outcome() classifies that BLOCKED: terminal, a human must
+            // act, and it looks like an unrelated support ticket with no obvious cause.
+            val openLocationId = _log.value.open?.locationId
+            val buildingId = openLocationId?.let { io { Zones.buildingIdOf(it, app.store.zones()) } }
+            io { app.materials.enqueue(worker.id, body, locationId = buildingId) }
             readMaterials()
             syncMaterials()
         }
