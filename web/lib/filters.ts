@@ -34,6 +34,13 @@ import { isPeriod, type Period } from '@/lib/period'
  *   state=            open | unresolved | manual | noEmail | noTag
  *   status=           open | all | decide | order | deliver     (materials only)
  *   open=<uuid>       opens the edit drawer on /locations/ for that building
+ *   zones=<uuid>      opens the ZONE list on /locations/ for that building (decision-43).
+ *                     Separate from `open=`, because they are two different jobs on one
+ *                     screen and one parameter for both would make „Zonen verwalten“ and
+ *                     „Objekt bearbeiten“ the same link. Separate from `location=` too:
+ *                     `location=` narrows a REPORT to one building, `zones=` opens an
+ *                     EDITOR for one, and /locations/ would otherwise have to guess which
+ *                     was meant from a link written on another screen
  *
  * `status=all` is an addition to decision-38's list of four, and it is deliberate:
  * `/material-requests/` already ships an „alle" option on its own control, and a filter the
@@ -73,6 +80,7 @@ export const FILTER_KEYS = [
   'state',
   'status',
   'open',
+  'zones',
 ] as const
 
 export type FilterKey = (typeof FILTER_KEYS)[number]
@@ -112,6 +120,7 @@ export type AdminFilters = {
   state: FilterState | null
   status: FilterStatus | null
   open: string | null
+  zones: string | null
 }
 
 export const EMPTY_FILTERS: AdminFilters = {
@@ -123,6 +132,7 @@ export const EMPTY_FILTERS: AdminFilters = {
   state: null,
   status: null,
   open: null,
+  zones: null,
 }
 
 /**
@@ -193,6 +203,7 @@ export function parseFilters(search: string): AdminFilters {
     state: state !== null && isFilterState(state) ? state : null,
     status: status !== null && isFilterStatus(status) ? status : null,
     open: toUuid(open),
+    zones: toUuid(text('zones')),
   }
 }
 

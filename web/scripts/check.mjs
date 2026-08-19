@@ -428,6 +428,8 @@ check('lib/filters.ts: a hand-typed or stale URL degrades, never throws', () => 
     '?state=nonsense',
     '?status=nonsense',
     '?open=nope',
+    '?zones=nope',
+    '?zones=729b9c2a-98e2-4fb6-91d1-889fc8b561c',
     '?unknownparam=1&another=2',
     '?location=a&location=b',
   ]
@@ -452,8 +454,12 @@ check('lib/filters.ts: every well-formed value survives a round trip', () => {
     state: 'unresolved',
     status: 'open',
     open: uuid,
+    zones: uuid,
   }
   assert.deepEqual(parseFilters(filterQuery(full)), full)
+  // The zone editor is its own parameter, and it is normalised like every other uuid: a
+  // tag writer that formats uppercase is exactly how this screen is reached.
+  assert.equal(parseFilters(`?zones=${uuid.toUpperCase()}`).zones, uuid)
   // A UUID IS NORMALISED TO LOWER CASE AT THE BOUNDARY, and this assertion used to say the
   // opposite: „kept verbatim, because rewriting the case would make two links to the same
   // building compare unequal". It has that backwards. Hex digits are case-insensitive on
@@ -1258,6 +1264,163 @@ check('lib/payroll.ts: the CSV states hours and amounts in ONE Austrian number f
   )
   assert.equal(quoted[0][6], '2 offen; 1 zu bestätigen')
   assert.deepEqual(readsAsDe(quoted[0][6]), { kind: 'text' })
+})
+
+// --- 11b. an area is exact decimal, and a missing one is never 0 (decision-43) ----------
+
+const {
+  hundredthsToPlainArea,
+  isDivisibleArea,
+  parseAreaToHundredths,
+  sumArea,
+  tagResolves,
+  wireAreaToHundredths,
+  zoneStateOf,
+} = await import(pathToFileURL(join(ROOT, 'lib/area.ts')).href)
+
+check('lib/area.ts: a building area is summed as integers and never invented', () => {
+  // Euros and square metres get the same discipline for the same reason: `zones.area_sqm` is
+  // NUMERIC(8,2) precisely so an exact decimal never passes through binary floating point.
+  assert.equal(parseAreaToHundredths('420'), 42_000)
+  assert.equal(parseAreaToHundredths('420,5'), 42_050, 'a German keyboard produces the comma')
+  assert.equal(parseAreaToHundredths('420.05'), 42_005)
+  assert.equal(parseAreaToHundredths('0.5'), 50)
+  // STRICTLY POSITIVE, same rule as the column's CHECK: a zone with no floor is not a zone.
+  assert.equal(parseAreaToHundredths('0'), null)
+  assert.equal(parseAreaToHundredths('0,00'), null)
+  // A typo is refused, never rounded into a measurement. `parseFloat` would take all three.
+  assert.equal(parseAreaToHundredths('12.345'), null)
+  assert.equal(parseAreaToHundredths(''), null)
+  assert.equal(parseAreaToHundredths('abc'), null)
+  assert.equal(parseAreaToHundredths('-5'), null)
+  // Round trip through the string the API is handed.
+  assert.equal(hundredthsToPlainArea(42_050), '420.50')
+  assert.equal(parseAreaToHundredths(hundredthsToPlainArea(42_005)), 42_005)
+  // ...and back off the wire, where pg has already parsed the numeric into a JS number.
+  assert.equal(wireAreaToHundredths(420.5), 42_050)
+  assert.equal(wireAreaToHundredths(null), null, 'nobody has measured it')
+
+  // THE FLOAT THIS FILE EXISTS TO AVOID. Three zones a spreadsheet would call 12.10, 0.20
+  // and 0.10: as floats they sum to 12.399999999999999, and that number then becomes the
+  // DENOMINATOR of every EUR/m2 figure the director quotes a new building from.
+  assert.notEqual(12.1 + 0.2 + 0.1, 12.4)
+  assert.equal(sumArea([12.1, 0.2, 0.1]).hundredths, 1240)
+
+  // NULL IS NOT 0, and the difference is the whole guard rail: one unmeasured zone makes the
+  // sum a FLOOR, and a floor printed as a total is a confidently wrong benchmark rather than
+  // an approximately right one.
+  assert.deepEqual(sumArea([]), { hundredths: 0, zones: 0, unmeasured: 0, state: 'none' })
+  assert.deepEqual(sumArea([420, null]), {
+    hundredths: 42_000,
+    zones: 2,
+    unmeasured: 1,
+    state: 'incomplete',
+  })
+  assert.deepEqual(sumArea([420, 80]), {
+    hundredths: 50_000,
+    zones: 2,
+    unmeasured: 0,
+    state: 'complete',
+  })
+  // "No zones at all" and "zones nobody measured" are DIFFERENT unknowns with different
+  // fixes, and the screen prints a different sentence for each.
+  assert.notEqual(sumArea([]).state, sumArea([null]).state)
+
+  // THE SUM STAYS AN INTEGER. The naive implementation — add the square metres, multiply by
+  // 100 at the end — gives 1239.9999999999998 here, and that number becomes the DENOMINATOR
+  // of every EUR/m2 figure the director quotes a new building from.
+  for (const areas of [
+    [12.1, 0.2, 0.1],
+    [0.07, 0.07, 0.07],
+    [999_999.99, 0.01],
+  ]) {
+    assert.ok(Number.isInteger(sumArea(areas).hundredths), `${areas} must sum to an integer`)
+  }
+
+  // A FLOOR IS NOT A DENOMINATOR. The panel and the server must refuse per-m2 under exactly
+  // the same condition, or two screens disagree about the same building.
+  assert.equal(isDivisibleArea(sumArea([420, 80])), true)
+  assert.equal(isDivisibleArea(sumArea([420, null])), false, 'a floor must never be divided into')
+  assert.equal(isDivisibleArea(sumArea([])), false, 'there is no area, and it is not 0')
+})
+
+check('lib/area.ts: the tag question cannot even SEE a zone count (decision-43 §3)', () => {
+  // THE PIN, AND IT IS A TYPE. `tagResolves` decides whether a building's tag starts a
+  // shift; `zoneStateOf` decides whether its pin is grey. They are separate functions and
+  // the first one's parameter has no zone field, so wiring a zone count into it is a change
+  // somebody has to make deliberately, in lib/area.ts, under the comment saying it kills the
+  // card on the HOIV wall.
+  //
+  // EXACTLY HOIV'S SHAPE: active, and zero zones. This is the case that must clock a worker
+  // in on the day 006 lands.
+  assert.equal(tagResolves({ active: true }), true)
+  assert.equal(zoneStateOf(0), 'unzoned')
+  // The same object carrying a zone count, which the function must ignore completely.
+  assert.equal(tagResolves({ active: true, zones: 0, zone_state: 'unzoned' }), true)
+  assert.equal(tagResolves({ active: true, zones: 0, area: null }), true)
+  // ...and the operational word still works in the direction it IS for.
+  assert.equal(tagResolves({ active: false }), false)
+  assert.equal(tagResolves({ active: false, zones: 9 }), false)
+  assert.equal(zoneStateOf(1), 'zoned')
+})
+
+check('/locations/: an unzoned building is a PRESENTATION state, never an operational one', () => {
+  // THE LANDMINE (decision-43 §3). Read operationally, "a building with no zones is
+  // inactive" kills the card on the HOIV wall on the day 006 lands: that card carries a
+  // BUILDING uuid, HOIV has no zones, and no site visit can fix a 422. So the two words are
+  // kept apart permanently — `locations.active` decides whether a tag resolves, `zone_state`
+  // decides whether a pin is grey — and this asserts the panel never crosses them.
+  const page = sources.find((f) => f.path === 'app/locations/page.tsx')
+  assert.ok(page, 'app/locations/page.tsx must exist')
+
+  // 1. The screen asks the operational question through `tagResolves`, whose parameter type
+  //    cannot see zones. Reading `location.active` inline in the status cell would work
+  //    today and would be one edit away from `&& zones.length > 0`.
+  assert.match(
+    page.text,
+    /tagResolves\(location\)/,
+    'the status cell must ask tagResolves(), not read `active` inline',
+  )
+  assert.match(page.text, /zoneStateOf\(/, 'the grey state must be the OTHER word')
+  // 2. And no `saveLocation` call may mention a zone AT ALL. Not just in `active`: a zone
+  //    count reaching this route in any field is the same merge wearing a different name.
+  //    `saveZone` is untouched by this — a zone's own `active` is a zone's own business.
+  const buildingSaves = [...page.text.matchAll(/saveLocation\(\{[\s\S]*?\n *\}\)/g)].map(
+    (m) => m[0],
+  )
+  assert.ok(buildingSaves.length >= 2, 'both the create/edit and the reactivate save must be seen')
+  const crossings = buildingSaves.filter((call) => /zone/i.test(call))
+  assert.deepEqual(crossings, [], 'a zone must never reach the building route')
+
+  // 2. The screen has to SAY the tag still works, or grey is the only signal a director
+  //    gets — and grey looks like broken.
+  for (const locale of LOCALES) {
+    const flat = dictionaries[locale]
+    for (const key of ['locations.zonesNoneStillWorks', 'locations.zonesEmpty']) {
+      assert.ok(flat[key], `${locale}: ${key} must exist`)
+    }
+    assert.match(
+      flat['locations.zonesEmpty'],
+      locale === 'de' ? /Schicht/ : /shift/i,
+      `${locale}: the empty zone list must say the building's own tag still starts a shift`,
+    )
+    // 3. The two warnings a director must not discover at the wall: a second tag deployed
+    //    ahead of the zone-aware app, and a test tap that creates an undeletable shift.
+    assert.ok(flat['locations.zonesSecondTagWarning'], `${locale}: the deployment order`)
+    assert.ok(
+      flat['locations.zonesTestTapWarning'],
+      `${locale}: the verification tap costs a shift`,
+    )
+  }
+
+  // 4. The zone tag URI is built by lib/tag.ts, on the PERMANENT tag host (decision-40) —
+  //    never from window.location, which on this panel is the RENAMEABLE api host.
+  assert.match(page.text, /tagUri\(zone\.id\)/, 'a zone tag carries the ZONE uuid')
+  assert.doesNotMatch(
+    page.text,
+    /window\.location\.origin[^\n]*\/t\?/,
+    'a tag URI must never be built from the host this page is served from',
+  )
 })
 
 // --- 12. a wage cannot be zero, on the screen as well as in the column (decision-41) ----

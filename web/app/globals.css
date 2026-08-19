@@ -1442,6 +1442,37 @@ a {
   color: var(--text-muted);
 }
 
+/* The BUILDING tag, collapsed (decision-43 §7).
+
+   Tag writing moved onto the zone, but this string cannot be hidden: the card already on the
+   HOIV wall carries a BUILDING uuid, and without a way to read it the director cannot see
+   what it says or re-write it if it is lost. Collapsed and never the primary control, so no
+   new building-level tags get minted out of habit.
+
+   Collapsing it is also what gave /locations/ room for the zone column: the URI's 20ch floor
+   above is width eight other columns cannot have, and it only applies while the disclosure is
+   OPEN — which is exactly when the URI is the only thing being read. */
+.tag-disclosure > summary {
+  cursor: pointer;
+  padding: var(--s1) 0;
+  /* A 24px target is the floor for a control on a phone; the row-to-card transform makes
+     this a real touch target rather than a table affordance. */
+  min-height: 24px;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.tag-disclosure > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Open, it is the whole cell's job — the string is read character by character off the
+   screen and typed into a tag writer. */
+.tag-disclosure[open] > summary {
+  margin-bottom: var(--s2);
+}
+
 /* --- Sidebar ------------------------------------------------------------------------ */
 
 .sidebar {

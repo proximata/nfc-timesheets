@@ -17,6 +17,7 @@ import {
   type Contact,
   createClientLink,
   deactivateLocation,
+  deactivateZone,
   fetchBuildingsSnapshot,
   type Location,
   revokeClientLink,
@@ -24,7 +25,18 @@ import {
   saveClient,
   saveContact,
   saveLocation,
+  saveZone,
+  type Zone,
+  zoneConflictOf,
 } from '@/lib/api'
+import {
+  hundredthsToPlainArea,
+  parseAreaToHundredths,
+  sumArea,
+  tagResolves,
+  wireAreaToHundredths,
+  zoneStateOf,
+} from '@/lib/area'
 import { filterHref, useFilters } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
 import { centsToPlainEuros, parseEuroToCents } from '@/lib/money'
@@ -107,6 +119,17 @@ type Draft = {
   monthly: string
   /** Whole hours as typed. Converted to integer minutes at submit. */
   targetHours: string
+  /**
+   * STEP 3, and it is OPTIONAL (decision-43 §7). Building creation no longer walks through
+   * tag writing; the tag walk moved onto the ZONE. A building with a contract, a contact
+   * and no zone is a legitimate, finished thing to save — its tag resolves and its workers
+   * clock in exactly as before — so this step offers a first zone and never demands one.
+   *
+   * An empty name here means "no zone", not "a zone called nothing".
+   */
+  firstZoneName: string
+  firstZoneArea: string
+  firstZoneNote: string
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -124,6 +147,9 @@ const EMPTY_DRAFT: Draft = {
   newContactPhone: '',
   monthly: '',
   targetHours: '',
+  firstZoneName: '',
+  firstZoneArea: '',
+  firstZoneNote: '',
 }
 
 function draftOf(location: Location): Draft {
@@ -165,6 +191,11 @@ type ErrorMessage =
   | 'errorContactPhoneShape'
   | 'errorMonthlyInvalid'
   | 'errorTargetInvalid'
+  | 'errorZoneNameRequired'
+  | 'errorAreaInvalid'
+  | 'errorZoneNameTaken'
+  | 'errorSerialTaken'
+  | 'errorSerialShape'
   | 'errorRejected'
 
 type FieldErrors = {
@@ -177,6 +208,7 @@ type FieldErrors = {
   newContactPhone?: ErrorMessage
   monthly?: ErrorMessage
   targetHours?: ErrorMessage
+  firstZoneArea?: ErrorMessage
 }
 
 /**
@@ -196,6 +228,48 @@ const STEP_ONE_FIELDS = [
 
 function hasStepOneError(errors: FieldErrors): boolean {
   return STEP_ONE_FIELDS.some((key) => errors[key] !== undefined)
+}
+
+/**
+ * Mirrors `normaliseSerial` in server/routes/admin.js, minus the normalising: the server
+ * accepts colons, dashes, spaces and any casing, so this only asks whether what was typed
+ * COULD be a serial. A NFC serial is 4, 7 or 10 bytes.
+ */
+const SERIAL_RE = /^[0-9a-f]{8,}$/i
+
+function plausibleSerial(input: string): boolean {
+  const hex = input.replace(/[\s:-]/g, '')
+  return hex.length % 2 === 0 && SERIAL_RE.test(hex)
+}
+
+/**
+ * A zone's own draft. Kept OUT of `Draft` because the two are saved by different routes and
+ * live in different overlays — one drawer, one job.
+ */
+type ZoneDraft = {
+  /** Absent = create. Present = update that zone. */
+  id?: string
+  locationId: string
+  name: string
+  /** Square metres as typed. Sent as a STRING, never as a float (lib/area.ts). */
+  area: string
+  note: string
+  active: boolean
+  /** An ADOPTED tag's serial as the director read it off NFC Tools. Empty = none. */
+  serial: string
+  /** Has a physical tag actually been put on the wall? Stamps `tag_deployed_at`. */
+  deployed: boolean
+}
+
+/**
+ * The three ways a zone's tag ends up working, and the fourth: not yet.
+ *
+ * Read off the row rather than stored, because the two columns are independent facts and a
+ * third column naming their combination would be a stored derivation that drifts.
+ */
+function tagStateOf(zone: Zone): 'adopted' | 'written' | 'pending' {
+  if (zone.tag_serial !== null) return 'adopted'
+  return zone.tag_deployed_at !== null ? 'written' : 'pending'
 }
 
 /** Recorded and not-yet-counted time for one building in the CHOSEN calendar month. */
@@ -262,16 +336,31 @@ export default function LocationsPage() {
   const monthId = useId()
   const monthHintId = useId()
   const activeId = useId()
+  const firstZoneNameId = useId()
+  const firstZoneAreaId = useId()
+  const firstZoneNoteId = useId()
+  const zoneFormId = useId()
+  const zoneNameId = useId()
+  const zoneAreaId = useId()
+  const zoneNoteId = useId()
+  const zoneSerialId = useId()
+  const zoneActiveId = useId()
+  const zoneDeployedId = useId()
 
   // null = still loading. Empty lists = loaded and genuinely empty, the first-run state.
   const [snapshot, setSnapshot] = useState<BuildingsSnapshot | null>(null)
   const [loadError, setLoadError] = useState<ErrorKey | null>(null)
   /** null = the drawer is closed. There is no half-open form on this screen any more. */
   const [draft, setDraft] = useState<Draft | null>(null)
-  /** 1 = the building and its client. 2 = the contract and the agreed time. */
-  const [step, setStep] = useState<1 | 2>(1)
-  /** Step 2's fields, so focus can be moved into them when the step changes. */
+  /**
+   * 1 = the building and its client. 2 = the contract and the agreed time. 3 = an OPTIONAL
+   * first zone. Step 3 replaced the tag walkthrough that used to live on this drawer: a tag
+   * belongs to a zone now (decision-43 §7), and a building that never gets one is fine.
+   */
+  const [step, setStep] = useState<1 | 2 | 3>(1)
+  /** Steps 2 and 3, so focus can be moved into them when the step changes. */
   const stepTwoRef = useRef<HTMLDivElement | null>(null)
+  const stepThreeRef = useRef<HTMLDivElement | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [formError, setFormError] = useState<ErrorMessage | null>(null)
   /** A 5xx or an offline browser during a SAVE. Shown in the drawer, which stays open. */
@@ -335,9 +424,36 @@ export default function LocationsPage() {
    * keystroke, because every keystroke replaces the draft.
    */
   useEffect(() => {
-    if (step !== 2) return
-    stepTwoRef.current?.focus()
+    if (step === 2) stepTwoRef.current?.focus()
+    if (step === 3) stepThreeRef.current?.focus()
   }, [step])
+
+  /* --- zones (decision-43) --------------------------------------------------------------
+   *
+   * A ZONE IS A PLACE INSIDE A BUILDING THAT CAN CARRY A TAG. It is not a costing unit and
+   * this screen must never grow one: a shift is building-level, so no duration is
+   * attributable to a zone.
+   *
+   * The zone drawer has TWO steps and the FIRST ONE SAVES. That is the whole design, and it
+   * is written for the failure that actually happens: the admin is in a stairwell, the tag
+   * will not read, the phone is not theirs, or they are not on site at all. A walk that can
+   * only be completed on the spot is a walk that gets abandoned on the spot, and abandoning
+   * it must not lose the zone. So step 1 files the zone and step 2 is a resumable errand
+   * the list keeps offering until somebody finishes it.
+   */
+  const [zoneDraft, setZoneDraft] = useState<ZoneDraft | null>(null)
+  /** 1 = the zone itself (this step SAVES). 2 = its tag, and it can be left for later. */
+  const [zoneStep, setZoneStep] = useState<1 | 2>(1)
+  /** The saved row, so step 2 can print the zone's real UUID into the tag URI. */
+  const [tagZone, setTagZone] = useState<Zone | null>(null)
+  const [zoneErrors, setZoneErrors] = useState<{
+    name?: ErrorMessage
+    area?: ErrorMessage
+    serial?: ErrorMessage
+  }>({})
+  const [zoneFormError, setZoneFormError] = useState<ErrorMessage | null>(null)
+  /** The zone waiting for a plain yes/no before its tag stops resolving. */
+  const [pendingZoneOff, setPendingZoneOff] = useState<Zone | null>(null)
 
   /**
    * The month the time column reports on. It used to be hard-locked to the current calendar
@@ -368,6 +484,17 @@ export default function LocationsPage() {
   const clients = snapshot?.clients ?? []
   const contacts = snapshot?.contacts ?? []
   const grants = snapshot?.portal_grants ?? []
+  const allZones = snapshot?.zones ?? []
+
+  /**
+   * LIVE zones only, per building. An inactive zone is history — a shift keeps naming the
+   * door it was tapped at — but it is not part of the area and its tag no longer resolves,
+   * so it must not be summed. The zone LIST shows both and says which is which.
+   */
+  const liveZonesOf = (locationId: string) =>
+    allZones.filter((zone) => zone.location_id === locationId && zone.active)
+  const areaOf = (locationId: string) =>
+    sumArea(liveZonesOf(locationId).map((zone) => zone.area_sqm))
 
   /**
    * THE FILTER CONTRACT (decision-38). Three parameters land here:
@@ -376,6 +503,7 @@ export default function LocationsPage() {
    *                   on record, which usually means no working tag on the wall
    *   `?client=<id>`  a company's buildings, from `/clients/`
    *   `?open=<uuid>`  open the edit drawer on that building, from the Objektpanel
+   *   `?zones=<uuid>` open that building's ZONE LIST, from this screen's own zone column
    *
    * `noTag` is computed the same way the dashboard computes it — no shift in the loaded
    * payload — and the payload is capped, so the truncation note below applies to it too.
@@ -517,6 +645,15 @@ export default function LocationsPage() {
     ) {
       errors.targetHours = 'errorTargetInvalid'
     }
+    // The optional first zone. An empty NAME means "no zone" and is not an error; an area
+    // typed next to no name is, because it is somebody halfway through a thought.
+    if (current.firstZoneArea.trim() !== '') {
+      if (parseAreaToHundredths(current.firstZoneArea) === null) {
+        errors.firstZoneArea = 'errorAreaInvalid'
+      } else if (current.firstZoneName.trim() === '') {
+        errors.firstZoneArea = 'errorZoneNameRequired'
+      }
+    }
     return errors
   }
 
@@ -595,7 +732,7 @@ export default function LocationsPage() {
         )
       }
 
-      await saveLocation({
+      const saved = await saveLocation({
         ...(draft.id === undefined ? {} : { id: draft.id }),
         name,
         slug,
@@ -608,11 +745,45 @@ export default function LocationsPage() {
         monthly_contract_cents: monthlyCents,
         target_minutes_per_month: targetHours === '' ? null : Number.parseInt(targetHours, 10) * 60,
       })
+
+      /*
+       * STEP 3, if it was filled in. The zone is written AFTER the building, because it
+       * references it — and only for a NEW building: offering "add the first zone" inside
+       * an edit would quietly create a second one every time somebody corrected an address.
+       * The zone list is where zones are added afterwards.
+       *
+       * A failure here does NOT lose the building. It is already saved; the drawer stays
+       * open on step 3 with the reason, and the zone can be retried or dropped.
+       */
+      const firstZoneName = draft.firstZoneName.trim()
+      let createdZone: Zone | null = null
+      if (draft.id === undefined && firstZoneName !== '') {
+        const areaTyped = draft.firstZoneArea.trim()
+        const hundredths = areaTyped === '' ? null : parseAreaToHundredths(areaTyped)
+        createdZone = await saveZone({
+          location_id: saved.id,
+          name: firstZoneName,
+          note: draft.firstZoneNote.trim(),
+          area_sqm: hundredths === null ? null : hundredthsToPlainArea(hundredths),
+          active: true,
+        })
+      }
+
       // The result is announced by the PAGE: the drawer closes on success and would take
       // its own success message with it, unread.
       setNotice({ ok: true, text: t('saved') })
       closeDrawer()
       await load()
+      /*
+       * A zone was just filed, so the tag walk is offered IMMEDIATELY — the one moment the
+       * director is definitely thinking about this door. It is still only an offer: the
+       * zone is already saved, and closing this drawer loses nothing but the errand, which
+       * the zone list keeps offering.
+       */
+      if (createdZone !== null) {
+        setFilters({ zones: saved.id }, 'push')
+        openZoneTag(createdZone)
+      }
     } catch (cause) {
       // A FAILED save keeps the drawer open, so its message stays inside the drawer, next
       // to the fields it is about.
@@ -620,6 +791,174 @@ export default function LocationsPage() {
       // A company or a person created above is already in the database; reload so the
       // selects offer them instead of tempting a second attempt at "+ New".
       await load()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /* --- the zone drawer -------------------------------------------------------------- */
+
+  function openZoneCreate(locationId: string) {
+    setZoneDraft({
+      locationId,
+      name: '',
+      area: '',
+      note: '',
+      active: true,
+      serial: '',
+      deployed: false,
+    })
+    setZoneStep(1)
+    setTagZone(null)
+    setZoneErrors({})
+    setZoneFormError(null)
+    setNotice(null)
+  }
+
+  function openZoneEdit(zone: Zone) {
+    const hundredths = wireAreaToHundredths(zone.area_sqm)
+    setZoneDraft({
+      id: zone.id,
+      locationId: zone.location_id,
+      name: zone.name,
+      area: hundredths === null ? '' : hundredthsToPlainArea(hundredths),
+      note: zone.note ?? '',
+      active: zone.active,
+      serial: zone.tag_serial ?? '',
+      deployed: zone.tag_deployed_at !== null,
+    })
+    setZoneStep(1)
+    setTagZone(zone)
+    setZoneErrors({})
+    setZoneFormError(null)
+    setNotice(null)
+  }
+
+  /** Resume the errand. The zone already exists; only its tag is outstanding. */
+  function openZoneTag(zone: Zone) {
+    openZoneEdit(zone)
+    setZoneStep(2)
+  }
+
+  function closeZoneDrawer() {
+    setZoneDraft(null)
+    setTagZone(null)
+    setZoneErrors({})
+    setZoneFormError(null)
+  }
+
+  /**
+   * STEP 1 SAVES. Pressing „Zone speichern" files the zone and moves to the tag walk with
+   * the zone's real UUID in hand — which is the only way step 2 can print the exact string
+   * that goes on the sticker.
+   *
+   * Step 2 saves again, with the serial and the deployment stamp. Two writes to one row on
+   * purpose: the first one is what makes the walk abandonable.
+   */
+  async function submitZone(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (busy || zoneDraft === null) return
+
+    const name = zoneDraft.name.trim()
+    const areaTyped = zoneDraft.area.trim()
+    const serial = zoneDraft.serial.trim()
+    const errors: typeof zoneErrors = {}
+    if (name === '') errors.name = 'errorZoneNameRequired'
+    // AN EMPTY AREA IS A REAL, SUPPORTED ANSWER (decision-43): "Stiege 3, there is no floor
+    // plan". A required area would be an invented one, and an invented m2 poisons the
+    // EUR/m2 benchmark that is the only reason the column exists. A TYPED area that does
+    // not parse is refused rather than rounded.
+    const hundredths = areaTyped === '' ? null : parseAreaToHundredths(areaTyped)
+    if (areaTyped !== '' && hundredths === null) errors.area = 'errorAreaInvalid'
+    if (serial !== '' && !plausibleSerial(serial)) errors.serial = 'errorSerialShape'
+    setZoneErrors(errors)
+    setZoneFormError(null)
+    if (Object.keys(errors).length > 0) {
+      // An error about a field the drawer is not showing is an error nobody can act on.
+      if (errors.name !== undefined || errors.area !== undefined) setZoneStep(1)
+      return
+    }
+
+    setBusy(true)
+    try {
+      const zone = await saveZone({
+        ...(zoneDraft.id === undefined ? {} : { id: zoneDraft.id }),
+        location_id: zoneDraft.locationId,
+        name,
+        note: zoneDraft.note.trim(),
+        area_sqm: hundredths === null ? null : hundredthsToPlainArea(hundredths),
+        // Only step 2 owns the tag columns. On step 1 they are sent back UNCHANGED, because
+        // the route's UPDATE rewrites every column and omitting them would clear an adopted
+        // serial every time somebody corrected a zone's name.
+        tag_serial:
+          zoneStep === 2 ? (serial === '' ? null : serial) : (tagZone?.tag_serial ?? null),
+        tag_deployed_at:
+          zoneStep === 2
+            ? zoneDraft.deployed
+              ? (tagZone?.tag_deployed_at ?? new Date().toISOString())
+              : null
+            : (tagZone?.tag_deployed_at ?? null),
+        active: zoneDraft.active,
+      })
+      setTagZone(zone)
+      setZoneDraft({ ...zoneDraft, id: zone.id })
+      await load()
+      if (zoneStep === 1) {
+        // Saved, and the walk continues with a real UUID. Announced on the PAGE because the
+        // drawer is still open and its own message would be read as "not yet saved".
+        setNotice({ ok: true, text: t('zoneSaved', { name: zone.name }) })
+        setZoneStep(2)
+      } else {
+        setNotice({ ok: true, text: t('zoneTagSaved', { name: zone.name }) })
+        closeZoneDrawer()
+      }
+    } catch (cause) {
+      if (handleAuthLoss(cause)) return
+      const conflict = zoneConflictOf(cause)
+      if (conflict === 'serial_taken') {
+        setZoneErrors({ serial: 'errorSerialTaken' })
+        setZoneFormError('errorSerialTaken')
+        setZoneStep(2)
+      } else if (conflict === 'duplicate_zone_name') {
+        setZoneErrors({ name: 'errorZoneNameTaken' })
+        setZoneFormError('errorZoneNameTaken')
+        setZoneStep(1)
+      } else {
+        setZoneFormError('errorRejected')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * SOFT, like every other delete here. A shift tapped at this zone keeps naming it, and
+   * deactivating is also what stops the zone's own tag resolving — which is what a director
+   * means when a tag comes off a wall.
+   */
+  async function toggleZone(zone: Zone) {
+    if (busy) return
+    setBusy(true)
+    try {
+      if (zone.active) {
+        await deactivateZone(zone.id)
+      } else {
+        const hundredths = wireAreaToHundredths(zone.area_sqm)
+        await saveZone({
+          id: zone.id,
+          location_id: zone.location_id,
+          name: zone.name,
+          note: zone.note ?? '',
+          area_sqm: hundredths === null ? null : hundredthsToPlainArea(hundredths),
+          tag_serial: zone.tag_serial,
+          tag_deployed_at: zone.tag_deployed_at,
+          active: true,
+        })
+      }
+      setNotice({ ok: true, text: t('zoneSaved', { name: zone.name }) })
+      await load()
+    } catch (cause) {
+      if (!handleAuthLoss(cause)) setNotice({ ok: false, text: t('zoneFailed') })
     } finally {
       setBusy(false)
     }
@@ -815,6 +1154,39 @@ export default function LocationsPage() {
   const drawerError =
     formError !== null ? t(formError) : saveError !== null ? tError(saveError) : ''
 
+  /** `?zones=<uuid>` — the building whose zone list is open, or null. */
+  const zonedBuilding =
+    filters.zones === null
+      ? null
+      : (allLocations.find((location) => location.id === filters.zones) ?? null)
+  const zonesUnknown = filters.zones !== null && snapshot !== null && zonedBuilding === null
+  /** Live first, then the stood-down ones history still names. */
+  const zonesOfBuilding =
+    zonedBuilding === null ? [] : allZones.filter((zone) => zone.location_id === zonedBuilding.id)
+  const zoneArea = zonedBuilding === null ? null : areaOf(zonedBuilding.id)
+  const zoneDrawerError = zoneFormError === null ? '' : t(zoneFormError)
+  /**
+   * The zone whose tag URI step 2 prints. `tagZone` after a save; before the first save
+   * there is no zone and therefore no id, which is exactly why step 1 saves.
+   */
+  const tagUriZone = tagZone
+
+  /**
+   * The area of ONE building, in words. Three genuinely different answers and never a
+   * number pretending to be a fourth:
+   *   none        there are no zones, so there is no area — and that is NOT 0 m2
+   *   incomplete  the sum is a FLOOR; saying "420 m2" here is a confidently wrong benchmark
+   *   complete    a total
+   */
+  function areaSentence(sum: ReturnType<typeof sumArea>): string {
+    if (sum.state === 'none') return t('areaNoZones')
+    const value = format.number(sum.hundredths / 100, { maximumFractionDigits: 2 })
+    if (sum.state === 'incomplete') {
+      return t('areaFloor', { area: value, zones: sum.unmeasured })
+    }
+    return t('areaTotal', { area: value, zones: sum.zones })
+  }
+
   return (
     <>
       <PageHeader
@@ -954,6 +1326,194 @@ export default function LocationsPage() {
         <p className="note bad">{t('truncatedNote', { limit: snapshot.shift_limit })}</p>
       ) : null}
 
+      {/*
+        THE ZONE LIST, for ONE building, opened by `?zones=<uuid>`.
+
+        On the page and not in an overlay, deliberately: the tag URI of every zone has to be
+        readable, copyable and comparable with what is on the wall, all at once, while the
+        list of doors is still visible. An overlay would show one zone at a time and trap
+        focus around it.
+      */}
+      {zonesUnknown ? <p className="notice bad">{tFilter('unknownNotice')}</p> : null}
+      {zonedBuilding === null ? null : (
+        <ListPanel
+          title={t('zonesHeading', { name: zonedBuilding.name })}
+          action={
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => openZoneCreate(zonedBuilding.id)}
+            >
+              {t('zoneCreate')}
+            </button>
+          }
+        >
+          <div className="list-body">
+            {/* The AREA, in words, with its three genuinely different answers. A floor is
+                never printed as a total: an unmeasured Tiefgarage makes every EUR/m2 figure
+                on /pl/ a confidently wrong benchmark rather than an approximately right one. */}
+            <p className="note num">{zoneArea === null ? '' : areaSentence(zoneArea)}</p>
+
+            {/* THE DEPLOYMENT ORDER, said out loud where the second tag gets created
+                (decision-43, Consequences). A second physical tag inside one building,
+                deployed before the zone-aware app is on the phone in the field, turns every
+                intra-building tap into an auto-closed shift plus a new one: a flood of
+                unresolved, unpaid work. It is a sentence, not a lock, because the admin is
+                the person who knows which build the phone is running. */}
+            <p className="notice">{t('zonesSecondTagWarning')}</p>
+
+            {/* THE VERIFICATION TAP. IA-PLAN §9.2 deferred a read-only „Tag prüfen" mode
+                until tags went in in bulk; zones going in is that trigger and the mode does
+                not exist yet. So the cost is stated HERE rather than discovered at the
+                wall: a test tap opens a real shift, and there is no DELETE for one. */}
+            <p className="notice">{t('zonesTestTapWarning')}</p>
+
+            <p className="form-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setFilters({ zones: null }, 'replace')}
+              >
+                {t('zonesClose')}
+              </button>
+            </p>
+          </div>
+
+          {zonesOfBuilding.length === 0 ? (
+            <div className="list-body">
+              {/* NOT A SCOLDING. Nothing is broken and nothing is missing that stops work:
+                  this building's own tag resolves and its workers clock in. What a zone
+                  buys is the area, and per-door tag activity. */}
+              <EmptyState>{t('zonesEmpty')}</EmptyState>
+            </div>
+          ) : (
+            <table className="data-table" aria-busy={busy}>
+              <caption className="visually-hidden">
+                {t('zonesTableCaption', { name: zonedBuilding.name })}
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">{t('colZoneName')}</th>
+                  <th scope="col" className="col-numeric">
+                    {t('colArea')}
+                  </th>
+                  <th scope="col">{t('colZoneTag')}</th>
+                  <th scope="col">{t('colLastTap')}</th>
+                  <th scope="col">{t('colStatus')}</th>
+                  <th scope="col">{t('colActions')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {zonesOfBuilding.map((zone) => (
+                  <tr key={zone.id} className={zone.active ? undefined : 'is-muted'}>
+                    <th scope="row">
+                      {zone.name}
+                      {zone.note === null || zone.note === '' ? null : (
+                        <span className="shift-state-note">{zone.note}</span>
+                      )}
+                    </th>
+                    <td className="col-numeric num">
+                      {/* NULL IS NOT 0 (decision-43). A zone nobody has measured is real, and
+                          an invented area is worse than a missing one. */}
+                      {zone.area_sqm === null ? (
+                        <span className="cell-muted">{t('areaUnmeasured')}</span>
+                      ) : (
+                        t('areaValue', {
+                          area: format.number(zone.area_sqm, { maximumFractionDigits: 2 }),
+                        })
+                      )}
+                    </td>
+                    <td>
+                      {/* Words first. The state is named, then the exact string. */}
+                      <span>
+                        {tagStateOf(zone) === 'adopted'
+                          ? t('zoneTagAdopted', { serial: zone.tag_serial ?? '' })
+                          : tagStateOf(zone) === 'written'
+                            ? t('zoneTagWritten')
+                            : t('zoneTagPending')}
+                      </span>
+                      {/* An ADOPTED tag has no URL on it at all — it is somebody else's
+                          hardware, matched by serial through the roster — so printing our
+                          URI beside it would invite writing over a tag we do not own. */}
+                      {tagStateOf(zone) === 'adopted' ? null : (
+                        <>
+                          <code className="code-block">{tagUri(zone.id)}</code>
+                          <button
+                            type="button"
+                            className="btn btn-quiet"
+                            onClick={() =>
+                              copy(
+                                tagUri(zone.id),
+                                t('copied', { name: zone.name }),
+                                t('copyFailed', { name: zone.name }),
+                              )
+                            }
+                          >
+                            {t('copyTag')}
+                            <span className="visually-hidden">
+                              {t('forLocation', { name: zone.name })}
+                            </span>
+                          </button>
+                        </>
+                      )}
+                    </td>
+                    <td>
+                      {/* NOT bounded by the month filter above: „das Tiefgaragen-Tag wurde
+                          seit 14. Mai nicht getippt" is precisely the answer a period would
+                          hide, and it is the maintenance question a zone can answer. */}
+                      {zone.last_tap_at === null ? (
+                        <span className="cell-muted">{t('zoneNeverTapped')}</span>
+                      ) : (
+                        format.dateTime(new Date(zone.last_tap_at), {
+                          dateStyle: 'medium',
+                          timeZone: BUSINESS_TIME_ZONE,
+                        })
+                      )}
+                    </td>
+                    <td>{zone.active ? t('statusActive') : t('zoneStatusInactive')}</td>
+                    <td className="cell-actions">
+                      <button
+                        type="button"
+                        className="btn btn-quiet"
+                        onClick={() => openZoneEdit(zone)}
+                      >
+                        {t('edit')}
+                        <span className="visually-hidden">
+                          {t('forLocation', { name: zone.name })}
+                        </span>
+                      </button>
+                      {/* THE RESUMABLE ERRAND. The zone exists; only the tag is
+                          outstanding, and the list keeps offering it until somebody is
+                          standing at the right door with the right phone. */}
+                      <button
+                        type="button"
+                        className="btn btn-quiet"
+                        onClick={() => openZoneTag(zone)}
+                      >
+                        {tagStateOf(zone) === 'pending' ? t('zoneTagFinish') : t('zoneTagEdit')}
+                        <span className="visually-hidden">
+                          {t('forLocation', { name: zone.name })}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-quiet"
+                        onClick={() => (zone.active ? setPendingZoneOff(zone) : toggleZone(zone))}
+                      >
+                        {zone.active ? t('deactivate') : t('activate')}
+                        <span className="visually-hidden">
+                          {t('forLocation', { name: zone.name })}
+                        </span>
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </ListPanel>
+      )}
+
       <ListPanel
         title={t('listHeading')}
         padded={snapshot === null}
@@ -987,6 +1547,7 @@ export default function LocationsPage() {
                 <th scope="col">{t('colAddress')}</th>
                 <th scope="col">{t('colClient')}</th>
                 <th scope="col">{t('colContract')}</th>
+                <th scope="col">{t('colZones')}</th>
                 <th scope="col">{t('colTag')}</th>
                 <th scope="col">{t('colShare')}</th>
                 <th scope="col">{t('colStatus')}</th>
@@ -1057,34 +1618,85 @@ export default function LocationsPage() {
                         {time.pending === 0 ? '' : t('timePending', { count: time.pending })}
                       </span>
                     </td>
+                    {/*
+                      ZONES AND AREA. The word comes first and the grey row styling second
+                      — an unzoned building is a PRESENTATION state (decision-43 §3), and
+                      colour is never the only signal. It says what is missing and links to
+                      the place that fixes it, and it never scolds: nothing is broken.
+                    */}
                     <td>
-                      {/* The exact string that goes on the sticker, shown in full and never
-                          elided. A URI shortened for layout is a URI somebody retypes
-                          wrongly onto a tag, and the fix for that costs a site visit. */}
-                      <code className="code-block">{tagUri(location.id)}</code>
-                      <button
-                        type="button"
-                        className="btn btn-quiet"
-                        onClick={() =>
-                          copy(
-                            tagUri(location.id),
-                            t('copied', { name: location.name }),
-                            t('copyFailed', { name: location.name }),
-                          )
-                        }
-                      >
-                        {t('copyTag')}
+                      <Link href={filterHref('/locations/', { zones: location.id })}>
+                        {t('zonesManage')}
                         <span className="visually-hidden">
                           {t('forLocation', { name: location.name })}
                         </span>
-                      </button>
-                      <p className="tag-uuid">
-                        {t('uuidLabel')} <code className="code-inline">{location.id}</code>
-                      </p>
+                      </Link>
+                      <span className="shift-state-note num">
+                        {areaSentence(areaOf(location.id))}
+                      </span>
+                      {/* The reassurance, on the row that raises the question. A building
+                          with no zones clocks workers in exactly as it did before zones
+                          existed, and the card already on the wall carries its uuid. */}
+                      {liveZonesOf(location.id).length === 0 && location.active ? (
+                        <span className="shift-state-note">{t('zonesNoneStillWorks')}</span>
+                      ) : null}
+                    </td>
+                    <td>
+                      {/*
+                        THE BUILDING TAG IS NOW A COLLAPSED, READ-ONLY DISCLOSURE
+                        (decision-43 §7). Tag writing moved onto the zone, but this string
+                        cannot be hidden: the card on the HOIV wall carries a BUILDING uuid,
+                        and without this the director cannot see what it says or re-write it
+                        if it is lost. Collapsed and never the primary control, so no new
+                        building-level tags get minted out of habit.
+
+                        Inside, the URI is shown IN FULL and never elided. A URI shortened
+                        for layout is a URI somebody retypes wrongly onto a tag, and the fix
+                        for that costs a site visit.
+                      */}
+                      <details className="tag-disclosure">
+                        <summary>{t('tagLegacySummary')}</summary>
+                        <p className="field-hint">{t('tagLegacyHint')}</p>
+                        <code className="code-block">{tagUri(location.id)}</code>
+                        <button
+                          type="button"
+                          className="btn btn-quiet"
+                          onClick={() =>
+                            copy(
+                              tagUri(location.id),
+                              t('copied', { name: location.name }),
+                              t('copyFailed', { name: location.name }),
+                            )
+                          }
+                        >
+                          {t('copyTag')}
+                          <span className="visually-hidden">
+                            {t('forLocation', { name: location.name })}
+                          </span>
+                        </button>
+                        <p className="tag-uuid">
+                          {t('uuidLabel')} <code className="code-inline">{location.id}</code>
+                        </p>
+                      </details>
                     </td>
                     <td>{shareCell(location, contact)}</td>
-                    {/* Text, not a colour: the status has to survive greyscale and a screen reader. */}
-                    <td>{location.active ? t('statusActive') : t('statusInactive')}</td>
+                    {/*
+                      Text, not a colour: the status has to survive greyscale and a screen
+                      reader.
+
+                      TWO WORDS, KEPT APART PERMANENTLY (decision-43 §3). `tagResolves`
+                      answers the OPERATIONAL question and its parameter type cannot see a
+                      zone count, so it cannot be quietly multiplied by one. The zone state
+                      underneath is PRESENTATION and says what is missing, not that anything
+                      is broken — an unzoned building clocks workers in exactly as it always
+                      did, and the card on the HOIV wall carries its uuid.
+                    */}
+                    <td>
+                      {tagResolves(location) ? t('statusActive') : t('statusInactive')}
+                      {zoneStateOf(liveZonesOf(location.id).length) === 'unzoned' ? (
+                        <span className="shift-state-note">{t('statusUnzoned')}</span>
+                      ) : null}
+                    </td>
                     <td className="cell-actions">
                       <button
                         type="button"
@@ -1123,7 +1735,7 @@ export default function LocationsPage() {
         open={draft !== null}
         onClose={closeDrawer}
         title={draft?.id === undefined ? t('createHeading') : t('editHeading')}
-        step={step === 1 ? t('stepOne') : t('stepTwo')}
+        step={step === 1 ? t('stepOne') : step === 2 ? t('stepTwo') : t('stepThree')}
         busy={busy}
         footer={
           step === 1 ? (
@@ -1147,9 +1759,30 @@ export default function LocationsPage() {
                 {t('stepNext')}
               </button>
             </>
-          ) : (
+          ) : step === 2 && draft?.id === undefined ? (
             <>
               <button key="back" type="button" className="btn btn-ghost" onClick={() => setStep(1)}>
+                {t('stepBack')}
+              </button>
+              {/* Distinct keys, same bug as above: React would otherwise reuse this node as
+                  the submit button on step 3 and one press would advance AND save. */}
+              <button
+                key="next3"
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setStep(3)}
+              >
+                {t('stepNextZone')}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                key="back"
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setStep(step === 3 ? 2 : 1)}
+              >
                 {t('stepBack')}
               </button>
               <button
@@ -1416,6 +2049,288 @@ export default function LocationsPage() {
                 <label htmlFor={activeId}>{t('fieldActive')}</label>
               </div>
             </div>
+
+            {/*
+              STEP 3, AND IT IS OPTIONAL (decision-43 §7).
+
+              Building creation used to walk through writing the building's NFC tag. It does
+              not any more: a tag belongs to a ZONE, and a building with a contract, a
+              contact and no zone is a legitimate thing to save. Skipping this step is a
+              first-class outcome, not an unfinished one — the note says what a zone buys
+              and what still works without one, and nothing here scolds.
+
+              Only on CREATE. Offering „add the first zone" inside an edit would quietly
+              create a second one every time somebody corrected an address; the zone list is
+              where zones are added afterwards.
+            */}
+            <div hidden={step !== 3} ref={stepThreeRef} tabIndex={-1}>
+              <p className="note">{t('stepThreeNote')}</p>
+
+              <Field
+                id={firstZoneNameId}
+                label={t('fieldZoneName')}
+                optional
+                help={t('zoneNameHint')}
+              >
+                <input
+                  type="text"
+                  value={draft.firstZoneName}
+                  onChange={(event) => setDraft({ ...draft, firstZoneName: event.target.value })}
+                  maxLength={120}
+                  autoComplete="off"
+                  disabled={busy}
+                />
+              </Field>
+
+              <Field
+                id={firstZoneAreaId}
+                label={t('fieldArea')}
+                optional
+                help={t('areaHint')}
+                error={
+                  fieldErrors.firstZoneArea === undefined ? undefined : t(fieldErrors.firstZoneArea)
+                }
+              >
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={draft.firstZoneArea}
+                  onChange={(event) => setDraft({ ...draft, firstZoneArea: event.target.value })}
+                  disabled={busy}
+                />
+              </Field>
+
+              <Field
+                id={firstZoneNoteId}
+                label={t('fieldZoneNote')}
+                optional
+                help={t('zoneNoteHint')}
+              >
+                <input
+                  type="text"
+                  value={draft.firstZoneNote}
+                  onChange={(event) => setDraft({ ...draft, firstZoneNote: event.target.value })}
+                  maxLength={500}
+                  autoComplete="off"
+                  disabled={busy}
+                />
+              </Field>
+
+              <p className="note">{t('stepThreeTagNote')}</p>
+            </div>
+          </form>
+        )}
+      </Drawer>
+
+      {/*
+        THE ZONE DRAWER. TWO STEPS, AND THE FIRST ONE SAVES.
+
+        That is the whole design and it is written for the failure that actually happens: the
+        admin is in a stairwell, the tag will not read, the phone is not theirs, or they are
+        not on site at all. A walk completable only on the spot is a walk abandoned on the
+        spot, and abandoning it must not lose the zone. So step 1 files it, step 2 is a
+        resumable errand, and the zone list keeps offering it until somebody finishes.
+      */}
+      <Drawer
+        open={zoneDraft !== null}
+        onClose={closeZoneDrawer}
+        title={zoneDraft?.id === undefined ? t('zoneCreate') : t('zoneEditHeading')}
+        step={zoneStep === 1 ? t('zoneStepOne') : t('zoneStepTwo')}
+        busy={busy}
+        footer={
+          zoneStep === 1 ? (
+            <>
+              <button
+                key="zcancel"
+                type="button"
+                className="btn btn-ghost"
+                onClick={closeZoneDrawer}
+              >
+                {t('cancel')}
+              </button>
+              <button
+                key="zsave"
+                type="submit"
+                form={zoneFormId}
+                className="btn btn-primary"
+                disabled={busy}
+              >
+                {busy ? t('submitting') : t('zoneSubmitStepOne')}
+              </button>
+            </>
+          ) : (
+            <>
+              {/* „Später erledigen" is the PRIMARY escape and it loses nothing: the zone is
+                  already saved. It is a plain close, not a cancel, and the word says so. */}
+              <button
+                key="zlater"
+                type="button"
+                className="btn btn-ghost"
+                onClick={closeZoneDrawer}
+              >
+                {t('zoneTagLater')}
+              </button>
+              <button
+                key="ztag"
+                type="submit"
+                form={zoneFormId}
+                className="btn btn-primary"
+                disabled={busy}
+              >
+                {busy ? t('submitting') : t('zoneSubmitStepTwo')}
+              </button>
+            </>
+          )
+        }
+      >
+        {zoneDraft === null ? null : (
+          <form id={zoneFormId} onSubmit={submitZone} noValidate>
+            <p className="form-error" role="alert">
+              {zoneDrawerError}
+            </p>
+
+            <div hidden={zoneStep !== 1}>
+              <Field
+                id={zoneNameId}
+                label={t('fieldZoneName')}
+                required
+                help={t('zoneNameHint')}
+                error={zoneErrors.name === undefined ? undefined : t(zoneErrors.name)}
+              >
+                <input
+                  type="text"
+                  required
+                  value={zoneDraft.name}
+                  onChange={(event) => setZoneDraft({ ...zoneDraft, name: event.target.value })}
+                  maxLength={120}
+                  autoComplete="off"
+                  disabled={busy}
+                />
+              </Field>
+
+              {/* OPTIONAL, and that is the point (decision-43). „Stiege 3, es gibt keinen
+                  Plan" is a real zone. A required area would be an invented one, and an
+                  invented m2 poisons the EUR/m2 benchmark the column exists for. */}
+              <Field
+                id={zoneAreaId}
+                label={t('fieldArea')}
+                optional
+                help={t('areaHint')}
+                error={zoneErrors.area === undefined ? undefined : t(zoneErrors.area)}
+              >
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={zoneDraft.area}
+                  onChange={(event) => setZoneDraft({ ...zoneDraft, area: event.target.value })}
+                  disabled={busy}
+                />
+              </Field>
+
+              <Field id={zoneNoteId} label={t('fieldZoneNote')} optional help={t('zoneNoteHint')}>
+                <input
+                  type="text"
+                  value={zoneDraft.note}
+                  onChange={(event) => setZoneDraft({ ...zoneDraft, note: event.target.value })}
+                  maxLength={500}
+                  autoComplete="off"
+                  disabled={busy}
+                />
+              </Field>
+
+              <div className="field field-check">
+                <input
+                  id={zoneActiveId}
+                  type="checkbox"
+                  checked={zoneDraft.active}
+                  onChange={(event) => setZoneDraft({ ...zoneDraft, active: event.target.checked })}
+                  disabled={busy}
+                />
+                <label htmlFor={zoneActiveId}>{t('fieldZoneActive')}</label>
+              </div>
+            </div>
+
+            <div hidden={zoneStep !== 2}>
+              <p className="note">{t('zoneTagIntro')}</p>
+
+              {/* WAY 1: write our own tag. The URI is the load-bearing control on this
+                  screen — a wrong string on a sticker is discovered when a worker taps it
+                  and nothing happens, and fixing it costs a site visit. It is shown VERBATIM
+                  and in full, and it is on the PERMANENT TAG HOST (decision-40), which is
+                  not the host this page is served from. */}
+              <h3>{t('zoneTagWriteHeading')}</h3>
+              {tagUriZone === null ? (
+                <p className="note bad">{t('zoneTagNeedsSave')}</p>
+              ) : (
+                <>
+                  <p>{t('zoneTagWriteSteps')}</p>
+                  <code className="code-block">{tagUri(tagUriZone.id)}</code>
+                  <p className="form-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={busy}
+                      onClick={() =>
+                        copy(
+                          tagUri(tagUriZone.id),
+                          t('copied', { name: tagUriZone.name }),
+                          t('copyFailed', { name: tagUriZone.name }),
+                        )
+                      }
+                    >
+                      {t('copyTag')}
+                    </button>
+                  </p>
+                  <p className="tag-uuid">
+                    {t('uuidLabel')} <code className="code-inline">{tagUriZone.id}</code>
+                  </p>
+                  <p className="field-hint">{t('zoneTagHostNote')}</p>
+                </>
+              )}
+
+              {/* WAY 2: adopt hardware somebody else mounted. Such a tag carries NO URL at
+                  all — the one on the Arsenalstrasse wall is 46 bytes, too small for our
+                  URI — so it is matched by SERIAL, locally on the phone, through the roster
+                  it already holds. The serial is not a credential: it is broadcast in the
+                  clear and trivially clonable, and it is never authenticated on. */}
+              <h3>{t('zoneTagAdoptHeading')}</h3>
+              <Field
+                id={zoneSerialId}
+                label={t('fieldSerial')}
+                optional
+                help={t('serialHint')}
+                error={zoneErrors.serial === undefined ? undefined : t(zoneErrors.serial)}
+              >
+                <input
+                  type="text"
+                  value={zoneDraft.serial}
+                  onChange={(event) => setZoneDraft({ ...zoneDraft, serial: event.target.value })}
+                  maxLength={64}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={busy}
+                />
+              </Field>
+
+              {/* The fact that decides whether this errand is finished. Unticked, the zone
+                  keeps appearing in the list with „Tag noch nicht angebracht" and the button
+                  that resumes this walk. */}
+              <div className="field field-check">
+                <input
+                  id={zoneDeployedId}
+                  type="checkbox"
+                  checked={zoneDraft.deployed}
+                  onChange={(event) =>
+                    setZoneDraft({ ...zoneDraft, deployed: event.target.checked })
+                  }
+                  disabled={busy}
+                />
+                <label htmlFor={zoneDeployedId}>{t('fieldDeployed')}</label>
+              </div>
+
+              <p className="notice">{t('zonesTestTapWarning')}</p>
+              <p className="note">{t('zoneTagLaterNote')}</p>
+            </div>
           </form>
         )}
       </Drawer>
@@ -1436,6 +2351,29 @@ export default function LocationsPage() {
             : t('deactivateConfirmTitle', { name: pendingDeactivate.name })
         }
         body={t('deactivateConfirmBody')}
+        confirmLabel={t('deactivate')}
+        destructive
+        busy={busy}
+      />
+
+      {/* A zone's tag STOPS RESOLVING the moment it is stood down, so a worker standing at
+          that door taps and nothing happens. That is the intended act when a tag comes off
+          a wall and a surprise otherwise, which is why it is confirmed and why the body
+          says which of the two it is. */}
+      <ConfirmModal
+        open={pendingZoneOff !== null}
+        onClose={() => setPendingZoneOff(null)}
+        onConfirm={() => {
+          const target = pendingZoneOff
+          setPendingZoneOff(null)
+          if (target !== null) void toggleZone(target)
+        }}
+        title={
+          pendingZoneOff === null
+            ? ''
+            : t('zoneDeactivateConfirmTitle', { name: pendingZoneOff.name })
+        }
+        body={t('zoneDeactivateConfirmBody')}
         confirmLabel={t('deactivate')}
         destructive
         busy={busy}
