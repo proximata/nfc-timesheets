@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useFormatter, useLocale, useTranslations } from 'next-intl'
 import { type FormEvent, useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { AnswerBand } from '@/components/AnswerBand'
+import { ConfirmModal } from '@/components/ConfirmModal'
 import { Drawer } from '@/components/Drawer'
 import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
@@ -15,14 +16,19 @@ import {
   ApiError,
   clearSetting,
   fetchPl,
+  fetchRevenue,
   isClosedRange,
   MARGIN_BASELINE_KEY,
   type PlBuilding,
   type PlReport,
+  type RevenueGrid,
+  retractRevenue,
+  saveRevenue,
   saveSetting,
 } from '@/lib/api'
 import { filterHref, useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
+import { centsToPlainEuros, parseEuroToCents } from '@/lib/money'
 import { LOGIN_PATH } from '@/lib/nav'
 import {
   futureDays,
@@ -56,23 +62,22 @@ import { formatDuration } from '@/lib/shifts'
  *
  * THE THREE THINGS THIS SCREEN WILL NOT DO:
  *
- * 1. Show a confident zero for something nobody knows. A building with no contract in the
- *    period has `revenue_cents: null` and renders as "no contract on file", never as
+ * 1. Show a confident zero for something nobody knows. A building nobody has typed a
+ *    payment for has `revenue_cents: null` and renders as "nicht eingetragen", never as
  *    EUR 0.00 — a zero would report it as a total loss and flag it for a conversation with
- *    a client who is paying perfectly well. The same rule runs down the COST side: hours
- *    worked by somebody with no hourly rate carry NO amount rather than 0,00 EUR, exactly
- *    as on /payroll/ and /workers/. Priced at zero they moved a building's hours from
- *    48:00 to 58:30 and its margin by nothing at all — an inflated margin is a decision
- *    about a client's contract taken on a false number, so those hours are excluded from
- *    the cost and NAMED, in the labour cell, in the flagged argument and in the method.
- * 1b. Report a period that has not finished as if it had. The contract fee accrues for
- *    every contract-valid day in the range while labour and materials only exist for days
- *    that have happened, so "Dieses Jahr" picked in August books five more months of
- *    revenue against three weeks of work: 71,33 % margin, next to the 10,70 % the last
- *    CLOSED month actually made. The arithmetic is NOT corrected here — clipping the
- *    accrual changes numbers already reported and is its own decision record — so instead
- *    the screen states it, in the margin cell and in the method block, naming how many days
- *    of the period have not happened. `isPartElapsed` in lib/period.ts carries the reason.
+ *    a client who is paying perfectly well. A TYPED 0 is a different thing entirely and is
+ *    shown as 0,00 EUR: that client really did pay nothing this month.
+ * 1b. Slice a payment. Revenue is a TYPED MONTHLY FACT (decision-42), so the report covers
+ *    the whole Vienna months the period FULLY CONTAINS and names the partial ones as
+ *    excluded. A ragged period gets no margin at all, `period_not_month_aligned`. The old
+ *    daily accrual off the contract — careful arithmetic about a number nobody received —
+ *    is gone, and with it the inflated-margin case that made "Dieses Jahr" picked in August
+ *    report 71,33 % beside the 10,70 % the last closed month actually made.
+ * 1c. THE COST SIDE'S "no rate" CASE IS GONE, AND ITS COPY WENT WITH IT. decision-41 made a
+ *    wage of 0 unrepresentable, so `labour_seconds` and `labour_cents` describe the same
+ *    seconds and there is nothing left to disclaim. `rate_basis: 'current'` is a DIFFERENT,
+ *    still-true limitation and it stays in the method block: there is still no rate
+ *    history, so raising a wage still re-values last March.
  * 2. Treat "not assessable" as a pass. `below_baseline` is TRUE, FALSE **or NULL**, and
  *    null means the margin or the baseline is unknown. It gets its own words.
  * 3. Invent the baseline. `pl_margin_baseline_bp` ships UNSET and nothing defaults it. With
@@ -95,7 +100,6 @@ import { formatDuration } from '@/lib/shifts'
 const MATERIALS_PATH = '/material-requests/'
 const CONTRACTS_PATH = '/contracts/'
 const SHIFTS_PATH = '/shifts/'
-const WORKERS_PATH = '/workers/'
 /** Where a building is created. The empty state names that action, so it links to it. */
 const BUILDINGS_PATH = '/locations/'
 /** The building's object surface. `/?location=<uuid>` — there is no `/locations/<id>`. */
@@ -111,6 +115,8 @@ export default function PlPage() {
 
   const periodId = useId()
   const baselineId = useId()
+  const revenueAmountId = useId()
+  const revenueNoteId = useId()
 
   /**
    * Austrian month names. next-intl is handed the message-file key ('de'), whose Intl
@@ -124,6 +130,26 @@ export default function PlPage() {
         day: 'numeric',
         month: 'long',
         year: 'numeric',
+        timeZone: 'Europe/Vienna',
+      }),
+    [locale],
+  )
+  /** „September 2026“ — the heading a typed monthly payment belongs under. */
+  const monthFormat = useMemo(
+    () =>
+      new Intl.DateTimeFormat(htmlLang(isLocale(locale) ? locale : 'de'), {
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'Europe/Vienna',
+      }),
+    [locale],
+  )
+  /** „03.09.“ — provenance, where the year is already in the row's month heading. */
+  const shortDayFormat = useMemo(
+    () =>
+      new Intl.DateTimeFormat(htmlLang(isLocale(locale) ? locale : 'de'), {
+        day: '2-digit',
+        month: '2-digit',
         timeZone: 'Europe/Vienna',
       }),
     [locale],
@@ -145,9 +171,12 @@ export default function PlPage() {
   const [now] = useState(() => new Date())
   const range = useMemo(() => periodRange(period, now), [period, now])
   /**
-   * The period has not finished, so every revenue figure on this page counts days nobody
-   * has worked yet. Said twice on purpose: once in the method block, which argues it, and
-   * once in the margin cell, which is the number the answer band exists to be read alone.
+   * The period has not finished. It no longer inflates REVENUE — decision-42 deleted the
+   * daily accrual, and an unentered month is null rather than a growing fraction — but the
+   * COST side still only contains days that have happened. So a figure typed for a month
+   * that is still running is compared against part of its own labour, and the margin that
+   * comes out is too high by an amount nothing here can know. Said twice: in the method
+   * block, which argues it, and beside the margin, which is read alone.
    */
   const stillRunning = isPartElapsed(range, now)
   const unhappenedDays = futureDays(range, now)
@@ -157,6 +186,30 @@ export default function PlPage() {
   const [baselineError, setBaselineError] = useState(false)
   const [baselineNotice, setBaselineNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
+
+  /* --- the revenue ledger (decision-42) ------------------------------------------------
+   *
+   * A SECOND REQUEST, deliberately. `GET /admin/pl` reports the SUM per building over the
+   * period; `GET /admin/revenue` returns the individual months, their provenance and the
+   * contract suggestion. Deriving the grid from the P&L would mean a period of three months
+   * showing one editable number per building, and the director types one month at a time.
+   */
+  const [grid, setGrid] = useState<RevenueGrid | null>(null)
+  /** null = the entry drawer is closed. */
+  const [entry, setEntry] = useState<{
+    locationId: string
+    building: string
+    month: string
+    amount: string
+    note: string
+  } | null>(null)
+  const [entryError, setEntryError] = useState<'amountInvalid' | 'rejected' | null>(null)
+  /** The building-month waiting for a yes/no before its figure goes back to UNKNOWN. */
+  const [pendingRetract, setPendingRetract] = useState<{
+    locationId: string
+    building: string
+    month: string
+  } | null>(null)
 
   const handleAuthLoss = useCallback(
     (cause: unknown): boolean => {
@@ -179,8 +232,14 @@ export default function PlPage() {
         return
       }
       try {
-        const next = await fetchPl(range, signal)
+        // Both, in parallel, and both replaced together: a report from the new period
+        // beside a ledger from the old one is two periods on one screen.
+        const [next, nextGrid] = await Promise.all([
+          fetchPl(range, signal),
+          fetchRevenue(range, signal),
+        ])
         setReport(next)
+        setGrid(nextGrid)
         setBaselineDraft(
           next.baseline_margin_bp === null ? '' : bpToPlainPercent(next.baseline_margin_bp),
         )
@@ -199,6 +258,7 @@ export default function PlPage() {
     // The payload IS the period. Clearing first stops the previous period's rows sitting
     // under the new period's heading while the request is in flight.
     setReport(null)
+    setGrid(null)
     void load(controller.signal)
     return () => controller.abort()
   }, [load])
@@ -249,12 +309,82 @@ export default function PlPage() {
     }
   }
 
+  /**
+   * File, or CORRECT, one building-month. A correction is an INSERT server-side, so the
+   * previous figure survives and this screen keeps printing what it used to be.
+   *
+   * Euros as typed -> integer cents by string slicing (lib/money.ts). No float multiply
+   * anywhere near a number that ends up in a report about a client's payments.
+   */
+  async function submitRevenue(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (busy || entry === null) return
+    const cents = parseEuroToCents(entry.amount)
+    // 0 IS ACCEPTED and is not the empty field: "they paid nothing this month" is a real
+    // answer. An EMPTY field is not an entry at all, which is why it fails here rather
+    // than being sent as 0.
+    if (cents === null) {
+      setEntryError('amountInvalid')
+      return
+    }
+    setEntryError(null)
+    setBusy(true)
+    try {
+      await saveRevenue(entry.locationId, entry.month, cents, entry.note.trim())
+      setBaselineNotice({
+        ok: true,
+        text: t('revenueSaved', { building: entry.building, month: monthLabel(entry.month) }),
+      })
+      // Announced by the PAGE: the drawer closes on success and would take its own message
+      // with it, unread.
+      setEntry(null)
+      await load()
+    } catch (cause) {
+      if (!handleAuthLoss(cause)) setEntryError('rejected')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** Back to UNKNOWN. NOT the same as typing 0 — see `retractRevenue` in lib/api.ts. */
+  async function retract(target: { locationId: string; building: string; month: string }) {
+    if (busy) return
+    setBusy(true)
+    try {
+      await retractRevenue(target.locationId, target.month)
+      setBaselineNotice({
+        ok: true,
+        text: t('revenueRetracted', {
+          building: target.building,
+          month: monthLabel(target.month),
+        }),
+      })
+      await load()
+    } catch (cause) {
+      if (!handleAuthLoss(cause)) setBaselineNotice({ ok: false, text: t('revenueFailed') })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const money = (cents: number) =>
     format.number(cents / 100, { style: 'currency', currency: 'EUR' })
   const percent = (bp: number) =>
     format.number(bpToRatio(bp), { style: 'percent', minimumFractionDigits: 2 })
   /** Basis points as PERCENTAGE POINTS of difference — "8.5 points short", not "8.5%". */
   const points = (bp: number) => format.number(bp / 100, { maximumFractionDigits: 2 })
+  /** Square metres. `NUMERIC(8,2)` on the column; divided once, here, for display only. */
+  const area = (hundredthsOfSqm: number) =>
+    format.number(hundredthsOfSqm, { maximumFractionDigits: 2 })
+
+  /**
+   * `2026-09` -> „September 2026“, in Vienna and in Austrian month names.
+   *
+   * Built from the 15th, not the 1st: the 1st at 00:00 UTC is still the previous month in
+   * a zone behind UTC, and a label that names the wrong month above an editable payment is
+   * how a figure lands in August that was meant for September.
+   */
+  const monthLabel = (month: string) => monthFormat.format(new Date(`${month}-15T12:00:00Z`))
 
   const periodLabel: Record<Period, string> = {
     last30Days: t('periodLast30Days'),
@@ -306,9 +436,66 @@ export default function PlPage() {
   function assessment(building: PlBuilding): string {
     if (building.below_baseline === true) return t('assessBelow')
     if (building.below_baseline === false) return t('assessOk')
-    if (building.margin_unknown_reason === 'no_contract') return t('assessNoContract')
+    if (building.margin_unknown_reason === 'period_not_month_aligned') {
+      return t('assessNotMonthAligned')
+    }
+    if (building.margin_unknown_reason === 'revenue_not_entered') return t('assessNotEntered')
     if (building.margin_unknown_reason === 'zero_revenue') return t('assessZeroRevenue')
     return t('assessNoBaseline')
+  }
+
+  /**
+   * The area line, or the refusal to state one, in the SAME shape as every other refusal
+   * here: a reason in words, never a dash and never a number that is really a floor.
+   *
+   * PER-ZONE COST IS NOT AND WILL NOT BE ON THIS SCREEN (decision-43). A shift is
+   * building-level, so no duration is attributable to a zone; splitting a building's labour
+   * by area share would assert that time is proportional to floor area, which is false in
+   * the obvious direction — a Tiefgarage is fast per m2, an office floor slow.
+   */
+  function areaNote(building: PlBuilding): string {
+    if (building.area_unknown_reason === 'no_zones') return t('areaNoZones')
+    if (building.area_unknown_reason === 'area_incomplete') {
+      return t('areaIncomplete', { zones: building.zones_unmeasured })
+    }
+    if (building.building_m2 === null) return t('areaNoZones')
+    const parts = [t('areaTotal', { area: area(building.building_m2) })]
+    if (building.cost_cents_per_m2 !== null) {
+      parts.push(t('areaCostPerM2', { amount: money(building.cost_cents_per_m2) }))
+    }
+    if (building.revenue_cents_per_m2 !== null) {
+      parts.push(t('areaRevenuePerM2', { amount: money(building.revenue_cents_per_m2) }))
+    } else if (building.per_m2_unknown_reason === 'not_entered') {
+      parts.push(t('areaRevenuePerM2Unknown'))
+    }
+    return parts.join(' · ')
+  }
+
+  /**
+   * WHEN a figure was typed, and what it replaced. Empty string when nothing was entered —
+   * the cell above it already says „nicht eingetragen“ and a second sentence saying the
+   * same thing is noise.
+   */
+  function provenanceNote(building: PlBuilding): string[] {
+    const lines: string[] = []
+    if (building.revenue_entered_at !== null) {
+      lines.push(
+        t('revenueEnteredAt', {
+          date: shortDayFormat.format(new Date(building.revenue_entered_at)),
+          // The server sends the admin's email. Never a name it does not have.
+          who: building.revenue_entered_by ?? t('revenueEnteredByUnknown'),
+        }),
+      )
+    }
+    if (building.revenue_changed_at !== null && building.revenue_previous_cents !== null) {
+      lines.push(
+        t('revenueChangedAt', {
+          date: shortDayFormat.format(new Date(building.revenue_changed_at)),
+          previous: money(building.revenue_previous_cents),
+        }),
+      )
+    }
+    return lines
   }
 
   /**
@@ -316,19 +503,6 @@ export default function PlPage() {
    * phone to a client: what the building earned, what it cost to clean, in what proportion,
    * and how far short of the floor that lands.
    */
-  /**
-   * The labour amount, or the refusal to state one.
-   *
-   * A building whose ONLY hours were worked by somebody with no rate has `labour_cents: 0`,
-   * and 0,00 EUR is the exact claim this screen refuses to make about a real person's work.
-   * Zero cost with zero unpriced hours is a genuine zero — nobody cleaned it — and stays a
-   * number. Same shape as `revenueUnknown`.
-   */
-  const labourAmount = (building: PlBuilding): string =>
-    building.labour_cents === 0 && building.labour_unpriced_seconds > 0
-      ? t('labourUnknown')
-      : money(building.labour_cents)
-
   function reasoning(building: PlBuilding, floorBp: number): string[] {
     const lines: string[] = []
     const labourShare = shareBp(building.labour_cents, building.revenue_cents)
@@ -348,29 +522,22 @@ export default function PlPage() {
       lines.push(
         t('whyRevenue', {
           revenue: money(building.revenue_cents),
-          days: building.revenue_days,
-          periodDays: building.period_days,
+          months: building.revenue_months_entered,
         }),
       )
     }
+    // A partial sum argued as if it were a total is the fastest way to lose a client
+    // conversation. Named here, on the paragraph the director reads out.
+    if (building.months_missing_revenue > 0) {
+      lines.push(t('whyRevenueMissing', { months: building.months_missing_revenue }))
+    }
     lines.push(
       t('whyLabour', {
-        labour: labourAmount(building),
+        labour: money(building.labour_cents),
         hours: formatDuration(building.labour_minutes),
         share: labourShare === null ? t('shareUnknown') : percent(labourShare),
       }),
     )
-    // Same shape as `whyExcluded` and for the same reason: work that is real, in the hours
-    // above, and in NOBODY's cost. Said here because it is the sentence that stops the
-    // director defending a margin that ignored somebody's wage.
-    if (building.labour_unpriced_seconds > 0) {
-      lines.push(
-        t('whyLabourUnpriced', {
-          workers: building.labour_unpriced_workers,
-          hours: formatDuration(building.labour_unpriced_minutes),
-        }),
-      )
-    }
     lines.push(
       t('whyMaterial', {
         material: money(building.material_cents),
@@ -390,6 +557,40 @@ export default function PlPage() {
     if (building.open_shifts > 0) lines.push(t('whyOpen', { shifts: building.open_shifts }))
     return lines
   }
+
+  /**
+   * ONE ROW PER BUILDING-MONTH, newest month first.
+   *
+   * Not a month x building matrix: at 390px a matrix is a horizontal scroll with the
+   * building names off-screen, and the row-to-card transform (globals.css) turns a flat
+   * table into readable cards for free. It is also the shape the ritual has — the director
+   * works down September, then down August.
+   *
+   * Months the period only TOUCHES are listed and are editable, and they say they are not
+   * in this report. A payment is a fact about a month, not about the period somebody
+   * happened to have selected, and hiding the row would make the figure unreachable from
+   * the one screen that asks for it.
+   */
+  const containedMonths = new Set(report?.revenue.months ?? [])
+  const entryOf = new Map(
+    (grid?.entries ?? []).map((row) => [`${row.location_id}|${row.month}`, row]),
+  )
+  const suggestionOf = new Map(
+    (grid?.suggestions ?? []).map((row) => [`${row.location_id}|${row.month}`, row.contract_cents]),
+  )
+  const ledgerRows =
+    grid === null
+      ? []
+      : [...grid.months].reverse().flatMap((month) =>
+          buildings.map((building) => ({
+            key: `${building.location_id}|${month}`,
+            month,
+            building,
+            entry: entryOf.get(`${building.location_id}|${month}`) ?? null,
+            contractCents: suggestionOf.get(`${building.location_id}|${month}`) ?? null,
+            inReport: containedMonths.has(month),
+          })),
+        )
 
   return (
     <>
@@ -474,10 +675,18 @@ export default function PlPage() {
             {
               k: t('answerRevenue'),
               v: money(totals.revenueCents),
-              calm: true,
-              sub: t('totalScope', {
-                buildings: buildings.length - totals.unpricedBuildings,
-              }),
+              // NOT calm while months are missing: this is a PARTIAL SUM wearing the
+              // label of a total, and the number that is too small is the one a director
+              // would take to mean a bad quarter.
+              calm: totals.monthsMissingRevenue === 0,
+              sub: [
+                t('totalScope', { buildings: buildings.length - totals.unpricedBuildings }),
+                totals.monthsMissingRevenue > 0
+                  ? t('answerMonthsMissing', { months: totals.monthsMissingRevenue })
+                  : null,
+              ]
+                .filter((part) => part !== null)
+                .join(' · '),
             },
           ]}
         />
@@ -516,6 +725,160 @@ export default function PlPage() {
               ? t('baselineUnset')
               : t('baselineCurrent', { percent: percent(report.baseline_margin_bp) })}
           </p>
+
+          {/*
+            WHAT THE CLIENT ACTUALLY PAID, typed by a human, one Vienna month at a time
+            (decision-42). It sits ABOVE the report because it is the INPUT the report is
+            made of: a director who opens this screen at the start of the month types
+            September here and then reads the numbers underneath.
+
+            NOTHING HERE WRITES A ROW ON ITS OWN. The contract value travels as a labelled
+            SUGGESTION with a button that fills the field, never as a pre-filled value a
+            stray Enter could store: auto-filling it is the rejected accrual wearing a
+            different hat, and it fabricates a payment a human then reads as confirmed.
+          */}
+          <ListPanel title={t('revenueHeading')}>
+            <div className="list-body">
+              <p className="note">{t('revenueIntro')}</p>
+              {/* A ragged period cannot have a margin at all, and the reason is a property
+                  of the PERIOD, so it is said once here rather than N times in a column. */}
+              {report.revenue.month_aligned ? null : (
+                <p className="notice bad">
+                  {t('revenueNotAligned', {
+                    months: report.revenue.partial_months_excluded,
+                  })}
+                </p>
+              )}
+            </div>
+            {ledgerRows.length === 0 ? (
+              <div className="list-body">
+                <EmptyState>{t('revenueEmpty')}</EmptyState>
+              </div>
+            ) : (
+              <table className="data-table" aria-busy={busy}>
+                <caption className="visually-hidden">{t('revenueTableCaption')}</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">{t('colMonth')}</th>
+                    <th scope="col">{t('colBuilding')}</th>
+                    <th scope="col" className="col-numeric">
+                      {t('colReceived')}
+                    </th>
+                    <th scope="col" className="col-numeric">
+                      {t('colAgreed')}
+                    </th>
+                    <th scope="col">{t('colEntered')}</th>
+                    <th scope="col">{t('colActions')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledgerRows.map((row) => (
+                    <tr key={row.key} className={row.inReport ? undefined : 'is-muted'}>
+                      <th scope="row">
+                        {monthLabel(row.month)}
+                        {row.inReport ? null : (
+                          <span className="shift-state-note">{t('revenueMonthOutside')}</span>
+                        )}
+                      </th>
+                      <td>{row.building.name}</td>
+                      <td className="col-numeric">
+                        {/* NEVER 0,00 EUR for "nobody has typed one". A typed 0 is a
+                            different, real answer and renders as 0,00 EUR right here. */}
+                        {row.entry === null ? (
+                          <span className="cell-muted">{t('revenueNotEntered')}</span>
+                        ) : (
+                          money(row.entry.amount_cents)
+                        )}
+                        {row.entry?.note ? (
+                          <span className="shift-state-note">{row.entry.note}</span>
+                        ) : null}
+                      </td>
+                      <td className="col-numeric">
+                        {row.contractCents === null ? (
+                          <span className="cell-muted">{t('revenueNoContract')}</span>
+                        ) : (
+                          money(row.contractCents)
+                        )}
+                      </td>
+                      <td>
+                        {row.entry === null ? (
+                          <span className="cell-muted">{t('revenueNeverEntered')}</span>
+                        ) : (
+                          <>
+                            <span>
+                              {t('revenueEnteredAt', {
+                                date: shortDayFormat.format(new Date(row.entry.entered_at)),
+                                who: row.entry.entered_by_email ?? t('revenueEnteredByUnknown'),
+                              })}
+                            </span>
+                            {row.entry.changed_at !== null && row.entry.previous_cents !== null ? (
+                              <span className="shift-state-note">
+                                {t('revenueChangedAt', {
+                                  date: shortDayFormat.format(new Date(row.entry.changed_at)),
+                                  previous: money(row.entry.previous_cents),
+                                })}
+                              </span>
+                            ) : null}
+                          </>
+                        )}
+                      </td>
+                      <td className="cell-actions">
+                        <button
+                          type="button"
+                          className="btn btn-quiet"
+                          disabled={busy}
+                          onClick={() => {
+                            setEntryError(null)
+                            setEntry({
+                              locationId: row.building.location_id,
+                              building: row.building.name,
+                              month: row.month,
+                              // An EDIT starts from the stored figure; a NEW entry starts
+                              // EMPTY. The contract is offered inside the drawer as a
+                              // one-press fill, never as the value already in the field.
+                              amount:
+                                row.entry === null ? '' : centsToPlainEuros(row.entry.amount_cents),
+                              note: row.entry?.note ?? '',
+                            })
+                          }}
+                        >
+                          {row.entry === null ? t('revenueEnter') : t('revenueEdit')}
+                          <span className="visually-hidden">
+                            {t('forBuildingMonth', {
+                              name: row.building.name,
+                              month: monthLabel(row.month),
+                            })}
+                          </span>
+                        </button>
+                        {row.entry === null ? null : (
+                          <button
+                            type="button"
+                            className="btn btn-quiet"
+                            disabled={busy}
+                            onClick={() =>
+                              setPendingRetract({
+                                locationId: row.building.location_id,
+                                building: row.building.name,
+                                month: row.month,
+                              })
+                            }
+                          >
+                            {t('revenueRetract')}
+                            <span className="visually-hidden">
+                              {t('forBuildingMonth', {
+                                name: row.building.name,
+                                month: monthLabel(row.month),
+                              })}
+                            </span>
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </ListPanel>
 
           {/* THE ARGUMENT, before the evidence. A red row is not something a director can
               take to a client; these paragraphs are. */}
@@ -655,6 +1018,12 @@ export default function PlPage() {
                             })}
                           </span>
                         ) : null}
+                        {/* AREA AND EUR/m2 — the denominator a director quotes a NEW
+                            building from, which is the whole payoff of zones. Never a
+                            per-ZONE cost: a shift is building-level, so no duration is
+                            attributable to a zone (decision-43). The refusal cases carry
+                            words, not a dash. */}
+                        <span className="shift-state-note num">{areaNote(building)}</span>
                       </th>
                       <td>
                         {building.client_name ?? (
@@ -662,44 +1031,49 @@ export default function PlPage() {
                         )}
                       </td>
                       <td className="col-numeric">
+                        {/* „Nicht eingetragen“, NEVER 0,00 EUR. A typed 0 is a different,
+                            real answer — "they paid nothing this month" — and it renders
+                            as 0,00 EUR through the same branch as any other figure. */}
                         {building.revenue_cents === null ? (
                           <span className="cell-muted">{t('revenueUnknown')}</span>
                         ) : (
                           <>
                             {money(building.revenue_cents)}
-                            {building.revenue_days < building.period_days ? (
+                            {/* A partial sum must not be read as a total. */}
+                            {building.months_missing_revenue > 0 ? (
                               <span className="shift-state-note">
-                                {t('revenuePartial', {
-                                  days: building.revenue_days,
-                                  periodDays: building.period_days,
+                                {t('revenuePartialMonths', {
+                                  months: building.months_missing_revenue,
                                 })}
                               </span>
                             ) : null}
                           </>
                         )}
+                        {/* „vereinbart“ beside „erhalten“: the question the contract /
+                            revenue split buys, named on the row rather than absorbed into
+                            the margin. */}
+                        {building.contract_cents === null ? null : (
+                          <span className="shift-state-note">
+                            {t('revenueAgreed', { amount: money(building.contract_cents) })}
+                          </span>
+                        )}
+                        {provenanceNote(building).map((line) => (
+                          <span className="shift-state-note" key={line}>
+                            {line}
+                          </span>
+                        ))}
                       </td>
                       <td className="col-numeric">
-                        {building.labour_cents === 0 && building.labour_unpriced_seconds > 0 ? (
-                          <span className="cell-muted">{t('labourUnknown')}</span>
-                        ) : (
-                          money(building.labour_cents)
-                        )}
+                        {/* Every payable second carries a rate (decision-41), so this is
+                            always an amount and never a refusal. The old „Betrag wird
+                            nicht berechnet“ branch described a state the schema no longer
+                            admits. */}
+                        {money(building.labour_cents)}
                         <span className="shift-state-note">
                           {t('labourHours', {
                             hours: formatDuration(building.labour_minutes),
                           })}
                         </span>
-                        {/* Attached to the amount it qualifies, the way `revenuePartial`
-                            is: this cell is the one that is too low, and it must not be
-                            read without the hours it does not contain. */}
-                        {building.labour_unpriced_seconds > 0 ? (
-                          <span className="shift-state-note">
-                            {t('labourUnpriced', {
-                              workers: building.labour_unpriced_workers,
-                              hours: formatDuration(building.labour_unpriced_minutes),
-                            })}
-                          </span>
-                        ) : null}
                       </td>
                       <td className="col-numeric">{money(building.material_cents)}</td>
                       <td className="col-numeric">
@@ -773,9 +1147,24 @@ export default function PlPage() {
               {/* The old lede's second sentence: every number on this page is the server's
                   SQL over exactly the chosen days. The lede is gone, the fact is not. */}
               <li>{t('intro')}</li>
-              {/* The reverse of `revenuePartial`: there the CONTRACT covers less than the
-                  period, here the period covers more than has happened. Same honesty
-                  channel, opposite direction, and the direction is the one that flatters. */}
+              {/* THE PERIOD'S SHAPE decides whether a margin is answerable at all
+                  (decision-42). Whole Vienna months only: a typed payment cannot be sliced,
+                  so a ragged period reports the months it fully contains, names the partial
+                  ones, and refuses every margin rather than approximating one. */}
+              <li>
+                {report.revenue.month_aligned
+                  ? t('methodMonths', { months: report.revenue.months_contained })
+                  : t('methodMonthsRagged', {
+                      months: report.revenue.months_contained,
+                      excluded: report.revenue.partial_months_excluded,
+                    })}
+              </li>
+              {totals.monthsMissingRevenue > 0 ? (
+                <li>{t('methodMonthsMissing', { months: totals.monthsMissingRevenue })}</li>
+              ) : null}
+              {/* The period covers more than has happened. Revenue no longer accrues into
+                  it — that was the accrual decision-42 deleted — but the COST side still
+                  only contains days that exist, so a figure typed early flatters. */}
               {stillRunning ? (
                 <li>
                   {t('methodFuture', {
@@ -813,29 +1202,28 @@ export default function PlPage() {
                 </li>
               ) : null}
               <li>{t('methodExclusions')}</li>
-              {/* The cost side's twin of `methodUnpriced`: a real input nobody has priced,
-                  counted rather than valued at zero, with the one link that fixes it.
-                  `unpriced_workers` is the server's DISTINCT head count — one person at
-                  three buildings is one rate to set, not three. */}
-              {report.labour.unpriced_workers > 0 ? (
-                <li>
-                  {t('methodUnpricedLabour', {
-                    workers: report.labour.unpriced_workers,
-                    hours: formatDuration(report.labour.unpriced_minutes),
-                    buildings: totals.unpricedLabourBuildings,
-                  })}{' '}
-                  <Link href={WORKERS_PATH}>{t('methodUnpricedLabourLink')}</Link>
-                </li>
-              ) : null}
+              {/* The cost side's "nobody priced this" case is GONE, not hidden: a wage of 0
+                  is unrepresentable (decision-41), so every payable second carries an
+                  amount. `methodRates` above is the limitation that SURVIVED it, and it is
+                  a different one — there is still no rate history. */}
               {totals.unpricedBuildings > 0 ? (
                 <li>
-                  {t('methodNoContract', {
+                  {t('methodNotEntered', {
                     buildings: totals.unpricedBuildings,
                     cost: money(totals.costCentsUnpriced),
-                  })}{' '}
-                  <Link href={CONTRACTS_PATH}>{t('methodNoContractLink')}</Link>
+                  })}
                 </li>
               ) : null}
+              {/* PRESENTATION, said as such. An unzoned building's tag resolves and its
+                  numbers are exactly as real as anyone else's; what it cannot answer is
+                  EUR/m2, and that is the only claim made here. */}
+              {totals.unzonedBuildings > 0 ? (
+                <li>
+                  {t('methodUnzoned', { buildings: totals.unzonedBuildings })}{' '}
+                  <Link href={BUILDINGS_PATH}>{t('methodUnzonedLink')}</Link>
+                </li>
+              ) : null}
+              <li>{t('methodPerZoneRefused')}</li>
               <li>{t('attributionHint')}</li>
             </ul>
           </div>
@@ -908,6 +1296,151 @@ export default function PlPage() {
           </p>
         ) : null}
       </Drawer>
+
+      {/*
+        THE SECOND WRITE: what a client actually paid, for ONE named Vienna month.
+
+        One drawer, one building-month. Not a grid of inputs: a screen full of money fields
+        saved by one button is a screen where a stray keystroke in row nine is discovered a
+        quarter later, and there is no undo for a figure that has already been reported.
+      */}
+      <Drawer
+        open={entry !== null}
+        onClose={() => setEntry(null)}
+        title={t('revenueDrawerHeading')}
+        step={
+          entry === null
+            ? undefined
+            : t('revenueDrawerStep', {
+                name: entry.building,
+                month: monthLabel(entry.month),
+              })
+        }
+        busy={busy}
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setEntry(null)}
+              disabled={busy}
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="submit"
+              form="pl-revenue-form"
+              className="btn btn-primary"
+              disabled={busy}
+            >
+              {busy ? t('submitting') : t('revenueSubmit')}
+            </button>
+          </>
+        }
+      >
+        {entry === null ? null : (
+          <>
+            <p>{t('revenueDrawerIntro')}</p>
+            <form id="pl-revenue-form" onSubmit={submitRevenue} noValidate>
+              <p className="form-error" role="alert">
+                {entryError === 'amountInvalid'
+                  ? t('errorAmountInvalid')
+                  : entryError === 'rejected'
+                    ? t('errorRevenueRejected')
+                    : ''}
+              </p>
+              <Field
+                id={revenueAmountId}
+                label={t('fieldAmount')}
+                required
+                help={t('amountHint')}
+                error={entryError === 'amountInvalid' ? t('errorAmountInvalid') : undefined}
+              >
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  required
+                  value={entry.amount}
+                  disabled={busy}
+                  onChange={(event) => setEntry({ ...entry, amount: event.target.value })}
+                />
+              </Field>
+
+              {/*
+                THE CONTRACT AS A SUGGESTION, AND ONLY AS ONE (decision-42).
+
+                It fills the field on a press and never before. Pre-filling it would put an
+                agreed number into a field labelled "received", one Enter away from being
+                stored as a payment nobody has seen — which is the accrual this decision
+                deleted, rebuilt out of a default value. The button says both figures out
+                loud so the act of accepting it is a decision and not a reflex.
+              */}
+              {(() => {
+                const suggestion = suggestionOf.get(`${entry.locationId}|${entry.month}`)
+                if (suggestion === undefined) return <p className="note">{t('suggestionNone')}</p>
+                return (
+                  <div className="note">
+                    <p>{t('suggestionExplain', { amount: money(suggestion) })}</p>
+                    <p className="form-actions">
+                      <button
+                        type="button"
+                        className="btn btn-quiet"
+                        disabled={busy}
+                        onClick={() =>
+                          setEntry({ ...entry, amount: centsToPlainEuros(suggestion) })
+                        }
+                      >
+                        {t('suggestionApply', { amount: money(suggestion) })}
+                      </button>
+                    </p>
+                  </div>
+                )
+              })()}
+
+              <Field
+                id={revenueNoteId}
+                label={t('fieldRevenueNote')}
+                optional
+                help={t('revenueNoteHint')}
+              >
+                <input
+                  type="text"
+                  value={entry.note}
+                  maxLength={500}
+                  autoComplete="off"
+                  disabled={busy}
+                  onChange={(event) => setEntry({ ...entry, note: event.target.value })}
+                />
+              </Field>
+            </form>
+            <p className="note">{t('revenueAppendOnly')}</p>
+          </>
+        )}
+      </Drawer>
+
+      {/* Retracting is not deleting and it is NOT typing 0: the month goes back to UNKNOWN.
+          It is confirmed because the figure it removes has already been read in a report. */}
+      <ConfirmModal
+        open={pendingRetract !== null}
+        onClose={() => setPendingRetract(null)}
+        onConfirm={() => {
+          const target = pendingRetract
+          setPendingRetract(null)
+          if (target !== null) void retract(target)
+        }}
+        title={
+          pendingRetract === null
+            ? ''
+            : t('retractConfirmTitle', {
+                name: pendingRetract.building,
+                month: monthLabel(pendingRetract.month),
+              })
+        }
+        body={t('retractConfirmBody')}
+        confirmLabel={t('revenueRetract')}
+        destructive
+        busy={busy}
+      />
     </>
   )
 }

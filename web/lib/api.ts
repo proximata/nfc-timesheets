@@ -28,14 +28,30 @@ export class ApiError extends Error {
   /** 0 means the request never got a response (offline, DNS, CORS, TLS). */
   readonly status: number
   readonly messageKey: ErrorKey
+  /**
+   * The server's own MACHINE code for the refusal — `serial_taken`, `rate_required`,
+   * `duplicate_zone_name` — and never its prose. Null when the body carried none, or when
+   * what it carried was not a bare identifier.
+   *
+   * This is deliberately NOT a widening of "no server text in the DOM": the value is gated
+   * by `ERROR_CODE_RE` to a short lowercase identifier, is never rendered, and only ever
+   * selects one of OUR translated messages. Without it two different 409s on one route are
+   * indistinguishable, and the form has to say "something conflicted" to a director who
+   * needs to know WHICH tag they have already used.
+   */
+  readonly code: string | null
 
-  constructor(status: number, messageKey: ErrorKey) {
+  constructor(status: number, messageKey: ErrorKey, code: string | null = null) {
     super(`API request failed (${status})`)
     this.name = 'ApiError'
     this.status = status
     this.messageKey = messageKey
+    this.code = code
   }
 }
+
+/** A bare identifier and nothing else. A stack trace, a path or SQL cannot match this. */
+const ERROR_CODE_RE = /^[a-z][a-z0-9_]{0,39}$/
 
 function messageKeyForStatus(status: number): ErrorKey {
   if (status === 401 || status === 403) return 'auth'
@@ -77,13 +93,32 @@ export async function apiFetch<T>(path: string, request: ApiRequest = {}): Promi
     throw new ApiError(0, 'network')
   }
 
-  if (!response.ok) throw new ApiError(response.status, messageKeyForStatus(response.status))
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      messageKeyForStatus(response.status),
+      await errorCode(response),
+    )
+  }
   if (response.status === 204) return undefined as T
 
   try {
     return (await response.json()) as T
   } catch {
     throw new ApiError(response.status, 'badResponse')
+  }
+}
+
+/**
+ * The `error` field of a refusal body, if it is a bare identifier. Anything else — prose, a
+ * path, HTML from a proxy, an unparseable body — answers null and is dropped on the floor.
+ */
+async function errorCode(response: Response): Promise<string | null> {
+  try {
+    const body = (await response.json()) as { error?: unknown }
+    return typeof body.error === 'string' && ERROR_CODE_RE.test(body.error) ? body.error : null
+  } catch {
+    return null
   }
 }
 
@@ -229,6 +264,114 @@ export type Location = {
   /** Joined by `/admin/data` so no screen has to look the names up itself. */
   client_name: string | null
   contact_name: string | null
+}
+
+/**
+ * A ZONE: a place inside a building that gets cleaned and can carry a tag (decision-43).
+ *
+ * A ZONE IS NOT A COSTING UNIT. A shift is billed to the BUILDING, and the contract and the
+ * revenue stay on the building (decision-42). There is no zone-level contract, target,
+ * revenue or margin, and no screen may compute one — a shift is building-level, so no
+ * duration is attributable to a zone, and splitting a building's labour by area share would
+ * assert that time is proportional to floor area. It is not: a Tiefgarage is fast per m²
+ * and an office floor is slow. What a zone answers is AREA and TAG ACTIVITY.
+ */
+export type Zone = {
+  id: string
+  location_id: string
+  name: string
+  /** Where the tag physically is: "links neben der Gegensprechanlage". Null = not said. */
+  note: string | null
+  /**
+   * Floor area. NULL IS THE POINT, and it is not 0: a zone nobody has measured is real,
+   * and an invented area poisons the €/m² benchmark that is the only reason the column
+   * exists. `NUMERIC(8,2)` in the column; a number on the wire, and it must never be
+   * multiplied by anything here — see lib/area.ts, which keeps it in integer hundredths.
+   */
+  area_sqm: number | null
+  /**
+   * An ADOPTED tag's hardware serial, uppercase hex, colon-separated (decision-44). Null on
+   * almost every zone: a tag WE wrote carries this zone's id in its URL and has no serial
+   * on file at all. It is NOT a credential — it is broadcast in the clear and trivially
+   * clonable — and it never travels phone → server, only server → phone inside /roster.
+   */
+  tag_serial: string | null
+  /** When a physical tag was actually put on the wall. Null = the walk is unfinished. */
+  tag_deployed_at: string | null
+  active: boolean
+  created_at: string
+  /**
+   * DERIVED by `/admin/data` from `shifts.start_zone_id`, never stored and never bounded by
+   * the screen's period: "the Tiefgarage tag has not been tapped since 14 May" is precisely
+   * the answer a period filter would hide. Null = this zone's tag has never opened a shift.
+   */
+  last_tap_at: string | null
+}
+
+/**
+ * Create (no `id`) or update (`id`). Same route either way.
+ *
+ * `location_id` is NOT patchable server-side: moving a zone between buildings would strand
+ * every shift that names it and silently re-point a physical tag on a wall at a different
+ * address. Send the zone's own building back on an edit.
+ *
+ * `area_sqm` goes as a STRING (`'420.5'`) or null, never as a JS number: the column is exact
+ * decimal precisely so the value never passes through binary floating point.
+ */
+export type ZoneInput = {
+  id?: string
+  location_id: string
+  name: string
+  note?: string
+  area_sqm?: string | null
+  tag_serial?: string | null
+  tag_deployed_at?: string | null
+  active?: boolean
+}
+
+/**
+ * Upsert a zone.
+ *
+ * 409 has TWO meanings here and they are not interchangeable, so the caller must read
+ * `ApiError.code` rather than the status alone:
+ *   `duplicate_zone_name` another LIVE zone of this building already has that name
+ *   `serial_taken`        another zone already claims that adopted serial
+ *
+ * The zone the taken serial belongs to is NOT read out of the error body: `/admin/data`
+ * already returns EVERY zone of every building, so the caller finds it by serial in the
+ * snapshot it is holding. One source for that name, and it is the same list the screen is
+ * rendering — a second copy arriving through an error body is how a form comes to name a
+ * zone the table underneath it does not show.
+ */
+export const ZONE_CONFLICTS = ['duplicate_zone_name', 'serial_taken'] as const
+export type ZoneConflict = (typeof ZONE_CONFLICTS)[number]
+
+export function zoneConflictOf(cause: unknown): ZoneConflict | null {
+  if (!(cause instanceof ApiError) || cause.status !== 409) return null
+  // A 409 whose code did not survive the gate is still a name clash far more often than
+  // anything else, and "that name is taken" sends the director to the field that is wrong.
+  return cause.code === 'serial_taken' ? 'serial_taken' : 'duplicate_zone_name'
+}
+
+export function saveZone(input: ZoneInput, signal?: AbortSignal): Promise<Zone> {
+  return apiFetch<{ zone: Zone }>('/admin/zones', {
+    method: 'POST',
+    body: input,
+    signal,
+  }).then((data) => data.zone)
+}
+
+/**
+ * SOFT deactivate, never a delete. A shift tapped here has to keep naming the door it was
+ * tapped at, and the composite FK would refuse a delete anyway. Deactivating also stops the
+ * zone's own tag resolving, which is what a director means when a tag comes off a wall.
+ * Reactivating is a normal `saveZone` with `active: true`.
+ */
+export function deactivateZone(id: string, signal?: AbortSignal): Promise<void> {
+  return apiFetch<{ zone: Zone }>(`/admin/zones/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    signal,
+  }).then(() => undefined)
 }
 
 /** Create (no `id`) or update (`id`, the UUID). Same route either way. */
@@ -648,6 +791,12 @@ export type PortalGrant = {
  */
 export type BuildingsSnapshot = {
   locations: Location[]
+  /**
+   * Every zone of every building, ACTIVE AND INACTIVE, unbounded by the period. History has
+   * to keep naming a zone a shift was tapped at, so an inactive one is rendered as inactive
+   * rather than hidden.
+   */
+  zones: Zone[]
   clients: Client[]
   contacts: Contact[]
   portal_grants: PortalGrant[]
@@ -1045,38 +1194,84 @@ export type PlBuilding = {
   client_id: number | null
   client_name: string | null
 
+  /**
+   * PRESENTATION ONLY, and never the same word as `active` above (decision-43 §3).
+   * `active` decides whether this building's tag resolves; this decides whether its pin is
+   * grey and which sentence the screen prints. An unzoned building clocks workers in
+   * perfectly well: the card on the HOIV wall carries a BUILDING uuid and has no zone.
+   */
+  zone_state: 'zoned' | 'unzoned'
+
   labour_seconds: number
   labour_minutes: number
-  /** Payable labour only (decision-10), valued at CURRENT rates \u2014 see `PlLabourBasis`. */
-  labour_cents: number
   /**
-   * The part of `labour_seconds` that `labour_cents` DOES NOT CONTAIN, because nobody has
-   * set those people's hourly rate. Real hours, no amount at all \u2014 not even zero, which
-   * would make their work look free and leave the margin untouched while the hours rose.
-   * Whenever this is above zero the labour cost is too low and the margin too high by an
-   * amount nothing in this system can know, and the screen must say so.
+   * Payable labour only (decision-10), valued at CURRENT rates. See `PlLabourBasis`.
+   *
+   * THERE IS NO `labour_unpriced_*` ANY MORE AND THAT IS A DELETION, NOT AN OMISSION:
+   * decision-41 made a rate of 0 unrepresentable, so `labour_seconds` and `labour_cents`
+   * describe the SAME set of seconds and any divergence is a bug rather than a state.
+   * `rate_basis: 'current'` below is a DIFFERENT, still-true limitation and it stays.
    */
-  labour_unpriced_seconds: number
-  labour_unpriced_minutes: number
-  /** People, at this building, with no rate on file. Named and counted, never priced. */
-  labour_unpriced_workers: number
+  labour_cents: number
   /** This building's share of the period's material pool, pro-rata by labour (decision-6). */
   material_cents: number
 
-  /** Null = no contract covering any day of the period. NOT zero. */
+  /**
+   * WHAT THE CLIENT ACTUALLY PAID for the whole Vienna months this period contains, typed
+   * by a human (decision-42). Not the contract, and not an accrual of one.
+   *
+   * Null = nobody has typed a figure for any of those months. It is NOT 0 and it is NOT the
+   * contract value: 0 is a real, different answer meaning "they paid nothing this month" -
+   * a credit month, a dispute, a free trial - and it comes back as 0.
+   */
   revenue_cents: number | null
-  revenue_unknown_reason: 'no_contract' | null
-  /** Days of the period this building actually had a price for. */
-  revenue_days: number
+  revenue_unknown_reason: 'not_entered' | null
+  /**
+   * Whole months of the period that still have nobody's figure in them. The period figure
+   * is only a TOTAL once this is 0; until then it is a partial sum, and a partial sum
+   * printed as a total reads as a bad quarter.
+   */
+  months_missing_revenue: number
+  revenue_months_entered: number
+  /** What was AGREED for the same months: "vereinbart" beside "erhalten". Null = none. */
+  contract_cents: number | null
+  /** Provenance of the most recent figure in the period. Null = nothing entered. */
+  revenue_entered_at: string | null
+  revenue_entered_by: string | null
+  /**
+   * Set when the figure REPLACED an earlier one, which is kept: "geaendert" without "from
+   * what" sends the director to the database, so the previous amount travels with it.
+   */
+  revenue_changed_at: string | null
+  revenue_previous_cents: number | null
   period_days: number
 
   target_minutes: number | null
   target_unknown_days: number
 
+  /**
+   * Area DERIVED from the building's live zones and never stored (decision-43 section 6).
+   * Null whenever the sum would be a FLOOR rather than a total, because a denominator that
+   * is silently too small inflates every per-m2 figure computed from it.
+   */
+  building_m2: number | null
+  zones_total: number
+  zones_unmeasured: number
+  area_unknown_reason: 'no_zones' | 'area_incomplete' | null
+  /** All three null whenever the area is unknown. Never 0, never "about". */
+  revenue_cents_per_m2: number | null
+  labour_minutes_per_m2: number | null
+  cost_cents_per_m2: number | null
+  /** EUR/m2 has TWO ways of being unknowable and the screen has to say which. */
+  per_m2_unknown_reason: 'no_zones' | 'area_incomplete' | 'not_entered' | null
+
   profit_cents: number | null
-  /** Margin in basis points. Null when revenue is unknown or exactly zero. */
+  /**
+   * Margin in basis points. Null when the period is not whole Vienna months, when revenue
+   * is unknown, or when revenue is exactly zero.
+   */
   margin_bp: number | null
-  margin_unknown_reason: 'no_contract' | 'zero_revenue' | null
+  margin_unknown_reason: 'period_not_month_aligned' | 'revenue_not_entered' | 'zero_revenue' | null
   /**
    * TRUE = below the operator's floor. FALSE = at or above it. NULL = NOT ASSESSABLE,
    * because either the margin or the baseline is unknown. Null is not a pass and must
@@ -1103,11 +1298,29 @@ export type PlBuilding = {
 export type PlLabourBasis = {
   rate_basis: 'current'
   rate_basis_note: string
-  /** Payable hours across the whole period that carry no rate, so carry no cost. */
-  unpriced_seconds: number
-  unpriced_minutes: number
-  /** DISTINCT people missing a rate. One person at three buildings is one rate to set. */
-  unpriced_workers: number
+}
+
+/**
+ * THE PERIOD'S SHAPE, which is what decides whether a margin is answerable at all
+ * (decision-42).
+ *
+ * A typed monthly payment CANNOT BE SLICED: 17/30ths of "the client paid 1.250,00 in
+ * September" invents a payment schedule nobody agreed to, which is the same accrual
+ * decision-42 removed, applied to its replacement. So a ragged period reports revenue for
+ * the months it fully contains, NAMES the partial ones as excluded, and refuses every
+ * margin. Cost keeps exact day boundaries, which is why approximating would compare a full
+ * month of revenue against a partial month of labour.
+ */
+export type PlRevenueBasis = {
+  basis: 'entered'
+  basis_decision: string
+  /** `YYYY-MM`, the whole Vienna months the period FULLY CONTAINS. */
+  months: string[]
+  months_contained: number
+  months_touched: number
+  /** False = days hang off a month boundary, and then every `margin_bp` is null. */
+  month_aligned: boolean
+  partial_months_excluded: number
 }
 
 export type PlMaterials = {
@@ -1130,6 +1343,7 @@ export type PlReport = {
   timezone: string
   baseline_margin_bp: number | null
   baseline_set: boolean
+  revenue: PlRevenueBasis
   labour: PlLabourBasis
   materials: PlMaterials
   buildings: PlBuilding[]
@@ -1137,6 +1351,103 @@ export type PlReport = {
 
 export function fetchPl(range: ClosedRange, signal?: AbortSignal): Promise<PlReport> {
   return apiFetch<PlReport>(`/admin/pl?${rangeQuery(range)}`, { signal })
+}
+
+/* --- Revenue: what a client actually PAID, per building per month (decision-42) ---------
+ *
+ * TWO FACTS THAT USED TO BE ONE:
+ *   CONTRACT   what was AGREED.   A rate, valid from a date until a date.  /contracts/
+ *   REVENUE    what was RECEIVED. A scalar, for one named Vienna month.    here
+ *
+ * THE ABSENCE OF A ROW IS THE UNKNOWN. Nothing on this screen may write a row on its own:
+ * pre-filling from the contract is the rejected accrual wearing a different hat, and it
+ * fabricates a payment a human then reads as confirmed. The contract value travels as a
+ * `suggestion`, is LABELLED as one, and is stored only when somebody presses save.
+ *
+ * 0 is NOT the unknown. It is a real, different answer: "they paid nothing this month".
+ * That is why RETRACTING exists and is not the same as typing 0 - see `retractRevenue`.
+ */
+
+/** The figure IN FORCE for one building-month, plus the one it replaced. */
+export type RevenueEntry = {
+  location_id: string
+  /** `YYYY-MM`. A Vienna calendar month, never a slice of one. */
+  month: string
+  amount_cents: number
+  note: string | null
+  entered_at: string
+  /** The admin who typed it, from their SESSION. A caller can never name themselves. */
+  entered_by_email: string | null
+  /** The amount this one replaced, or null when nothing was replaced. */
+  previous_cents: number | null
+  changed_at: string | null
+  changed_by_email: string | null
+}
+
+/**
+ * The CONTRACT value in force on the first of that month. A pre-fill for the form and
+ * NOTHING ELSE: nothing applies it, and it is never summed into a report.
+ */
+export type RevenueSuggestion = {
+  location_id: string
+  month: string
+  contract_cents: number
+}
+
+export type RevenueGrid = {
+  range: ClosedRange
+  timezone: string
+  /** Every Vienna month the period TOUCHES, oldest first. `YYYY-MM`. */
+  months: string[]
+  entries: RevenueEntry[]
+  /** Named `suggestions` and not `defaults` on purpose. */
+  suggestions: RevenueSuggestion[]
+}
+
+export function fetchRevenue(range: ClosedRange, signal?: AbortSignal): Promise<RevenueGrid> {
+  return apiFetch<RevenueGrid>(`/admin/revenue?${rangeQuery(range)}`, { signal })
+}
+
+/**
+ * File, or CORRECT, one month's payment. A correction is an INSERT, never an update in
+ * place: the previous row keeps its amount and gains a superseded stamp, so the screen can
+ * print what the figure used to be and who changed it.
+ *
+ * 422 `amount_required` = the field was left empty. An entry with no amount is not an entry.
+ * 422 `month_too_far_ahead` = further ahead than next month, which is a mistyped YEAR.
+ * 400 `invalid_month` = not `YYYY-MM`.
+ */
+export function saveRevenue(
+  locationId: string,
+  month: string,
+  amountCents: number,
+  note: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  return apiFetch<{ entry: unknown }>(
+    `/admin/locations/${encodeURIComponent(locationId)}/revenue`,
+    { method: 'POST', body: { month, amount_cents: amountCents, note }, signal },
+  ).then(() => undefined)
+}
+
+/**
+ * RETRACT: the month reverts to UNKNOWN. NOT the same as entering 0, and not optional.
+ *
+ * If a figure lands on the wrong building the only other way back would be "set it to 0",
+ * which asserts that a paying client paid nothing - inside a report that drives
+ * conversations with that client. The retracted row is kept and stamped.
+ *
+ * 404 = there is no live entry for that month, which is already the state asked for.
+ */
+export function retractRevenue(
+  locationId: string,
+  month: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  return apiFetch<{ retracted: unknown }>(
+    `/admin/locations/${encodeURIComponent(locationId)}/revenue/${encodeURIComponent(month)}`,
+    { method: 'DELETE', signal },
+  ).then(() => undefined)
 }
 
 /** One Vienna calendar month of actual payable time at one building. */
@@ -1164,6 +1475,18 @@ export type AnalyticsBuilding = {
   geocode_state: 'pinned' | 'never_attempted' | 'failed'
   geocode_status: string | null
   street_view_status: string | null
+
+  /**
+   * PRESENTATION ONLY (decision-43). A grey pin and a named next action, never an
+   * operational state: `active` is what decides whether the building's tag resolves, and an
+   * unzoned building clocks workers in exactly as it did before zones existed.
+   */
+  zone_state: 'zoned' | 'unzoned'
+  zones_total: number
+  zones_unmeasured: number
+  /** Null whenever the sum would be a floor rather than a total. Never 0. */
+  building_m2: number | null
+  area_unknown_reason: 'no_zones' | 'area_incomplete' | null
 
   actual_minutes: number
   target_minutes: number | null

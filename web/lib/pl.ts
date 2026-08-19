@@ -10,10 +10,14 @@ import type { PlBuilding } from '@/lib/api'
  * lands on the wrong side of a flag it is sitting precisely on.
  *
  * THE ONE RULE THIS FILE EXISTS TO PROTECT: a `null` from the API is a REFUSAL TO GUESS.
- * `revenue_cents` null means nobody has priced the building; it must never be summed as
- * zero, because a zero would report the building as a total loss and flag it. So the
- * totals below carry the KNOWN-revenue subtotals separately from the whole-period cost,
- * and the caller is expected to say which is which on screen.
+ * `revenue_cents` null means NOBODY HAS TYPED WHAT THE CLIENT PAID for any month of the
+ * period (decision-42); it must never be summed as zero, because a zero would report the
+ * building as a total loss and flag it. So the totals below carry the KNOWN-revenue
+ * subtotals separately from the whole-period cost, and the caller is expected to say which
+ * is which on screen.
+ *
+ * 0 IS NOT THAT NULL. A building with a typed 0 really was paid nothing this month - a
+ * credit month, a dispute, a free trial - and it is summed, counted and flagged normally.
  */
 
 /** `12,5` or `12.5` or `-5` — German keyboards produce the comma. Two decimals, i.e. 1 bp. */
@@ -91,17 +95,23 @@ export function shortfallBp(marginBp: number | null, baselineBp: number | null):
 }
 
 export type PlTotals = {
-  /** Sum over buildings that HAVE a contract covering part of the period. */
+  /** Sum over buildings that have a TYPED figure for at least one month of the period. */
   revenueCents: number
-  /** How many buildings had none. Their cost is real; their revenue is unknown. */
+  /** How many buildings have none. Their cost is real; what they were paid is unknown. */
   unpricedBuildings: number
+  /**
+   * Whole months of the period, summed across buildings, that nobody has typed a figure
+   * for. The revenue total is a partial sum until this is 0, and the screen has to say so:
+   * a quarter with two of three months entered is not a bad quarter, it is two months.
+   */
+  monthsMissingRevenue: number
   /** Labour and materials for EVERY building in the period, priced or not. */
   labourCents: number
   materialCents: number
   /** ...and for the priced ones alone, which is the only subset a profit can be taken of. */
   labourCentsPriced: number
   materialCentsPriced: number
-  /** Cost carried by buildings with no contract on file. Not a loss — an unknown. */
+  /** Cost carried by buildings with no revenue typed. Not a loss - an unknown. */
   costCentsUnpriced: number
   /** Revenue minus cost, OVER THE PRICED BUILDINGS ONLY. Null when there are none. */
   profitCents: number | null
@@ -113,22 +123,21 @@ export type PlTotals = {
   excludedUnresolvedShifts: number
   openShifts: number
   /**
-   * How many buildings carry payable hours nobody could price, because the worker has no
-   * rate. Those hours are in the building's `labour_seconds` and NOT in its `labour_cents`,
-   * so each of these buildings reports a cost that is too low and a margin that is too
-   * high by an amount nothing here can know.
+   * Buildings whose pin is grey because no zone has been filed yet (decision-43).
    *
-   * BUILDINGS, not people. The distinct head count is the server's `labour.unpriced_workers`
-   * — one person cleaning three buildings is one rate to go and set, and summing per-building
-   * counts here would send the director looking for two people who do not exist.
+   * PRESENTATION ONLY. It is deliberately NOT summed into anything, NOT a flag and NOT a
+   * reason to exclude a building from a total: an unzoned building's tag resolves, its
+   * workers clock in, and its P&L is exactly as real as everyone else's. It exists so the
+   * screen can name a next action, in words, beside a number that is already correct.
    */
-  unpricedLabourBuildings: number
+  unzonedBuildings: number
 }
 
 export function plTotals(buildings: readonly PlBuilding[]): PlTotals {
   const totals: PlTotals = {
     revenueCents: 0,
     unpricedBuildings: 0,
+    monthsMissingRevenue: 0,
     labourCents: 0,
     materialCents: 0,
     labourCentsPriced: 0,
@@ -140,7 +149,7 @@ export function plTotals(buildings: readonly PlBuilding[]): PlTotals {
     notAssessable: 0,
     excludedUnresolvedShifts: 0,
     openShifts: 0,
-    unpricedLabourBuildings: 0,
+    unzonedBuildings: 0,
   }
 
   for (const building of buildings) {
@@ -148,7 +157,8 @@ export function plTotals(buildings: readonly PlBuilding[]): PlTotals {
     totals.materialCents += building.material_cents
     totals.excludedUnresolvedShifts += building.excluded_unresolved_shifts
     totals.openShifts += building.open_shifts
-    if (building.labour_unpriced_seconds > 0) totals.unpricedLabourBuildings += 1
+    totals.monthsMissingRevenue += building.months_missing_revenue
+    if (building.zone_state === 'unzoned') totals.unzonedBuildings += 1
     if (building.below_baseline === true) totals.flagged += 1
     if (building.below_baseline === null) totals.notAssessable += 1
 

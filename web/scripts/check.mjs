@@ -670,73 +670,103 @@ check('lib/pl.ts: a share of nothing is unknown, not zero', () => {
   assert.equal(shortfallBp(1_000, null), null)
 })
 
-check('lib/pl.ts: a building nobody has priced is not summed as if it earned zero', () => {
-  const building = (over) => ({
-    location_id: over.location_id,
-    labour_cents: 0,
-    material_cents: 0,
-    revenue_cents: null,
-    below_baseline: null,
-    excluded_unresolved_shifts: 0,
-    open_shifts: 0,
-    labour_unpriced_seconds: 0,
-    ...over,
-  })
-  const totals = plTotals([
-    building({
-      location_id: 'a',
+check(
+  'lib/pl.ts: a building nobody has entered revenue for is not summed as if it earned zero',
+  () => {
+    const building = (over) => ({
+      location_id: over.location_id,
+      labour_cents: 0,
+      material_cents: 0,
+      revenue_cents: null,
+      below_baseline: null,
+      excluded_unresolved_shifts: 0,
+      open_shifts: 0,
+      months_missing_revenue: 0,
+      zone_state: 'zoned',
+      ...over,
+    })
+    const totals = plTotals([
+      building({
+        location_id: 'a',
+        revenue_cents: 100_000,
+        labour_cents: 60_000,
+        material_cents: 10_000,
+        below_baseline: false,
+      }),
+      // No contract on file. Real cost, unknown income.
+      building({
+        location_id: 'b',
+        labour_cents: 50_000,
+        material_cents: 5_000,
+        excluded_unresolved_shifts: 2,
+        open_shifts: 1,
+      }),
+    ])
+
+    assert.equal(totals.revenueCents, 100_000, 'only the priced building contributes revenue')
+    assert.equal(totals.unpricedBuildings, 1)
+    assert.equal(totals.costCentsUnpriced, 55_000, 'its cost is reported, not discarded')
+    // Whole-period cost is still available for the methodology note...
+    assert.equal(totals.labourCents, 110_000)
+    assert.equal(totals.materialCents, 15_000)
+    // ...but the bottom line is taken over the priced buildings ALONE. Counting b's revenue
+    // as 0 would report EUR -250.00 and a -25% margin for a portfolio that made +30%.
+    assert.equal(totals.profitCents, 30_000)
+    assert.equal(totals.marginBp, 3_000)
+    assert.equal(totals.notAssessable, 1, 'null below_baseline is counted, never read as a pass')
+    assert.equal(totals.flagged, 0)
+    assert.equal(totals.excludedUnresolvedShifts, 2)
+    assert.equal(totals.openShifts, 1)
+
+    // A TYPED ZERO IS NOT THE UNKNOWN (decision-42). "They paid nothing this month" is a real
+    // answer — a credit month, a dispute, a free trial — and it is summed, counted and
+    // assessed like any other figure. Reading 0 as "not entered" would quietly move a real
+    // loss out of the bottom line.
+    const zero = plTotals([
+      building({ location_id: 'z', revenue_cents: 0, labour_cents: 20_000, below_baseline: true }),
+    ])
+    assert.equal(zero.unpricedBuildings, 0, 'an entered 0 is an ANSWER, not a missing entry')
+    assert.equal(zero.revenueCents, 0)
+    assert.equal(zero.labourCentsPriced, 20_000, 'its cost belongs to the bottom line')
+    assert.equal(zero.profitCents, -20_000)
+    assert.equal(zero.flagged, 1)
+
+    // A PARTIAL SUM IS NOT A TOTAL. Two of three months entered is not a bad quarter, and the
+    // screen can only say so if the count reaches it.
+    const partial = plTotals([
+      building({ location_id: 'f', revenue_cents: 100_000, months_missing_revenue: 1 }),
+      building({ location_id: 'g', revenue_cents: 200_000, months_missing_revenue: 2 }),
+    ])
+    assert.equal(partial.monthsMissingRevenue, 3)
+
+    // THE LANDMINE, PINNED ON THE WEB SIDE (decision-43 §3). `zone_state` is PRESENTATION.
+    // It must be counted so a sentence can be written, and it must change NOTHING ELSE: an
+    // unzoned building's tag resolves, its workers clock in, and its P&L is exactly as real
+    // as everyone else's. Wire it into the revenue, the cost or the flag — which is the
+    // reading of "a building with no zones is inactive" that kills the card on the HOIV wall
+    // — and these three equalities go red.
+    const zoned = building({
+      location_id: 'h',
       revenue_cents: 100_000,
       labour_cents: 60_000,
-      material_cents: 10_000,
-      below_baseline: false,
-    }),
-    // No contract on file. Real cost, unknown income.
-    building({
-      location_id: 'b',
-      labour_cents: 50_000,
-      material_cents: 5_000,
-      excluded_unresolved_shifts: 2,
-      open_shifts: 1,
-    }),
-  ])
+      below_baseline: true,
+    })
+    const unzoned = plTotals([{ ...zoned, location_id: 'i', zone_state: 'unzoned' }])
+    assert.equal(unzoned.unzonedBuildings, 1, 'counted, so the screen can name the next action')
+    assert.deepEqual(
+      { ...unzoned, unzonedBuildings: 0 },
+      plTotals([zoned]),
+      'zone_state must change NOTHING but its own count',
+    )
+    assert.equal(unzoned.flagged, 1, 'an unzoned building is still assessed')
 
-  assert.equal(totals.revenueCents, 100_000, 'only the priced building contributes revenue')
-  assert.equal(totals.unpricedBuildings, 1)
-  assert.equal(totals.costCentsUnpriced, 55_000, 'its cost is reported, not discarded')
-  // Whole-period cost is still available for the methodology note...
-  assert.equal(totals.labourCents, 110_000)
-  assert.equal(totals.materialCents, 15_000)
-  // ...but the bottom line is taken over the priced buildings ALONE. Counting b's revenue
-  // as 0 would report EUR -250.00 and a -25% margin for a portfolio that made +30%.
-  assert.equal(totals.profitCents, 30_000)
-  assert.equal(totals.marginBp, 3_000)
-  assert.equal(totals.notAssessable, 1, 'null below_baseline is counted, never read as a pass')
-  assert.equal(totals.flagged, 0)
-  assert.equal(totals.excludedUnresolvedShifts, 2)
-  assert.equal(totals.openShifts, 1)
-  assert.equal(totals.unpricedLabourBuildings, 0, 'nothing to caveat when every hour has a rate')
-
-  // A worker with no hourly rate: her hours are in `labour_seconds` and her pay is in
-  // NOBODY's cents, so the building's cost is too low and its margin too high. Counted so
-  // the screen can say so — BUILDINGS, because one person can clean several of them and the
-  // head count to go and fix is the server's own distinct one.
-  const unpriced = plTotals([
-    building({ location_id: 'd', revenue_cents: 100_000, labour_cents: 60_000 }),
-    building({
-      location_id: 'e',
-      revenue_cents: 100_000,
-      labour_cents: 60_000,
-      labour_unpriced_seconds: 37_800,
-    }),
-  ])
-  assert.equal(unpriced.unpricedLabourBuildings, 1, 'only the building with unpriced hours counts')
-
-  // Nothing priced at all => no bottom line is claimed.
-  const none = plTotals([building({ location_id: 'c', labour_cents: 900 })])
-  assert.equal(none.profitCents, null)
-  assert.equal(none.marginBp, null)
-  assert.deepEqual(plTotals([]).profitCents, null)
-})
+    // Nothing entered at all => no bottom line is claimed.
+    const none = plTotals([building({ location_id: 'c', labour_cents: 900 })])
+    assert.equal(none.profitCents, null)
+    assert.equal(none.marginBp, null)
+    assert.deepEqual(plTotals([]).profitCents, null)
+  },
+)
 
 // --- 7. material lifecycle (lib/materials.ts) -------------------------------------------
 
