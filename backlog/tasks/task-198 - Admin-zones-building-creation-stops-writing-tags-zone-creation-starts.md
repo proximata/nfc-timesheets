@@ -1,0 +1,77 @@
+---
+id: TASK-198
+title: 'Admin zones: building creation stops writing tags, zone creation starts'
+status: To Do
+assignee: []
+created_date: '2026-08-19 14:02'
+labels:
+  - web
+  - zones
+  - nfc
+  - i18n
+  - a11y
+dependencies:
+  - TASK-196
+documentation:
+  - backlog/decisions/decision-43
+  - backlog/decisions/decision-44
+  - backlog/docs/ZONES-MODEL.md
+priority: high
+ordinal: 116000
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+decision-43, the admin surface. ZONES-MODEL.md $3.5, $8.
+
+BUILDING DRAWER (/locations/)
+  step 1  identity + address + client/contact     unchanged
+  step 2  contract                                unchanged
+  step 3  OPTIONAL 'Erste Zone anlegen': name, m2, note
+          Skipping SAVES the building unzoned, with a named next action. A building with a
+          contract and a contact but no zones is LEGITIMATE.
+  NO TAG URI ON THIS PATH ANY MORE. Creating a building no longer produces a sticker to write.
+
+ZONE DRAWER (from the building panel, or from step 3)
+  name · m2 (OPTIONAL -- NULL means nobody has measured it, and an invented m2 poisons the
+  EUR/m2 benchmark that is the only reason the column exists) · note (where the tag physically
+  is: 'hinter der Tür links, hüfthoch') · then the tag walkthrough, which is the SAME control
+  as today's, repeated per zone:
+      the zone's URI verbatim in a code-block + one-click copy + the UUID underneath
+      'mit NFC Tools schreiben · NICHT sperren' (decision-15)
+      [ Tag angebracht ] -> tag_deployed_at
+  OR adopt an existing tag: type its serial, normalised on input. Next to that field, in words:
+      'Ein übernommener Tag ohne URL kann die App nicht von selbst öffnen. Er funktioniert nur
+       über Scannen in der App.'
+  A worker must not discover that at a door.
+
+*** DO NOT DROP THIS ***
+The building keeps a COLLAPSED, READ-ONLY 'Gebäude-Tag (Bestand)' disclosure showing its own
+URI, labelled 'Nur für bereits angebrachte Tags. Neue Tags tragen eine Zone.' The card on the
+wall carries a BUILDING uuid; without this the director cannot see what it says or re-write it
+if it is lost. Collapsed and never the primary control, so no new building-level tags get minted
+out of habit.
+
+ZONE LIST on the building panel: name · m2 (or 'Fläche unbekannt') · Tag-Status
+(geschrieben / übernommen / kein Tag) · letzter Kontakt (DERIVED from shifts, never stored).
+
+URIs are built by web/lib/tag.ts on the PERMANENT tag host (decision-40) -- one place, already
+gated by a format check. Never hand-concatenate a host here.
+
+WARNING COPY, until the zone-aware APK is confirmed on the field phone: adding a SECOND active
+zone to a building makes every intra-building tap read as a building switch on the shipped
+build (auto_closed = true + a new shift). The zone drawer must say so.
+<!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 Building creation completes with zero zones and offers a named next action; no tag URI appears on that path
+- [ ] #2 The zone drawer renders the zone's URI verbatim from lib/tag.ts, with copy and the UUID line, matching today's building control exactly
+- [ ] #3 RED, seeded: remove the 'Gebäude-Tag (Bestand)' disclosure -> a check asserting the HOIV building's own URI is reachable in the admin goes red
+- [ ] #4 m2 left empty saves NULL and the zone list says 'Fläche unbekannt' -- never 0
+- [ ] #5 Serial input accepts '04a1a852ae5c80', '04-a1-a8-52-ae-5c-80' and '04:A1:A8:52:AE:5C:80' and stores the canonical form; a serial already claimed answers 409 naming the other zone
+- [ ] #6 The second-zone warning is rendered until the APK is confirmed, and it is a sentence, not a colour
+- [ ] #7 de/en exact key parity (web/scripts/check.mjs); Austrian business German; every plural through ICU
+- [ ] #8 Renders at 1680 and at 390; the zone list is stacked blocks on narrow; focus trap and Escape behave as in the existing Drawer
+<!-- AC:END -->
