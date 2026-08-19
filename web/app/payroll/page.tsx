@@ -251,23 +251,21 @@ export default function PayrollPage() {
       ? null
       : (snapshot?.workers.find((worker) => worker.id === filters.worker)?.name ?? null)
 
-  /**
-   * 0 cents is not a rate anybody agreed (`/workers/` says so on the row too). Their hours
-   * are real and are in the hours column; NO amount is computed for them at all — not zero,
-   * no amount — so the payout total is short by a sum this screen cannot know. Counted and
-   * named, never shown as a confident EUR 0,00, and `payroll.caveatNoRate` says exactly that
-   * in the same words /workers/ uses.
+  /*
+   * THE „no rate" CASE IS GONE FROM THIS SCREEN, AND IT IS A DELETION.
+   *
+   * It used to hold `noRateLines` and `noRateMs`: people whose hours were in the hours
+   * column and whose money was in nobody's column, so „Stunden 267,25" and „Auszuzahlen
+   * 2.827,96 €" could not be reconciled and the gap was 810,30 € (journey D14). decision-41
+   * made a wage of 0 unrepresentable — `workers.hourly_rate_cents` lost its DEFAULT and
+   * gained CHECK (> 0) in migration 006, and the migration REFUSED to apply until the one
+   * rate-less row in production was dealt with by a human. Every payable hour therefore
+   * carries an amount, and the two totals reconcile by construction.
+   *
+   * WHAT DID NOT GO WITH IT: the „Hinweis" column in the CSV, which also carries
+   * decision-10's „zu bestätigen" and „noch offen", and the decision-10 exclusions
+   * themselves. Only the no-rate contribution was removed.
    */
-  const noRateLines =
-    totals === null ? [] : totals.lines.filter((l) => l.worker.hourly_rate_cents === 0)
-  /**
-   * The hours inside „Stunden" that carry NO amount, because nobody set those people's
-   * rate. They are payable, they are in the hours total, and they are in nobody's money
-   * column — so „Stunden 267,25" and „Auszuzahlen 2.827,96 €" cannot be reconciled with each
-   * other until this number is on the screen. It was not, and the gap was 810,30 € with
-   * nothing above the table to explain it (journey D14, „my hours are wrong").
-   */
-  const noRateMs = noRateLines.reduce((sum, line) => sum + line.payableMs, 0)
 
   // Explicit map, not a template-literal key: messages are typed (global.d.ts), and a
   // computed key would defeat the check that catches a typo at build time.
@@ -315,12 +313,10 @@ export default function PayrollPage() {
    * the export shipped `Ana Ilic;10.500;0;0;0.00;0`.
    */
   function exclusionNote(line: PayrollLine): string {
-    const noRate = line.worker.hourly_rate_cents === 0
-    if (!noRate && line.unresolvedShifts === 0 && line.openShifts === 0) return t('excludedNone')
+    if (line.unresolvedShifts === 0 && line.openShifts === 0) return t('excludedNone')
     return [
       line.unresolvedShifts > 0 ? t('excludedUnresolved', { count: line.unresolvedShifts }) : null,
       line.openShifts > 0 ? t('excludedOpen', { count: line.openShifts }) : null,
-      noRate ? t('excludedNoRate') : null,
     ]
       .filter((part) => part !== null)
       .join(' · ')
@@ -349,16 +345,15 @@ export default function PayrollPage() {
         // and /workers/ refuse to make. Not a sentinel like -1 either: it would sum, and it
         // would sum WRONG. Not the word „Nicht bewertet“ in a numeric column either: one
         // text cell turns the whole column to text in Excel and breaks SUM for everyone.
-        const noRate = line.worker.hourly_rate_cents === 0
         return [
           line.worker.name,
           // DECIMAL COMMA, because the field separator is a semicolon and the two go
           // together: `10.500` under `;` is TEN THOUSAND FIVE HUNDRED to an Austrian Excel.
           // See `decimalComma` in lib/payroll.ts for what each column used to be read as.
           decimalComma(msToHours(line.payableMs).toFixed(3)),
-          noRate ? '' : String(line.worker.hourly_rate_cents),
-          noRate ? '' : String(line.payCents),
-          noRate ? '' : decimalComma(centsToPlainEuros(line.payCents)),
+          String(line.worker.hourly_rate_cents),
+          String(line.payCents),
+          decimalComma(centsToPlainEuros(line.payCents)),
           String(line.manualShifts),
           exclusionNote(line),
         ]
@@ -372,7 +367,9 @@ export default function PayrollPage() {
         String(totals.payCents),
         decimalComma(centsToPlainEuros(totals.payCents)),
         String(totals.manualShifts),
-        noRateLines.length === 0 ? '' : t('csvTotalNoRate', { count: noRateLines.length }),
+        // The Hinweis column STAYS on the total row: it still carries the decision-10
+        // exclusions. Only the no-rate contribution to it is gone.
+        excludedShifts === 0 ? '' : t('csvTotalExcluded', { count: excludedShifts }),
       ],
     ]
 
@@ -419,7 +416,7 @@ export default function PayrollPage() {
    * caveat bullet and the CSV's total note already carry, and three counts of one condition
    * is how a screen and the file the accountant keeps come to disagree again.
    */
-  const excludedCount = excludedShifts + noRateLines.length
+  const excludedCount = excludedShifts
   /** What is excluded, in the words the rows use. Never empty: „nothing" is a branch. */
   const shiftExclusionSummary =
     totals === null || excludedShifts === 0
@@ -432,8 +429,6 @@ export default function PayrollPage() {
         ]
           .filter((part) => part !== null)
           .join(' · ')
-  const noRateSummary =
-    noRateLines.length === 0 ? null : t('answerExcludedNoRate', { count: noRateLines.length })
 
   return (
     <>
@@ -534,12 +529,9 @@ export default function PayrollPage() {
               calm: true,
               // The hours are complete and the amount beside them is not. That difference
               // is stated HERE, on the cell that is too big for the money next to it.
-              sub: [
-                t('answerHoursSub'),
-                noRateMs > 0 ? t('answerHoursUnvalued', { hours: hours(noRateMs) }) : null,
-              ]
-                .filter((part) => part !== null)
-                .join(' · '),
+              // Every payable hour carries a rate (decision-41), so the hours and the
+              // amount beside them now describe the same work by construction.
+              sub: t('answerHoursSub'),
             },
             { k: t('answerWorkers'), v: totals.lines.length, calm: true },
             {
@@ -554,7 +546,7 @@ export default function PayrollPage() {
               // clause is ALWAYS first, including its „nothing" branch: the count above is a
               // count of two different nouns, so the breakdown may never be silent about
               // either of them.
-              sub: [shiftExclusionSummary, noRateSummary].filter((p) => p !== null).join(' · '),
+              sub: shiftExclusionSummary,
             },
           ]}
         />
@@ -649,27 +641,6 @@ export default function PayrollPage() {
               ) : null}
               {totals.unresolvedShifts === 0 && totals.openShifts === 0 ? (
                 <li>{t('caveatNoneExcluded')}</li>
-              ) : null}
-              {/* An unset rate is not a free worker. Their hours are in the hours column and
-                  their money is in nobody's column, so the sum is too low by an amount this
-                  screen cannot know. */}
-              {noRateLines.length > 0 ? (
-                <li>
-                  {t('caveatNoRate', { count: noRateLines.length })}{' '}
-                  <Link
-                    href={
-                      // One unpriced person → straight to their panel, where the rate is.
-                      // Several → the roster, unfiltered: there is no „no rate" state in the
-                      // vocabulary and inventing one for a single link would be a parameter
-                      // only this screen writes and only that screen reads.
-                      noRateLines.length === 1 && noRateLines[0] !== undefined
-                        ? filterHref(WORKERS_PATH, { worker: noRateLines[0].worker.id })
-                        : WORKERS_PATH
-                    }
-                  >
-                    {t('caveatNoRateLink')}
-                  </Link>
-                </li>
               ) : null}
               {/* The row list is capped; the server aggregate is not. The failing branch is
                   in the warning above, and the reconciled branch is stated here, because
@@ -767,8 +738,7 @@ export default function PayrollPage() {
                 </thead>
                 <tbody>
                   {totals.lines.map((line) => {
-                    const noRate = line.worker.hourly_rate_cents === 0
-                    const attention = noRate || line.unresolvedShifts > 0 || line.openShifts > 0
+                    const attention = line.unresolvedShifts > 0 || line.openShifts > 0
                     return (
                       // The 3px left rule is the THIRD signal. The words in the last column
                       // are the first, their position is the second; desaturate this table
@@ -784,25 +754,15 @@ export default function PayrollPage() {
                           </Link>
                         </th>
                         <td className="col-numeric">{hours(line.payableMs)}</td>
-                        <td className="col-numeric">
-                          {noRate ? (
-                            <span className="cell-muted">{t('rowNoRate')}</span>
-                          ) : (
-                            money(line.worker.hourly_rate_cents)
-                          )}
-                        </td>
-                        <td className="col-numeric">
-                          {noRate ? (
-                            <span className="cell-muted">{t('amountNoRate')}</span>
-                          ) : (
-                            money(line.payCents)
-                          )}
-                        </td>
+                        {/* Always amounts. A wage of 0 is unrepresentable since 006, so the
+                            two „nicht bewertet" branches described a row that cannot exist. */}
+                        <td className="col-numeric">{money(line.worker.hourly_rate_cents)}</td>
+                        <td className="col-numeric">{money(line.payCents)}</td>
                         {/* Same string the CSV's last column carries, from the same
                             function: two spellings of one exclusion is how a screen and an
                             export drift apart again. */}
                         <td>
-                          {!noRate && line.unresolvedShifts === 0 && line.openShifts === 0 ? (
+                          {line.unresolvedShifts === 0 && line.openShifts === 0 ? (
                             <span className="cell-muted">{exclusionNote(line)}</span>
                           ) : (
                             exclusionNote(line)

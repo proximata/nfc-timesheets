@@ -145,15 +145,14 @@ export function WorkerPanel({ worker, shifts, truncated, now, onClose }: WorkerP
         <dt>{t('colCode')}</dt>
         <dd>{codeText}</dd>
 
-        {/* 0 cents is not a rate anybody agreed. Never 0,00 €. */}
+        {/* Always an amount: a wage of 0 is unrepresentable since 006 (decision-41), so
+            the „kein Stundensatz" branch described a row that can no longer exist. */}
         <dt>{t('colRate')}</dt>
         <dd>
-          {worker.hourly_rate_cents === 0
-            ? t('noRate')
-            : format.number(worker.hourly_rate_cents / 100, {
-                style: 'currency',
-                currency: 'EUR',
-              })}
+          {format.number(worker.hourly_rate_cents / 100, {
+            style: 'currency',
+            currency: 'EUR',
+          })}
         </dd>
 
         <dt>{t('panelStatus')}</dt>

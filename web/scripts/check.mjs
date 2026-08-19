@@ -1161,8 +1161,13 @@ check('lib/payroll.ts: the CSV states hours and amounts in ONE Austrian number f
   assert.equal(decimalComma('1,5'), '1,5')
 
   // EVERY numeric column of a whole file, as that machine reads it. Cent columns carry no
-  // separator at all and must stay integers; the rate-less worker's money cells must stay
-  // EMPTY, because Excel's SUM skips a blank and adds a zero.
+  // separator at all and must stay integers.
+  //
+  // THE RATE-LESS WORKER IS GONE FROM THIS FIXTURE because the state is gone from the
+  // schema (decision-41): her three money cells used to be EMPTY, and they had to be,
+  // because Excel's SUM skips a blank and adds a zero. Every row now carries a rate and an
+  // amount. THE „Hinweis" COLUMN STAYS AND IS STILL EXERCISED — it also carries
+  // decision-10's exclusions, which is the case the second row is now written for.
   const file = toCsv([
     [
       'Mitarbeiter',
@@ -1185,20 +1190,20 @@ check('lib/payroll.ts: the CSV states hours and amounts in ONE Austrian number f
     [
       'Ana Ilic',
       decimalComma(msToHours(37_800_000).toFixed(3)),
-      '',
-      '',
-      '',
+      '1350',
+      '141750',
+      decimalComma(centsToPlainEuros(141_750)),
       '0',
-      'Kein Stundensatz',
+      '2 Schichten zu bestätigen',
     ],
     [
       'Summe',
       decimalComma(msToHours(126_000_000).toFixed(3)),
       '',
-      '362600',
-      decimalComma(centsToPlainEuros(362_600)),
+      '504350',
+      decimalComma(centsToPlainEuros(504_350)),
       '1',
-      'Summe ohne 1 Mitarbeiter ohne Stundensatz',
+      '2 Schichten sind in dieser Summe nicht enthalten',
     ],
   ])
   const rows = parseCsv(file)
@@ -1226,17 +1231,17 @@ check('lib/payroll.ts: the CSV states hours and amounts in ONE Austrian number f
       [
         'Ana Ilic',
         { kind: 'number', value: 10.5 },
-        { kind: 'empty' },
-        { kind: 'empty' },
-        { kind: 'empty' },
+        { kind: 'number', value: 1350 },
+        { kind: 'number', value: 141_750 },
+        { kind: 'number', value: 1417.5 },
         { kind: 'number', value: 0 },
       ],
       [
         'Summe',
         { kind: 'number', value: 35 },
         { kind: 'empty' },
-        { kind: 'number', value: 362_600 },
-        { kind: 'number', value: 3626 },
+        { kind: 'number', value: 504_350 },
+        { kind: 'number', value: 5043.5 },
         { kind: 'number', value: 1 },
       ],
     ],
@@ -1249,10 +1254,98 @@ check('lib/payroll.ts: the CSV states hours and amounts in ONE Austrian number f
   )
   // A note containing the delimiter is still one cell, and still text.
   const quoted = parseCsv(
-    toCsv([['Ana Ilic', '10,500', '', '', '', '0', '2 Schichten offen; Kein Stundensatz']]),
+    toCsv([['Ana Ilic', '10,500', '1350', '141750', '1417,50', '0', '2 offen; 1 zu bestätigen']]),
   )
-  assert.equal(quoted[0][6], '2 Schichten offen; Kein Stundensatz')
+  assert.equal(quoted[0][6], '2 offen; 1 zu bestätigen')
   assert.deepEqual(readsAsDe(quoted[0][6]), { kind: 'text' })
+})
+
+// --- 12. a wage cannot be zero, on the screen as well as in the column (decision-41) ----
+//
+// Migration 006 dropped the DEFAULT on `workers.hourly_rate_cents` and added
+// `CHECK (> 0)`, so "nobody has told us yet" is a state the database no longer admits. The
+// panel therefore may not be able to PRODUCE it, and may not carry copy that DESCRIBES it:
+// a branch for an impossible row is a branch nobody will ever see fail, and an explanation
+// of a state that cannot occur teaches the director something untrue.
+
+check('a worker rate is REQUIRED on the form, and the state it replaced is gone', () => {
+  const workersPage = sources.find((f) => f.path === 'app/workers/page.tsx')
+  assert.ok(workersPage, 'app/workers/page.tsx must exist')
+
+  // 1. The field is marked required THREE ways: the label marker, the control (which is
+  //    what actually announces it), and a submit that refuses an empty value.
+  const rateField = workersPage.text.slice(
+    workersPage.text.indexOf('id={rateId}'),
+    workersPage.text.indexOf('</Field>', workersPage.text.indexOf('id={rateId}')),
+  )
+  assert.ok(rateField.length > 0, 'the rate Field must still exist')
+  assert.match(rateField, /\brequired\b/, 'the rate Field must be marked required')
+  assert.doesNotMatch(rateField, /\boptional\b/, 'the rate is no longer optional')
+  assert.match(
+    workersPage.text,
+    /if \(typed === ''\) errors\.rate = 'errorRateRequired'/,
+    'an empty rate must be a validation failure, never a silent 0',
+  )
+  assert.doesNotMatch(
+    workersPage.text,
+    /rate\.trim\(\) === '' \? 0/,
+    'an empty field must never be converted to 0 cents',
+  )
+
+  // 2. NO FLOAT MULTIPLY anywhere near the rate. lib/money.ts pads a fraction string and
+  //    adds integers; a `* 100` in a page would reintroduce Math.round(1.005 * 100).
+  for (const path of ['app/workers/page.tsx', 'lib/money.ts', 'lib/area.ts']) {
+    const file = sources.find((f) => f.path === path)
+    assert.ok(file, path)
+    assert.doesNotMatch(
+      file.text.replaceAll(/\* 100 \/ /g, ''),
+      /Number\.parseFloat|parseFloat\(|\bNumber\([^)]*\) \* 100/,
+      `${path}: euros must reach cents by string slicing, never by multiplying a float`,
+    )
+  }
+
+  // 3. THE COPY WENT WITH THE STATE. Not one screen may still say a rate can be missing.
+  const banned = /hourly_rate_cents === 0/
+  const offenders = sources.filter((f) => banned.test(f.text)).map((f) => f.path)
+  assert.deepEqual(offenders, [], 'no screen may branch on a rate of 0')
+
+  for (const locale of LOCALES) {
+    const flat = dictionaries[locale]
+    const dead = [
+      'workers.noRate',
+      'workers.rateOptionalHint',
+      'payroll.rowNoRate',
+      'payroll.amountNoRate',
+      'payroll.excludedNoRate',
+      'payroll.caveatNoRate',
+      'payroll.caveatNoRateLink',
+      'payroll.answerExcludedNoRate',
+      'payroll.answerHoursUnvalued',
+      'payroll.csvTotalNoRate',
+      // /pl/: the same state, said on the cost side of the report.
+      'pl.labourUnknown',
+      'pl.labourUnpriced',
+      'pl.whyLabourUnpriced',
+      'pl.methodUnpricedLabour',
+      'pl.methodUnpricedLabourLink',
+    ].filter((key) => key in flat)
+    assert.deepEqual(dead, [], `${locale}: copy describing a rate that cannot be missing`)
+
+    // ...and the limitation that SURVIVED it is still said. Deleting this line along with
+    // the others is the likeliest mistake in the whole change: there is still no rate
+    // history, so raising a wage still re-values last March.
+    assert.ok(flat['pl.methodRates'], `${locale}: pl.methodRates must survive`)
+    assert.match(
+      flat['pl.methodRates'],
+      locale === 'de' ? /Satzhistorie/ : /rate history/i,
+      `${locale}: pl.methodRates must still name the missing rate history`,
+    )
+    assert.ok(flat['workers.errorRateRequired'], `${locale}: the refusal needs words`)
+    assert.ok(flat['workers.rateRequiredHint'], `${locale}: the field needs to say it is required`)
+    // The CSV's Hinweis column STAYS: it also carries decision-10's exclusions.
+    assert.ok(flat['payroll.csvNote'], `${locale}: the CSV note column stays`)
+    assert.ok(flat['payroll.csvTotalExcluded'], `${locale}: ...and so does its total row`)
+  }
 })
 
 // --- report -----------------------------------------------------------------------------

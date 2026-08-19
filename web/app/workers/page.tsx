@@ -68,7 +68,14 @@ type Draft = {
   email: string
   /** Contact detail only. Never a credential — see `phoneHint`. */
   phone: string
-  /** Euros as typed. Converted to integer cents at submit, never held as a float. */
+  /**
+   * Euros as typed. Converted to integer cents at submit by string slicing, never held as
+   * a float and never multiplied (lib/money.ts).
+   *
+   * REQUIRED, and strictly positive (decision-41). `workers.hourly_rate_cents` lost its
+   * DEFAULT and gained `CHECK (> 0)` in migration 006, so "nobody has told us yet" is a
+   * state the database no longer admits and this form must not be able to produce.
+   */
   rate: string
   active: boolean
 }
@@ -81,9 +88,9 @@ function draftOf(worker: Worker): Draft {
     name: worker.name,
     email: worker.email ?? '',
     phone: worker.phone ?? '',
-    // 0 is "nobody has told us yet" and is shown as an empty field, not as "0.00": a rate
-    // that reads as a real agreed number is how an unset rate stops being noticed.
-    rate: worker.hourly_rate_cents === 0 ? '' : centsToPlainEuros(worker.hourly_rate_cents),
+    // Always a real figure now: 006 refuses to store anything else, and it refused to
+    // apply at all until the one rate-less row in production was dealt with by a human.
+    rate: centsToPlainEuros(worker.hourly_rate_cents),
     active: worker.active,
   }
 }
@@ -94,6 +101,7 @@ type ErrorMessage =
   | 'errorEmailShape'
   | 'errorEmailTaken'
   | 'errorPhoneShape'
+  | 'errorRateRequired'
   | 'errorRateInvalid'
   | 'errorRejected'
 
@@ -225,6 +233,15 @@ export default function WorkersPage() {
       setFormError('errorEmailTaken')
       return
     }
+    // decision-41's own refusal, put on the field it is about. The client check above
+    // should already have caught it; this is the case where they ever disagree, and „Der
+    // Server hat diese Angaben abgelehnt" beside four fields is not something a director
+    // can act on.
+    if (cause instanceof ApiError && cause.code === 'rate_required') {
+      setFieldErrors({ rate: 'errorRateRequired' })
+      setFormError('errorRateRequired')
+      return
+    }
     setFormError(
       cause instanceof ApiError && cause.status >= 400 && cause.status < 500
         ? 'errorRejected'
@@ -244,17 +261,27 @@ export default function WorkersPage() {
     const name = draft.name.trim()
     const email = draft.email.trim()
     const phone = draft.phone.trim()
-    // Only `name` is required. An EMPTY rate is a deliberate 0 — "nobody has told us yet",
-    // flagged on the row. A rate that was TYPED and does not parse is rejected and never
-    // silently zeroed: a wrong rate is wrong on every payslip until somebody notices.
-    const cents = draft.rate.trim() === '' ? 0 : parseEuroToCents(draft.rate)
+    /*
+     * THE RATE IS REQUIRED AND STRICTLY POSITIVE (decision-41).
+     *
+     * An empty field used to mean 0, which meant "nobody has told us yet", which meant a
+     * real person's hours sat in every report carrying no amount at all. That state is
+     * gone from the schema, so it has to be gone from here: an empty field is now a
+     * VALIDATION FAILURE and never a silent 0, and 0 itself is refused because a wage of
+     * zero is not a wage. THIS BRANCH ALSO COVERS THE EDIT PATH — the route rewrites every
+     * column, so an edit that cleared the field would have posted a 0 the server now
+     * refuses with `422 rate_required`, and the drawer would have had nothing to say.
+     */
+    const typed = draft.rate.trim()
+    const cents = typed === '' ? null : parseEuroToCents(typed)
 
     // Client-side validation is UX only — server/lib/validate.js decides for real.
     const errors: FieldErrors = {}
     if (name === '') errors.name = 'errorNameRequired'
     if (email !== '' && !EMAIL_RE.test(email)) errors.email = 'errorEmailShape'
     if (phone !== '' && !PHONE_RE.test(phone)) errors.phone = 'errorPhoneShape'
-    if (cents === null) errors.rate = 'errorRateInvalid'
+    if (typed === '') errors.rate = 'errorRateRequired'
+    else if (cents === null || cents <= 0) errors.rate = 'errorRateInvalid'
     setFieldErrors(errors)
     setFormError(null)
     setSaveError(null)
@@ -588,18 +615,15 @@ export default function WorkersPage() {
                       <a href={`tel:${worker.phone.replace(/[^0-9+]/g, '')}`}>{worker.phone}</a>
                     )}
                   </td>
-                  {/* 0 cents is NOT a rate anybody agreed. Saying so on the row is the
-                      whole fix: an unset rate is otherwise an invisible EUR 0,00 that only
-                      shows up as a wrong payslip. */}
+                  {/* Always an amount. The „Kein Stundensatz hinterlegt" branch that used
+                      to live here described a row the database can no longer hold
+                      (decision-41), and a branch for an impossible state is a branch
+                      nobody will ever see fail. */}
                   <td className="col-numeric num">
-                    {worker.hourly_rate_cents === 0 ? (
-                      <span className="cell-muted">{t('noRate')}</span>
-                    ) : (
-                      format.number(worker.hourly_rate_cents / 100, {
-                        style: 'currency',
-                        currency: 'EUR',
-                      })
-                    )}
+                    {format.number(worker.hourly_rate_cents / 100, {
+                      style: 'currency',
+                      currency: 'EUR',
+                    })}
                   </td>
                   {/* Text, not a colour: the status has to survive greyscale and a screen reader. */}
                   <td>{worker.active ? t('statusActive') : t('statusInactive')}</td>
@@ -758,16 +782,20 @@ export default function WorkersPage() {
               />
             </Field>
 
+            {/* REQUIRED on the label, `required` on the control (which is what announces
+                it), and refused on submit. Three places, one rule: a person cannot be
+                filed without the number their pay is computed from. */}
             <Field
               id={rateId}
               label={t('fieldRate')}
-              optional
-              help={`${t('rateHint')} ${t('rateOptionalHint')}`}
+              required
+              help={`${t('rateHint')} ${t('rateRequiredHint')}`}
               error={fieldErrors.rate === undefined ? undefined : t(fieldErrors.rate)}
             >
               <input
                 type="text"
                 inputMode="decimal"
+                required
                 value={draft.rate}
                 onChange={(event) => setDraft({ ...draft, rate: event.target.value })}
                 disabled={busy}
