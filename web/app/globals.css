@@ -1891,10 +1891,48 @@ a {
 
 .map-info-face {
   min-height: 0;
-  /* The safety valve, and only that: at the measured geometry neither face needs it. A pin
-     dragged into a corner gets a shorter box, and a face that cannot fit must scroll rather
-     than be cut. */
+  /* The safety valve. NOT "only that", and the word was wrong: it said neither face needs
+     it at the measured geometry, and the geometry it was measured at was 1680x1050.
+
+     MEASURED at 1440x900 — the laptop, and the reason that size is in the probe at all —
+     the map region is 324px, so the box gets 300 and the numbers face gets 198. The
+     content is 204px on four of the five demo buildings and 225px on the one with somebody
+     standing in it. So the face folds by 6px, and by 27px on the busiest pin, on the
+     landing surface (decision-39), every time.
+
+     There is no room to give it: `--map-info-max` is already the WHOLE map region less
+     INFO_MARGIN twice (components/HomeMap.tsx `reposition`), and the region is cut short
+     on purpose to keep the Objektliste above the fold. HomeMap's own INFO_MIN_HEIGHT
+     comment accepts this — "below that it is a scrollbar with a title". Scrolling is the
+     design. Scrolling INVISIBLY is not.
+
+     macOS gives overlay scrollbars: nothing is drawn until a scroll gesture starts, so
+     those 6px read as "the row ends here", which is a fact hidden with no affordance —
+     exactly what components/BuildingFacts.tsx's own header refuses ("A FOLD HIDES FACTS").
+
+     THE CUE IS THE BACKGROUND, and it costs no JavaScript and no layout. Two layers: a
+     shadow painted at the bottom edge of the SCROLLPORT (`background-attachment: scroll`,
+     i.e. it stays put while the content moves) and a cover painted at the bottom of the
+     CONTENT (`local`, i.e. it slides up as you scroll and hides the shadow at the end). A
+     face that fits has its content bottom AT the scrollport bottom, so the cover sits
+     exactly over the shadow and NOTHING is drawn. The cue therefore appears if and only if
+     there is something below the fold, with no measurement and no state to keep in step. */
   overflow: auto;
+  /* NO `color-mix()` HERE, and that is not taste. It was written with one, it is valid CSS,
+     and the minifier in `next build` emitted `color-mix(in oklab,var(--text)22%,transparent)`
+     — no space before the percentage — which is invalid, so Chrome dropped the WHOLE
+     declaration and computed `background-image: none`. The stylesheet read correctly the
+     whole time; only the probe saw it. `color-mix` appears nowhere else in this file, so
+     this is the first and last time that trap is stepped in: existing tokens only. */
+  background-image:
+    linear-gradient(to top, var(--bg-raised), transparent),
+    linear-gradient(to top, var(--border-strong), transparent);
+  background-position:
+    bottom center,
+    bottom center;
+  background-repeat: no-repeat;
+  background-size: 100% 14px;
+  background-attachment: local, scroll;
 }
 
 /* The disclosure. Full width, its own rule, never part of the scrolling area. */

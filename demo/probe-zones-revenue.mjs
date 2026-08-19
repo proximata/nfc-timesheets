@@ -59,9 +59,13 @@ function record(ok, label, detail) {
  *     node demo/demo-server.mjs &
  *   BASE=http://127.0.0.1:8080 node demo/probe-zones-revenue.mjs
  *
- * Port 8080 is part of the fixture: the browser key is referrer-restricted to
- * `http://127.0.0.1:8080/*`, so on any other port Google answers `gm_authFailure` and the
- * map tears itself down.
+ * PORT 8080 IS PART OF THE FIXTURE and the default port for this file is NOT. The browser
+ * key's HTTP-referrer allowlist contains exactly one loopback origin, `http://127.0.0.1:8080/*`
+ * (measured origin by origin — the table is in demo/check-map-home.mjs's header). On :4319,
+ * which is what the line above defaults to, Google answers `RefererNotAllowedMapError`, no
+ * pin is drawn, and every map assertion here SKIPS. Two consecutive runs read those skips as
+ * "the key rejects loopback" and wrote it down as measured. It does not. Run this file on
+ * 8080 or its map coverage is zero.
  */
 function skip(label, why) {
   lines.push(`SKIP ${label} — ${why}`)
@@ -104,6 +108,38 @@ const OVERFLOW = `(() => {
     })
   return { over: by > 1 ? by : 0, what: culprits.join(' | ') }
 })()`
+
+/**
+ * DOES A FOLD ANNOUNCE ITSELF.
+ *
+ * The info box on a pin is as tall as the map region lets it be, and on a 900px-tall screen
+ * the region is 324px — so the numbers face folds by 6px on most buildings and by 27px on
+ * the one with somebody standing in it. There is no room to give it (`--map-info-max` is
+ * already the whole region less INFO_MARGIN twice), and HomeMap's INFO_MIN_HEIGHT comment
+ * accepts scrolling by design. What is NOT acceptable is scrolling with nothing drawn:
+ * macOS overlay scrollbars paint nothing until a gesture starts, so the cut row reads as
+ * the end of the list.
+ *
+ * So the rule is not "never fold". It is: FOLD ONLY WITH A CUE. The cue is the two-layer
+ * `background-attachment: local, scroll` shadow in globals.css, which draws if and only if
+ * there is content below the fold — so this reads the computed style rather than a class,
+ * and a stylesheet that loses the rule fails here even though the DOM is unchanged.
+ *
+ * `--hide-scrollbars` is on every Chrome this repo launches, which is exactly why a
+ * scrollbar-width assertion would be worthless and this one is not.
+ */
+const FOLD_CUE = `(face) => {
+  if (!face) return { cued: false, cue: 'no visible face' }
+  const over = face.scrollHeight - face.clientHeight
+  if (over <= 2) return { cued: true, cue: 'no fold (+' + over + 'px)' }
+  const s = getComputedStyle(face)
+  const layers = s.backgroundAttachment.split(',').map((x) => x.trim())
+  const drawn = /gradient/.test(s.backgroundImage) && layers.includes('local') && layers.includes('scroll')
+  return {
+    cued: drawn,
+    cue: '+' + over + 'px folded — cue ' + (drawn ? 'drawn' : 'MISSING') + ' [' + layers.join('|') + ']',
+  }
+}`
 
 /** Everything the keyboard can reach, in tab order, as text. */
 const FOCUSABLES = `(() => {
@@ -614,6 +650,40 @@ async function run() {
             `${tag} / a pin is grey and SAYS the word, or it is neither`,
             `${home.pins} pins drawn · ${home.pinnableUnzoned} unzoned+pinnable · ${home.greyPins} grey · ${home.pinsSayIt} carrying the word`,
           )
+
+          // EVERY PIN, not the one pin the assertions below happen to pick.
+          //
+          // The fold assertion further down opens the box on the UNZONED building, so it
+          // measured 6px and never saw the 27px one: the box on the building with somebody
+          // standing in it carries an extra worker link and is the worst case on the
+          // screen. A defect that is only on the busiest building is the one a director
+          // meets first. Opening all of them costs ~1s per pin and removes the sampling.
+          const everyBox = []
+          for (let i = 0; i < home.pins; i++) {
+            await page.eval(`(() => {
+              const p = document.querySelectorAll('.map-pin')[${i}]
+              ;(p.querySelector('button, [role=button]') ?? p).click()
+              return true
+            })()`)
+            await sleep(450)
+            everyBox.push(
+              await page.eval(`(() => {
+                const box = document.querySelector('.map-info')
+                if (!box) return { cued: false, cue: 'pin ${i}: no box opened' }
+                const name = (box.querySelector('h3')?.textContent ?? '?').split(',')[0].trim()
+                const r = (${FOLD_CUE})(box.querySelector('.map-info-face:not([hidden])'))
+                return { cued: r.cued, cue: name + ': ' + r.cue }
+              })()`),
+            )
+            await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+            await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+            await sleep(250)
+          }
+          record(
+            everyBox.length > 0 && everyBox.every((b) => b.cued),
+            `${tag} / EVERY pin's box: a fold is drawn or there is no fold`,
+            everyBox.map((b) => b.cue).join(' | '),
+          )
         }
 
         // THE INFO BOX ON A PIN IS A SEPARATE SURFACE AND IT IS ASSERTED SEPARATELY.
@@ -662,6 +732,7 @@ async function run() {
               folds: [box, ...box.querySelectorAll('*')]
                 .filter((el) => !el.classList.contains('visually-hidden') && el.scrollHeight > el.clientHeight + 2)
                 .map((el) => String(el.className) + ' +' + (el.scrollHeight - el.clientHeight) + 'px'),
+              ...(${FOLD_CUE})(box.querySelector('.map-info-face:not([hidden])')),
             }
           })()`)
           // ...and only NOW open the links face.
@@ -680,10 +751,22 @@ async function run() {
             `${tag} / the info box hangs off a pin that is grey AND says the word`,
             infoBox === null ? 'no box opened' : `${infoBox.h}px, grey=${infoBox.grey}, word=${infoBox.pinSaysIt} — ${boxTarget.name}`,
           )
+          // WHAT THIS USED TO ASSERT, and why it was replaced rather than relaxed.
+          //
+          // It was `folds.length === 0` — nothing on the numbers face may scroll, at all.
+          // That claim is FALSE at 1440x900 and always was: the box gets the whole map
+          // region less INFO_MARGIN twice, the region is 324px on a 900px-tall screen, and
+          // the numbers are 204px against 198px of face. The assertion had never been run
+          // with a Maps key on this size, so it had never been able to say so.
+          //
+          // "No fold anywhere" is also not what the design claims. HomeMap's
+          // INFO_MIN_HEIGHT comment accepts a scrolling box outright. What it cannot accept
+          // is a fold nobody can SEE, so that is what is asserted now — on every pin rather
+          // than on this one, which is where the 27px case was hiding.
           record(
-            infoBox !== null && infoBox.folds.length === 0,
-            `${tag} / ...and nothing on its numbers face is behind a silent fold`,
-            infoBox === null ? 'no box opened' : infoBox.folds.length === 0 ? 'nothing scrolls' : infoBox.folds.join(' | '),
+            infoBox !== null && infoBox.cued,
+            `${tag} / ...and if it DOES fold, the fold is drawn, not silent`,
+            infoBox === null ? 'no box opened' : infoBox.cue,
           )
           record(
             boxFix !== null && boxFix.found && boxFix.inside,

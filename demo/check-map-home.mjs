@@ -5,10 +5,32 @@
 //     node demo/demo-server.mjs &
 //   node demo/check-map-home.mjs
 //
-// PORT 8080 IS NOT ARBITRARY. The Maps browser key is HTTP-referrer restricted to
-// `https://schimmer-glanz.exe.xyz/*`, `http://localhost:3000/*` and `http://127.0.0.1:8080/*`.
-// On any other port Google answers `gm_authFailure` and this file would prove the degraded
-// path five times over and the working one never.
+// PORT 8080 IS NOT ARBITRARY, and the list below is MEASURED rather than remembered.
+// The Maps browser key is HTTP-referrer restricted. Asked, origin by origin, from a real
+// headless Chrome against a local build carrying the key:
+//
+//   http://127.0.0.1:8080/       LOADS   ← this file's fixture, and the only loopback one
+//   https://timesheets.exe.xyz/  LOADS   ← the box's OLD name. It is the TAG host now:
+//                                          nginx, three static files, no admin panel.
+//   https://schimmer-glanz.exe.xyz/   RefererNotAllowedMapError
+//   http://localhost:3000/            RefererNotAllowedMapError
+//   http://127.0.0.1:4319/            RefererNotAllowedMapError
+//
+// Two things follow, and both were got wrong before they were measured.
+//
+//   1. ON ANY OTHER PORT this file proves the degraded path five times over and the working
+//      one never. Two consecutive agents ran the probes on :4319, read
+//      `RefererNotAllowedMapError`, and recorded "the key rejects loopback" as a fact. It
+//      does not. It rejects that port.
+//   2. THE KEY DOES NOT WORK ON THE HOST THAT SERVES THE ADMIN. The allowlist still names
+//      the box's pre-rename hostname. So shipping the key in `ops/deploy.sh` — recorded
+//      elsewhere as a one-line fix — is necessary and NOT sufficient: the director would
+//      get the same empty map with `RefererNotAllowedMapError` in the console. The
+//      remaining step is in the Google Cloud console, on the key's HTTP-referrer
+//      allowlist, and it is a SECOND silent casualty of the timesheets -> schimmer-glanz
+//      rename that decision-40 was written about.
+//
+// Re-measure with demo/check-map-key.mjs rather than by editing this comment.
 //
 // A KEY IS REQUIRED, AND A KEY-LESS RUN IS A SEPARATE, DELIBERATE ONE:
 //
