@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import io.github.qwadratic.nfctimesheets.BuildConfig
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
+import io.github.qwadratic.nfctimesheets.core.Zones
 import io.github.qwadratic.nfctimesheets.ui.TimeSheetsTheme
 
 /**
@@ -140,23 +141,32 @@ class ScanActivity : ComponentActivity() {
         val uid = tag.id.joinToString(":") { "%02X".format(it) }
         val uri = readUri(tag)
 
-        // Our own tag first: a real URL always wins over the adopted-serial table, so a tag
-        // we wrote keeps working even if its serial were ever listed by mistake.
+        // Our own tag first: a real URL always wins over any serial table, so a tag we
+        // wrote keeps working even if its serial were ever listed by mistake.
         val fromUri = app.tagLink.locationId(uri?.toString())
-        // Then a third-party tag adopted by serial. See KnownTags for what this costs.
-        val fromSerial = if (fromUri == null) KnownTags.locationIdFor(uid) else null
-        val locationId = fromUri ?: fromSerial
+        // Then a roster-cached zone serial (decision-44 §4): an admin-adopted tag,
+        // resolved from the server, takes priority over the compiled fallback below.
+        val fromRosterZone = if (fromUri == null) Zones.zonePlaceIdForSerial(uid, app.store.zones()) else null
+        // Then the compiled last-resort table. See KnownTags for what this costs, and why
+        // it is NOT deleted this phase.
+        val fromSerial = if (fromUri == null && fromRosterZone == null) KnownTags.locationIdFor(uid) else null
+        val locationId = fromUri ?: fromRosterZone ?: fromSerial
 
         runOnUiThread {
             when {
                 locationId != null -> {
-                    status = if (fromSerial != null) ScanStatus.AcceptedBySerial else ScanStatus.Accepted
+                    status = if (fromRosterZone != null || fromSerial != null) {
+                        ScanStatus.AcceptedBySerial
+                    } else {
+                        ScanStatus.Accepted
+                    }
                     // THE CONVERGENCE. Hand a URL back through the ordinary front door so
-                    // everything downstream is identical to a passive tap. An adopted tag
-                    // has no URL of its own, so one is synthesised from the location it maps
-                    // to — which means TagLink still parses it and still gets the final say.
-                    val target = if (fromSerial != null) {
-                        app.tagLink.uriFor(fromSerial)?.let { Uri.parse(it.toString()) }
+                    // everything downstream is identical to a passive tap. A serial-matched
+                    // tag has no URL of its own, so one is synthesised from the PLACE it
+                    // maps to (a zone id or, from the compiled table, a building id) —
+                    // which means TagLink still parses it and still gets the final say.
+                    val target = if (fromRosterZone != null || fromSerial != null) {
+                        app.tagLink.uriFor(fromRosterZone ?: fromSerial)?.let { Uri.parse(it.toString()) }
                     } else {
                         uri
                     }
