@@ -1117,6 +1117,127 @@ check('lib/objects.ts: the pin and the list row cannot disagree about a building
   assert.deepEqual(pinnedOnly(summariseBuildings([building({ id: 'f', lat: 48.2 })], [])), [])
 })
 
+// --- 8c. the zone state on the DASHBOARD is presentation, and only presentation ---------
+//
+// THE FAILURE THIS EXISTS TO STOP is one line away at all times: fold the zone count into
+// `active`, or into `attention`, or filter it out of `summariseBuildings`, and the building
+// this whole run is about disappears from the map on the day migration 006 lands. HOIV has
+// ZERO zones and a card already on its wall carrying its BUILDING uuid, so a screen that
+// reads unzoned as an operational state stops drawing the one building the company has —
+// and the same reading in the resolver refuses the tap, which no site visit can fix.
+//
+// So the assertions below are deliberately blunt: an unzoned building is summarised, is
+// pinnable, is not flagged for attention, and SAYS SO IN A FIELD OF ITS OWN. The zone state
+// and the tag state are separate properties on purpose; a check that only asserted
+// `zoneState === 'unzoned'` would stay green while the pin vanished.
+
+check('lib/objects.ts: an unzoned building is drawn, and its state is a WORD (decision-43)', () => {
+  const building = (over) => ({
+    id: over.id,
+    name: over.name ?? over.id,
+    lat: 48.17,
+    lng: 16.39,
+    geocoded_at: null,
+    geocode_status: null,
+    active: true,
+    ...over,
+  })
+  const zone = (over) => ({
+    id: over.id,
+    location_id: over.location_id,
+    name: over.name ?? over.id,
+    note: null,
+    area_sqm: over.area_sqm ?? null,
+    tag_serial: null,
+    tag_deployed_at: null,
+    active: over.active ?? true,
+    created_at: '2026-08-01T00:00:00Z',
+    last_tap_at: null,
+  })
+
+  // PRODUCTION'S EXACT SHAPE: `hoiv` is active, has a card on its wall, and has no zones.
+  // `stood` has one zone that was taken off the wall during a facade repair — history still
+  // names the door, but nothing about it is set up any more.
+  const cleaned = (location_id) => ({
+    id: 9,
+    worker_id: 1,
+    worker_name: 'W1',
+    location_id,
+    start_time: '2026-08-01T05:00:00Z',
+    end_time: '2026-08-01T08:00:00Z',
+    auto_closed: false,
+    corrected_at: null,
+    client_uuid: 'x',
+  })
+
+  const summaries = summariseBuildings(
+    [
+      building({ id: 'hoiv', name: 'Arsenalstrasse 11' }),
+      building({ id: 'zoned', name: 'Donaufeld' }),
+      building({ id: 'stood', name: 'Handelskai' }),
+    ],
+    // `zoned` and `stood` have been cleaned; `hoiv` has not, which is the DEAD-TAG proxy and
+    // has nothing to do with zones. Keeping the two apart in the fixture is what lets the
+    // assertions below tell which derivation fired.
+    [cleaned('zoned'), { ...cleaned('stood'), id: 10 }],
+    [
+      zone({ id: 'z1', location_id: 'zoned', area_sqm: 240 }),
+      zone({ id: 'z2', location_id: 'zoned', area_sqm: null }),
+      zone({ id: 'z3', location_id: 'stood', area_sqm: 120, active: false }),
+    ],
+  )
+
+  const hoiv = summaries.find((s) => s.id === 'hoiv')
+  const zoned = summaries.find((s) => s.id === 'zoned')
+  const stood = summaries.find((s) => s.id === 'stood')
+
+  assert.ok(
+    hoiv !== undefined,
+    'a building with no zones is STILL summarised, or it leaves the map',
+  )
+  assert.deepEqual(
+    pinnedOnly(summaries)
+      .map((s) => s.id)
+      .sort(),
+    ['hoiv', 'stood', 'zoned'],
+    'and it is STILL pinnable: nothing about zones may remove a pin',
+  )
+
+  assert.equal(hoiv.liveZones, 0)
+  assert.equal(hoiv.zoneState, 'unzoned', 'the state exists as its own field, in words')
+  assert.equal(zoned.liveZones, 2)
+  assert.equal(zoned.zoneState, 'zoned')
+  assert.equal(stood.liveZones, 0, 'a stood-down zone carries no tag, so it counts for nothing')
+  assert.equal(stood.zoneState, 'unzoned')
+
+  // THE PIN. `attention` drives the triage list and the answer band's number: an unzoned
+  // building is unfinished setup, not a defect, and putting it in the same bucket as an
+  // unconfirmed shift is how a director learns to ignore the bucket.
+  assert.equal(hoiv.attention, true, 'hoiv has no shift at all — that is the dead-tag proxy')
+  assert.equal(zoned.attention, false, 'a zoned, cleaned building with no defects is quiet')
+  assert.equal(
+    stood.attention,
+    false,
+    'and so is a building whose only zone came off the wall: that is not a defect either',
+  )
+
+  // ...and the proof that it is the SHIFT proxy and not the zone state doing it: give the
+  // unzoned building a shift and the attention goes away while the zone state does not.
+  const withShift = summariseBuildings([building({ id: 'hoiv' })], [cleaned('hoiv')], [])
+  assert.equal(withShift[0].zoneState, 'unzoned', 'still unzoned')
+  assert.equal(
+    withShift[0].attention,
+    false,
+    'and NOT flagged: the zone state must never reach the attention derivation',
+  )
+
+  // The old two-argument call sites must keep working, and must not silently claim every
+  // building is zoned. Omitted zones means UNKNOWN, and unknown renders as the sentence
+  // that says a zone has not been recorded — never as a building that is set up.
+  const noZoneArg = summariseBuildings([building({ id: 'hoiv' })], [])
+  assert.equal(noZoneArg[0].zoneState, 'unzoned')
+})
+
 // --- 9. the payroll CSV's number format (lib/payroll.ts) --------------------------------
 //
 // The accountant's copy of the payroll, checked as BYTES and as what an Austrian Excel

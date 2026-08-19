@@ -597,6 +597,14 @@ export type ShiftBounds = { earliest: string | null; latest: string | null }
 export type ShiftSnapshot = {
   workers: Worker[]
   locations: Location[]
+  /**
+   * Every zone of every building, active and inactive — the same array `BuildingsSnapshot`
+   * declares, because it is the same `/admin/data` response. Typed here too so the
+   * dashboard can state a building's zone state from the request it ALREADY makes: a
+   * second round trip for one integer per building would be a second thing that can be
+   * stale, and the pin and the buildings table would then disagree about the same building.
+   */
+  zones: Zone[]
   shifts: Shift[]
   shift_limit: number
   shift_range: { from: string | null; to: string | null }

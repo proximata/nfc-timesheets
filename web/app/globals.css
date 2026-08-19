@@ -1787,6 +1787,23 @@ a {
   );
 }
 
+/* AN UNZONED BUILDING IS GREY, AND GREY IS THE SECOND SIGNAL, NEVER THE FIRST
+   (decision-43 section 3). The pin also carries the WORD, the Objektliste row under it
+   repeats it in a sentence, and the info box says what is missing and what still works.
+   Desaturate the screenshot and nothing is lost.
+
+   MUTED, NOT ALARMING, and specifically NOT `--state-unres`: this is unfinished setup and
+   not a defect. The building is active, its own card still clocks people in, and a pin that
+   looked like an outage would send somebody to a wall to fix a tag that is working.
+
+   The 3px left rule is the only thing that changes, and only for the EMPTY case: a building
+   with somebody standing in it keeps its `--state-open` rule, because who is on site right
+   now outranks whether the paperwork is done. */
+.map-pin[data-zone="unzoned"][data-state="empty"] .map-pin-label {
+  border-left-color: var(--text-muted);
+  border-left-style: dashed;
+}
+
 .map-pin.is-selected .map-pin-label {
   border-color: var(--accent);
   background: var(--bg-raised);

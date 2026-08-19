@@ -1,4 +1,5 @@
-import type { Location, Shift } from '@/lib/api'
+import type { Location, Shift, Zone } from '@/lib/api'
+import { type ZoneState, zoneStateOf } from '@/lib/area'
 import { isPinned } from '@/lib/map'
 import { blocksPayroll, shiftState } from '@/lib/shifts'
 
@@ -50,12 +51,31 @@ export type BuildingSummary = {
   /** The newest completed, payable shift here. `null` is „noch nie", which is a real answer. */
   lastCleaned: Shift | null
   /**
-   * TODAY'S PROXY for „no tag on the wall", and it is the same one `/` already uses in its
-   * triage list (`home.rowDeadTag`): an active building that appears in NO loaded shift has
-   * probably never had a working tag. It becomes a real fact when zones land (decision-37:
-   * a zone row IS the tag record) — until then it is a proxy and the wording says so.
+   * A PROXY for „no tag on the wall", and it is the same one `/` already uses in its triage
+   * list (`home.rowDeadTag`): an active building that appears in NO loaded shift has
+   * probably never had a working tag.
+   *
+   * ZONES LANDED AND IT IS STILL A PROXY. The obvious move — „no live zone carries a
+   * deployed tag, therefore no tag" — is FALSE for the building this whole run is about:
+   * HOIV has zero zones and a card already on its wall carrying its BUILDING uuid. Zone
+   * rows record the tags we know about; they cannot prove the absence of one somebody else
+   * mounted. So this stays a shift-derived guess, the copy keeps saying „möglicherweise",
+   * and `zoneState` beside it answers the different, answerable question.
    */
   noTag: boolean
+  /** LIVE zones (`active`). Inactive ones still name a door in history but carry no tag. */
+  liveZones: number
+  /**
+   * PRESENTATION ONLY (decision-43 §3), and the same derivation `/locations/` renders, so
+   * the pin, the Objektliste row and the buildings table cannot disagree about the same
+   * building on two screens.
+   *
+   * IT IS NOT `active` AND IT MUST NEVER BE FOLDED INTO IT. Read operationally, „no zones
+   * means inactive" refuses the tap from the card on the HOIV wall, and no site visit fixes
+   * a building that stopped resolving. `summariseBuildings` filters on `location.active`
+   * and nothing here narrows that further.
+   */
+  zoneState: ZoneState
   /** `pinned` | `never_attempted` | `failed`, computed exactly as server/lib/reporting.js does. */
   geocodeState: 'pinned' | 'never_attempted' | 'failed'
   geocodeStatus: string | null
@@ -84,7 +104,17 @@ function shortName(name: string): string {
 export function summariseBuildings(
   locations: readonly Location[],
   shifts: readonly Shift[],
+  zones: readonly Zone[] = [],
 ): BuildingSummary[] {
+  // LIVE zones only. A stood-down zone („Tag wurde bei der Fassadensanierung entfernt")
+  // still names the door a March shift was tapped at, but its tag resolves nothing, so
+  // counting it would paint a building as set up on the strength of a tag that is in a skip.
+  const zonesPerLocation = new Map<string, number>()
+  for (const zone of zones) {
+    if (!zone.active) continue
+    zonesPerLocation.set(zone.location_id, (zonesPerLocation.get(zone.location_id) ?? 0) + 1)
+  }
+
   const byLocation = new Map<string, Shift[]>()
   for (const shift of shifts) {
     const bucket = byLocation.get(shift.location_id)
@@ -124,6 +154,8 @@ export function summariseBuildings(
         unresolved,
         lastCleaned,
         noTag: here.length === 0,
+        liveZones: zonesPerLocation.get(location.id) ?? 0,
+        zoneState: zoneStateOf(zonesPerLocation.get(location.id) ?? 0),
         geocodeState: isPinned(location)
           ? 'pinned'
           : location.geocoded_at === null

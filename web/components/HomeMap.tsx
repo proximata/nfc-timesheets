@@ -651,13 +651,21 @@ type PinProps = {
  *   ○ 0 vor Ort     hollow glyph, everything in 400   — nobody is
  *   ▲ prüfen        a separate boxed chip with a WORD in it, own divider rule
  *   ▢ kein Tag      hatched left rule + a word
+ *   ▢ ohne Zone     the same hatched treatment + a word
  *
  * The coloured 3px left rule is the SECOND signal, always. Occupancy and attention are
  * INDEPENDENT: a building can be fully staffed and still need looking at, and modelling
  * them as one traffic light makes the pin and the answer band disagree.
  *
- * At most TWO chips. Three states at once overflows the label, so the third is dropped from
- * the pin and stated in the list row instead; priority is `prüfen` over `kein Tag`.
+ * GREY IS NEVER THE ONLY SIGNAL, and „ohne Zone" is where that rule earns its keep. The pin
+ * of an unzoned building is drawn muted, and it also SAYS the word — desaturate the
+ * screenshot and the state survives. It is a PRESENTATION state and it is drawn like one
+ * (decision-43 §3): the building is active, its own card still clocks people in, and
+ * nothing on this pin may read as an outage.
+ *
+ * At most TWO chips. Three states at once overflows the label, so the rest are dropped from
+ * the pin and stated in the list row instead; priority is `prüfen` → `kein Tag` → `ohne
+ * Zone`, i.e. a defect before an absence before a piece of unfinished setup.
  *
  * NO ANIMATION. Five pulsing labels over a moving map is noise, and `prefers-reduced-motion`
  * would have to remove the only signal.
@@ -728,6 +736,13 @@ function Pin({
       </span>,
     )
   }
+  if (flags.length < 2 && building.zoneState === 'unzoned') {
+    flags.push(
+      <span key="nozone" className="map-pin-flag is-notag">
+        {t('pinNoZone')}
+      </span>,
+    )
+  }
 
   return (
     <div
@@ -735,6 +750,9 @@ function Pin({
       className={selected ? 'map-pin is-selected' : 'map-pin'}
       data-state={building.occupancy}
       data-attention={building.attention ? 'yes' : 'no'}
+      /* The GREY. A styling hook and nothing else — no route, no filter and no number reads
+         it, so there is no path from this attribute back to whether a tap resolves. */
+      data-zone={building.zoneState}
     >
       {/*
         aria-hidden + tabindex="-1": the Objektliste below carries this building, these

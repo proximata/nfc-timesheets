@@ -105,6 +105,13 @@
     "panelContractNone": "No contract on file",
     "panelContractValue": "{amount} / month",
     "panelClientNone": "no client on file",
+    "panelZones": "Zones and area",
+    "panelZonesNone": "No zone recorded yet – so the area is unknown, not zero.",
+    "panelZonesTotal": "{area} m² across {count, plural, one {# zone} other {# zones}}",
+    "panelZonesFloor": "at least {area} m² across {count, plural, one {# zone} other {# zones}} · {unmeasured, plural, one {# zone has not been measured} other {# zones have not been measured}}",
+    "panelZonesStillWorks": "The building’s own tag still starts a shift. A zone records where a tag hangs and how large the area is.",
+    "panelLinkZones": "Manage this building’s zones",
+    "panelLinkZonesFirst": "Create the first zone",
     "panelTruncated": "Only the most recent shifts were loaded. The numbers above are therefore floors, not totals.",
     "panelLinksHeading": "Go to",
     "panelLinksToggle": "{count, plural, one {# link} other {# links}}",
@@ -135,6 +142,7 @@
     "pinOnSite": "on site",
     "pinCheck": "▲ check",
     "pinNoTag": "▢ no tag",
+    "pinNoZone": "▢ no zone",
     "pinCollapse": "Close the info box for {name}",
     "objectsHeading": "Buildings",
     "objectsNote": "Every active building, whether or not the map could be drawn. Sorted: what needs checking first, then where somebody is, then by name.",
@@ -150,6 +158,7 @@
     "objectsNeverCleaned": "Never — no completed shift recorded.",
     "objectsLastBy": "{name} · {duration} h",
     "objectsNoTag": "no tag — no shift recorded",
+    "objectsNoZone": "No zone recorded yet · the building’s own tag still starts a shift",
     "objectsNothingToCheck": "nothing open",
     "objectsOpen": "Open",
     "objectsGeocode": "Get coordinates",
@@ -516,7 +525,7 @@
     "errorSerialShape": "That does not look like a serial. At least four bytes in hexadecimal are expected, for example 04:A1:A8:52:AE:5C:80.",
     "tagLegacySummary": "Building tag (existing)",
     "tagLegacyHint": "This URL belongs to the whole building and not to a zone. New tags belong on a zone; this line is here because cards already on walls carry this URL and it has to be readable and re-writable.",
-    "statusUnzoned": "No zone yet"
+    "statusUnzoned": "No zone recorded yet"
   },
   "clients": {
     "heading": "Clients",

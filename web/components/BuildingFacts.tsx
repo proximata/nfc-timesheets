@@ -3,7 +3,8 @@
 import Link from 'next/link'
 import { useFormatter, useTranslations } from 'next-intl'
 import { useId, useState } from 'react'
-import type { Location, Shift } from '@/lib/api'
+import type { Location, Shift, Zone } from '@/lib/api'
+import { type AreaSum, sumArea, zoneStateOf } from '@/lib/area'
 import { filterHref } from '@/lib/filters'
 import { periodRange, withinRange } from '@/lib/period'
 import {
@@ -21,6 +22,15 @@ export type BuildingFactsProps = {
   building: Location
   /** The whole loaded ledger. Sliced here; never refetched. */
   shifts: readonly Shift[]
+  /**
+   * Every zone of every building, from the SAME `/admin/data` response the shifts came
+   * from. Sliced here, never refetched: a second request for one integer would be a second
+   * thing that can be stale, and this box sits beside the pin that is drawn from the first.
+   *
+   * Defaulted to empty so the box degrades to „noch keine Zone angelegt" — which is TRUE of
+   * a caller that has not wired it — rather than to a crash on a landing screen.
+   */
+  zones?: readonly Zone[]
   /**
    * How many OPEN material requests this building has, or null while that list is still on
    * its way. Null suppresses both the number and the link — decision-38 rule 1 forbids a
@@ -82,6 +92,7 @@ export type BuildingFactsProps = {
 export function BuildingFacts({
   building,
   shifts,
+  zones = [],
   openMaterials,
   truncated,
   asOf,
@@ -107,6 +118,33 @@ export function BuildingFacts({
   const lastCleaned = here.find(
     (shift) => shift.end_time !== null && !blocksPayroll(shiftState(shift)),
   )
+
+  /**
+   * ZONES AND AREA, and the sentence that says what is missing WITHOUT saying anything is
+   * broken (decision-43 §3).
+   *
+   * LIVE zones only: a stood-down zone still names the door a March shift was tapped at,
+   * but its tag resolves nothing, so counting it would paint a building as set up on the
+   * strength of a tag that has been taken off the wall.
+   *
+   * The area is a SUM OF INTEGER HUNDREDTHS and never a float sum (lib/area.ts): this
+   * number is the denominator of every EUR/m² figure `/pl/` quotes a new building from.
+   * When any live zone is unmeasured it is a FLOOR and the sentence says so — an invented
+   * m² poisons the benchmark that is the only reason the column exists.
+   */
+  const liveZones = zones.filter((zone) => zone.location_id === building.id && zone.active)
+  const zoneState = zoneStateOf(liveZones.length)
+  const area: AreaSum = sumArea(liveZones.map((zone) => zone.area_sqm))
+  const areaSentence = (sum: AreaSum): string => {
+    if (sum.state === 'none') return t('panelZonesNone')
+    const value = format.number(sum.hundredths / 100, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    })
+    return sum.state === 'complete'
+      ? t('panelZonesTotal', { area: value, count: sum.zones })
+      : t('panelZonesFloor', { area: value, count: sum.zones, unmeasured: sum.unmeasured })
+  }
 
   const month = periodRange('thisMonth', asOf)
   const monthShifts = here.filter((shift) => withinRange(shift.start_time, month))
@@ -219,6 +257,15 @@ export function BuildingFacts({
       label: t('panelLinkMaterials', { count: openMaterials }),
     })
   }
+  // THE ROUTE THAT FIXES IT, offered only when there is something to fix. Rule 1 of
+  // decision-38 cuts both ways: a link labelled „Erste Zone anlegen" on a building that has
+  // six zones is a link whose label is a lie, so a zoned building gets the plain zone list
+  // instead and an unzoned one gets the sentence naming the first step.
+  links.push({
+    key: 'zones',
+    href: filterHref('/locations/', { zones: building.id }),
+    label: zoneState === 'unzoned' ? t('panelLinkZonesFirst') : t('panelLinkZones'),
+  })
   links.push({
     key: 'edit',
     href: filterHref('/locations/', { open: building.id }),
@@ -311,6 +358,20 @@ export function BuildingFacts({
               })}
           {' · '}
           {building.client_name ?? t('panelClientNone')}
+        </dd>
+
+        {/* N6 — zones and area. GREY ON THE PIN IS NEVER THE ONLY SIGNAL: this is the words
+            behind it, and they are careful ones. „Noch keine Zone angelegt" states what is
+            missing; the second sentence states what still works, because an unzoned building
+            clocks workers in exactly as it did before zones existed and the card on the HOIV
+            wall carries its BUILDING uuid. Nothing here scolds and nothing here says
+            „inaktiv" — that word belongs to `locations.active` alone (decision-43 §3). */}
+        <dt>{t('panelZones')}</dt>
+        <dd>
+          {areaSentence(area)}
+          {zoneState === 'unzoned' ? (
+            <span className="shift-state-note">{t('panelZonesStillWorks')}</span>
+          ) : null}
         </dd>
       </dl>
 

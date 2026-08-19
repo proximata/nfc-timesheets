@@ -35,6 +35,12 @@ export type ObjektlisteProps = {
  * `● 1 vor Ort`, `○ niemand vor Ort`, `▲ 2 nicht bestätigt`, `▢ kein Tag`. Greyscale the
  * screenshot and nothing becomes unreadable.
  *
+ * THE ZONE STATE IS A SETUP FACT, NOT A CHECK. It rides under the building's NAME rather
+ * than in the „Zu prüfen" column, because nothing about it is broken: an unzoned building
+ * clocks workers in exactly as it did before zones existed, and the card already on the
+ * HOIV wall carries its BUILDING uuid (decision-43 §3). The map pin beside it is drawn
+ * grey; this sentence is what makes the grey readable without colour.
+ *
  * A BUILDING WITHOUT COORDINATES IS NOT AN ERROR ROW. It says which of the three genuinely
  * different things happened — nobody has asked yet, we asked and Google said no, or the
  * address is the problem — and offers the retry, because that is the state the whole
@@ -98,6 +104,9 @@ export function Objektliste({ buildings, selectedId, onOpen, onGeocode, busy }: 
               <th scope="row">
                 {building.name}
                 {note === null ? null : <span className="shift-state-note">{note}</span>}
+                {building.zoneState === 'unzoned' ? (
+                  <span className="shift-state-note">{t('objectsNoZone')}</span>
+                ) : null}
               </th>
               <td>
                 {/* The glyph is decoration ON TOP OF the sentence beside it, so it is

@@ -105,6 +105,13 @@
     "panelContractNone": "Kein Vertrag hinterlegt",
     "panelContractValue": "{amount} / Monat",
     "panelClientNone": "kein Kunde hinterlegt",
+    "panelZones": "Zonen und Fläche",
+    "panelZonesNone": "Noch keine Zone angelegt – die Fläche ist daher unbekannt, nicht null.",
+    "panelZonesTotal": "{area} m² aus {count, plural, one {# Zone} other {# Zonen}}",
+    "panelZonesFloor": "mindestens {area} m² aus {count, plural, one {# Zone} other {# Zonen}} · {unmeasured, plural, one {# Zone ist noch nicht vermessen} other {# Zonen sind noch nicht vermessen}}",
+    "panelZonesStillWorks": "Der Tag dieses Objekts startet trotzdem eine Schicht. Eine Zone hält fest, wo ein Tag hängt und wie groß die Fläche ist.",
+    "panelLinkZones": "Zonen dieses Objekts verwalten",
+    "panelLinkZonesFirst": "Erste Zone anlegen",
     "panelTruncated": "Es wurden nur die neuesten Schichten geladen. Die Zahlen oben sind daher Mindestwerte, keine Summen.",
     "panelLinksHeading": "Weiter zu",
     "panelLinksToggle": "{count, plural, one {# Verknüpfung} other {# Verknüpfungen}}",
@@ -135,6 +142,7 @@
     "pinOnSite": "vor Ort",
     "pinCheck": "▲ prüfen",
     "pinNoTag": "▢ kein Tag",
+    "pinNoZone": "▢ ohne Zone",
     "pinCollapse": "Infobox zu {name} schließen",
     "objectsHeading": "Objekte",
     "objectsNote": "Jedes aktive Objekt, unabhängig davon, ob die Karte gezeichnet werden konnte. Sortiert: zuerst was zu prüfen ist, dann wo jemand ist, dann alphabetisch.",
@@ -150,6 +158,7 @@
     "objectsNeverCleaned": "Noch nie – keine abgeschlossene Schicht erfasst.",
     "objectsLastBy": "{name} · {duration} Std.",
     "objectsNoTag": "kein Tag – keine Schicht erfasst",
+    "objectsNoZone": "Noch keine Zone angelegt · der Tag dieses Objekts startet trotzdem eine Schicht",
     "objectsNothingToCheck": "nichts offen",
     "objectsOpen": "Öffnen",
     "objectsGeocode": "Koordinaten holen",
@@ -516,7 +525,7 @@
     "errorSerialShape": "Das sieht nicht nach einer Seriennummer aus. Erwartet werden mindestens vier Bytes in Hexadezimalschreibweise, zum Beispiel 04:A1:A8:52:AE:5C:80.",
     "tagLegacySummary": "Gebäude-Tag (Bestand)",
     "tagLegacyHint": "Diese URL gehört zum ganzen Objekt und nicht zu einer Zone. Neue Tags gehören an eine Zone; diese Zeile steht hier, weil bereits angebrachte Karten diese URL tragen und man sie lesen oder neu schreiben können muss.",
-    "statusUnzoned": "Ohne Zone"
+    "statusUnzoned": "Noch keine Zone angelegt"
   },
   "clients": {
     "heading": "Kunden",

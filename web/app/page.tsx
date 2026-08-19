@@ -401,7 +401,7 @@ export default function DashboardPage() {
    * fought the pan that opens an info box and re-entered `loadGoogleMaps()` per keystroke.
    */
   const objects = useMemo(
-    () => summariseBuildings(snapshot?.locations ?? [], snapshot?.shifts ?? []),
+    () => summariseBuildings(snapshot?.locations ?? [], snapshot?.shifts ?? [], snapshot?.zones),
     [snapshot],
   )
 
@@ -544,6 +544,7 @@ export default function DashboardPage() {
                 <BuildingFacts
                   building={building}
                   shifts={snapshot.shifts}
+                  zones={snapshot.zones}
                   openMaterials={openMaterials === null ? null : (openMaterials[id] ?? 0)}
                   truncated={snapshot.shifts.length >= snapshot.shift_limit}
                   asOf={asOf}
@@ -730,6 +731,7 @@ export default function DashboardPage() {
       <BuildingPanel
         building={panelOnMap ? null : panelBuilding}
         shifts={snapshot?.shifts ?? []}
+        zones={snapshot?.zones ?? []}
         openMaterials={
           filters.location === null || openMaterials === null
             ? null

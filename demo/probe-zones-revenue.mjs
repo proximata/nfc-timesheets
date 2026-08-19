@@ -31,10 +31,35 @@ const WIDTHS = [
 const THEMES = ['dark', 'light']
 
 const failures = []
+const skipped = []
 const lines = []
 function record(ok, label, detail) {
   lines.push(`${ok ? 'ok  ' : 'FAIL'} ${label}${detail ? ` — ${detail}` : ''}`)
   if (!ok) failures.push(`${label}: ${detail}`)
+}
+
+/**
+ * NOT A PASS. A surface this build cannot render, named out loud.
+ *
+ * The map is the case: `NEXT_PUBLIC_GOOGLE_MAPS_KEY` is not in `ops/deploy.sh`, so the
+ * default build draws no pin at all, and an assertion about pins written as
+ * `pins === 0 || <the real test>` is green on a screen that never existed. That is worse
+ * than a red one — it is a check reporting that it checked something.
+ *
+ * So the pin assertions SKIP, loudly, and the run prints how to make them run for real:
+ *
+ *   cd web && NEXT_PUBLIC_GOOGLE_MAPS_KEY=$(psst get NEXT_PUBLIC_GOOGLE_MAPS_KEY) pnpm build
+ *   DATABASE_URL=postgres:///nfc_demo APP_KEY=… PORT=8080 PUBLIC_DIR="$PWD/web/out" \
+ *     node demo/demo-server.mjs &
+ *   BASE=http://127.0.0.1:8080 node demo/probe-zones-revenue.mjs
+ *
+ * Port 8080 is part of the fixture: the browser key is referrer-restricted to
+ * `http://127.0.0.1:8080/*`, so on any other port Google answers `gm_authFailure` and the
+ * map tears itself down.
+ */
+function skip(label, why) {
+  lines.push(`SKIP ${label} — ${why}`)
+  skipped.push(label)
 }
 
 /**
@@ -144,11 +169,45 @@ async function run() {
           `${tag} every building states its zone/area state`,
           `${zoneWords.length} rows, e.g. "${zoneWords[0]}"`,
         )
-        // GREY IS NEVER THE ONLY SIGNAL: an unzoned building says so in text.
-        const unzonedSaid = await page.eval(
-          `document.body.innerText.includes('Noch keine Zone') || document.body.innerText.includes('No zone yet')`,
+        // GREY IS NEVER THE ONLY SIGNAL, and this counts rather than greps.
+        //
+        // A `body.innerText.includes(...)` version of this assertion passed for the wrong
+        // reason twice: once because the phrase appeared in a hint paragraph belonging to no
+        // row, and once because the copy was reworded and the check silently went looking
+        // for a string nothing rendered any more. So the number of ROWS carrying the words
+        // is compared against the number of buildings the API says have no live zone. Both
+        // sides are measured; neither is a constant.
+        const zoneTruth = await page.eval(`(async () => {
+          const res = await fetch('/admin/data?limit=2000', { credentials: 'include' })
+          const data = await res.json()
+          const live = new Map()
+          for (const z of data.zones) {
+            if (!z.active) continue
+            live.set(z.location_id, (live.get(z.location_id) || 0) + 1)
+          }
+          const unzoned = data.locations.filter((l) => (live.get(l.id) || 0) === 0)
+          const rows = Array.from(document.querySelectorAll('table.data-table tbody tr'))
+          const said = rows.filter((r) => unzoned.some((l) => r.textContent.includes(l.name)) && /Noch keine Zone angelegt|No zone recorded yet/.test(r.textContent))
+          return {
+            unzoned: unzoned.length,
+            unzonedActive: unzoned.filter((l) => l.active).length,
+            said: said.length,
+            names: unzoned.map((l) => l.name),
+          }
+        })()`)
+        record(
+          zoneTruth.unzoned > 0 && zoneTruth.said === zoneTruth.unzoned,
+          `${tag} every unzoned building says so in words, not only in grey`,
+          `${zoneTruth.said}/${zoneTruth.unzoned} rows carry the sentence — ${zoneTruth.names.join(', ')}`,
         )
-        record(unzonedSaid, `${tag} an unzoned building is named in words, not only greyed`)
+        // ...AND THE BUILDING IS STILL ACTIVE. The rule the owner stated operationally would
+        // refuse the tap from the card on the HOIV wall (decision-43 section 3), so the
+        // fixture that proves the words are there also proves the state was not merged.
+        record(
+          zoneTruth.unzonedActive === zoneTruth.unzoned,
+          `${tag} ...and every one of them is still ACTIVE, not silently stood down`,
+          `${zoneTruth.unzonedActive} of ${zoneTruth.unzoned} active`,
+        )
 
         // The building tag is a COLLAPSED disclosure, and it still contains the URI.
         const disclosure = await page.eval(`(() => {
@@ -380,6 +439,134 @@ async function run() {
           `closed=${revRestored.closed} focus=${revRestored.focus || '(body)'} expected=${revOpener}`,
         )
 
+        // ---- /, the dashboard: the grey pin and the words behind it ----------------
+        //
+        // THE SURFACE THE OWNER NAMED. A building with a contract and a contact but no zones
+        // is legitimate, is drawn, and is drawn GREY -- and the grey is the SECOND signal.
+        // The pin, the Objektliste row and the info box each have to carry the state in
+        // words, because a director who desaturates nothing still reads the list on a phone
+        // in sunlight.
+        await page.goto(`${BASE}/`)
+        await setTheme(page, theme)
+        await page.waitFor(`document.querySelectorAll('table.objects-table tbody tr').length > 0`)
+        await sleep(400)
+
+        over = await page.eval(OVERFLOW)
+        record(over.over <= 0, `${tag} / fits ${width}px`, `worst +${over.over}px ${over.what}`)
+
+        // Counted against the API again, not grepped: the Objektliste only lists ACTIVE
+        // buildings, so the expected number is the active unzoned ones.
+        const home = await page.eval(`(async () => {
+          const data = await (await fetch('/admin/data?limit=2000', { credentials: 'include' })).json()
+          const live = new Map()
+          for (const z of data.zones) {
+            if (!z.active) continue
+            live.set(z.location_id, (live.get(z.location_id) || 0) + 1)
+          }
+          const unzoned = data.locations.filter((l) => l.active && (live.get(l.id) || 0) === 0)
+          const pinnableUnzoned = unzoned.filter((l) => l.lat !== null && l.lng !== null).length
+          const rows = Array.from(document.querySelectorAll('table.objects-table tbody tr'))
+          const said = rows.filter((r) => unzoned.some((l) => r.textContent.includes(l.name)) && /Noch keine Zone angelegt|No zone recorded yet/.test(r.textContent))
+          const pins = Array.from(document.querySelectorAll('.map-pin'))
+          return {
+            expected: unzoned.length,
+            said: said.length,
+            rows: rows.length,
+            pins: pins.length,
+            pinnableUnzoned,
+            mapCollapsed: /Karte ist eingeklappt|map is collapsed/.test(document.body.innerText),
+            greyPins: pins.filter((p) => p.dataset.zone === 'unzoned').length,
+            pinsSayIt: pins.filter((p) => /ohne Zone|no zone/.test(p.textContent)).length,
+            names: unzoned.map((l) => l.name),
+          }
+        })()`)
+        record(
+          home.expected > 0 && home.said === home.expected,
+          `${tag} / every unzoned building says so in the Objektliste, in words`,
+          `${home.said}/${home.expected} rows -- ${home.names.join(', ')}`,
+        )
+        // THE PINS, and only when Google actually drew some. See `skip` above for why this
+        // is not written as `pins === 0 || ...`.
+        //
+        // The three numbers have to agree: the buildings the API says are unzoned AND
+        // pinnable, the pins carrying the grey styling hook, and the pins carrying the WORD.
+        // Grey without the word is the failure the owner named; the word without the grey
+        // would be the styling silently dropped. Both are one comparison.
+        if (home.pins === 0) {
+          // TWO DIFFERENT REASONS FOR NO PIN, and they are not interchangeable. On a phone
+          // the map is COLLAPSED BY DESIGN (decision-39 §3, IA-PLAN §9) and the Objektliste
+          // is the whole answer — which is why the row assertions above are the ones that
+          // matter at 390 and they ran. A desktop with no pin is the missing Maps key.
+          skip(
+            `${tag} / the grey pin`,
+            home.mapCollapsed
+              ? 'the map is collapsed on a phone by design — the Objektliste above IS the surface here, and it was asserted'
+              : 'this build has no Google Maps key, so no pin was drawn — rebuild with the key and re-run against :8080',
+          )
+        } else {
+          record(
+            home.greyPins === home.pinnableUnzoned && home.pinsSayIt === home.pinnableUnzoned,
+            `${tag} / a pin is grey and SAYS the word, or it is neither`,
+            `${home.pins} pins drawn · ${home.pinnableUnzoned} unzoned+pinnable · ${home.greyPins} grey · ${home.pinsSayIt} carrying the word`,
+          )
+        }
+
+        // THE INFO BOX / DRAWER: what is missing, what still works, and the route that fixes
+        // it. Opened from the row, which is the keyboard path and the only set of tab stops.
+        const boxOpener = await page.eval(`(async () => {
+          const data = await (await fetch('/admin/data?limit=2000', { credentials: 'include' })).json()
+          const live = new Set(data.zones.filter((z) => z.active).map((z) => z.location_id))
+          const target = data.locations.find((l) => l.active && !live.has(l.id))
+          if (!target) return null
+          const row = Array.from(document.querySelectorAll('table.objects-table tbody tr')).find((r) => r.textContent.includes(target.name))
+          const b = Array.from(row.querySelectorAll('button')).find((x) => /Öffnen|Open/.test(x.textContent))
+          b.id = b.id || 'probe-home-opener'
+          b.focus()
+          b.click()
+          return { id: b.id, name: target.name }
+        })()`)
+        await sleep(700)
+        const box = await page.eval(`(() => {
+          const d = document.querySelector('aside.drawer, .map-info')
+          if (!d) return null
+          const text = d.innerText
+          return {
+            w: Math.round(d.getBoundingClientRect().width),
+            focusInside: d.contains(document.activeElement),
+            saysMissing: /Noch keine Zone angelegt|No zone recorded yet/.test(text),
+            saysStillWorks: /startet trotzdem eine Schicht|still starts a shift/.test(text),
+            // NEVER the word for the operational state: 'inaktiv' here would be the merge
+            // decision-43 section 3 forbids, printed at the reader.
+            saysInactive: /inaktiv|inactive/i.test(text),
+            fixLink: Array.from(d.querySelectorAll('a')).some((a) => /Erste Zone anlegen|Create the first zone/.test(a.textContent)),
+          }
+        })()`)
+        record(
+          box !== null && box.saysMissing && box.saysStillWorks && !box.saysInactive,
+          `${tag} / the panel says what is missing AND what still works, and never says inactive`,
+          box === null ? `no panel for ${boxOpener && boxOpener.name}` : JSON.stringify(box),
+        )
+        record(
+          box !== null && box.fixLink,
+          `${tag} / ...and offers the route that fixes it`,
+          box === null ? 'missing' : `first-zone link ${box.fixLink}`,
+        )
+        over = await page.eval(OVERFLOW)
+        record(over.over <= 0, `${tag} / with the panel open fits ${width}px`, `worst +${over.over}px ${over.what}`)
+
+        await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+        await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+        await sleep(400)
+        const homeRestored = await page.eval(`(() => ({
+          closed: document.querySelector('aside.drawer') === null && document.querySelector('.map-info') === null,
+          focus: document.activeElement.id,
+        }))()`)
+        record(
+          homeRestored.closed && homeRestored.focus === (boxOpener && boxOpener.id),
+          `${tag} / Escape closes the building panel and restores focus`,
+          `closed=${homeRestored.closed} focus=${homeRestored.focus || '(body)'} expected=${boxOpener && boxOpener.id}`,
+        )
+
         // ---- /workers/, the required rate ------------------------------------------
         await page.goto(`${BASE}/workers/`)
         await setTheme(page, theme)
@@ -424,7 +611,14 @@ async function run() {
     process.stderr.write(`${failures.length} probe(s) failed.\n`)
     process.exit(1)
   }
-  process.stdout.write('All geometry probes passed.\n')
+  // A SKIP IS REPORTED IN THE SUCCESS LINE, not swallowed by it. A run that says "all
+  // passed" while four assertions never executed is the report this whole file exists to
+  // stop being possible.
+  process.stdout.write(
+    skipped.length === 0
+      ? 'All geometry probes passed.\n'
+      : `All geometry probes passed — ${skipped.length} SKIPPED and NOT proven: ${skipped.join(', ')}\n`,
+  )
 }
 
 await run()
