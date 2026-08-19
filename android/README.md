@@ -425,6 +425,33 @@ Export the four variables from § Toolchain first, then:
     ./gradlew :app:assembleRelease        # no keystore needed — falls back to debug signing
     ./gradlew :app:bundleRelease          # the AAB Play wants; needs a keystore to be uploadable
 
+### Publishing the release APK for sideloading
+
+    ./dist-apk.sh
+
+Copies `app/build/outputs/apk/release/app-release.apk` into `dist/` under a name **read out
+of the APK's own manifest** — `nfc-timesheets-<versionName>-<versionCode>-release.apk` — and
+prints the `adb install -r` line to run.
+
+`dist/` is gitignored, so nothing here is durable except this script. It exists because the
+last build was copied there by hand and the next one was not: a run reported
+`dist/nfc-timesheets-0.3.0-4-release.apk` as its deliverable while the only 0.3.0 bytes on
+the machine were still in `app/build/outputs/`. That path is step one of getting a working
+build onto the one phone in the field, and it would have failed with “No such file” after
+the phone had already been fetched.
+
+It **refuses** two things rather than copying them, and the refusals matter more than the
+copy:
+
+- a **debug-signed** APK — `adb install -r` over the field build fails with
+  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, and the obvious next move (`adb uninstall`) wipes
+  the live worker session on the only phone in service;
+- a signer whose SHA-256 is **not the one `ops/branding.json` publishes** in
+  `assetlinks.json` — App Links would not verify and every tap would open Chrome.
+
+Both refusals were exercised: substituting the debug APK makes it exit 1 naming
+`CN=Android Debug`, and restoring the real one makes it exit 0.
+
 Debug and release share the same `applicationId` on purpose. An `applicationIdSuffix`
 would make App Links fail to verify against the published `assetlinks.json` — i.e. the
 debug build could never reproduce the only bug that matters.
