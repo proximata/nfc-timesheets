@@ -35,6 +35,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // cannot be rewritten from Vienna, so this value is not ours to change (decision-40).
 const WALL_TAG_UUID = "c3c37d4a-ca0a-42c5-b248-9704b9907ec7";
 
+// The Mifare Ultralight EV1 physically mounted at HOIV. It is a THIRD-PARTY tag: 46 B of
+// NDEF capacity against the ~64 B our URI needs, so it holds no URL and cannot be rewritten
+// from here. Its serial is the only stable handle it has (decision-44), and today it is
+// resolved by a hard-coded map compiled into the APK (android/.../nfc/KnownTags.kt). That
+// map is deleted only once a zone row carries the serial and the phone has seen it come
+// down /roster — so "can a zone carry it, and does /roster ship it" is the gate on a
+// deletion, and it is checked here against the real database rather than against the design.
+const MOUNTED_SERIAL = "04:A1:A8:52:AE:5C:80";
+
 const DB_NAME = `nfc_prodrestore_${process.pid}`;
 const DATABASE_URL = `postgres:///${DB_NAME}`;
 const APP_KEY = "prod-restore-check-key";
@@ -121,6 +130,15 @@ try {
   }
 
   // ---- 3 · apply, and re-apply ------------------------------------------------------
+  //
+  // WHAT THE BUILDING LOOKED LIKE BEFORE, read now and compared after. "006 applied" and
+  // "006 applied without touching anything" are different claims, and only the second one
+  // is worth making: the pin is the landing surface (decision-39), and a migration that
+  // silently rounded a coordinate would move a building on a map with nothing to notice it.
+  const buildingsBefore = psql(
+    "SELECT string_agg(id || '|' || name || '|' || active || '|' || coalesce(lat::text,'-') || '|' || coalesce(lng::text,'-'), E'\n' ORDER BY id) FROM locations",
+  );
+
   assert.match(migrate(), /applied 006_zones_revenue_rates\.sql/, "006 must apply");
   assert.match(migrate(), /up to date/, "and re-running must be a no-op");
   assert.equal(psql("SELECT count(*) FROM zones"), "0", "006 must invent no zone");
@@ -131,6 +149,22 @@ try {
     "006 must backfill no zone onto any existing shift",
   );
   ok("006 applies to the real database, twice, creating ZERO rows");
+
+  // EVERY BUILDING SURVIVES, BYTE FOR BYTE — id, name, active flag AND both coordinates.
+  // HOIV is pinned at 48.1761151/16.3953038 and that pin is the whole map screen.
+  assert.equal(
+    psql(
+      "SELECT string_agg(id || '|' || name || '|' || active || '|' || coalesce(lat::text,'-') || '|' || coalesce(lng::text,'-'), E'\n' ORDER BY id) FROM locations",
+    ),
+    buildingsBefore,
+    "006 must leave every building exactly as it found it, coordinates included",
+  );
+  assert.match(
+    psql(`SELECT lat || '/' || lng FROM locations WHERE id = '${WALL_TAG_UUID}'`),
+    /^\d+\.\d+\/\d+\.\d+$/,
+    "the wall tag's building must still carry BOTH coordinates, so its pin still draws",
+  );
+  ok(`every building survives with its pin: ${psql(`SELECT name || ' @ ' || lat || '/' || lng FROM locations WHERE id = '${WALL_TAG_UUID}'`)}`);
 
   // ---- 4 · the API boots on it, and THE CARD ON THE WALL STILL WORKS ----------------
   //
@@ -210,6 +244,77 @@ try {
   });
   assert.equal(closed.status, 200, "the shipped build's close shape must still work");
   ok("POST /shifts/close in the SHIPPED build's shape -> 200");
+
+  // ---- 5 · THE MOUNTED EV1 SERIAL, END TO END ON THE REAL DATABASE ------------------
+  //
+  // Everything above proves the BUILDING uuid still resolves. This proves the OTHER tag on
+  // the same wall can be adopted: the serial goes into a zone row, comes back down /roster,
+  // is matched by the phone's own pure resolver, and the resolved place opens a shift.
+  //
+  // WHY IT IS HERE and not in check-api.js: check-api builds its own schema from a
+  // hand-written DDL copy, so it can prove the ROUTE. Only this file can prove the
+  // constraint accepts this exact string in the database the client actually has — and
+  // `zones.tag_serial ~ '^[0-9A-F]{2}(:[0-9A-F]{2})+$'` is a regex somebody could tighten
+  // without ever typing the serial that is screwed to a wall in Vienna.
+  //
+  // WRITTEN AND THEN REMOVED. This is a throwaway scratch database, but the assertions
+  // below have to hold for a database with ZERO zones (which is what production is), so the
+  // zone is deleted again before the check ends rather than left to colour later runs.
+  psql(
+    `INSERT INTO zones (location_id, name, note, tag_serial) VALUES ('${WALL_TAG_UUID}', 'Stiege 1', 'Fremdtag am Eingang', '${MOUNTED_SERIAL}')`,
+  );
+  const zoneId = psql(`SELECT id FROM zones WHERE tag_serial = '${MOUNTED_SERIAL}'`);
+  assert.match(zoneId, /^[0-9a-f-]{36}$/, "the mounted serial must be storable on a zone at all");
+
+  const zoned = await (await call("/roster")).json();
+  const shipped = zoned.zones.find((z) => z.id === zoneId);
+  assert.ok(shipped, "GET /roster must SHIP the zone — there is no other route a serial arrives on");
+  assert.equal(shipped.tag_serial, MOUNTED_SERIAL, "...carrying the serial verbatim, in the shape the phone normalises");
+  assert.equal(shipped.location_id, WALL_TAG_UUID, "...and naming its building, which is what a tap is billed to");
+
+  // THE PHONE'S OWN RESOLVER, RE-DERIVED HERE. `core/Zones.kt` is Kotlin and is proven on a
+  // JVM by android/checks; what CANNOT be proven there is that its input arrives. This is
+  // the same two rules against the real wire bytes: normalise both sides, match, and post
+  // the ZONE's id — never the building's, and never the serial (decision-44 §3).
+  const normalise = (s) => (s ?? "").toUpperCase().replace(/[^0-9A-F]/g, "").match(/../g)?.join(":") ?? null;
+  for (const asRead of [MOUNTED_SERIAL, "04a1a852ae5c80", "04-A1-A8-52-AE-5C-80", " 04:a1:A8:52:ae:5C:80 "]) {
+    const hit = zoned.zones.find((z) => normalise(z.tag_serial) === normalise(asRead));
+    assert.equal(hit?.id, zoneId, `a reader printing the serial as "${asRead}" must still resolve it`);
+  }
+  ok(`the mounted EV1 serial resolves through /roster to zone ${zoneId} (4 reader spellings)`);
+
+  // ...and the resolved ZONE id opens a shift that is still billed to the BUILDING. This is
+  // decision-43's whole shape in one request: a zone is a place, never a costing unit.
+  const zoneClientUuid = "11111111-2222-4333-8444-555555559002";
+  const zoneOpen = await call("/shifts/open", {
+    method: "POST",
+    body: { client_uuid: zoneClientUuid, location_uuid: zoneId, start_time: new Date().toISOString() },
+  });
+  const zoneBody = await zoneOpen.json();
+  assert.equal(zoneOpen.status, 201, `the mounted serial's zone must clock a worker in: ${JSON.stringify(zoneBody)}`);
+  assert.equal(zoneBody.shift.location_id, WALL_TAG_UUID, "a zone tap is billed to the BUILDING, never to the zone");
+  assert.equal(zoneBody.shift.start_zone_id, zoneId, "...and the door that was tapped is recorded as a tap FACT");
+  ok("POST /shifts/open with the RESOLVED zone id -> 201, billed to the building, start_zone_id set");
+
+  const zoneClosed = await call("/shifts/close", {
+    method: "POST",
+    body: { client_uuid: zoneClientUuid, end_time: new Date(Date.now() + 60_000).toISOString() },
+  });
+  assert.equal(zoneClosed.status, 200, "and it closes in the shipped build's shape too");
+
+  // THE SERIAL NEVER REACHES THE SERVER. Asserted, not assumed: if any route ever started
+  // accepting one, the adoption model's security argument (decision-44 §3 — a serial is
+  // broadcast in the clear and is clonable) would be silently gone.
+  const bySerial = await call("/shifts/open", {
+    method: "POST",
+    body: { client_uuid: "11111111-2222-4333-8444-555555559003", location_uuid: MOUNTED_SERIAL, start_time: new Date().toISOString() },
+  });
+  assert.equal(bySerial.status, 400, "a raw SERIAL must never be accepted as a place — it is not a credential");
+  ok("a raw serial posted as a place is refused: the phone resolves, the server never sees it");
+
+  psql("DELETE FROM shifts WHERE start_zone_id IS NOT NULL");
+  psql(`DELETE FROM zones WHERE tag_serial = '${MOUNTED_SERIAL}'`);
+  assert.equal(psql("SELECT count(*) FROM zones"), "0", "the scratch zone must not outlive this check");
 
   console.log(
     "\nOK check-prod-restore: 006 applies to the real database, the API boots on it, and the\n" +
