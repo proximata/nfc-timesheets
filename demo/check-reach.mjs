@@ -715,19 +715,62 @@ async function main() {
   // FK order is not the obvious one: `locations` points AT `contacts` and `clients`, so the
   // buildings go before the people who own them. `admins` and `sessions` are kept, or the
   // browser is signed out and every picture below is the login screen.
-  console.log("\ncheck-reach: emptying nfc_demo for the day-zero pass");
-  for (const table of [
+  //
+  // `zones` and `location_revenue` are here because MIGRATION 006 ADDED THEM, and adding
+  // them to the schema without adding them to this list is what actually happened: the
+  // whole day-zero pass -- every empty-state screen, which is the ONLY state the client's
+  // database is in on onboarding day -- died on
+  //   ERROR: update or delete on table "locations" violates foreign key constraint
+  //          "zones_location_id_fkey"
+  // and had done so silently since 006 was written. The guard below is the point of this
+  // comment: a hand-kept delete order is a list that the NEXT migration breaks in exactly
+  // the same way, so the list is now CHECKED against the database's own foreign keys
+  // rather than trusted.
+  const EMPTIED = [
     "shifts",
     "material_requests",
     "portal_grants",
     "location_contracts",
+    "location_revenue",
+    "zones",
     "locations",
     "contacts",
     "clients",
     "inventory_items",
+    // Points at `workers`. It has never had a row in nfc_demo, so its absence from this
+    // list was a DELETE waiting for the first fixture that seeds a worker session -- the
+    // guard below found it on its first run, unseeded. Emptying it logs out a WORKER, not
+    // the admin browser: `sessions` (which points at `admins`) is deliberately kept.
+    "worker_sessions",
     "workers",
     "app_settings",
-  ]) {
+  ];
+  // Every table that POINTS AT something this pass empties must itself be emptied, or the
+  // DELETE raises 23503. Asked of the live catalogue, so migration 007 cannot forget it.
+  // `sessions`/`worker_sessions` reference `admins`/`workers`: worker_sessions is caught
+  // here and belongs in the list; `sessions` points at `admins`, which is deliberately kept.
+  const referencing = sql(
+    `SELECT DISTINCT c.conrelid::regclass::text
+       FROM pg_constraint c
+      WHERE c.contype = 'f'
+        AND c.confrelid::regclass::text = ANY (ARRAY[${EMPTIED.map((t) => `'${t}'`).join(",")}])
+        AND c.conrelid <> c.confrelid
+      ORDER BY 1`,
+  )
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const missing = referencing.filter((t) => !EMPTIED.includes(t));
+  assert(
+    "day zero: the delete order covers every table that references an emptied one",
+    missing.length === 0,
+    missing.length === 0
+      ? `${referencing.length} referencing table(s), all listed`
+      : `${missing.join(", ")} -- a migration added a foreign key and this list did not follow it`,
+  );
+
+  console.log("\ncheck-reach: emptying nfc_demo for the day-zero pass");
+  for (const table of EMPTIED) {
     exec(`DELETE FROM ${table}`);
   }
   assert(

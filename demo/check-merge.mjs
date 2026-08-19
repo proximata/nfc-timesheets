@@ -2,11 +2,21 @@
 // key path rendered onto a screen. `next build` only prerenders the empty first paint, so it
 // cannot see a key that is missing on a row that only exists once data has arrived.
 //
-// Read-only against the local demo stack on 127.0.0.1:8082 («stack» in backlog/docs/DEMO.md).
+// Read-only against the local demo stack («stack» in backlog/docs/DEMO.md).
 // Bounded: every wait has a timeout, because a check that can hang forever looks exactly like
 // a check that is passing.
 //
 //   «stack», then: node demo/check-merge.mjs
+//   DEMO_BASE=http://127.0.0.1:8093 node demo/check-merge.mjs
+//
+// THE PORT IS AN ENV VAR AND WAS A LITERAL, and that made this the one check in demo/ that
+// nobody could run. It was pinned to :8082 with no override while README.md § checks says
+// every browser check wants the server on :8080 — so a full sweep started it, got a login
+// page that was not there, and died inside `page.type` with
+// `Cannot read properties of null (reading 'focus')`. That reads like a broken login form,
+// not like a wrong port, which is why it survived: the failure blamed the product. ICU
+// parity across both locales is exactly the kind of defect that only shows up at runtime,
+// so a runtime check that cannot be started is worse than none.
 //
 // CDP PORT, and it is not paranoia: `launchChrome` returns as soon as SOMETHING answers
 // /json/version on that port. A headless Chrome left behind by an earlier run therefore gets
@@ -15,8 +25,8 @@
 //   curl -s -m1 -o /dev/null -w '%{http_code}' http://127.0.0.1:9353/json/version
 import { attach, launchChrome } from './cdp.mjs'
 
-const BASE = 'http://127.0.0.1:8082'
-if (!/^http:\/\/127\.0\.0\.1:/.test(BASE)) throw new Error('loopback only')
+const BASE = process.env.DEMO_BASE ?? 'http://127.0.0.1:8080'
+if (!/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(BASE)) throw new Error('loopback only')
 
 const PAGES = [
   '/', '/shifts/', '/material-requests/', '/workers/', '/locations/', '/clients/',
