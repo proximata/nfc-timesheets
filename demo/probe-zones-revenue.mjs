@@ -215,6 +215,105 @@ async function run() {
           `${zoneTruth.unzonedActive} of ${zoneTruth.unzoned} active`,
         )
 
+        // THE AREA ON SCREEN IS THE SUM OF THE ZONES, AND AN UNMEASURED ZONE MAKES IT SAY SO.
+        //
+        // decision-43: the building stores no area, so this number is derived twice — by
+        // `lib/area.ts` for this table and by `SUM(z.area_sqm)` in server/lib/reporting.js
+        // for /pl/. Two derivations of one fact drift, and the drift shows up as a director
+        // quoting a EUR/m2 from one screen that the other screen disagrees with.
+        //
+        // INDEPENDENT ORACLE. The expected sentence is computed HERE, from /admin/data's raw
+        // zone rows, in integer hundredths — never by re-reading the number off the screen and
+        // then agreeing with it. That is the mistake check-money.mjs's own „Nicht gezählt"
+        // assertion made: it matched vocabulary that the failing case also contains.
+        //
+        // THE FLOOR CASE IS THE POINT. A building with one unmeasured zone must NOT print the
+        // measured subtotal as though it were the building: 980 m2 stated as a total for a
+        // building whose Tiefgarage nobody has measured is a confidently wrong benchmark, and
+        // it is the denominator of every EUR/m2 figure quoted from it.
+        const areaTruth = await page.eval(`(async () => {
+          const data = await (await fetch('/admin/data?limit=2000', { credentials: 'include' })).json()
+          // Integer hundredths, by string slicing. The wire value is a JS number, and
+          // 12.10 + 0.20 as floats is 12.299999999999999.
+          const hundredths = (v) => {
+            if (v === null || v === undefined) return null
+            const [w, f = ''] = String(v).split('.')
+            return Number.parseInt(w, 10) * 100 + Number.parseInt((f + '00').slice(0, 2), 10)
+          }
+          const rows = Array.from(document.querySelectorAll('table.data-table tbody tr'))
+          const out = []
+          for (const l of data.locations) {
+            const live = data.zones.filter((z) => z.active && z.location_id === l.id)
+            const measured = live.filter((z) => z.area_sqm !== null && z.area_sqm !== undefined)
+            const sum = measured.reduce((a, z) => a + hundredths(z.area_sqm), 0)
+            const state = live.length === 0 ? 'none' : measured.length < live.length ? 'incomplete' : 'complete'
+            const row = rows.find((r) => r.textContent.includes(l.name))
+            if (!row) continue
+            const said = (row.children[4]?.textContent || '')
+            // COMPARED AS A VALUE, NOT AS A STRING. The screen formats through next-intl and
+            // Austrian German groups with a narrow no-break space in some builds and a dot in
+            // others; a string comparison would fail on the SEPARATOR and say the area was
+            // wrong. So the number is read back OFF the sentence, stripped of every grouping
+            // character, and compared in integer hundredths against the oracle.
+            // NO BACKSLASH ESCAPES IN THIS REGEX, and that is not a style choice: this whole
+            // expression is a TEMPLATE LITERAL evaluated in the page, so a lone \d here is
+            // eaten by the template and reaches Chrome as a bare 'd'. The first version of
+            // this line did exactly that, matched nothing, and reported every measured
+            // building as having no number on screen. Explicit classes cannot be eaten.
+            const token = (said.match(/[0-9][0-9.,\u00a0\u202f ]*(?=[ ]*m\u00b2)/) || [null])[0]
+            const shownHundredths = token === null
+              ? null
+              : (() => {
+                  const plain = token.replace(/[^0-9,.]/g, '')
+                  // The LAST separator is the decimal one; everything before it groups.
+                  const cut = Math.max(plain.lastIndexOf(','), plain.lastIndexOf('.'))
+                  const hasDecimals = cut !== -1 && plain.length - cut - 1 <= 2
+                  const whole = (hasDecimals ? plain.slice(0, cut) : plain).replace(/[.,]/g, '')
+                  const frac = hasDecimals ? (plain.slice(cut + 1) + '00').slice(0, 2) : '00'
+                  return Number.parseInt(whole, 10) * 100 + Number.parseInt(frac, 10)
+                })()
+            out.push({
+              name: l.name,
+              state,
+              zones: live.length,
+              unmeasured: live.length - measured.length,
+              shown: token === null ? null : token.trim(),
+              expected: sum,
+              got: shownHundredths,
+              hasNumber: sum > 0 && shownHundredths === sum,
+              saysFloor: /Mindestens|At least/.test(said) && /keine Gesamtfläche|not a total/.test(said),
+              saysTotal: /gesamt aus|in total across/.test(said),
+              saysNone: /Fläche unbekannt|area unknown/.test(said),
+              said: said.trim().slice(0, 90),
+            })
+          }
+          return out
+        })()`)
+
+        const complete = areaTruth.filter((b) => b.state === 'complete')
+        const incomplete = areaTruth.filter((b) => b.state === 'incomplete')
+        const none = areaTruth.filter((b) => b.state === 'none')
+        record(
+          complete.length > 0 && complete.every((b) => b.hasNumber && b.saysTotal && !b.saysFloor),
+          `${tag} a fully measured building states the SUM of its zones as a total`,
+          complete.map((b) => `${b.name}: ${b.zones} zones, db ${b.expected / 100} m², screen ${b.got === null ? 'none' : b.got / 100} m² ("${b.shown}")`).join(' | ') || 'no such building in the fixture',
+        )
+        record(
+          incomplete.length > 0 && incomplete.every((b) => b.saysFloor && !b.saysTotal && b.got === b.expected),
+          `${tag} a building with an unmeasured zone says INCOMPLETE, never a total`,
+          incomplete
+            .map(
+              (b) =>
+                `${b.name}: ${b.unmeasured}/${b.zones} unmeasured, floor ${b.got === null ? 'none' : b.got / 100} m² = db ${b.expected / 100} — "${b.said}"`,
+            )
+            .join(' | ') || 'no such building in the fixture',
+        )
+        record(
+          none.length > 0 && none.every((b) => b.saysNone && !b.saysTotal && !b.saysFloor),
+          `${tag} a building with no zone has NO area — and that is not 0 m²`,
+          none.map((b) => `${b.name}: "${b.said}"`).join(' | ') || 'no such building in the fixture',
+        )
+
         // The building tag is a COLLAPSED disclosure, and it still contains the URI.
         const disclosure = await page.eval(`(() => {
           const d = document.querySelector('details.tag-disclosure')
