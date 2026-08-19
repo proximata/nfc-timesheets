@@ -263,9 +263,37 @@ node server/check-api.js              # API behaviour against a throwaway schema
 node server/routes/wellknown.test.js  # AASA / assetlinks / /t handler
 ./ops/check-autoclose.sh              # 8h auto-close SQL is correct and idempotent
 sh demo/check-guards.sh               # the demo scripts still refuse the live db and host
-node demo/probe-zones-revenue.mjs     # zone list/drawer + revenue ledger geometry, 1680/1440x900/390,
-                                       # dark+light; needs DB nfc_demo + API on :4319, PUBLIC_DIR=../web/out
+node server/db/check-prod-restore.mjs <dump>   # 006 against the REAL client database, and the
+                                      # card on the wall still clocking a worker in. SKIPs with no dump.
 cd web && pnpm check                  # exact versions, en/de key parity, ICU plurals
+```
+
+Browser checks. **All of them want the server on `:8080`**, and that port is not a
+convention — it is the one loopback origin the Google Maps browser key's HTTP-referrer
+allowlist contains. On any other port Google answers `RefererNotAllowedMapError`, no pin is
+drawn, and every map assertion silently SKIPs. Two runs read those skips as "the key rejects
+loopback" and wrote it down as a measured fact; it is not true.
+
+```bash
+cd web && NEXT_PUBLIC_GOOGLE_MAPS_KEY=$(cd .. && psst get NEXT_PUBLIC_GOOGLE_MAPS_KEY) pnpm build
+DATABASE_URL=postgres:///nfc_demo APP_KEY=demo-app-key-local-only-0123456789 \
+  PORT=8080 PUBLIC_DIR="$PWD/web/out" node server/server.js &
+
+sh demo/check-guards.sh               # the demo scripts still refuse the live db and host
+BASE=http://127.0.0.1:8080 node demo/probe-zones-revenue.mjs
+                                      # zone list/drawer, revenue ledger, the grey pin and
+                                      # the info-box fold cue; 1680/1440x900/390, dark+light
+DATABASE_URL=postgres:///nfc_demo node demo/check-revenue-unknown.mjs
+                                      # a figure nobody typed is never 0,00 EUR, on EVERY
+                                      # screen that prints money. The surfaces are GREPPED
+                                      # out of web/, not listed, and the oracle is
+                                      # differential: retract every figure and no amount
+                                      # anywhere may become a zero it was not already.
+node demo/check-map-key.mjs           # is the Maps key authorised for the host that serves
+                                      # the admin? Not greppable - a key restriction is not
+                                      # in this repo - so it asks, under the real hostname.
+node demo/check-map-home.mjs          # the map surface itself
+AUDIT_BASE=http://127.0.0.1:8080 node demo/audit-widths.mjs   # 11 widths x 19 states
 ```
 
 Against a running server:
