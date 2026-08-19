@@ -345,7 +345,28 @@ export function BuildingFacts({
           {monthPending === 0 ? '' : ` · ${t('panelHoursPending', { count: monthPending })}`}
         </dd>
 
-        {/* N5 — the contract as recorded. No margin: see the file header. */}
+        {/*
+          N5 — the contract as recorded, and in the DRAWER the area it is paid for. No
+          margin: see the file header.
+
+          WHY THE AREA IS A SUB-LINE AND NOT A SIXTH ROW, AND WHY THE BOX DOES NOT GET IT.
+          Both are measured, not tasteful.
+
+          The info box on a pin is as tall as the map region leaves it — 323px at 1680, of
+          which the numbers face is 221px — and the five existing rows already filled it to
+          within 14 pixels. A sixth `dt`/`dd` pair costs ~30px and put EVERY building's box
+          behind a silent fold; as a sub-line it still costs ~18px and the two busiest
+          buildings were over by 19 and 22. demo/check-map-home.mjs caught it. The 1680/390
+          probe could not, because this box is sized by the map region rather than by the
+          viewport — the widths a redesign is checked at say nothing about it.
+
+          A FOLD HIDES FACTS; THIS DOES NOT. On the box's own surface the state is already
+          said twice: the pin it hangs off carries the word „▢ ohne Zone", and the links
+          face behind the disclosure carries „Erste Zone anlegen". The drawer and the phone
+          bottom sheet — which is every path with no map, including the one production is in
+          on day one — carry the whole thing. Nothing true is only in the place it was cut
+          from.
+        */}
         <dt>{t('panelContract')}</dt>
         <dd>
           {building.monthly_contract_cents === null
@@ -358,19 +379,19 @@ export function BuildingFacts({
               })}
           {' · '}
           {building.client_name ?? t('panelClientNone')}
-        </dd>
-
-        {/* N6 — zones and area. GREY ON THE PIN IS NEVER THE ONLY SIGNAL: this is the words
-            behind it, and they are careful ones. „Noch keine Zone angelegt" states what is
-            missing; the second sentence states what still works, because an unzoned building
-            clocks workers in exactly as it did before zones existed and the card on the HOIV
-            wall carries its BUILDING uuid. Nothing here scolds and nothing here says
-            „inaktiv" — that word belongs to `locations.active` alone (decision-43 §3). */}
-        <dt>{t('panelZones')}</dt>
-        <dd>
-          {areaSentence(area)}
-          {zoneState === 'unzoned' ? (
-            <span className="shift-state-note">{t('panelZonesStillWorks')}</span>
+          {/* GREY ON THE PIN IS NEVER THE ONLY SIGNAL: these are the words behind it, and
+              they are careful ones. „Noch keine Zone angelegt" states what is missing; the
+              line under it states what still works, because an unzoned building clocks
+              workers in exactly as it did before zones existed and the card on the HOIV wall
+              carries its BUILDING uuid. Nothing here scolds and nothing here says
+              „inaktiv" — that word belongs to `locations.active` alone (decision-43 §3). */}
+          {layout === 'panel' ? (
+            <>
+              <span className="shift-state-note num">{areaSentence(area)}</span>
+              {zoneState === 'unzoned' ? (
+                <span className="shift-state-note">{t('panelZonesStillWorks')}</span>
+              ) : null}
+            </>
           ) : null}
         </dd>
       </dl>

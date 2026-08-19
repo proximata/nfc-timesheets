@@ -25,6 +25,12 @@ if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(BASE)) {
 const WIDTHS = [
   // decision-7's desktop case, at the width the owner named.
   { name: '1680', width: 1680, height: 1050 },
+  // THE LAPTOP, and it is here for the map info box specifically. The box is as tall as
+  // the MAP REGION lets it be, and the map region scales with the VIEWPORT HEIGHT — so a
+  // 1050px-tall screen and a 900px-tall one give different boxes, and a fold that appears
+  // on the shorter one is invisible on the taller. Width is not the variable this surface
+  // is sensitive to, which is why the two sizes above could not see it.
+  { name: '1440x900', width: 1440, height: 900 },
   // decision-28: the admin panel works on a phone. 390 is the iPhone the director carries.
   { name: '390', width: 390, height: 844 },
 ]
@@ -509,6 +515,85 @@ async function run() {
             `${tag} / a pin is grey and SAYS the word, or it is neither`,
             `${home.pins} pins drawn · ${home.pinnableUnzoned} unzoned+pinnable · ${home.greyPins} grey · ${home.pinsSayIt} carrying the word`,
           )
+        }
+
+        // THE INFO BOX ON A PIN IS A SEPARATE SURFACE AND IT IS ASSERTED SEPARATELY.
+        //
+        // It is 323px tall at most, it already held five facts, and the numbers face had 14
+        // pixels of slack — so the zone sentences are NOT in it, deliberately, and
+        // demo/check-map-home.mjs is the check that says why. What the box owes instead is
+        // that the state is still readable from it WITHOUT COLOUR: the pin it hangs off
+        // carries the word, and the links face behind the disclosure carries the fix.
+        //
+        // Without this, the box path for an unzoned building is never exercised at all: the
+        // drawer assertion below happens to pick a building with no coordinates, which is
+        // exactly the case that CANNOT have a box.
+        const boxTarget = await page.eval(`(async () => {
+          const data = await (await fetch('/admin/data?limit=2000', { credentials: 'include' })).json()
+          const liveIds = new Set(data.zones.filter((z) => z.active).map((z) => z.location_id))
+          const t = data.locations.find((l) => l.active && !liveIds.has(l.id) && l.lat !== null && l.lng !== null)
+          if (!t) return null
+          const short = t.name.split(',')[0].trim()
+          const pin = Array.from(document.querySelectorAll('.map-pin')).find((p) => p.textContent.includes(short))
+          if (!pin) return null
+          pin.querySelector('.map-pin-label').click()
+          return { name: t.name, short }
+        })()`)
+        if (boxTarget === null) {
+          skip(
+            `${tag} / the info box of an unzoned pin`,
+            'no unzoned building has coordinates on this map, or none was drawn',
+          )
+        } else {
+          await sleep(600)
+          // MEASURED BEFORE THE DISCLOSURE IS TOUCHED, and that ordering is the assertion.
+          // A first version clicked `.map-info-expand` inside this same function and then
+          // counted the folds, so it measured the LINKS face and reported 0 while the
+          // NUMBERS face was 19px over — the exact defect it was written for, passing.
+          // `.visually-hidden` is a 1px clipping rectangle by construction and is excluded,
+          // the same way demo/check-map-home.mjs excludes it.
+          const infoBox = await page.eval(`(() => {
+            const box = document.querySelector('.map-info')
+            if (!box) return null
+            const pin = box.closest('.map-pin')
+            return {
+              h: Math.round(box.getBoundingClientRect().height),
+              pinSaysIt: /ohne Zone|no zone/.test(pin.querySelector('.map-pin-label').textContent),
+              grey: pin.dataset.zone === 'unzoned',
+              folds: [box, ...box.querySelectorAll('*')]
+                .filter((el) => !el.classList.contains('visually-hidden') && el.scrollHeight > el.clientHeight + 2)
+                .map((el) => String(el.className) + ' +' + (el.scrollHeight - el.clientHeight) + 'px'),
+            }
+          })()`)
+          // ...and only NOW open the links face.
+          await page.eval(`(() => { const e = document.querySelector('.map-info-expand'); if (e) e.click(); return true })()`)
+          await sleep(400)
+          const boxFix = await page.eval(`(() => {
+            const box = document.querySelector('.map-info')
+            if (!box) return null
+            const link = Array.from(box.querySelectorAll('a')).find((a) => /Erste Zone anlegen|Create the first zone/.test(a.textContent))
+            if (!link) return { found: false, inside: false }
+            const l = link.getBoundingClientRect(), b = box.getBoundingClientRect()
+            return { found: true, inside: l.top >= b.top - 1 && l.bottom <= b.bottom + 1 }
+          })()`)
+          record(
+            infoBox !== null && infoBox.grey && infoBox.pinSaysIt,
+            `${tag} / the info box hangs off a pin that is grey AND says the word`,
+            infoBox === null ? 'no box opened' : `${infoBox.h}px, grey=${infoBox.grey}, word=${infoBox.pinSaysIt} — ${boxTarget.name}`,
+          )
+          record(
+            infoBox !== null && infoBox.folds.length === 0,
+            `${tag} / ...and nothing on its numbers face is behind a silent fold`,
+            infoBox === null ? 'no box opened' : infoBox.folds.length === 0 ? 'nothing scrolls' : infoBox.folds.join(' | '),
+          )
+          record(
+            boxFix !== null && boxFix.found && boxFix.inside,
+            `${tag} / ...and its links face carries the first-zone route, inside the box`,
+            boxFix === null ? 'no box' : `found=${boxFix.found} inside=${boxFix.inside}`,
+          )
+          await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+          await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+          await sleep(400)
         }
 
         // THE INFO BOX / DRAWER: what is missing, what still works, and the route that fixes
