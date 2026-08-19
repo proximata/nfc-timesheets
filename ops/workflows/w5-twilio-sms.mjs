@@ -5,7 +5,39 @@ export const meta = {
   phases: [{ title: 'Design' }, { title: 'Build' }, { title: 'Verify' }]
 };
 
-const MODEL = 'anthropic/claude-opus-5';
+const PLANNER  = 'anthropic/claude-sonnet-5';   // plans, with ultrathink
+const WORKER   = 'anthropic/claude-sonnet-5';   // writes the code
+const VERIFIER = 'anthropic/claude-opus-5';     // tries to break it
+
+// Every work item is planned before it is built. The plan is written by a model asked to
+// think hard and touch nothing; the build is a separate agent that receives it. Splitting
+// them is the point: a planner with no edit rights cannot quietly start implementing, and a
+// builder handed a plan cannot quietly redesign. Both are Sonnet; verification is not.
+async function planned(brief, opts) {
+  const plan = await agent(
+    brief +
+    "\n\n--- THIS AGENT PLANS ONLY. IT WRITES NO CODE AND EDITS NO FILE. ---\n" +
+    "ultrathink\n\n" +
+    "Think it through before answering. Read the code the task touches, not just the brief.\n" +
+    "Produce: the files you would change and why · the order · the decision records and\n" +
+    "constraints above that BIND this work, quoted · what could go wrong at each step and\n" +
+    "what would prove it did · the checks whose negative case must be shown RED first · what\n" +
+    "is genuinely ambiguous in the brief, stated as a question rather than a guess.\n" +
+    "Apply the lazy-senior-dev ladder in the plan itself: say what should NOT be built, and\n" +
+    "where an already-installed dependency or one line beats new code. Name what you would\n" +
+    "NOT do and why. A plan that only lists work is half a plan.",
+    { ...opts, label: opts.label + '-plan', model: PLANNER }
+  );
+  return agent(
+    brief +
+    "\n\n--- PLAN FROM THE PLANNING AGENT ---\n" + plan +
+    "\n\n--- BUILD IT ---\n" +
+    "Follow the plan. Where it is wrong, say so explicitly and explain before diverging —\n" +
+    "do not silently do something else. Where it asked a question the brief cannot answer,\n" +
+    "record it for the owner rather than guessing. Commit as you go.",
+    { ...opts, model: opts.model || WORKER }
+  );
+}
 const REPO = '/Users/gerhardgustav/Desktop/ai-automations/hoiv/cleaning-timesheets';
 
 const BASE = `
@@ -37,7 +69,7 @@ absolute /usr/bin/grep, /bin/ls, /usr/bin/git · stage EXPLICIT paths.
 `;
 
 phase('Design');
-const design = await agent(`${BASE}
+const design = await planned(`${BASE}
 
 Design SMS sign-in, and be honest about what it replaces.
 
@@ -58,10 +90,10 @@ Design SMS sign-in, and be honest about what it replaces.
 DELIVER: a decision record (PROPOSED) explicitly stating what supersedes decision-26 and what
 survives, backlog/docs/SMS-DESIGN.md, tasks (</dev/null). Name what the owner must decide and buy
 before build. COMMIT. Do NOT build in this phase.`,
-  { label: 'w5-design', phase: 'Design', model: MODEL });
+  { label: 'w5-design', phase: 'Design' });
 
 phase('Build');
-const build = await agent(`${BASE}
+const build = await planned(`${BASE}
 
 DESIGN: ${design}
 
@@ -76,7 +108,7 @@ closed and legible rather than pretending to send.
  - Twilio is one HTTPS POST with basic auth. No SDK.
 Extend server/check-api.js: every refusal, the rate limits, the byte-identical failures, and a
 16-way concurrent redemption yielding exactly one session. Commit as you go.`,
-  { label: 'w5-build', phase: 'Build', model: MODEL });
+  { label: 'w5-build', phase: 'Build' });
 
 phase('Verify');
 const verify = await agent(`${BASE}
@@ -94,6 +126,6 @@ Verify. Assume every claim is optimistic.
  - Standing battery: pnpm verify · check-api · check-close-flag · check-guards · android/checks/.
  - Mutation-test every NEW assertion: RED, restore, GREEN.
 Write backlog/docs/W5-VERIFY.md, update the backlog (</dev/null), COMMIT, end with ONE LINE:
-SAFE TO DEPLOY or NOT, naming what blocks it.`, { label: 'w5-verify', phase: 'Verify', model: MODEL });
+SAFE TO DEPLOY or NOT, naming what blocks it.`, { label: 'w5-verify', phase: 'Verify', model: VERIFIER });
 
 return { design, build, verify };

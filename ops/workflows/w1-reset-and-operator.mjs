@@ -6,7 +6,39 @@ export const meta = {
   phases: [{ title: 'Design' }, { title: 'Data' }, { title: 'Admin' }, { title: 'Verify' }]
 };
 
-const MODEL = 'anthropic/claude-opus-5';
+const PLANNER  = 'anthropic/claude-sonnet-5';   // plans, with ultrathink
+const WORKER   = 'anthropic/claude-sonnet-5';   // writes the code
+const VERIFIER = 'anthropic/claude-opus-5';     // tries to break it
+
+// Every work item is planned before it is built. The plan is written by a model asked to
+// think hard and touch nothing; the build is a separate agent that receives it. Splitting
+// them is the point: a planner with no edit rights cannot quietly start implementing, and a
+// builder handed a plan cannot quietly redesign. Both are Sonnet; verification is not.
+async function planned(brief, opts) {
+  const plan = await agent(
+    brief +
+    "\n\n--- THIS AGENT PLANS ONLY. IT WRITES NO CODE AND EDITS NO FILE. ---\n" +
+    "ultrathink\n\n" +
+    "Think it through before answering. Read the code the task touches, not just the brief.\n" +
+    "Produce: the files you would change and why · the order · the decision records and\n" +
+    "constraints above that BIND this work, quoted · what could go wrong at each step and\n" +
+    "what would prove it did · the checks whose negative case must be shown RED first · what\n" +
+    "is genuinely ambiguous in the brief, stated as a question rather than a guess.\n" +
+    "Apply the lazy-senior-dev ladder in the plan itself: say what should NOT be built, and\n" +
+    "where an already-installed dependency or one line beats new code. Name what you would\n" +
+    "NOT do and why. A plan that only lists work is half a plan.",
+    { ...opts, label: opts.label + '-plan', model: PLANNER }
+  );
+  return agent(
+    brief +
+    "\n\n--- PLAN FROM THE PLANNING AGENT ---\n" + plan +
+    "\n\n--- BUILD IT ---\n" +
+    "Follow the plan. Where it is wrong, say so explicitly and explain before diverging —\n" +
+    "do not silently do something else. Where it asked a question the brief cannot answer,\n" +
+    "record it for the owner rather than guessing. Commit as you go.",
+    { ...opts, model: opts.model || WORKER }
+  );
+}
 const REPO = '/Users/gerhardgustav/Desktop/ai-automations/hoiv/cleaning-timesheets';
 
 const BASE = `
@@ -37,7 +69,7 @@ PSST_SKIP_SCAN=1 accepted, gitleaks must pass.
 `;
 
 phase('Design');
-const design = await agent(`${BASE}
+const design = await planned(`${BASE}
 
 Design the operator identity model. NO code, NO migration applied.
 
@@ -69,10 +101,10 @@ still log in afterwards. Deleting the last admin locks the owner out of his own 
 
 DELIVER: backlog/docs/OPERATOR-MODEL.md, decision records status PROPOSED, backlog tasks
 (</dev/null). Name what the owner must decide before build. COMMIT.`,
-  { label: 'w1-design', phase: 'Design', model: MODEL });
+  { label: 'w1-design', phase: 'Design' });
 
 phase('Data');
-const data = await agent(`${BASE}
+const data = await planned(`${BASE}
 
 DESIGN: ${design}
 
@@ -87,10 +119,10 @@ Build schema + server. You own sql/ and server/. Do not touch web/ or android/.
    transaction, recreates the operator, and REFUSES to run against any database it was not told
    to target. Show it refusing.
 Extend server/check-api.js for every new route and refusal. Commit as you go.`,
-  { label: 'w1-data', phase: 'Data', model: MODEL });
+  { label: 'w1-data', phase: 'Data' });
 
 phase('Admin');
-const admin = await agent(`${BASE}
+const admin = await planned(`${BASE}
 
 DESIGN: ${design}
 SERVER: ${data}
@@ -102,7 +134,7 @@ Admin UI. You own web/ including both message files.
  - Everything at 390px, keyboard reachable, focus trapped and restored, Escape working, de/en
    parity with real Austrian German plurals.
 Prove in the browser at 1680 and 390, dark and light; paste geometry. Commit as you go.`,
-  { label: 'w1-admin', phase: 'Admin', model: MODEL });
+  { label: 'w1-admin', phase: 'Admin' });
 
 phase('Verify');
 const verify = await agent(`${BASE}
@@ -123,6 +155,6 @@ Verify. Assume every claim is optimistic.
  - Mutation-test every NEW assertion: RED, restore, GREEN.
 Update the backlog (</dev/null) with evidence. Write backlog/docs/W1-VERIFY.md, COMMIT, and end
 with ONE LINE: SAFE TO DEPLOY or NOT, naming what blocks it. Do NOT deploy, do NOT touch
-production data.`, { label: 'w1-verify', phase: 'Verify', model: MODEL });
+production data.`, { label: 'w1-verify', phase: 'Verify', model: VERIFIER });
 
 return { design, data, admin, verify };

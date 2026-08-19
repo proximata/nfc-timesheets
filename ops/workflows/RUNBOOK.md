@@ -1,6 +1,8 @@
 # Onboarding workflows — run in this order
 
-Five isolated workflows. None is launched. Each is a complete script for the `workflow`
+Five isolated workflows. None is launched. Each work item is PLANNED by claude-sonnet-5
+(ultrathink, writes nothing) and BUILT by a second claude-sonnet-5 agent that receives the
+plan. Verification stays on claude-opus-5: its job is to disbelieve both. Each is a complete script for the `workflow`
 tool. They are ordered so no two ever own the same files, and so that the thing you need
 first (an operator who can log in) ships first.
 

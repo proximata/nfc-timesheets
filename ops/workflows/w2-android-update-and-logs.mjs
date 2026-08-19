@@ -6,7 +6,39 @@ export const meta = {
   phases: [{ title: 'Update' }, { title: 'Logs' }, { title: 'Verify' }]
 };
 
-const MODEL = 'anthropic/claude-opus-5';
+const PLANNER  = 'anthropic/claude-sonnet-5';   // plans, with ultrathink
+const WORKER   = 'anthropic/claude-sonnet-5';   // writes the code
+const VERIFIER = 'anthropic/claude-opus-5';     // tries to break it
+
+// Every work item is planned before it is built. The plan is written by a model asked to
+// think hard and touch nothing; the build is a separate agent that receives it. Splitting
+// them is the point: a planner with no edit rights cannot quietly start implementing, and a
+// builder handed a plan cannot quietly redesign. Both are Sonnet; verification is not.
+async function planned(brief, opts) {
+  const plan = await agent(
+    brief +
+    "\n\n--- THIS AGENT PLANS ONLY. IT WRITES NO CODE AND EDITS NO FILE. ---\n" +
+    "ultrathink\n\n" +
+    "Think it through before answering. Read the code the task touches, not just the brief.\n" +
+    "Produce: the files you would change and why · the order · the decision records and\n" +
+    "constraints above that BIND this work, quoted · what could go wrong at each step and\n" +
+    "what would prove it did · the checks whose negative case must be shown RED first · what\n" +
+    "is genuinely ambiguous in the brief, stated as a question rather than a guess.\n" +
+    "Apply the lazy-senior-dev ladder in the plan itself: say what should NOT be built, and\n" +
+    "where an already-installed dependency or one line beats new code. Name what you would\n" +
+    "NOT do and why. A plan that only lists work is half a plan.",
+    { ...opts, label: opts.label + '-plan', model: PLANNER }
+  );
+  return agent(
+    brief +
+    "\n\n--- PLAN FROM THE PLANNING AGENT ---\n" + plan +
+    "\n\n--- BUILD IT ---\n" +
+    "Follow the plan. Where it is wrong, say so explicitly and explain before diverging —\n" +
+    "do not silently do something else. Where it asked a question the brief cannot answer,\n" +
+    "record it for the owner rather than guessing. Commit as you go.",
+    { ...opts, model: opts.model || WORKER }
+  );
+}
 const REPO = '/Users/gerhardgustav/Desktop/ai-automations/hoiv/cleaning-timesheets';
 
 const BASE = `
@@ -33,7 +65,7 @@ absolute /usr/bin/grep, /bin/ls, /usr/bin/git · stage EXPLICIT paths, never git
 `;
 
 phase('Update');
-const update = await agent(`${BASE}
+const update = await planned(`${BASE}
 
 Give the Android app an in-app update path, because every fix currently requires the owner to
 hand someone a file over Telegram.
@@ -55,10 +87,10 @@ hand someone a file over Telegram.
 
 Write a decision record (PROPOSED) covering the Play mutual-exclusivity and the key-loss ceiling.
 Build a signed release APK; state versionCode/versionName and path. Commit as you go.`,
-  { label: 'w2-update', phase: 'Update', model: MODEL });
+  { label: 'w2-update', phase: 'Update' });
 
 phase('Logs');
-const logs = await agent(`${BASE}
+const logs = await planned(`${BASE}
 
 UPDATE PHASE: ${update}
 
@@ -77,7 +109,7 @@ Add a send-logs button, visible ONLY to an operator (W1's role, recognised by ph
 
 Build a signed release APK. Run every check in android/checks/ (each needs its documented
 dependency set concatenated; there is no runner). Commit as you go.`,
-  { label: 'w2-logs', phase: 'Logs', model: MODEL });
+  { label: 'w2-logs', phase: 'Logs' });
 
 phase('Verify');
 const verify = await agent(`${BASE}
@@ -99,6 +131,6 @@ Verify. Assume every claim is optimistic.
  - Mutation-test every NEW assertion: RED, restore, GREEN.
 State exactly what the owner must verify ON THE PHONE, in order, and what each failure looks like.
 Write backlog/docs/W2-VERIFY.md, update the backlog (</dev/null), COMMIT, and end with ONE LINE:
-SAFE TO SHIP or NOT.`, { label: 'w2-verify', phase: 'Verify', model: MODEL });
+SAFE TO SHIP or NOT.`, { label: 'w2-verify', phase: 'Verify', model: VERIFIER });
 
 return { update, logs, verify };
