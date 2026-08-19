@@ -4,6 +4,7 @@ title: 'Migration 006: zones, location_revenue, and a worker rate that cannot be
 status: To Do
 assignee: []
 created_date: '2026-08-19 13:54'
+updated_date: '2026-08-19 16:09'
 labels:
   - migration
   - server
@@ -60,6 +61,12 @@ HOUSE RULES: additive only; NO BEGIN/COMMIT; 001-005 are untouched; no down-migr
 Production is 1 building, 0 workers, 0 shifts, 5 migrations -- the cheapest moment there will
 ever be. Applying this is two ADD COLUMN with no default, two ADD CONSTRAINT validating against
 zero rows, one DROP DEFAULT, one CHECK over an empty table, two CREATE TABLE. Brief locks.
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1,#2 -> §7 "Represent a building with several cleanable areas: **impossible** — no zone table". This migration is the row that deletes.
+AC#3,#4 -> D3 (hire a worker and issue a code) and D7 (month-end payroll ★): a wage that cannot be 0 is the input D7 multiplies.
+AC#5    -> W3/W6 (clock in; two buildings, one shift): the composite FK is what makes "a shift naming another building's zone" unrepresentable rather than merely unlikely.
+AC#6    -> D8 (is this building worth the contract?): a month is a Vienna month or it is not a fact.
+AC#7,#8 -> S3 (nightly backup / restore): a migration that cannot be re-run against a restored client dump is a migration that cannot be recovered onto.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

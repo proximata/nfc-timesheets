@@ -4,6 +4,7 @@ title: A worker's hourly rate becomes REQUIRED on every write path
 status: To Do
 assignee: []
 created_date: '2026-08-19 13:54'
+updated_date: '2026-08-19 16:10'
 labels:
   - server
   - payroll
@@ -59,6 +60,11 @@ workers.rateRequired. Server remains the gate; the client is a courtesy.
 
 SEED/IMPORT PATHS, re-read all three: seed.sql (1450/1380/1520, OK), check-migrate.js:359
 (1500, OK), check-api.js -- eight fixtures, and :2966 inserts 0 deliberately.
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1..#5 -> D3 (hire a worker and issue a code): the rate is set at hire or the hire is refused, in the same 422 the director already reads.
+AC#2,#3   -> D7 (month-end payroll ★, highest consequence): the empty-rate path is the one that reached payroll as a named exclusion.
+AC#4      -> D14 („my hours are wrong"): a negative rate must keep its OWN error, or a typo reads as a policy refusal.
+AC#6,#7   -> D3 on a phone (decision-28): the refusal must arrive before the submit, at 390px, in de and en.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

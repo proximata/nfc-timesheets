@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-19 14:12'
+updated_date: '2026-08-19 16:10'
 labels:
   - android
   - ops
@@ -48,6 +49,12 @@ STEPS, in order, none skippable:
   ONLY AFTER 1-5: a second physical tag may go on any wall.
 
 Until step 5 is recorded here, the admin surface keeps its second-zone warning (TASK-198).
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1     -> W11 (losing the phone / reinstalling): the session must survive install -r, or a worker needs a new enrolment code (decision-26).
+AC#2,#3  -> W3 (clock in ★) and W5 (clock out ★): App Links verified, and the mounted tag opens AND closes with KnownTags gone.
+AC#4     -> W6 (two buildings, one shift): a zone tag and the building tag close the same shift, with no auto_closed.
+AC#5     -> D2 (get a working tag onto a wall) + P1: the evidence a future run needs to know which build is in the field.
+AC#6     -> D1 (onboard a new client ★): the warning comes down only once step 5 is real, because step 6 starts next week.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

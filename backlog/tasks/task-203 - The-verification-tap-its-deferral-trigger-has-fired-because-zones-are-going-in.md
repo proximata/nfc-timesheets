@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-19 14:12'
+updated_date: '2026-08-19 16:10'
 labels:
   - android
   - web
@@ -50,6 +51,11 @@ refuse to do.
 
 UNTIL IT LANDS, the zone drawer (TASK-198) must say in words that the test tap creates a shift
 which has to be corrected afterwards. It must not be discovered at the wall.
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1..#3 -> D1 (onboard a new client from nothing ★): every new building creates a verification tap, and today it is a real payroll row.
+AC#2     -> D7 (month-end payroll ★) and W8: a test flag must be its OWN fact, never a reuse of auto_closed or corrected_at, or a real exclusion becomes indistinguishable from a test.
+AC#4     -> D1/D2: until it is decided, the interim copy is what stops the director wondering.
+AC#5     -> the deferral is a decision, not an implementation; D6 (correcting the past) is the workaround that stays.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

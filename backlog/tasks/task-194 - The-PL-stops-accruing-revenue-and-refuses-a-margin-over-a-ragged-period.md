@@ -4,6 +4,7 @@ title: The P&L stops accruing revenue and refuses a margin over a ragged period
 status: To Do
 assignee: []
 created_date: '2026-08-19 13:57'
+updated_date: '2026-08-19 16:10'
 labels:
   - server
   - revenue
@@ -57,6 +58,11 @@ Jahr' in August booked five future months and reported 71,33% against the 10,70%
 closed month made. An unfinished month now simply has no entry, so it reports UNKNOWN instead
 of INFLATED. The isPartElapsed warning survives as a narrower statement about labour and
 materials; do not delete it, narrow it.
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1,#2,#3 -> D8 (is this building worth the contract?): the margin is only allowed to exist where a real payment was entered.
+AC#4        -> D8: „Dieses Jahr" picked mid-year is the exact click that books unfinished months today.
+AC#5        -> D7 (month-end payroll ★) and S1 (8 h auto-close): the Vienna DST boundaries are the same boundaries payroll periods are cut on.
+AC#6,#7     -> D7: integer cents, and decision-10's exclusions still asserted after the rewrite.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

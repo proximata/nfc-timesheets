@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-19 14:09'
+updated_date: '2026-08-19 16:10'
 labels:
   - web
   - zones
@@ -50,6 +51,11 @@ BUILDING PANEL gains:
 
 The 'mindestens' wording is not decoration: a denominator that is silently too small inflates
 every per-m2 figure downstream (TASK-200). A total that pretends completeness is the failure.
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1,#3 -> D4 (the daily „is everything running" check) and D1 (onboard a new client ★): grey is a state the director must be able to read in words, colour second (IA-A11Y).
+AC#2     -> D8 (is this building worth the contract?): „mindestens X m² (1 von 2 Zonen ohne Fläche)" is the honest denominator.
+AC#4     -> W3 (clock in ★): the grey pin must not touch tap resolution. This is the landmine, asserted.
+AC#5,#6  -> D4 at 390px (decision-28): the qualifier wraps, it never truncates — a truncated „mindestens" is a lie.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

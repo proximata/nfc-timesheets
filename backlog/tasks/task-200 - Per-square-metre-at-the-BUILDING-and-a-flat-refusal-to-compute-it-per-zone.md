@@ -4,6 +4,7 @@ title: Per square metre at the BUILDING -- and a flat refusal to compute it per 
 status: To Do
 assignee: []
 created_date: '2026-08-19 14:09'
+updated_date: '2026-08-19 16:10'
 labels:
   - server
   - web
@@ -52,6 +53,12 @@ What a zone CAN answer: 'the Tiefgarage tag has not been tapped since 14 May', a
 SCREEN (/pl/): one block per building, under the existing figures, with the reason rendered in
 words whenever a figure is NULL. The method block gains a paragraph naming what per-m2 does and
 does not mean.
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1,#5 -> D8 (is this building worth the contract?): per-m² at the BUILDING is the number that makes zones worth having.
+AC#2,#3 -> D8: an incomplete or absent denominator yields a reason in words, never an inflated figure.
+AC#4    -> D8 + D12 (reprice): €/m² needs revenue; minutes/m² does not, and the screen must not lose the half it can still answer.
+AC#6    -> §7 „per-zone cost": the grep pin is the refusal — a shift is building-level, so no duration is attributable to a zone (decision-6's identical refusal for materials).
+AC#7    -> D8 in Austrian business German, de/en exact key parity.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

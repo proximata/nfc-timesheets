@@ -4,6 +4,7 @@ title: 'location_revenue API: type a month''s payment, correct it, retract it'
 status: To Do
 assignee: []
 created_date: '2026-08-19 13:56'
+updated_date: '2026-08-19 16:10'
 labels:
   - server
   - revenue
@@ -49,6 +50,11 @@ removes, wearing a different hat.
 
 entered_by comes from the admin session, never from the body (the decision-22 rule, applied to
 the admin side).
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1,#2,#7,#8 -> D8 (is this building worth the contract?): revenue stops being derived from a contract and becomes something a human typed.
+AC#3          -> D8: a month too far ahead is a typo, not a forecast.
+AC#4          -> D12 (reprice a building) and D6 (correcting the past): a correction keeps the old figure visible, the same way a contract period does.
+AC#5,#6       -> D8: „not entered" and „zero received" are two different answers and the client conversation differs.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

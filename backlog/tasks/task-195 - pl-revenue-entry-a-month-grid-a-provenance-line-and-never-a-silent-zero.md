@@ -4,6 +4,7 @@ title: '/pl/ revenue entry: a month grid, a provenance line, and never a silent 
 status: To Do
 assignee: []
 created_date: '2026-08-19 13:58'
+updated_date: '2026-08-19 16:10'
 labels:
   - web
   - revenue
@@ -55,6 +56,12 @@ revenue. Where the margin is refused (period_not_month_aligned) the screen says 
 were left out, by name.
 
 MONEY: parseEuroToCents from lib/money.ts. Integer cents on the wire. No float multiply.
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1,#3,#4 -> D8 (is this building worth the contract?): the screen may not show a margin it cannot defend, and must name what is missing.
+AC#2        -> D12 (reprice a building) and D6 (correcting the past): provenance is what makes a correction reviewable.
+AC#5        -> D8: a suggestion the director did not confirm must not become a stored fact by being looked at.
+AC#6        -> D8 in Austrian business German, de/en exact key parity.
+AC#7,#8     -> D4/D8 on a phone in a stairwell (decision-28) and IA-A11Y: focus trap, Escape, announced result.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-19 14:09'
+updated_date: '2026-08-19 16:10'
 labels:
   - android
   - zones
@@ -63,6 +64,13 @@ BUILD: JAVA_HOME=/Applications/Android Studio.app/Contents/jbr/Contents/Home,
 ANDROID_HOME=/opt/homebrew/share/android-commandlinetools, keystore password in psst tag android.
 versionCode 4. The SAME upload key as versionCode 3, or the field phone's install-over --and the
 worker session in SharedPreferences -- is lost.
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1     -> D2 (get a working tag onto a wall): the GATE. The mounted EV1 must already be in /roster before KnownTags is deleted, or the only live tap dies.
+AC#2     -> W5 (clock out ★ top-ranked) and W6 (two buildings, one shift): the second tap in the same building must CLOSE, not switch.
+AC#3     -> W3 (clock in ★) and W10 (a tap that did nothing): a cold cache must still open a shift.
+AC#4     -> W4 (working): the running screen says in words what the next tap will do.
+AC#5,#6  -> W10 + §6 („which buildings have a tag, and is it ours"): an unknown serial is copyable, and posts nothing.
+AC#7,#8  -> P1 (Play/APK): same key, versionCode 4, and installation is TASK-202's evidence, not this one's.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

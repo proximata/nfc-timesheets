@@ -4,6 +4,7 @@ title: Delete the no-rate exclusion machinery -- and NOT the CSV Hinweis column
 status: To Do
 assignee: []
 created_date: '2026-08-19 13:55'
+updated_date: '2026-08-19 16:10'
 labels:
   - server
   - web
@@ -57,6 +58,11 @@ labour_unpriced_* read); lib/api.ts types.
 
 MESSAGES: delete the same keys from de.json AND en.json. Enumerate by grepping 'NoRate',
 'noRate', 'unpriced', 'Unvalued'.
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1,#5,#6 -> D7 (month-end payroll ★): the exclusion machinery exists only in D7's output and is deleted there.
+AC#2       -> W7+W8 (forget → auto-close → resolve): the CSV „Hinweis" column carries decision-10's unresolved shifts and MUST survive this deletion.
+AC#3,#4    -> D8 (is this building worth the contract?): rate_basis = current is the last true statement about labour valuation; the pin makes „hours but no cost" impossible.
+AC#7       -> D4 (daily check) and D7 at 390px (decision-28): a deleted column must not leave an empty cell behind.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

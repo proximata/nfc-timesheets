@@ -4,6 +4,7 @@ title: 'Admin zones: building creation stops writing tags, zone creation starts'
 status: To Do
 assignee: []
 created_date: '2026-08-19 14:02'
+updated_date: '2026-08-19 16:10'
 labels:
   - web
   - zones
@@ -62,6 +63,13 @@ gated by a format check. Never hand-concatenate a host here.
 WARNING COPY, until the zone-aware APK is confirmed on the field phone: adding a SECOND active
 zone to a building makes every intra-building tap read as a building switch on the shipped
 build (auto_closed = true + a new shift). The zone drawer must say so.
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1     -> D1 (onboard a new client from nothing ★ starts next week): creation completes without a tag and names the next action.
+AC#2,#3  -> D2 (get a working tag onto a wall): the URI the director copies is the zone's, and the legacy building URI stays visible because it is on a wall today.
+AC#4     -> D8 (is this building worth it): an unmeasured zone is „Fläche unbekannt" and never 0, or the €/m² benchmark rots.
+AC#5     -> D2 + W10: the serial the director reads off a tag is accepted in the three shapes it is ever written in.
+AC#6     -> W3/W6 + P1: the sequencing warning is the only thing standing between step 6 and a flood of auto-closed shifts.
+AC#7,#8  -> D1/D2 at 390px (decision-28) and IA-A11Y.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

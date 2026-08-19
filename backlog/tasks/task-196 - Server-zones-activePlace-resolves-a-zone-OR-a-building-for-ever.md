@@ -4,6 +4,7 @@ title: 'Server zones: activePlace resolves a zone OR a building, for ever'
 status: To Do
 assignee: []
 created_date: '2026-08-19 14:00'
+updated_date: '2026-08-19 16:10'
 labels:
   - server
   - zones
@@ -59,6 +60,14 @@ decides whether a building tag resolves.
       inactive building is unresolvable and looks like a dead tag.
 
 6 · Zone name rides along on GET /shifts/open, /unresolved, /mine as a nullable zone_name.
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1     -> W3 (clock in ★) and W10 (a tap that did nothing): the 422 CODE is what the shipped APK renders; a new code becomes „unknown status".
+AC#2     -> W3 ★ THE ONE THAT MATTERS: HOIV's exact shape — an active building with zero zones — must keep resolving. D2 (get a working tag onto a wall) depends on it.
+AC#3     -> W10: a deactivated zone or building must refuse, and refuse identically, so the panel can explain a dead tag.
+AC#4     -> D6 (correcting the past, filing a shift that was never tapped): re-pointing a shift clears the tap record it contradicts.
+AC#5     -> D2 and D11 (offboarding a place): an active zone under an inactive building is an unresolvable tag on a wall.
+AC#6     -> W3 + P1 (Play/APK latency): the roster must stay parseable by the build already in the field.
+AC#7     -> C2 (client checks a building): the portal payload does not move.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

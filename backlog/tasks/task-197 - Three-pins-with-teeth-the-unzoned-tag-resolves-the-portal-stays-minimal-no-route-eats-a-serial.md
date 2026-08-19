@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-19 14:00'
+updated_date: '2026-08-19 16:10'
 labels:
   - server
   - zones
@@ -55,6 +56,11 @@ PIN 3 · NO ROUTE ACCEPTS A TAG SERIAL AS INPUT.
   the server at all -- the phone matches it locally and sends the resolved place UUID, which the
   server resolves itself, with the worker taken from session.workerId (decision-22). That is a
   stronger statement than any rate limit, and it is worth keeping true by machine.
+## Journey anchors — backlog/docs/JOURNEYS.md
+AC#1,#5,#6 -> §6 „four facts that live only in a human's memory": a pin is how the fact stops being memory.
+AC#2       -> W3 (clock in ★): the unzoned building tap. Failure = the card on the wall dies on migration day.
+AC#3       -> C2 (client checks a building) and D10 (give a contact a link, take it away): the portal's minimality is the lawful-basis argument.
+AC#4       -> D2 (get a working tag onto a wall) and W10: a serial must never become an accepted identifier on a public route.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
