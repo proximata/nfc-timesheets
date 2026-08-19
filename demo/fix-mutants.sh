@@ -40,8 +40,19 @@
 #   t175  lib/period.ts `isPartElapsed` returns false. Every number on /pl/ and /analytics/ is
 #         unchanged; the only thing that disappears is the SENTENCE saying how much of the
 #         period has not happened, which is what TASK-175 shipped.
-#   t176  app/payroll/page.tsx counts SHIFTS again (`excludedShifts` alone). A rate-less
-#         worker's wages are still missing from the total and the cell reads 0.
+#   t176  app/payroll/page.tsx's `excludedCount` gains a phantom `+ 1` with no shift behind
+#         it. RE-POINTED: the mutant this ID originally named (drop `+ noRateLines.length`,
+#         restoring `excludedShifts` alone) is now dead code to even write — decision-41
+#         deleted `noRateLines` outright, so "restore the pre-fix line" and "the current
+#         line" are the same string, and B4 caught fix-mutants aborting on the missing site.
+#         What survives from the original bug (RECON B4, TASK-176) is the CLASS of defect:
+#         a number on the screen that the sub-line's WORDS do not actually back. Proven by
+#         hand first: the pre-existing check-money.mjs assertion —
+#         `/Schicht/.test(excluded.sub) || excluded.v === "0"` — stayed GREEN under this
+#         exact mutant, because "Keine Schicht offen oder unbestätigt" (the zero-case
+#         sentence) contains the word "Schicht" regardless of the count next to it. So
+#         check-money.mjs A2 gained an independent SQL oracle for the count itself (commit
+#         message has the detail) and THAT is what this mutant now exercises.
 #   t177  components/WorkerPanel.tsx puts the cross-links back UNDER the ten-row history.
 #         Nothing is deleted; the links are merely second, which is the state check-reach
 #         measured as 0 of 3 reachable.
@@ -265,13 +276,13 @@ fi
 # --- t176 -----------------------------------------------------------------------------
 if selected t176; then
 echo ""
-echo "=== MUTANT t176 · „Nicht gezählt“ counts shifts again ==="
+echo "=== MUTANT t176 · „Nicht gezählt“ gains a phantom +1 no shift backs ==="
 apply "$PAYROLL" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p, encoding='utf-8').read()
-old = "  const excludedCount = excludedShifts + noRateLines.length"
-new = "  const excludedCount = excludedShifts"
-assert old in s, 't176 site not found — the fix moved, update this script'
+old = "  const excludedCount = excludedShifts\n"
+new = "  const excludedCount = excludedShifts + 1\n"
+assert s.count(old) == 1, 't176 site not found — the fix moved, update this script'
 open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
 PY
 [ $? -eq 0 ] || exit 1
