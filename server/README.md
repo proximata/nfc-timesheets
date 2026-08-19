@@ -100,9 +100,9 @@ session; `body.worker_id` and `?worker=` are gone (decision-22) and are ignored 
 
 | route                      | body                                     | notes                                    |
 | -------------------------- | ---------------------------------------- | ---------------------------------------- |
-| `GET /roster`              | —                                        | `{worker, locations}`; no staff list      |
+| `GET /roster`              | —                                        | `{worker, locations, zones}`; no staff list |
 | `POST /shifts/open`        | `client_uuid, location_uuid, start_time`  | 201 new / 200 retry / 409 already open   |
-| `POST /shifts/close`       | `client_uuid, end_time, auto_closed?`     | 200; retry is a no-op, no duration limit |
+| `POST /shifts/close`       | `client_uuid, end_time, auto_closed?, location_uuid?` | 200; retry is a no-op, no duration limit |
 | `GET /shifts/open`         | —                                        | my running shift; server is authoritative |
 | `GET /shifts/unresolved`   | —                                        | mine only: `auto_closed AND corrected_at IS NULL` |
 | `POST /shifts/:id/resolve` | `end_time`                                | mine only; stamps `corrected_at`. 404 otherwise |
@@ -128,6 +128,68 @@ timer and by a human and could not tell them apart:
 
 There is no `needs_correction` column. "Unresolved" is derived, so it cannot drift.
 
+### Zones, and what a tapped uuid resolves to (006, decision-43)
+
+The id space is **shared**: `/t?l=<uuid>` means "the id of the place that was tapped", and
+that place may be a building or a zone. `v.activePlace()` is the one resolver.
+
+```
+an ACTIVE zone of an ACTIVE building  -> (location_id, zone_id)
+an ACTIVE building                    -> (location_id, NULL)   <- THE CARD ON THE WALL
+neither                               -> 422 unknown_location
+```
+
+**An active building resolves to itself, zoned or not, for ever.** The card mounted at HOIV
+carries a *building* uuid and that building has zero zones. "A building with no zones is
+inactive" is a rule about a **grey pin on the map** (`zone_state`, reported separately);
+wired into resolution it would 422 that card the day 006 landed, and no site visit could fix
+it because the tag cannot be rewritten from Vienna. `locations.active` **alone** decides
+whether a building tag resolves.
+
+A building uuid never resolves to "the first zone" — that fabricates a tap location and
+silently changes meaning the day a second zone is added.
+
+**The 422 code stays `unknown_location`.** The APK in the field maps exactly that string to a
+translated message; any *new* code renders as "unknown status from a newer server".
+
+`v.activeLocation()` survives for the paths where a building is the only sensible answer —
+`POST /admin/shifts`, `PATCH /admin/shifts/:id`, `POST /material-requests` — so a zone id
+posted to one of those is refused rather than silently widened.
+
+**An old APK in a pocket, exactly:** `POST /shifts/open` keeps the field name `location_uuid`
+and a building uuid in it still answers `201`, now with `start_zone_id: null`.
+`POST /shifts/close` gained an **optional** `location_uuid` that the shipped build never
+sends, so it never meets the new `422 wrong_building`. `GET /roster` grew a flat `zones[]`
+beside `locations[]`; `Api.kt` reads `getJSONArray("locations")` and ignores the rest, and
+the `locations` element shape is asserted unchanged key for key. Nothing an old client sends
+starts failing and nothing it parses moved.
+
+*ponytail:* `location_uuid` now carries a zone id, so the name is a lie. **Ceiling:** it is
+the cheapest correct thing while an APK is in the field and cannot be force-updated.
+**Upgrade path:** accept `place_uuid` as preferred once both clients send it, and keep
+accepting `location_uuid` **for ever** — a tag on a wall outlives a field name.
+
+`shifts.start_zone_id` / `end_zone_id` are nullable **tap facts**, never an input to money.
+A shift is billed to the **building**. `NULL` means "a building-level tag was tapped, or this
+predates zones" and is not a missing value to be backfilled.
+
+### Adopted tag serials (decision-44)
+
+`zones.tag_serial` exists for third-party hardware someone else mounted, which holds no URL
+and cannot be rewritten to carry ours. **The serial never travels towards the server:** it
+rides out inside `GET /roster`, the phone matches it against its cached copy, and posts the
+*resolved place UUID*. A cloned serial therefore buys a clock-in at that building **as
+yourself** — exactly what a cloned URL tag already buys (decision-15). No route anywhere
+accepts a serial as input, and `check-api.js` fails if one ever does.
+
+A URL-less tag **cannot wake a closed app** — there is no universal link for the OS to match
+— so an adopted tag only ever works through the in-app *Scan* screen. That is permanent
+hardware behaviour, not a bug to be fixed, and the admin surface has to say so.
+
+*ponytail:* the roster grows with zones, ~30 KB at 50 buildings × 6 zones. **Ceiling:** a
+real payload at a few hundred buildings. **Upgrade path:** a targeted session-gated
+`GET /tags/:serial`, built the day the roster crosses ~100 KB and not before.
+
 ## Admin write routes (003)
 
 All of them need the `ts_session` cookie; the app key does **not** substitute for it. One
@@ -144,7 +206,12 @@ keep naming the worker, the building, the client that was paying and the person 
 | `POST /admin/inventory` | `id?, name, kind, unit_cost_cents?, active?` | `{item}`; `kind` ∈ `product`\|`equipment`, one table |
 | `DELETE /admin/inventory/:id` | — | soft |
 | `POST /admin/locations` | + `client_id?, contact_id?, monthly_contract_cents?, target_minutes_per_month?` | contact alone implies the client; both must agree |
-| `DELETE /admin/locations/:id` | — | soft **and revokes that building's portal links** |
+| `DELETE /admin/locations/:id` | — | soft, **revokes that building's portal links AND deactivates its zones** |
+| `POST /admin/zones` | `id?, location_id, name, note?, area_sqm?, tag_serial?, tag_deployed_at?, active?` | `{zone}`. `409 duplicate_zone_name` · `409 serial_taken` (which **names** the zone holding it). `location_id` is not patchable |
+| `DELETE /admin/zones/:id` | — | soft; its tag stops resolving, history keeps naming the door |
+| `GET /admin/revenue?from=&to=` | — | the `/pl/` month grid: `{months, entries, suggestions}` |
+| `POST /admin/locations/:id/revenue` | `month` (`YYYY-MM`), `amount_cents`, `note?` | 201 new / 200 correction. `entered_by` from the **session** |
+| `DELETE /admin/locations/:id/revenue/:month` | — | **retract** → the month reverts to UNKNOWN, never to 0 |
 | `POST /admin/shifts` | `worker_id, location_id, start_time, end_time` | 201; the phone-died recovery |
 | `POST /admin/portal-grants` | `contact_id, location_id` | 201 `{grant, token, path}` — **raw token returned once** |
 | `DELETE /admin/portal-grants/:token_hash` | — | revoke, idempotent |
@@ -160,6 +227,44 @@ keep naming the worker, the building, the client that was paying and the person 
 building, end after start, nothing in the future) plus `409 shift_overlap` against any existing
 shift of that worker, including an open one. `end_time` is required. It sets **no** flag: the
 shift is marked by `client_uuid IS NULL`, which already means "no phone ever keyed this".
+
+**`PATCH /admin/shifts/:id` clears both zone columns when `location_id` changes.** Not
+optional: the composite FKs are `(zone_id, location_id) → zones (id, location_id)`, so a zone
+from the *old* building raises `23503` and the director's correction dies as a 500 they
+cannot act on. Clearing is also the right semantics — a human re-pointing a shift is saying
+the tap record was wrong, and the honest replacement for a wrong fact is no fact.
+
+**A worker's `hourly_rate_cents` is REQUIRED and strictly positive (decision-41).** Absent,
+`null`, `""` and `0` are all `422 rate_required` with `field: "hourly_rate_cents"`; junk and
+negatives stay `400 invalid_field`. One shared `rate` variable feeds **both** branches of
+`upsertWorker`, because a worker created *with* a rate can be edited back to empty from
+`/workers/`. A rate of `0` is unrepresentable in the column too, which is what allowed the
+whole named `Kein Stundensatz` exclusion to be deleted rather than kept.
+
+### Revenue is typed, and append-only (decision-42)
+
+```
+CONTRACT   what was AGREED.  A rate, valid from a date until a date.   location_contracts
+REVENUE    what was RECEIVED. A scalar, for one named Vienna month.    location_revenue
+```
+
+- **The absence of a row is the unknown.** `0` is expressible and means *"the client paid
+  nothing this month"* — a credit month, a dispute, a free trial. That is a different answer
+  from "nobody has told me", and the difference is carried by whether a row exists.
+- **Nothing writes a row except an admin pressing save.** The contract value is offered as a
+  labelled *suggestion* in `GET /admin/revenue`; auto-applying it is the rejected accrual
+  wearing a different hat, and it fabricates a payment a human then reads as confirmed.
+- **Corrections INSERT**, stamping `superseded_at`/`superseded_by` on the row they replace, so
+  `/pl/` can print *"geändert 11.09 · vorher 1.250,00"*. Hand-typed money that changes
+  invisibly is an opinion, not a fact.
+- **Retraction is not optional.** Without it, a figure typed against the wrong building could
+  only be undone by setting it to `0` — which asserts that a paying client paid nothing,
+  inside the report we discuss with that client.
+- `v.isoMonth` takes `YYYY-MM` and returns the **string** `"YYYY-MM-01"` (same reasoning as
+  `isoDate`: a JS `Date` re-introduces the timezone question the `DATE` type exists to avoid).
+  Future months are accepted up to the **next** Vienna calendar month and refused beyond with
+  `422 month_too_far_ahead` — prepaid contracts are real, and a +1 cap still catches the
+  realistic typo, which is the wrong *year*. A judgement call, named as one.
 
 ## Reports (005)
 
@@ -185,8 +290,11 @@ What these routes refuse to guess — each is a `null` **plus a reason**, never 
 
 | situation | answer |
 | --------- | ------ |
-| no contract in the period | `revenue_cents: null`, `revenue_unknown_reason: "no_contract"` |
+| nobody has typed a payment for the month | `revenue_cents: null`, `revenue_unknown_reason: "not_entered"`, `margin_unknown_reason: "revenue_not_entered"` |
+| the period is not whole Vienna months | whole contained months only; `margin_bp: null`, `"period_not_month_aligned"` |
 | revenue of exactly 0 | `margin_bp: null`, `margin_unknown_reason: "zero_revenue"` |
+| a building with no zones | every per-m² figure `null`, `area_unknown_reason: "no_zones"` |
+| any live zone with no `area_sqm` | every per-m² figure `null`, `"area_incomplete"` — a floor is not a total |
 | no baseline configured | `baseline_set: false`, every `below_baseline: null` — **nothing is flagged** |
 | materials but no payable hours | `unallocated_cents`, `unallocated_reason: "no_payable_labour_in_period"` |
 | a request the admin has not priced | excluded from the pool **and** counted in `unpriced_requests` |
@@ -209,7 +317,75 @@ because three shifts are stuck awaiting resolution is not a cheap building.
 `workers.hourly_rate_cents` is one mutable column with no history, so every figure values *all*
 history at *today's* rate. The screen must carry that as a permanent visible notice, not a
 tooltip. Fixing it needs a `worker_rates` table that payroll reads — a decision record, not a
-commit.
+commit. **It survives decision-41 and must not be deleted with it:** a rate is now always
+*some* number, which is a different fact from the rate being *period-correct*.
+
+**There is no `labour_unpriced_*` any more.** A rate of `0` is unrepresentable (decision-41),
+so `labour_seconds` and `labour_cents` describe **the same set of seconds** — any divergence is
+a bug, not a state, and `check-api.js` asserts `labour_cents > 0` wherever `labour_seconds > 0`.
+The fields are **deleted**, not left reporting `0`: a caveat that can never fire is a screen
+element nobody can explain.
+
+### Revenue stops accruing (decision-42)
+
+`contractSlice` still produces `target_minutes` for `/analytics/`; its revenue line is **gone**,
+not computed-and-ignored — a dormant accrual is one `COALESCE` away from coming back. Money now
+comes from `revenueSlice`, over the **whole Vienna months fully contained** in the period.
+
+```
+period is exactly N whole Vienna months  -> revenue = SUM of those months' entries
+period is ragged                         -> whole contained months ONLY; the partial ones are
+                                            NAMED as excluded, never sliced
+                                            margin_bp = NULL, "period_not_month_aligned"
+```
+
+Cost keeps its exact half-open day boundaries, so a margin over a ragged period would divide
+full-month revenue by partial-month labour — two periods, one number. It is **refused rather
+than approximated**. "Letzte 30 Tage" still works and still reports labour and materials; it
+just cannot answer a margin, and the screen has to say so rather than let it be discovered.
+
+**Free win, and it is worth knowing why:** `isPartElapsed` existed because contract revenue
+accrued for every day in the range while labour only exists for days that have happened —
+"Dieses Jahr" picked in August booked five *future* months and reported 71,33 % beside the
+10,70 % the last closed month actually made. An unfinished month now has no entry, so it
+reports **unknown** instead of **inflated**. The warning survives as a narrower, still-true
+statement about labour and materials.
+
+Every building also carries `contract_cents` — *vereinbart* beside *erhalten* — with the
+difference named on the row instead of silently absorbed into the margin. That comparison is
+the argument for keeping `location_contracts` alive at all.
+
+### Per square metre — at the building, refused at the zone (decision-43 §6)
+
+```
+building_m2   = SUM(zones.area_sqm) WHERE active     <- DERIVED, never stored
+EUR/m2/month  = revenue_cents / building_m2
+minutes/m2    = labour_minutes / building_m2
+cost/m2       = (labour_cents + material_cents) / building_m2
+```
+
+This is what makes zones worth having: it is the denominator the director needs to quote a new
+building. **Nothing stores a building area** — a stored copy drifts the first time a zone is
+resized, and then the building's own report disagrees with its own zone list.
+
+**Per-zone cost is refused, and the refusal is the deliverable.** A shift is building-level, so
+no duration is attributable to a zone. Splitting a building's labour by area share asserts that
+time is proportional to floor area — false in the obvious direction, since a Tiefgarage is fast
+per m² and an office floor is slow. Same failure decision-6 already refused for materials. A
+grep pin in `check-api.js` fails if any query ever divides a cost by a zone's area. What a zone
+*can* answer is tag activity ("the Tiefgarage tag has not been tapped since 14 May") and area.
+
+### `zone_state` is a grey pin, not a switch
+
+```
+locations.active   OPERATIONAL. A building tag resolves iff this is true.
+zone_state         PRESENTATION. 'zoned' | 'unzoned' -> a grey pin and a sentence, and nothing
+                   else. It never touches resolution, payroll, the P&L's money or the portal.
+```
+
+It rides on `/admin/pl`, `/admin/analytics` and `/admin/data` **beside** `active`, never folded
+into it. Collapsing the two is the one change that would kill the card on the wall at HOIV, so
+`check-api.js` asserts an *unzoned* building answers `201` to a tap while its pin is grey.
 
 ### Contract history
 
@@ -375,9 +551,46 @@ hashed, cross-worker isolation on `/shifts/*`, and deactivation killing a live s
   the lifecycle refuses every illegal jump; a late invoice edits the cost without moving
   `ordered_at`.
 
+006 adds, in the same file — **every one of these was shown RED by the named mutation before
+it landed. A check whose negative case cannot fail is not a check:**
+
+- **PIN 1 · an UNZONED building's own uuid still resolves.** An active building with zero zones
+  — exactly HOIV's shape — taps and gets `201` with `start_zone_id: null`.
+  *RED:* add `AND EXISTS (SELECT 1 FROM zones …)` to the resolver → `422 unknown_location`,
+  which is the card on the wall going dead with no site visit able to fix it.
+- **PIN 2 · no zone name and no area reaches the client portal.** The payload stays
+  `{building:{name}, cleanings:[{date, first_name, minutes}]}`, `portal_grants` has no
+  zone-scoped column, and no route mints a grant against a zone id.
+  *RED:* add `z.name` to the portal select list.
+- **PIN 3 · no route accepts a tag serial as INPUT.** The serial travels server → phone only.
+  *RED:* add a serial-accepting branch to any route.
+- **`zone_state` never becomes `active`**, asserted on all three reporting surfaces, plus the
+  positive case: an unzoned building answers `201` to a tap while its pin is grey.
+  *RED:* `active: l.active && zone_state === 'zoned'` in either report block.
+- **The shipped APK's shape still works**, key for key: the old three-field clock-in, a close
+  with no place named, and `GET /roster`'s `locations` element shape unchanged.
+- **A wage cannot be zero**, on the API (create *and* update branches) and in the database
+  (`23502` for an omitted column, `23514` for an explicit `0`, including on `UPDATE`).
+- **Revenue is typed and append-only**: a correction keeps the superseded amount; retraction
+  returns a month to UNKNOWN and not to `0`; `0` is accepted and reported *as* `0`; a ragged
+  period refuses the margin; a year picked mid-year reports 11 blank months rather than
+  booking them.
+- **Per-m² refuses a floor as a denominator**, plus a grep pin against per-zone cost.
+
 ```bash
-node db/check-migrate.js   # 005 applies over live rows; the contract backfill is idempotent
+node db/check-migrate.js   # 005 applies over live rows; 006 REFUSES a rate-less worker
+                           # before applying cleanly, and creates zero rows
+
+# Before deploying 006 — against the database the client actually has:
+ssh schimmer-glanz.exe.xyz 'sudo -n cat /var/backups/nfc/nfc-<newest>.sql.gz' > /tmp/nfc.sql.gz
+node db/check-prod-restore.mjs /tmp/nfc.sql.gz
 ```
+
+`check-prod-restore.mjs` restores a real dump into a throwaway local database, applies 006,
+boots the API on it and **taps the uuid physically written on the card at HOIV**. It skips and
+exits 0 with no dump, and never touches production. Its first run found the thing the briefing
+did not have: one leftover worker with `hourly_rate_cents = 0`, which 006 correctly refuses to
+migrate past. See `db/README.md` §006 for the one-line ops step.
 
 ## Errors
 
@@ -435,4 +648,30 @@ to handle, leaving that worker unable to clock out at all.
 - **The trend is actual minutes only**, with no per-month target beside it. Ceiling: a building
   whose contracted target changed mid-trend shows the time moving without showing why.
 - **`GET /admin/data` now also carries every open material request** plus the 500 most recent.
-  Same unpaginated-blob ceiling as the rest of it.
+  Same unpaginated-blob ceiling as the rest of it. It also carries **every zone**, unbounded by
+  the period — "the Tiefgarage tag has not been tapped since 14 May" is precisely the answer a
+  period filter would hide.
+- **`location_uuid` may now carry a ZONE id**, so the field name is a lie. Ceiling: it is the
+  cheapest correct thing while an APK is in the field and cannot be force-updated. Upgrade
+  path: accept `place_uuid` as preferred once both clients send it, and keep accepting
+  `location_uuid` for ever — a tag on a wall outlives a field name.
+- **One adopted serial per zone** (`zones.tag_serial`, not a table). Ceiling: a zone with two
+  doors and two foreign tags cannot be expressed, and neither can "this tag was replaced in
+  March". Upgrade path: a `zone_tag_serials` child table. There is exactly one adopted tag in
+  the world today.
+- **Serials reach the phone inside `GET /roster`**, which grows with zones (~30 KB at 50
+  buildings × 6 zones). Ceiling: a real payload at a few hundred buildings. Upgrade path: a
+  targeted session-gated `GET /tags/:serial`, built the day it crosses ~100 KB.
+- **A revenue row does not record whether the figure was accepted from the contract suggestion
+  or typed over it.** Ceiling: afterwards those two are indistinguishable. Pressing save is the
+  assertion either way and the audit question — who, and when — is answered. Upgrade path:
+  `source TEXT CHECK (source IN ('typed','suggested'))`.
+- **`NUMERIC` comes back as a JS number** (`lib/db.js` parser 1700), so `area_sqm` leaves exact
+  decimal at the process boundary. Harmless at the scale of a floor area — two decimals, well
+  under 2^53 — and it is only ever a divisor of an integer here, never a multiplier of money.
+  Ceiling: do not reuse this column shape for currency; cents are integers for a reason.
+- **The verification tap now costs a real payroll row per zone.** `IA-PLAN` §9.2 deferred a
+  read-only "Tag prüfen" mode "until tags are deployed in bulk"; zones going in is that
+  trigger, and there is no `DELETE /admin/shifts/:id`. Either that mode lands, or the zone
+  drawer says in words that a test tap creates a shift somebody must correct. It must not be
+  discovered at the wall.
