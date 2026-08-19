@@ -64,6 +64,37 @@ const PAIRS = [
 
 const REQUIRED = { body: 4.5, large: 3, ui: 3 }
 
+/**
+ * THE FOUR EXPECTED FAILURES, NAMED — and why a list and not a deleted row.
+ *
+ * `--border` is `rgba(255,255,255,.08)` dark / `rgba(0,0,0,.10)` light, straight out of
+ * `docs/brand/prototype.html`, and the prototype wins. It draws a table hairline and a panel
+ * edge: a decorative divider, not a control boundary and not a graphical object needed to
+ * understand content, so WCAG 1.4.11 does not reach it. Raising it to 3:1 would print a
+ * spreadsheet grid across every table in a design system whose first word is „flat".
+ * Argued and accepted in REDESIGN-FIX.md §5 and IA-A11Y.md.
+ *
+ * BUT THE SCRIPT USED TO EXIT 1 FOR IT, EVERY RUN, FOR MONTHS (REDESIGN-REVIEW.md R3). A
+ * gate that is always red is not a gate: a real new regression arrives as a fifth red line
+ * under four that everybody has learned to scroll past. That is the same rot that left
+ * `demo/check-reports.mjs` failing since the redesign.
+ *
+ * SO THE EXCEPTION IS DATA, AND IT FAILS IN BOTH DIRECTIONS:
+ *   · a failing pair that is NOT on this list still exits 1 — the negative case is intact;
+ *   · an entry on this list that NO LONGER fails also exits 1, so a fixed token cannot
+ *     leave a stale excuse behind that would silently absorb the next regression;
+ *   · and `floor` is the ratio measured today. Getting WORSE is a new defect and exits 1,
+ *     so „it was already red" cannot be used to darken the hairline further.
+ */
+const EXPECTED = [
+  { theme: 'dark', fg: '--border', bg: '--bg-base', floor: 1.19 },
+  { theme: 'dark', fg: '--border', bg: '--bg-raised', floor: 1.23 },
+  { theme: 'light', fg: '--border', bg: '--bg-base', floor: 1.26 },
+  { theme: 'light', fg: '--border', bg: '--bg-raised', floor: 1.26 },
+]
+const keyOf = (theme, fg, bg) => `${theme} ${fg} on ${bg}`
+const EXPECTED_BY_KEY = new Map(EXPECTED.map((e) => [keyOf(e.theme, e.fg, e.bg), e]))
+
 // A port of our own. launchChrome's poll of /json/version succeeds against ANY Chrome on
 // that port, so a leftover browser on the 9333 default is silently adopted — and then wiped
 // out from under itself by the profile rmSync. That is the "hung headless Chrome at 0% CPU"
@@ -146,6 +177,7 @@ async function measure(theme) {
 await page.goto(`${BASE}/login/`, { settle: 400 })
 
 let failures = 0
+const seenExpected = new Set()
 for (const theme of ['dark', 'light']) {
   const rows = await measure(theme)
   console.log(`\n=== ${theme.toUpperCase()} ===`)
@@ -157,18 +189,45 @@ for (const theme of ['dark', 'light']) {
     }
     const need = REQUIRED[row.tier]
     const pass = row.ratio >= need
-    if (!pass) failures++
+    const key = keyOf(theme, row.fgToken, row.bgToken)
+    const expected = pass ? undefined : EXPECTED_BY_KEY.get(key)
+    let mark = pass ? 'ok  ' : 'FAIL'
+    let tail = ''
+    if (expected !== undefined) {
+      seenExpected.add(key)
+      if (row.ratio + 0.005 < expected.floor) {
+        // Worse than the day it was accepted. That is a NEW defect wearing an old excuse.
+        failures++
+        mark = 'FAIL'
+        tail = `  << WORSE THAN THE ACCEPTED ${expected.floor}:1`
+      } else {
+        mark = 'kno '
+        tail = '  (accepted: decorative hairline, REDESIGN-FIX.md §5)'
+      }
+    } else if (!pass) {
+      failures++
+    }
     console.log(
-      `  ${pass ? 'ok  ' : 'FAIL'} ${String(row.ratio).padStart(6)}:1  need ${need}:1  ` +
-        `${row.fgToken} on ${row.bgToken}  — ${row.where}`,
+      `  ${mark} ${String(row.ratio).padStart(6)}:1  need ${need}:1  ` +
+        `${row.fgToken} on ${row.bgToken}  — ${row.where}${tail}`,
     )
   }
 }
 
+// A STALE EXCEPTION IS A FAILURE. If a pair on the list now passes, the list is lying about
+// the state of the tree, and the next regression on that pair would be absorbed silently.
+for (const e of EXPECTED) {
+  const key = keyOf(e.theme, e.fg, e.bg)
+  if (seenExpected.has(key)) continue
+  failures++
+  console.log(`  FAIL stale exception: „${key}" is on the accepted list but did not fail — remove it`)
+}
+
 // The negative case has to be reachable, so say what would make it fire.
 console.log(
-  `\n${failures} contrast failure(s). Mutation check: lighten --text-muted toward its ` +
-    `background in globals.css and the two --text-muted rows must go FAIL.`,
+  `\n${failures} unexpected contrast failure(s); ${seenExpected.size} accepted (${EXPECTED.length} listed).\n` +
+    `Mutation check: lighten --text-muted toward its background in globals.css and the two ` +
+    `--text-muted rows must go FAIL; darken --border and its accepted rows must go FAIL too.`,
 )
 
 page.close()

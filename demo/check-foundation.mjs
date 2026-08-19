@@ -37,6 +37,26 @@ const SHOTS = "/tmp/ts-demo/foundation";
 const KEEP = process.argv.includes("--keep");
 const DEADLINE_MS = 5 * 60 * 1000;
 
+/**
+ * How many links the sidebar carries, READ FROM web/lib/nav.ts and never written here.
+ *
+ * This was the literal `12` from before decision-39 cut the sidebar to NINE, so the phone
+ * assertion below failed on a screen that was obeying an accepted decision — a check that
+ * is red for a superseded reason is a check nobody reads. Same regex as demo/audit-phone.mjs
+ * and for the same reason: this is a plain node script with no TypeScript loader, and the
+ * account group is written on one line so `^\s*\{ href:` undercounts it by one.
+ */
+const NAV_SOURCE = readFileSync(`${WEB}/lib/nav.ts`, "utf8");
+const NAV_COUNT = (
+  NAV_SOURCE.slice(
+    NAV_SOURCE.indexOf("export const NAV_GROUPS"),
+    NAV_SOURCE.indexOf("export const OFF_NAV_ROUTES"),
+  ).match(/href:/g) ?? []
+).length;
+if (NAV_COUNT < 2) {
+  throw new Error(`check-foundation: read ${NAV_COUNT} nav entries out of web/lib/nav.ts`);
+}
+
 const ADMIN = { email: "demo@example.test", password: "demo-nur-lokal-2026" };
 
 // Never the live server. A hostname check, not a comment.
@@ -183,9 +203,28 @@ function removeHarness() {
   rmSync(`${WEB}/out/foundation-check`, { recursive: true, force: true });
 }
 
+/**
+ * THIS FUNCTION OVERWRITES web/out FOR EVERY OTHER CHECK IN THIS DIRECTORY, and the build
+ * it leaves behind is the one they all read. That made it a trap: `pnpm build` with no
+ * NEXT_PUBLIC_GOOGLE_MAPS_KEY in the environment produces a static export whose
+ * `MAPS_API_KEY` is `''`, which puts HomeMap into its `noKey` state — no script tag, no
+ * canvas, no pins, forever. Nothing warns; the map region simply says „für diesen Build ist
+ * kein Kartenschlüssel hinterlegt", which is a TRUE sentence about a build nobody meant to
+ * make. demo/check-filters.mjs and demo/check-ia-greyscale.mjs then timed out waiting for
+ * pins that could never appear, and the failure pointed at them rather than at here.
+ *
+ * So the key is carried through when the caller has one, and the run says out loud which
+ * kind of build it is leaving on disk. Not fetched from `psst`: this file must keep working
+ * with no secret store, and a check is not a place to reach for credentials on its own.
+ */
 function build(label) {
-  process.stdout.write(`  … next build (${label})\n`);
-  execFileSync("pnpm", ["build"], { cwd: WEB, stdio: "pipe" });
+  const key = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY ?? "";
+  process.stdout.write(`  … next build (${label})${key === "" ? " — NO MAPS KEY" : " — with maps key"}\n`);
+  execFileSync("pnpm", ["build"], {
+    cwd: WEB,
+    stdio: "pipe",
+    env: { ...process.env, NEXT_PUBLIC_GOOGLE_MAPS_KEY: key },
+  });
 }
 
 // ---------------------------------------------------------------------------------------
@@ -459,10 +498,13 @@ async function main() {
       narrow.w <= narrow.v + 1,
       JSON.stringify(narrow),
     );
+    const navLinks = await page.eval(
+      `document.querySelectorAll('nav.sidebar a.nav-link').length`,
+    );
     assert(
-      "nav: the sidebar is still a reachable strip on a phone",
-      (await page.eval(`document.querySelectorAll('nav.sidebar a.nav-link').length`)) === 12,
-      `${await page.eval(`document.querySelectorAll('nav.sidebar a.nav-link').length`)} links`,
+      `nav: the sidebar is still a reachable strip on a phone, all ${NAV_COUNT} routes`,
+      navLinks === NAV_COUNT,
+      `${navLinks} links, web/lib/nav.ts declares ${NAV_COUNT}`,
     );
     await page.screenshot(`${SHOTS}/phone-360-shifts.png`);
 

@@ -130,12 +130,34 @@ async function main() {
     const uuid = (buildingHref ?? "").split("=")[1];
 
     await page.goto(`${BASE}${buildingHref}`, { settle: 1400 });
-    await page.waitFor(`document.querySelector('.drawer')`, { label: "the Objektpanel" });
-    const panelTitle = await page.eval(`document.querySelector('.drawer h2')?.textContent?.trim()`);
+    // TWO RENDERINGS, ONE CONTRACT. decision-39 made the map the landing surface, and since
+    // then a building the map can draw opens as the INFO BOX ON ITS PIN while a building with
+    // no coordinates opens as the drawer (MAP-HOME-SPEC §7, STATE-GALLERY §1). This waited for
+    // `.drawer` and nothing else, so it timed out on a pinned building — which is the ordinary
+    // case — and reported it as „the Objektpanel never opened".
+    //
+    // Accepting either is NOT loosening the assertion: exactly one of the two may be on the
+    // screen (HomeMap tells `/` through `onDrawnChange` precisely so two boxes about one
+    // building cannot ship), and that exclusivity is asserted here rather than assumed. The
+    // title still has to name the building the row named.
+    await page.waitFor(`document.querySelector('.drawer, .map-info')`, {
+      label: "the Objektpanel (drawer or info box)",
+    });
+    const panel = await page.eval(`(() => {
+      const drawer = document.querySelector('.drawer')
+      const box = document.querySelector('.map-info')
+      return {
+        kind: drawer !== null ? (box !== null ? 'BOTH' : 'drawer') : 'info box',
+        title: (drawer?.querySelector('h2') ?? box?.querySelector('h3'))?.textContent?.trim() ?? null,
+      }
+    })()`);
+    const panelTitle = panel.title;
     assert(
-      "/?location=<uuid> opens the Objektpanel ON that building",
-      (buildingName ?? "").startsWith(panelTitle ?? "\u0000"),
-      `panel titled "${panelTitle}", row said "${buildingName}"`,
+      "/?location=<uuid> opens the Objektpanel ON that building, in exactly one place",
+      panel.kind !== "BOTH" &&
+        panelTitle !== null &&
+        (buildingName ?? "").startsWith(panelTitle),
+      `${panel.kind} titled "${panelTitle}", row said "${buildingName}"`,
     );
     const leak = await page.eval(KEY_LEAK);
     assert("Objektpanel: no message key rendered as text", leak.length === 0, leak.join(", "));
@@ -147,8 +169,13 @@ async function main() {
     );
     await shoot(page, "objektpanel-1680");
 
+    // The panel is whichever of the two shapes opened above. `.map-info` keeps both faces
+    // MOUNTED and hides one with the `hidden` attribute, so the hrefs are readable either
+    // way — and asking the DOM for them is the right question here: whether a link is on
+    // the screen is V1's question and is measured, in geometry, by demo/recheck.mjs.
+    const PANEL = ".drawer, .map-info";
     const panelLinks = await page.eval(
-      `[...document.querySelectorAll('.drawer .panel-links a')].map((a) => a.getAttribute('href'))`,
+      `[...document.querySelectorAll('${PANEL}')].flatMap((p) => [...p.querySelectorAll('.panel-links a')]).map((a) => a.getAttribute('href'))`,
     );
     // Every link out of the panel must carry state. A bare href here is the whole defect.
     const bare = panelLinks.filter((href) => !href.includes("?"));
@@ -161,7 +188,7 @@ async function main() {
     // Whichever way this building falls, one of the two must be on screen and never both.
     const materialLink = panelLinks.some((href) => href.startsWith("/material-requests/"));
     const materialWords = await page.eval(
-      `!!document.querySelector('.drawer .panel-link-empty')`,
+      `!!document.querySelector('.drawer .panel-link-empty, .map-info .panel-link-empty')`,
     );
     assert(
       "Objektpanel: the material queue is either a link or the words, never both, never neither",
@@ -393,9 +420,15 @@ async function main() {
       ghostNotice.includes("Filter") && ghostNotice.length > 40,
       ghostNotice === "" ? "no .notice.bad on the page" : ghostNotice,
     );
+    // Both shapes, not just the drawer: since decision-39 a pinned building opens as the
+    // info box on its pin, so „no drawer" would have been satisfied by a ghost id that
+    // opened a box on the nearest pin — the exact leak this line exists to forbid.
     assert(
-      "…and it does NOT open a panel on somebody else's building",
-      (await page.eval(`!document.querySelector('.drawer')`)) === true,
+      "…and it does NOT open a panel on somebody else's building, in EITHER shape",
+      (await page.eval(`!document.querySelector('.drawer, .map-info')`)) === true,
+      await page.eval(
+        `document.querySelector('.drawer, .map-info')?.className ?? 'nothing opened'`,
+      ),
     );
     await shoot(page, "unknown-building-1680");
 

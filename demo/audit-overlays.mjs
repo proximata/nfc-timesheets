@@ -337,8 +337,31 @@ for (const path of SCREENS) {
       }).length
     out.tables = document.querySelectorAll('table.data-table').length
 
-    // A permanently-mounted alert region and a status region, empty when idle.
-    out.alertRegions = document.querySelectorAll('[role=alert]').length
+    // A PAGE-LEVEL LIVE REGION, not literally role=alert.
+    //
+    // Eleven screens announce their one outcome with role=alert; /account/ announces its
+    // one outcome with role=status aria-live=polite, deliberately and with the reason in
+    // the source: the password form's result is the answer to a button the reader just
+    // pressed with focus still on it, which is the case WAI-ARIA reserves status for.
+    // alert is for something that arrives unbidden. Requiring the literal role therefore
+    // failed the one screen that had thought about it hardest, and it had been failing
+    // since /account/ shipped.
+    //
+    // The negative case is intact and is the one that matters: a screen with NO live region
+    // at all, or one that only exists once there is a message to put in it, still fails.
+    // The role each screen chose is printed so a change of mind is visible in the log
+    // rather than silent.
+    //
+    // NOTE FOR THE NEXT EDITOR: this comment lives INSIDE a page.eval template literal. A
+    // backtick here ends the string and the file stops parsing at import time — which is
+    // exactly how this check arrived: written, never run, left unparseable.
+    out.liveRegions = [...document.querySelectorAll('[role=alert], [role=status], [aria-live]')]
+      .filter((el) => !el.closest('.drawer, .modal'))
+    out.alertRegions = out.liveRegions.length
+    out.liveRoles = out.liveRegions
+      .map((el) => el.getAttribute('role') ?? 'aria-live=' + el.getAttribute('aria-live'))
+      .join(',')
+    out.liveRegions = out.liveRegions.length
     out.statusRegions = document.querySelectorAll('[role=status], [aria-live]').length
 
     // The question line under the h1.
@@ -365,11 +388,16 @@ for (const path of SCREENS) {
   if (report.unlabelled.length) problems.push(`unlabelled: ${report.unlabelled.join(', ')}`)
   if (report.namelessButtons.length) problems.push(`nameless: ${report.namelessButtons.join(', ')}`)
   if (report.tablesWithoutCaption) problems.push(`${report.tablesWithoutCaption} table(s) w/o caption`)
-  if (report.alertRegions === 0) problems.push('no role=alert region')
+  if (report.alertRegions === 0) problems.push('no page-level live region (alert or status)')
   if (report.h1Count !== 1) problems.push(`${report.h1Count} h1 in main`)
   if (report.question === null) problems.push('no question line under the h1')
   if (report.labelMismatch.length) problems.push(`card-label mismatch: ${report.labelMismatch.join('; ')}`)
-  record(problems.length === 0, `${path}`, problems.join(' | ') || `h1="${report.h1}" tables=${report.tables}`)
+  record(
+    problems.length === 0,
+    `${path}`,
+    problems.join(' | ') ||
+      `h1="${report.h1}" tables=${report.tables} live=[${report.liveRoles}]`,
+  )
 }
 
 const failed = results.filter((r) => !r.ok)

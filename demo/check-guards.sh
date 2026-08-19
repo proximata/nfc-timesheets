@@ -155,6 +155,31 @@ else
   ok "demo/ios-setup.sh refuses a non-loopback tag host"
 fi
 
+# EVERY CHECK IN demo/ MUST AT LEAST PARSE.
+#
+# Two of them did not, for a whole round. Both had a comment written INSIDE a
+# `page.eval(\`...\`)` template literal containing a backtick, which ends the string; the
+# files then threw `SyntaxError: missing ) after argument list` at import time. Nobody saw
+# it, because a check that dies before its first assertion prints a stack trace and exits
+# non-zero, which looks exactly like a check that ran and found a defect — and the round's
+# report recorded them as "fixed".
+#
+# `node --check` is the whole test. It costs a few milliseconds per file and it is the
+# difference between "this check found nothing" and "this check never ran".
+unparseable=""
+checked=0
+for f in demo/*.mjs; do
+  checked=$((checked + 1))
+  node --check "$f" >/dev/null 2>&1 || unparseable="$unparseable $f"
+done
+if [ "$checked" -lt 10 ]; then
+  fail "only $checked file(s) in demo/*.mjs — the glob matched nothing, so this proves nothing"
+elif [ -n "$unparseable" ]; then
+  fail "demo/*.mjs does not parse:$unparseable"
+else
+  ok "all $checked demo/*.mjs parse"
+fi
+
 echo
 if [ "$fails" -eq 0 ]; then
   echo "check-guards: OK"

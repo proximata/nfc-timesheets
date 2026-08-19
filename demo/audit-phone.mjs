@@ -130,14 +130,55 @@ for (const theme of ['dark', 'light']) {
         return { heads: heads.length, cells: cells.length, mismatch: bad }
       })
 
-      // Touch targets: nothing interactive under 44px on a phone.
-      out.smallTargets = [...document.querySelectorAll('button, a[href], input, select, textarea')]
+      // TOUCH TARGETS: nothing interactive under 44px on a phone — with TWO NAMED
+      // EXCEPTIONS, classified here rather than absorbed by a per-screen allowlist.
+      //
+      // This check exited 1 on 24 of 26 screens for months (REDESIGN-REVIEW.md R3). Every
+      // one of those 24 lines was one of the two shapes below, both argued and accepted in
+      // REDESIGN-FIX.md §5 — so a genuine new small control would have arrived as a 25th
+      // red line under 24 that everybody had learned to scroll past. A gate that is always
+      // red is not a gate.
+      //
+      // The exceptions are CLASSIFIED, not listed by screen, so they cannot go stale: each
+      // one restates the WCAG clause that permits it and is re-tested on every element.
+      //
+      //   BRAND     the header wordmark, 24x24. WCAG 2.5.8 (AA) asks 24x24; 44px is this
+      //             house's own AAA-flavoured floor. Below 24 in EITHER dimension it is a
+      //             real failure again, so shrinking the header cannot hide behind this.
+      //   IN A      2.5.8 excepts a target „in a sentence or [whose] size is otherwise
+      //   SENTENCE  constrained by the line-height of non-target text". Enforced literally:
+      //             the link's own block must carry MORE text than the link. A lone link in
+      //             an empty <li> is not a sentence and still fails.
+      const classify = (el) => {
+        const r = el.getBoundingClientRect()
+        if (el.tagName === 'A' && el.classList.contains('brand')) {
+          return r.width >= 24 && r.height >= 24 ? 'brand 24x24 (WCAG 2.5.8 AA)' : null
+        }
+        if (el.tagName !== 'A') return null
+        const block = el.closest('p, li, td, dd, figcaption, blockquote')
+        if (block === null) return null
+        const own = (el.textContent || '').replace(/\s+/g, ' ').trim()
+        const all = (block.textContent || '').replace(/\s+/g, ' ').trim()
+        return own !== '' && all.length > own.length + 8 ? 'in a sentence (WCAG 2.5.8)' : null
+      }
+      const small = [...document.querySelectorAll('button, a[href], input, select, textarea')]
         .filter((el) => {
           const r = el.getBoundingClientRect()
           return r.width > 0 && r.height > 0 && r.height < 44 && !el.classList.contains('visually-hidden')
         })
+      const describe = (el) =>
+        el.tagName + '.' + (String(el.className).split(' ')[0] || '-') +
+        ' h=' + Math.round(el.getBoundingClientRect().height) +
+        ' „' + (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 32) + '"'
+      out.smallTargets = small.filter((el) => classify(el) === null).slice(0, 6).map(describe)
+      out.exceptedTargets = small
+        .filter((el) => classify(el) !== null)
         .slice(0, 6)
-        .map((el) => el.tagName + '.' + String(el.className).split(' ')[0] + ' h=' + Math.round(el.getBoundingClientRect().height))
+        .map((el) => describe(el) + ' [' + classify(el) + ']')
+      // VACUITY GUARD for the exception itself. The brand link is on every admin screen; if
+      // it stops being found, the classifier has silently stopped matching anything and the
+      // „excepted" bucket would be empty for the wrong reason.
+      out.brandFound = document.querySelector('a.brand') !== null
       return out
     })()`)
 
@@ -163,8 +204,19 @@ for (const theme of ['dark', 'light']) {
     const capProblems = report.captions.flatMap((c) => c.mismatch ?? [])
     if (capProblems.length) problems.push(`card captions: ${capProblems.join(' | ')}`)
     if (report.smallTargets.length) problems.push(`<44px: ${report.smallTargets.join(', ')}`)
+    // /reinigung/ is the public client portal and carries no admin header.
+    if (path !== '/reinigung/' && report.brandFound !== true) {
+      problems.push('no a.brand — the 24x24 exception matched nothing, so it proves nothing')
+    }
 
-    record(problems.length === 0, `${theme} 360 ${path}`, problems.join(' || '))
+    record(
+      problems.length === 0,
+      `${theme} 360 ${path}`,
+      problems.join(' || ') ||
+        (report.exceptedTargets.length
+          ? `accepted <44px: ${report.exceptedTargets.join(', ')}`
+          : ''),
+    )
   }
 }
 

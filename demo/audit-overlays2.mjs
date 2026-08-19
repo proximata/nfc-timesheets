@@ -390,12 +390,24 @@ for (const path of [
       alerts: regions.filter((el) => el.getAttribute('role') === 'alert').length,
       // A region that only exists once there is a message is not a live region.
       empty: regions.filter((el) => el.textContent.trim() === '').length,
+      roles: regions
+        .map((el) => el.getAttribute('role') ?? 'aria-live=' + el.getAttribute('aria-live'))
+        .join(','),
     }
   })()`)
+  // ALERT **OR** STATUS, and it must be there BEFORE there is anything to say.
+  //
+  // `r.alerts >= 1` failed /account/, which is the one screen that picked its role on
+  // purpose: its outcome answers a button the reader just pressed with focus still on it,
+  // which is `status`, not `alert`. See the note in demo/audit-overlays.mjs.
+  //
+  // What is NOT relaxed is the part that catches the real bug — the region has to exist
+  // while the screen is idle. A page that mounts its live region together with its first
+  // message announces nothing, and `r.empty >= 1` is what says so.
   record(
-    r.alerts >= 1,
-    `${path}: a page-level role=alert region exists when idle`,
-    `alert=${r.alerts} liveRegions=${r.total} emptyOnes=${r.empty}`,
+    r.total >= 1 && r.empty >= 1,
+    `${path}: a page-level live region exists AND is empty when idle`,
+    `regions=${r.total} [${r.roles}] alerts=${r.alerts} emptyOnes=${r.empty}`,
   )
 }
 

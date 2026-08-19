@@ -472,7 +472,39 @@ async function main() {
       fields: [...document.querySelectorAll('form .field label')].map((l) => l.textContent.trim()),
       autocomplete: [...document.querySelectorAll('form input')].map((i) => i.getAttribute('autocomplete')),
       status: !!document.querySelector('[role=status]'),
-      noResetSaid: [...document.querySelectorAll('.note')].some((n) => n.textContent.includes('Passwort vergessen')),
+      // MOVED, AND THIS DID NOT FOLLOW. The paragraph left .note and went inside a
+      // <details class="callout"> whose <summary> is the exact phrase a director hunts
+      // for — /account/ was the one screen the redesign left HEAVIER on a phone, and
+      // folding it made the sentence findable rather than merely present. A .note-only
+      // query has been red ever since, for a screen behaving as designed.
+      //
+      // So what is asserted is what the design actually promises: the phrase is on the
+      // screen with nothing pressed (it is the summary), it names itself as a control, and
+      // ONE press puts the explanation itself into view. A tooltip or a deleted paragraph
+      // fails all three; .note or <summary> passes for the right reason.
+      //
+      // NOTE FOR THE NEXT EDITOR: this comment lives INSIDE a page.eval template literal.
+      // A backtick here ends the string, and the file then fails to parse at import time
+      // — which is exactly how this check arrived: written, never run, left unparseable.
+      noResetSaid: (() => {
+        const shown = (el) => el !== null && el.offsetParent !== null
+        const inNote = [...document.querySelectorAll('.note')]
+          .some((n) => shown(n) && n.textContent.includes('Passwort vergessen'))
+        const d = [...document.querySelectorAll('details.callout')]
+          .find((x) => /Passwort vergessen/.test(x.textContent || ''))
+        const s = d?.querySelector('summary') ?? null
+        return inNote || (shown(s) && /Passwort vergessen/.test(s.textContent || ''))
+      })(),
+      noResetBody: (() => {
+        const d = [...document.querySelectorAll('details.callout')]
+          .find((x) => /Passwort vergessen/.test(x.textContent || ''))
+        if (d === undefined) return null
+        d.open = true
+        const p = d.querySelector('p')
+        const text = (p?.textContent ?? '').trim()
+        d.open = false
+        return text
+      })(),
       resetControls: [...document.querySelectorAll('main a, main button')]
         .filter((el) => /vergessen|zur(ü|ue)cksetzen|reset|e-?mail/i.test(el.textContent))
         .map((el) => el.textContent.trim()),
@@ -498,6 +530,16 @@ async function main() {
     assert(
       'account: …and the absence is now SAID on screen rather than only in a comment',
       account.noResetSaid === true,
+      account.noResetBody === null
+        ? 'neither a .note nor a details.callout mentions „Passwort vergessen"'
+        : 'the phrase is the summary of a disclosure',
+    )
+    assert(
+      'account: …and one press puts the REASON on the screen, not just the heading',
+      account.noResetBody === null || account.noResetBody.length > 40,
+      account.noResetBody === null
+        ? 'no disclosure — the sentence had better be a plain .note, checked above'
+        : `${account.noResetBody.length} chars: „${(account.noResetBody ?? '').slice(0, 90)}"`,
     )
     await page.screenshot(`${SHOTS}/account-dark-1680.png`)
 

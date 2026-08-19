@@ -210,16 +210,84 @@ async function main() {
       `footer ${footCents}, rows ${rowCents}`,
     );
 
-    // 2. The caveats, as VISIBLE text.
-    const payrollText = await page.eval(VISIBLE_TEXT);
+    // 2. The caveats.
+    //
+    // THESE TWO MOVED, AND THE CHECK DID NOT FOLLOW. app/payroll/page.tsx ships the two
+    // standing limitations inside a `<details class="callout">` that is CLOSED on load —
+    // deliberately, and its own comment says why: open, they put the prose the redesign
+    // took off the top of the screen back at the bottom of it. So a plain „is this string
+    // among the visible text" assertion has been red since the redesign, for a screen that
+    // is behaving as designed, which is how a check stops being read.
+    //
+    // Reconciled rather than deleted, because the fact is still load-bearing: past hours
+    // are priced at TODAY's rate, and a payslip dispute turns on it. What the design
+    // actually promises is ONE PRESS, so that is what is measured — the disclosure is a
+    // real control that names itself, the sentence is inside it, and after a real press it
+    // is on the screen. A tooltip, a `title=`, or a deleted <li> all fail this.
+    const disclosure = await page.eval(`(() => {
+      const d = [...document.querySelectorAll('details.callout')]
+        .find((x) => /zum heutigen Satz bewertet/.test(x.textContent || ''))
+      if (!d) return { found: false }
+      const s = d.querySelector('summary')
+      const r = s ? s.getBoundingClientRect() : null
+      return {
+        found: true,
+        openOnLoad: d.open,
+        summary: s ? s.textContent.replace(/\\s+/g, ' ').trim() : null,
+        summaryShown: !!(s && s.offsetParent !== null && r.height > 0),
+        summaryH: r ? Math.round(r.height) : null,
+      }
+    })()`);
     assert(
-      "payroll: the rate-history caveat is visible (not merely in the DOM)",
-      payrollText.includes("vergangene Stunden werden daher zum heutigen Satz bewertet"),
+      "payroll: the rate-history caveat is on the page, inside a disclosure that names itself",
+      disclosure.found === true && disclosure.summaryShown === true && (disclosure.summary ?? "") !== "",
+      `found=${disclosure.found} summary=„${disclosure.summary ?? ""}" ${disclosure.summaryH}px`,
+    );
+    // Read the screen AS DELIVERED, before anything is pressed. Reading it after a press
+    // and a re-close was the first version of this block, and it made the twin below
+    // untestable: `details open` in the markup still measured as folded, because the probe
+    // had closed it itself. The state that matters is the one on load.
+    const asDelivered = await page.eval(VISIBLE_TEXT);
+    assert(
+      "payroll: the disclosure ships CLOSED — the caveat is folded until pressed",
+      disclosure.openOnLoad === false &&
+        !asDelivered.includes("vergangene Stunden werden daher zum heutigen Satz bewertet"),
+      `open on load=${disclosure.openOnLoad}`,
+    );
+    // …and what may NOT be folded is the money. The counted, named exclusion and the
+    // reconciliation sentence are visible with nothing pressed, or this screen is lying by
+    // omission about a bank transfer.
+    assert(
+      "payroll: the reconciliation sentence is NOT behind the disclosure",
+      asDelivered.includes("auf dieser Seite fehlt nichts") ||
+        asDelivered.includes("Die Summe des Servers für diesen Zeitraum beträgt"),
+      "not visible with the callout closed",
+    );
+    // Open it the way a reader does, then require BOTH sentences to be visible text.
+    await page.eval(`(() => {
+      const d = [...document.querySelectorAll('details.callout')]
+        .find((x) => /zum heutigen Satz bewertet/.test(x.textContent || ''))
+      if (d) d.open = true
+      return !!d
+    })()`);
+    await sleep(250);
+    const openedText = await page.eval(VISIBLE_TEXT);
+    assert(
+      "payroll: …and one press puts the rate-history caveat on the screen",
+      openedText.includes("vergangene Stunden werden daher zum heutigen Satz bewertet"),
     );
     assert(
-      "payroll: the attribution rule is visible",
-      payrollText.includes("Eine Schicht zählt in dem Zeitraum, in dem sie begonnen hat"),
+      "payroll: …and the attribution rule with it",
+      openedText.includes("Eine Schicht zählt in dem Zeitraum, in dem sie begonnen hat"),
     );
+    await page.eval(`(() => {
+      const d = [...document.querySelectorAll('details.callout')]
+        .find((x) => /zum heutigen Satz bewertet/.test(x.textContent || ''))
+      if (d) d.open = false
+      return true
+    })()`);
+    // Everything below still reads the CLOSED screen, which is the one the director sees.
+    const payrollText = asDelivered;
     const reconcileOk = payrollText.includes("auf dieser Seite fehlt nichts");
     const reconcileBad = payrollText.includes("Die Summe des Servers für diesen Zeitraum beträgt");
     assert(
