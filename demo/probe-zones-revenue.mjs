@@ -11,6 +11,7 @@
 //
 //   node demo/probe-zones-revenue.mjs            (server on 127.0.0.1:4319, DB nfc_demo)
 //   BASE=http://127.0.0.1:4319 node demo/probe-zones-revenue.mjs
+import { assertFreshBuild } from './build-guard.mjs'
 import { attach, launchChrome, sleep } from './cdp.mjs'
 
 const BASE = process.env.BASE ?? 'http://127.0.0.1:4319'
@@ -21,6 +22,9 @@ const PASSWORD = process.env.DEMO_PASSWORD ?? 'demo-nur-lokal-2026'
 if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(BASE)) {
   throw new Error(`refusing a non-loopback target: ${BASE}`)
 }
+// BEFORE Chrome is launched: every number below is about the bundle in web/out, and a
+// bundle older than the tree makes both a pass and a fail describe code nobody is reading.
+assertFreshBuild()
 
 const WIDTHS = [
   // decision-7's desktop case, at the width the owner named.
@@ -199,7 +203,11 @@ async function run() {
         await page.waitFor(`document.querySelectorAll('table.data-table tbody tr').length > 0`)
 
         let over = await page.eval(OVERFLOW)
-        record(over.over <= 0, `${tag} /locations/ fits ${width}px`, `worst +${over.over}px ${over.what}`)
+        record(
+          over.over <= 0,
+          `${tag} /locations/ fits ${width}px`,
+          `worst +${over.over}px ${over.what}`,
+        )
 
         // The zone column exists on every row and names the area state in WORDS.
         const zoneWords = await page.eval(`(() => {
@@ -292,7 +300,7 @@ async function run() {
             // wrong. So the number is read back OFF the sentence, stripped of every grouping
             // character, and compared in integer hundredths against the oracle.
             // NO BACKSLASH ESCAPES IN THIS REGEX, and that is not a style choice: this whole
-            // expression is a TEMPLATE LITERAL evaluated in the page, so a lone \d here is
+            // expression is a TEMPLATE LITERAL evaluated in the page, so a lone d here is
             // eaten by the template and reaches Chrome as a bare 'd'. The first version of
             // this line did exactly that, matched nothing, and reported every measured
             // building as having no number on screen. Explicit classes cannot be eaten.
@@ -332,10 +340,16 @@ async function run() {
         record(
           complete.length > 0 && complete.every((b) => b.hasNumber && b.saysTotal && !b.saysFloor),
           `${tag} a fully measured building states the SUM of its zones as a total`,
-          complete.map((b) => `${b.name}: ${b.zones} zones, db ${b.expected / 100} m², screen ${b.got === null ? 'none' : b.got / 100} m² ("${b.shown}")`).join(' | ') || 'no such building in the fixture',
+          complete
+            .map(
+              (b) =>
+                `${b.name}: ${b.zones} zones, db ${b.expected / 100} m², screen ${b.got === null ? 'none' : b.got / 100} m² ("${b.shown}")`,
+            )
+            .join(' | ') || 'no such building in the fixture',
         )
         record(
-          incomplete.length > 0 && incomplete.every((b) => b.saysFloor && !b.saysTotal && b.got === b.expected),
+          incomplete.length > 0 &&
+            incomplete.every((b) => b.saysFloor && !b.saysTotal && b.got === b.expected),
           `${tag} a building with an unmeasured zone says INCOMPLETE, never a total`,
           incomplete
             .map(
@@ -347,7 +361,73 @@ async function run() {
         record(
           none.length > 0 && none.every((b) => b.saysNone && !b.saysTotal && !b.saysFloor),
           `${tag} a building with no zone has NO area — and that is not 0 m²`,
-          none.map((b) => `${b.name}: "${b.said}"`).join(' | ') || 'no such building in the fixture',
+          none.map((b) => `${b.name}: "${b.said}"`).join(' | ') ||
+            'no such building in the fixture',
+        )
+
+        // ...AND THE OTHER SCREEN DERIVES THE SAME NUMBER A DIFFERENT WAY.
+        //
+        // decision-43 stores no area on the building, so it is derived TWICE: by
+        // `web/lib/area.ts` for the table above, and by `SUM(z.area_sqm)` in
+        // server/lib/reporting.js for /pl/. The block above proves the CLIENT derivation
+        // against the raw zone rows and says out loud that two derivations of one fact
+        // drift — and then never compared them. A drift here is a director reading
+        // 980 m² on one screen and quoting €/m² computed from 1.240 m² on the other.
+        //
+        // COMPARED AS THE STATE AND AS THE NUMBER. Matching only the number would let
+        // /pl/ state a floor as a total, which is the same defect the block above exists
+        // for, moved one screen sideways.
+        const plArea = await page.eval(`(async () => {
+          const y = new Date().getFullYear()
+          const [data, pl] = await Promise.all([
+            (await fetch('/admin/data?limit=2000', { credentials: 'include' })).json(),
+            (await fetch('/admin/pl?from=' + y + '-01-01T00:00:00.000Z&to=' + y + '-12-31T23:59:59.999Z', { credentials: 'include' })).json(),
+          ])
+          const hundredths = (v) => {
+            if (v === null || v === undefined) return null
+            const [w, f = ''] = String(v).split('.')
+            return Number.parseInt(w, 10) * 100 + Number.parseInt((f + '00').slice(0, 2), 10)
+          }
+          return (pl.buildings || []).map((b) => {
+            const live = data.zones.filter((z) => z.active && z.location_id === b.location_id)
+            const measured = live.filter((z) => z.area_sqm !== null && z.area_sqm !== undefined)
+            const expected = measured.reduce((a, z) => a + hundredths(z.area_sqm), 0)
+            const clientState = live.length === 0 ? 'none' : measured.length < live.length ? 'incomplete' : 'complete'
+            // The server's own words for the same three states.
+            const serverState =
+              b.area_unknown_reason === 'no_zones' ? 'none'
+              : b.area_unknown_reason === 'area_incomplete' ? 'incomplete'
+              : b.building_m2 === null ? 'none' : 'complete'
+            return {
+              name: b.name,
+              clientState,
+              serverState,
+              agreeState: clientState === serverState,
+              // The server states a number ONLY when it is a total, so an incomplete or
+              // zoneless building must carry no m2 at all rather than a floor.
+              serverHundredths: hundredths(b.building_m2),
+              expected,
+              agreeNumber:
+                serverState === 'complete'
+                  ? hundredths(b.building_m2) === expected
+                  : b.building_m2 === null,
+              // ...and every per-m2 figure derived from a non-total must be refused.
+              perM2Refused:
+                serverState === 'complete' || (b.cost_cents_per_m2 === null && b.revenue_cents_per_m2 === null),
+            }
+          })
+        })()`)
+        record(
+          plArea.length > 0 && plArea.every((b) => b.agreeState && b.agreeNumber && b.perM2Refused),
+          `${tag} /pl/ derives the SAME area as /locations/, state and number`,
+          plArea
+            .map(
+              (b) =>
+                `${b.name.split(',')[0]}: ${b.clientState}${b.agreeState ? '' : `≠${b.serverState}`} ` +
+                `${b.serverHundredths === null ? 'no m²' : `${b.serverHundredths / 100} m²`}` +
+                `${b.agreeNumber ? '' : ` ≠ db ${b.expected / 100}`}${b.perM2Refused ? '' : ' €/m² NOT REFUSED'}`,
+            )
+            .join(' | '),
         )
 
         // The building tag is a COLLAPSED disclosure, and it still contains the URI.
@@ -360,7 +440,9 @@ async function run() {
         record(
           disclosure !== null && disclosure.open === false && disclosure.h >= 24,
           `${tag} building tag is collapsed, summary is a real target`,
-          disclosure === null ? 'missing' : `${disclosure.w}x${disclosure.h}px, open=${disclosure.open}`,
+          disclosure === null
+            ? 'missing'
+            : `${disclosure.w}x${disclosure.h}px, open=${disclosure.open}`,
         )
 
         // Open the zone list for a building that HAS zones.
@@ -371,10 +453,16 @@ async function run() {
           return true
         })()`)
         await sleep(900)
-        await page.waitFor(`document.body.innerText.includes('m²') || document.body.innerText.includes('Keine Zone')`)
+        await page.waitFor(
+          `document.body.innerText.includes('m²') || document.body.innerText.includes('Keine Zone')`,
+        )
 
         over = await page.eval(OVERFLOW)
-        record(over.over <= 0, `${tag} zone list fits ${width}px`, `worst +${over.over}px ${over.what}`)
+        record(
+          over.over <= 0,
+          `${tag} zone list fits ${width}px`,
+          `worst +${over.over}px ${over.what}`,
+        )
 
         // The zone tag URI is on the PERMANENT tag host, verbatim, never elided.
         const uri = await page.eval(`(() => {
@@ -440,7 +528,11 @@ async function run() {
         )
 
         over = await page.eval(OVERFLOW)
-        record(over.over <= 0, `${tag} zone drawer fits ${width}px`, `worst +${over.over}px ${over.what}`)
+        record(
+          over.over <= 0,
+          `${tag} zone drawer fits ${width}px`,
+          `worst +${over.over}px ${over.what}`,
+        )
 
         // Every control in the drawer is reachable, and the trap holds: tabbing past the
         // last control comes back to the first.
@@ -451,11 +543,25 @@ async function run() {
           const inside = Array.from(d.querySelectorAll(sel)).filter((el) => el.offsetParent !== null)
           return { count: inside.length, names: inside.map((e) => (e.getAttribute('aria-label') || e.textContent || e.type).trim().slice(0, 22)) }
         })()`)
-        record(trap.count >= 5, `${tag} zone drawer controls reachable`, `${trap.count}: ${trap.names.join(' | ')}`)
+        record(
+          trap.count >= 5,
+          `${tag} zone drawer controls reachable`,
+          `${trap.count}: ${trap.names.join(' | ')}`,
+        )
 
         // ESCAPE closes it and focus goes back to the button that opened it.
-        await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
-        await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+        await page.send('Input.dispatchKeyEvent', {
+          type: 'keyDown',
+          key: 'Escape',
+          code: 'Escape',
+          windowsVirtualKeyCode: 27,
+        })
+        await page.send('Input.dispatchKeyEvent', {
+          type: 'keyUp',
+          key: 'Escape',
+          code: 'Escape',
+          windowsVirtualKeyCode: 27,
+        })
         await sleep(400)
         const restored = await page.eval(`(() => ({
           closed: document.querySelector('aside.drawer') === null,
@@ -470,7 +576,9 @@ async function run() {
         // ---- /pl/, the revenue ledger ---------------------------------------------
         await page.goto(`${BASE}/pl/`)
         await setTheme(page, theme)
-        await page.waitFor(`document.body.innerText.includes('Umsatz erfassen') || document.body.innerText.includes('Enter revenue')`)
+        await page.waitFor(
+          `document.body.innerText.includes('Umsatz erfassen') || document.body.innerText.includes('Enter revenue')`,
+        )
 
         over = await page.eval(OVERFLOW)
         record(over.over <= 0, `${tag} /pl/ fits ${width}px`, `worst +${over.over}px ${over.what}`)
@@ -561,14 +669,30 @@ async function run() {
         record(
           revDrawer !== null && revDrawer.amountEmpty,
           `${tag} the contract value is NOT pre-filled into the amount`,
-          revDrawer === null ? 'missing' : `value="" is ${revDrawer.amountEmpty}, suggestion offered ${revDrawer.suggestionOffered}`,
+          revDrawer === null
+            ? 'missing'
+            : `value="" is ${revDrawer.amountEmpty}, suggestion offered ${revDrawer.suggestionOffered}`,
         )
 
         over = await page.eval(OVERFLOW)
-        record(over.over <= 0, `${tag} revenue drawer fits ${width}px`, `worst +${over.over}px ${over.what}`)
+        record(
+          over.over <= 0,
+          `${tag} revenue drawer fits ${width}px`,
+          `worst +${over.over}px ${over.what}`,
+        )
 
-        await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
-        await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+        await page.send('Input.dispatchKeyEvent', {
+          type: 'keyDown',
+          key: 'Escape',
+          code: 'Escape',
+          windowsVirtualKeyCode: 27,
+        })
+        await page.send('Input.dispatchKeyEvent', {
+          type: 'keyUp',
+          key: 'Escape',
+          code: 'Escape',
+          windowsVirtualKeyCode: 27,
+        })
         await sleep(400)
         const revRestored = await page.eval(`(() => ({
           closed: document.querySelector('aside.drawer') === null,
@@ -675,8 +799,18 @@ async function run() {
                 return { cued: r.cued, cue: name + ': ' + r.cue }
               })()`),
             )
-            await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
-            await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+            await page.send('Input.dispatchKeyEvent', {
+              type: 'keyDown',
+              key: 'Escape',
+              code: 'Escape',
+              windowsVirtualKeyCode: 27,
+            })
+            await page.send('Input.dispatchKeyEvent', {
+              type: 'keyUp',
+              key: 'Escape',
+              code: 'Escape',
+              windowsVirtualKeyCode: 27,
+            })
             await sleep(250)
           }
           record(
@@ -736,7 +870,9 @@ async function run() {
             }
           })()`)
           // ...and only NOW open the links face.
-          await page.eval(`(() => { const e = document.querySelector('.map-info-expand'); if (e) e.click(); return true })()`)
+          await page.eval(
+            `(() => { const e = document.querySelector('.map-info-expand'); if (e) e.click(); return true })()`,
+          )
           await sleep(400)
           const boxFix = await page.eval(`(() => {
             const box = document.querySelector('.map-info')
@@ -749,7 +885,9 @@ async function run() {
           record(
             infoBox !== null && infoBox.grey && infoBox.pinSaysIt,
             `${tag} / the info box hangs off a pin that is grey AND says the word`,
-            infoBox === null ? 'no box opened' : `${infoBox.h}px, grey=${infoBox.grey}, word=${infoBox.pinSaysIt} — ${boxTarget.name}`,
+            infoBox === null
+              ? 'no box opened'
+              : `${infoBox.h}px, grey=${infoBox.grey}, word=${infoBox.pinSaysIt} — ${boxTarget.name}`,
           )
           // WHAT THIS USED TO ASSERT, and why it was replaced rather than relaxed.
           //
@@ -773,8 +911,18 @@ async function run() {
             `${tag} / ...and its links face carries the first-zone route, inside the box`,
             boxFix === null ? 'no box' : `found=${boxFix.found} inside=${boxFix.inside}`,
           )
-          await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
-          await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+          await page.send('Input.dispatchKeyEvent', {
+            type: 'keyDown',
+            key: 'Escape',
+            code: 'Escape',
+            windowsVirtualKeyCode: 27,
+          })
+          await page.send('Input.dispatchKeyEvent', {
+            type: 'keyUp',
+            key: 'Escape',
+            code: 'Escape',
+            windowsVirtualKeyCode: 27,
+          })
           await sleep(400)
         }
 
@@ -819,10 +967,24 @@ async function run() {
           box === null ? 'missing' : `first-zone link ${box.fixLink}`,
         )
         over = await page.eval(OVERFLOW)
-        record(over.over <= 0, `${tag} / with the panel open fits ${width}px`, `worst +${over.over}px ${over.what}`)
+        record(
+          over.over <= 0,
+          `${tag} / with the panel open fits ${width}px`,
+          `worst +${over.over}px ${over.what}`,
+        )
 
-        await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
-        await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+        await page.send('Input.dispatchKeyEvent', {
+          type: 'keyDown',
+          key: 'Escape',
+          code: 'Escape',
+          windowsVirtualKeyCode: 27,
+        })
+        await page.send('Input.dispatchKeyEvent', {
+          type: 'keyUp',
+          key: 'Escape',
+          code: 'Escape',
+          windowsVirtualKeyCode: 27,
+        })
         await sleep(400)
         const homeRestored = await page.eval(`(() => ({
           closed: document.querySelector('aside.drawer') === null && document.querySelector('.map-info') === null,
@@ -863,8 +1025,18 @@ async function run() {
           JSON.stringify(rateField),
         )
         record(rate === true, `${tag} worker drawer reachable`)
-        await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
-        await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+        await page.send('Input.dispatchKeyEvent', {
+          type: 'keyDown',
+          key: 'Escape',
+          code: 'Escape',
+          windowsVirtualKeyCode: 27,
+        })
+        await page.send('Input.dispatchKeyEvent', {
+          type: 'keyUp',
+          key: 'Escape',
+          code: 'Escape',
+          windowsVirtualKeyCode: 27,
+        })
         await sleep(300)
       }
     }

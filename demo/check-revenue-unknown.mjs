@@ -32,6 +32,7 @@
 //      genuine zero is left in place (nfc_demo seeds one) and asserted to still be there.
 import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
+import { assertFreshBuild } from './build-guard.mjs'
 import { attach, launchChrome, sleep } from './cdp.mjs'
 import { assertDemoDatabase } from './db-guard.mjs'
 
@@ -49,6 +50,10 @@ assertDemoDatabase(DATABASE_URL, (why) => {
   console.error(`check-revenue-unknown: ${why}`)
   process.exit(1)
 })
+// ...and the bundle under the browser must be THIS tree. Restoring a mutated source without
+// rebuilding leaves the mutant being served while `git status` reads clean — which is how a
+// mutant's own output came within an inch of being reported here as a product defect.
+assertFreshBuild()
 
 const sql = (q) =>
   execFileSync('psql', [DATABASE_URL, '-v', 'ON_ERROR_STOP=1', '-q', '-t', '-A', '-c', q], {

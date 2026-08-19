@@ -1,0 +1,84 @@
+// IS THE BUNDLE UNDER THE BROWSER THE CODE IN THE TREE?
+//
+//   import { assertFreshBuild } from './build-guard.mjs'
+//   assertFreshBuild()      // throws if any source file is newer than web/out
+//
+// WHY. Every browser check here drives a STATIC EXPORT. Editing a .tsx changes nothing that
+// Chrome can see until `pnpm build` runs, and `git status` is clean the moment the source is
+// put back — so "the tree is clean" and "the screen is the tree" are two different claims
+// and only the first one is easy.
+//
+// It cost real time three times in one session, twice in the direction that matters:
+//
+//   * a mutant was applied, built, and the source restored WITHOUT rebuilding. The next
+//     forty minutes were spent investigating an apparent product defect on /pl/ — a null
+//     revenue rendering as 0,00 € — that was the mutant, still being served.
+//   * the same again with web/lib/area.ts: six FAILs that read exactly like a real
+//     regression in the INCOMPLETE-area wording, from a bundle nobody had rebuilt.
+//   * and the benign direction: a fix was written, and the check went on reporting the old
+//     failure until somebody noticed the build step had not run.
+//
+// The benign direction wastes an hour. The other one puts a fabricated defect into a report,
+// or hides a real one behind a stale pass. Neither is acceptable in a file whose whole job
+// is to be believed.
+//
+// mtime, not a content hash: the question is "did anybody touch a source file after the last
+// build", one stat per file, no dependency, and nothing to keep in step.
+import { readdirSync, statSync } from 'node:fs'
+
+const SOURCE_DIRS = ['app', 'components', 'lib', 'messages']
+/** Not source: build output, deps, and the editor/OS droppings that are never compiled. */
+const IGNORE = /^(node_modules|\.next|out|\.DS_Store)$/
+
+function newestUnder(dir, best = { mtimeMs: 0, path: null }) {
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return best // a directory this project does not have is not a failure
+  }
+  for (const e of entries) {
+    if (IGNORE.test(e.name)) continue
+    const path = `${dir}/${e.name}`
+    if (e.isDirectory()) {
+      best = newestUnder(path, best)
+      continue
+    }
+    if (!/\.(tsx?|css|json)$/.test(e.name)) continue
+    const { mtimeMs } = statSync(path)
+    if (mtimeMs > best.mtimeMs) best = { mtimeMs, path }
+  }
+  return best
+}
+
+/**
+ * Throw unless `web/out` is at least as new as every file it was built from.
+ *
+ * ONE SECOND of slack, and it is not a fudge: a build writes `out/` while the compiler is
+ * still reading sources, so an untouched file can legitimately land a few hundred
+ * milliseconds either side. A stale bundle is stale by minutes.
+ */
+export function assertFreshBuild(webDir = new URL('../web', import.meta.url).pathname) {
+  let built
+  try {
+    built = statSync(`${webDir}/out/index.html`).mtimeMs
+  } catch {
+    throw new Error(
+      `build-guard: ${webDir}/out has no index.html — build it first:\n` +
+        '  cd web && NEXT_PUBLIC_GOOGLE_MAPS_KEY=$(cd .. && psst get NEXT_PUBLIC_GOOGLE_MAPS_KEY) pnpm build',
+    )
+  }
+  const newest = SOURCE_DIRS.map((d) => newestUnder(`${webDir}/${d}`)).reduce(
+    (a, b) => (b.mtimeMs > a.mtimeMs ? b : a),
+    { mtimeMs: 0, path: null },
+  )
+  if (newest.mtimeMs > built + 1000) {
+    const behind = Math.round((newest.mtimeMs - built) / 1000)
+    throw new Error(
+      `build-guard: web/out is ${behind}s OLDER than ${newest.path.replace(`${webDir}/`, '')}.\n` +
+        '  The browser would be reading a bundle that is not this tree, and every result\n' +
+        '  below — pass or fail — would be about code nobody is looking at.\n' +
+        '  cd web && NEXT_PUBLIC_GOOGLE_MAPS_KEY=$(cd .. && psst get NEXT_PUBLIC_GOOGLE_MAPS_KEY) pnpm build',
+    )
+  }
+}

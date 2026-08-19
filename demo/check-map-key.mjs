@@ -101,18 +101,74 @@ if (!hasKey) {
 // the page ORIGIN is `https://<host>/`, which is the only thing Google is being asked about.
 mkdirSync(CERT_DIR, { recursive: true })
 const sh = (cmd, args) => execFileSync(cmd, args, { cwd: CERT_DIR, stdio: 'ignore' })
-sh('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '7', '-nodes',
-  '-keyout', 'ca.key', '-out', 'ca.pem', '-subj', '/CN=map-key check CA/O=local only'])
-sh('openssl', ['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'server.key', '-out',
-  'server.csr', '-subj', `/CN=${API_HOST}`])
-execFileSync('sh', ['-c',
-  `printf 'subjectAltName=DNS:${API_HOST},DNS:${TAG_HOST},IP:127.0.0.1\\nextendedKeyUsage=serverAuth\\nbasicConstraints=CA:FALSE\\n' > ext.cnf`],
-  { cwd: CERT_DIR })
-sh('openssl', ['x509', '-req', '-in', 'server.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key',
-  '-CAcreateserial', '-out', 'server.pem', '-days', '7', '-sha256', '-extfile', 'ext.cnf'])
+sh('openssl', [
+  'req',
+  '-x509',
+  '-newkey',
+  'rsa:2048',
+  '-sha256',
+  '-days',
+  '7',
+  '-nodes',
+  '-keyout',
+  'ca.key',
+  '-out',
+  'ca.pem',
+  '-subj',
+  '/CN=map-key check CA/O=local only',
+])
+sh('openssl', [
+  'req',
+  '-newkey',
+  'rsa:2048',
+  '-nodes',
+  '-keyout',
+  'server.key',
+  '-out',
+  'server.csr',
+  '-subj',
+  `/CN=${API_HOST}`,
+])
+execFileSync(
+  'sh',
+  [
+    '-c',
+    `printf 'subjectAltName=DNS:${API_HOST},DNS:${TAG_HOST},IP:127.0.0.1\\nextendedKeyUsage=serverAuth\\nbasicConstraints=CA:FALSE\\n' > ext.cnf`,
+  ],
+  { cwd: CERT_DIR },
+)
+sh('openssl', [
+  'x509',
+  '-req',
+  '-in',
+  'server.csr',
+  '-CA',
+  'ca.pem',
+  '-CAkey',
+  'ca.key',
+  '-CAcreateserial',
+  '-out',
+  'server.pem',
+  '-days',
+  '7',
+  '-sha256',
+  '-extfile',
+  'ext.cnf',
+])
 
-const front = spawn('node', [new URL('./tls-front.mjs', import.meta.url).pathname,
-  '--cert', CERT_DIR, '--port', String(TLS_PORT), '--upstream', UPSTREAM], { stdio: 'ignore' })
+const front = spawn(
+  'node',
+  [
+    new URL('./tls-front.mjs', import.meta.url).pathname,
+    '--cert',
+    CERT_DIR,
+    '--port',
+    String(TLS_PORT),
+    '--upstream',
+    UPSTREAM,
+  ],
+  { stdio: 'ignore' },
+)
 
 /** Does Google draw a map when the page's origin is `https://<host>/`? */
 async function mapLoadsAt(host) {
@@ -123,20 +179,31 @@ async function mapLoadsAt(host) {
   const profile = `/tmp/ts-demo/chrome-profile-mapkey-${host}`
   rmSync(profile, { recursive: true, force: true })
   mkdirSync(profile, { recursive: true })
-  const child = spawn(CHROME, [
-    '--headless=new', `--remote-debugging-port=${CDP_PORT}`,
-    `--user-data-dir=${profile}`,
-    '--window-size=1440,900', '--no-first-run', '--no-default-browser-check',
-    '--disable-extensions', '--hide-scrollbars',
-    // The whole trick, and it is one flag: the real hostname, resolved to the local front.
-    `--host-resolver-rules=MAP ${host}:443 127.0.0.1:${TLS_PORT}`,
-    '--ignore-certificate-errors', 'about:blank',
-  ], { stdio: 'ignore' })
+  const child = spawn(
+    CHROME,
+    [
+      '--headless=new',
+      `--remote-debugging-port=${CDP_PORT}`,
+      `--user-data-dir=${profile}`,
+      '--window-size=1440,900',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-extensions',
+      '--hide-scrollbars',
+      // The whole trick, and it is one flag: the real hostname, resolved to the local front.
+      `--host-resolver-rules=MAP ${host}:443 127.0.0.1:${TLS_PORT}`,
+      '--ignore-certificate-errors',
+      'about:blank',
+    ],
+    { stdio: 'ignore' },
+  )
   try {
     for (let i = 0; i < 120; i++) {
       try {
         if ((await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).ok) break
-      } catch { /* not up yet */ }
+      } catch {
+        /* not up yet */
+      }
       await sleep(100)
     }
     // ATTACH IS RETRIED, and that is not flake-papering. On a profile that was just wiped,
@@ -152,12 +219,17 @@ async function mapLoadsAt(host) {
     if (page === null) skip(`Chrome opened no page target for ${host}`)
     let refused = false
     page.on('Runtime.consoleAPICalled', (p) => {
-      if (/RefererNotAllowed/.test((p.args ?? []).map((a) => a.value ?? '').join(' '))) refused = true
+      if (/RefererNotAllowed/.test((p.args ?? []).map((a) => a.value ?? '').join(' ')))
+        refused = true
     })
     const base = `https://${host}`
     await page.goto(`${base}/login/`)
-    await page.type('input[name="email"]', process.env.DEMO_EMAIL ?? 'demo@example.test', { perChar: 3 })
-    await page.type('input[name="password"]', process.env.DEMO_PASSWORD ?? 'demo-nur-lokal-2026', { perChar: 3 })
+    await page.type('input[name="email"]', process.env.DEMO_EMAIL ?? 'demo@example.test', {
+      perChar: 3,
+    })
+    await page.type('input[name="password"]', process.env.DEMO_PASSWORD ?? 'demo-nur-lokal-2026', {
+      perChar: 3,
+    })
     await page.eval(`document.querySelector('form button[type="submit"]').click()`)
     await sleep(2500)
     await page.goto(base + '/')
@@ -175,10 +247,15 @@ const lines = []
 let failed = false
 try {
   await sleep(1200)
-  for (const [host, role] of [[API_HOST, 'apiHost — serves the admin panel'], [TAG_HOST, 'tagHost — three static files']]) {
+  for (const [host, role] of [
+    [API_HOST, 'apiHost — serves the admin panel'],
+    [TAG_HOST, 'tagHost — three static files'],
+  ]) {
     const r = await mapLoadsAt(host)
-    lines.push(`  ${r.ok ? 'ok  ' : 'FAIL'} https://${host}/  ${role}\n` +
-      `         canvas=${r.canvas} pins=${r.pins} ${r.refused ? 'RefererNotAllowedMapError' : ''}`)
+    lines.push(
+      `  ${r.ok ? 'ok  ' : 'FAIL'} https://${host}/  ${role}\n` +
+        `         canvas=${r.canvas} pins=${r.pins} ${r.refused ? 'RefererNotAllowedMapError' : ''}`,
+    )
     // ONLY apiHost is required. tagHost is reported because knowing WHICH host the
     // allowlist still names is the difference between "add the key" and "the allowlist is
     // one rename behind", and those are different jobs for different people.
