@@ -70,7 +70,34 @@ echo "==> 1/8 build the admin export (web/out)"
 # happens to hold would otherwise decide the language the director sees in production. A shell
 # variable beats .env.local in Next, so setting it here makes the shipped default German
 # (decision-8) regardless of who runs the deploy. English is still one click away in the UI.
-(cd web && pnpm install --frozen-lockfile && NEXT_PUBLIC_DEFAULT_LOCALE=de pnpm verify)
+#
+# THE MAPS KEY IS BAKED IN AT BUILD TIME TOO, and it was not being passed. The map is the
+# landing surface (decision-39) and the director has never seen a pin: every production
+# bundle so far has been built with no key, so the dashboard renders its degraded state.
+#
+# ADDING IT HERE IS HALF THE FIX AND NOT THE WHOLE ONE. Measured with a real headless
+# Chrome against a local build carrying this key, fronted under each real hostname:
+#
+#   https://timesheets.exe.xyz/       map loads     <- the box's name BEFORE the rename
+#   https://schimmer-glanz.exe.xyz/   RefererNotAllowedMapError
+#
+# The key's HTTP-referrer allowlist is one rename behind, so it refuses the host that
+# actually serves the admin. Until somebody adds https://<apiHost>/* in the Google Cloud
+# console the pin still will not draw - it will just fail for a different reason, in a
+# console nobody opens. `node demo/check-map-key.mjs` is what says whether that is done.
+#
+# A MISSING KEY REFUSES rather than quietly shipping the degraded map, because "the deploy
+# worked and the map is empty" is how this went unnoticed for two weeks. ALLOW_NO_MAP_KEY=1
+# is the deliberate way past it.
+MAPS_KEY="${NEXT_PUBLIC_GOOGLE_MAPS_KEY:-$(psst get NEXT_PUBLIC_GOOGLE_MAPS_KEY 2>/dev/null || true)}"
+if [ -z "$MAPS_KEY" ] && [ "${ALLOW_NO_MAP_KEY:-}" != "1" ]; then
+  echo "FATAL: no NEXT_PUBLIC_GOOGLE_MAPS_KEY (env or psst). The dashboard is the map" >&2
+  echo "       (decision-39) and a key-less bundle ships it empty. Unlock the vault, or" >&2
+  echo "       re-run with ALLOW_NO_MAP_KEY=1 if that is genuinely what you want." >&2
+  exit 1
+fi
+(cd web && pnpm install --frozen-lockfile \
+  && NEXT_PUBLIC_DEFAULT_LOCALE=de NEXT_PUBLIC_GOOGLE_MAPS_KEY="$MAPS_KEY" pnpm verify)
 
 echo "==> 2/8 install server runtime deps (pg + @sentry/node, both pure JS — safe to ship from macOS)"
 (cd server && pnpm install --prod --frozen-lockfile)

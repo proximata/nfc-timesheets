@@ -66,6 +66,12 @@ const rate = toCents(arg("rate"));
 const create = arg("create", false) === true;
 
 if (!name && !workerId) die('need --name "Full Name" or --worker-id N');
+// BEFORE the admin login, not after it. A wage is REQUIRED and strictly positive
+// (decision-41), so `--create` without `--rate` cannot succeed; the server answers 422
+// rate_required and this script used to print that JSON verbatim, three network round trips
+// in, at the exact moment the operator is standing next to the cleaner they are enrolling.
+// Everything this refusal needs is already on the command line.
+if (create && rate === null) die("--create needs --rate too: a wage is required (e.g. --rate 14.50)");
 
 // --- admin session ---------------------------------------------------------------
 const vault = (key) => {
@@ -137,13 +143,13 @@ if (!worker && name) {
 // --- create if asked -------------------------------------------------------------
 if (!worker) {
   if (!create) die(`no worker matched. Re-run with --create to add "${name}" as a new worker.`);
-  const payload = { name, active: true };
+  const payload = { name, active: true, hourly_rate_cents: rate };
   if (email) payload.email = email;
   if (phone) payload.phone = phone;
-  if (rate !== null) payload.hourly_rate_cents = rate;
   const made = await api("/admin/workers", { method: "POST", body: JSON.stringify(payload) });
   if (!made.ok) {
     if (made.body?.error === "email_taken") die("that email already belongs to another worker");
+    if (made.body?.error === "rate_required") die(`the server refused the rate: --rate ${arg("rate")}`);
     die(`creating the worker failed: ${made.status} ${JSON.stringify(made.body)}`);
   }
   worker = made.body.worker ?? made.body;
