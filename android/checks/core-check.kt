@@ -36,6 +36,8 @@ import io.github.qwadratic.nfctimesheets.core.SyncPlan.QueuedShift
 import io.github.qwadratic.nfctimesheets.core.TagLink
 import io.github.qwadratic.nfctimesheets.core.TapInbox
 import io.github.qwadratic.nfctimesheets.core.Wire
+import io.github.qwadratic.nfctimesheets.core.WireZone
+import io.github.qwadratic.nfctimesheets.core.Zones
 import org.json.JSONObject
 import java.io.File
 import java.time.Instant
@@ -86,6 +88,7 @@ fun main() {
     syncPlan()
     stringResources()
     manifestAndWiring()
+    zones()
     enrolmentCode()
     enrolmentAgainstServer()
     sessionPersistence()
@@ -330,6 +333,38 @@ private fun wireDecoding() {
     val roster = JSONObject("""{"worker":{"id":7,"name":"Anna"},"locations":[{"id":"$UUID_A","slug":"w","name":"Westbahnhof"}]}""")
     check(Wire.worker(roster.getJSONObject("worker")).name == "Anna", "worker decodes")
     check(Wire.location(roster.getJSONArray("locations").getJSONObject(0)).id == UUID_A, "location id is the tag uuid")
+
+    // decision-44: the whole envelope, WITH zones.
+    val fullRoster = Wire.roster(
+        JSONObject(
+            """{"worker":{"id":7,"name":"Anna"},
+                "locations":[{"id":"$UUID_A","slug":"w","name":"Westbahnhof"}],
+                "zones":[{"id":"$UUID_B","location_id":"$UUID_A","name":"Haupteingang",
+                          "tag_serial":"04:A1:A8:52:AE:5C:80"}]}""",
+        ),
+    )
+    check(fullRoster.locations.single().id == UUID_A, "roster() still decodes locations")
+    check(fullRoster.zones.single().id == UUID_B, "roster() decodes the additive zones array")
+    check(fullRoster.zones.single().tagSerial == "04:A1:A8:52:AE:5C:80", "zone tag_serial rides along")
+
+    // THE RED CASE, shown RED before it was fixed: an older server has no "zones" key
+    // at all. `getJSONArray("zones")` throws `org.json.JSONException` on exactly this
+    // body -- verified by writing Wire.roster() with getJSONArray first, watching this
+    // assertion below fail with that exception, then switching to optJSONArray. It must
+    // stay optJSONArray: this is the concrete "server older than the app" case named in
+    // the workflow brief, and it must degrade, never throw.
+    val noZonesKey = JSONObject(
+        """{"worker":{"id":7,"name":"Anna"},
+            "locations":[{"id":"$UUID_A","slug":"w","name":"Westbahnhof"}]}""",
+    )
+    val degraded = Wire.roster(noZonesKey)
+    check(degraded.locations.single().id == UUID_A, "a zones-less roster still decodes its locations")
+    check(degraded.zones.isEmpty(), "a missing \"zones\" key degrades to an empty list, never a throw")
+
+    // A PRESENT but empty array must decode the same way (HOIV's shape today: migration
+    // 006 landed, zero zone rows).
+    val emptyZones = JSONObject(noZonesKey.toString()).put("zones", org.json.JSONArray())
+    check(Wire.roster(emptyZones).zones.isEmpty(), "an empty zones array decodes to an empty list too")
 }
 
 // ---------------------------------------------------------------------------------
@@ -715,6 +750,132 @@ private fun manifestAndWiring() {
             check(!text.contains(legacy), "$legacy is hardcoded in ${file.path} — it belongs in branding.properties")
         }
     }
+}
+
+// ---------------------------------------------------------------------------------
+// 8b. ZONES (decision-43, decision-44). Pure decision logic first, then the two seams
+//     that only compile on-device (ShiftStore's DB migration, TimeSheetViewModel's tap
+//     and material paths), read as text — the same convention section 8 already uses for
+//     data/ and ui/.
+// ---------------------------------------------------------------------------------
+private fun zones() {
+    val hoiv = "c3c37d4a-ca0a-42c5-b248-9704b9907ec7"
+    val otherBuilding = "6b3a2c1d-0e4f-4a8b-9c7d-1e2f3a4b5c6d"
+    val zoneOfHoiv = WireZone(id = "11111111-1111-1111-1111-111111111111", locationId = hoiv, name = "Haupteingang", tagSerial = "04:A1:A8:52:AE:5C:80")
+    val zoneOfHoiv2 = WireZone(id = "22222222-2222-2222-2222-222222222222", locationId = hoiv, name = "Tiefgarage", tagSerial = null)
+    val zoneOfOther = WireZone(id = "33333333-3333-3333-3333-333333333333", locationId = otherBuilding, name = "Eingang", tagSerial = null)
+    val cache = listOf(zoneOfHoiv, zoneOfHoiv2, zoneOfOther)
+
+    // ---- Zones.buildingIdOf ------------------------------------------------------
+    check(Zones.buildingIdOf(zoneOfHoiv.id, cache) == hoiv, "a zone resolves to its building")
+    check(Zones.buildingIdOf(hoiv, cache) == hoiv, "a building id is already its own building id")
+    check(Zones.buildingIdOf(zoneOfOther.id, cache) == otherBuilding, "a different zone resolves to a different building")
+
+    // THE RED CASE, shown RED before it was fixed: a SENTINEL default on a cache miss
+    // (e.g. `?: "unknown"`) collapses every currently-uncached place onto one shared
+    // value, so two DIFFERENT, unrelated buildings compare as "the same building" the
+    // moment the roster cache is empty (a fresh install, an offline cold launch, or a
+    // roster fetch ShiftSync.refreshRoster silently swallowed). Verified by implementing
+    // buildingIdOf with that fallback first: this assertion failed, both unresolved ids
+    // collapsed to "unknown" and compared equal. IDENTITY fixes it — see the fun's kdoc.
+    val uncachedA = "44444444-4444-4444-4444-444444444444"
+    val uncachedB = "55555555-5555-5555-5555-555555555555"
+    check(
+        Zones.buildingIdOf(uncachedA, emptyList()) != Zones.buildingIdOf(uncachedB, emptyList()),
+        "two different cache-miss ids must stay different buildings, not collapse onto a sentinel",
+    )
+    check(
+        Zones.buildingIdOf(uncachedA, emptyList()) == uncachedA,
+        "a cache miss resolves to ITSELF (identity), never a placeholder string",
+    )
+
+    // THE OLD BUG, shown RED against a bare `==`: two zone taps in the SAME building must
+    // read as a tap-OUT (decision-37's named risk), not as a building switch. A raw
+    // `running.locationId == locationId` comparison treats zoneOfHoiv and zoneOfHoiv2 as
+    // different places and would auto-close-and-reopen instead of closing. Verified by
+    // comparing the raw ids directly here first: FALSE, i.e. red. buildingIdOf fixes it.
+    check(zoneOfHoiv.id != zoneOfHoiv2.id, "sanity: the two HOIV zones really are different raw ids")
+    check(
+        Zones.buildingIdOf(zoneOfHoiv.id, cache) == Zones.buildingIdOf(zoneOfHoiv2.id, cache),
+        "two zones of the SAME building compare equal once resolved (the fix TimeSheetViewModel.sameBuilding relies on)",
+    )
+    check(
+        Zones.buildingIdOf(zoneOfHoiv.id, cache) != Zones.buildingIdOf(zoneOfOther.id, cache),
+        "zones of DIFFERENT buildings still compare unequal",
+    )
+
+    // ---- Zones.zonePlaceIdForSerial + Zones.normaliseSerial ----------------------
+    check(
+        Zones.zonePlaceIdForSerial("04:A1:A8:52:AE:5C:80", cache) == zoneOfHoiv.id,
+        "a roster-cached serial resolves to its zone's place id, not its building id",
+    )
+    check(Zones.zonePlaceIdForSerial("04a1a852ae5c80", cache) == zoneOfHoiv.id, "any casing/separator style matches")
+    check(Zones.zonePlaceIdForSerial("04:A1:A8:52:AE:5C:81", cache) == null, "one byte off must NOT match")
+    check(Zones.zonePlaceIdForSerial(null, cache) == null, "a null serial resolves to nothing")
+    check(Zones.zonePlaceIdForSerial("  ", cache) == null, "a blank serial resolves to nothing")
+    check(Zones.zonePlaceIdForSerial("04:A1:A8:52:AE:5C:80", emptyList()) == null, "an empty cache matches nothing")
+
+    // THE ROUND TRIP, same discipline known-tags-check.kt already runs for the compiled
+    // table: what a scan resolves must also be what TagLink accepts back, or a worker
+    // holding a tag the roster knows about gets "unknown tag" anyway.
+    val link = TagLink(host, legacyHosts)
+    val resolved = Zones.zonePlaceIdForSerial("04:A1:A8:52:AE:5C:80", cache)
+    check(resolved != null, "the fixture serial resolves")
+    val synthesised = link.uriFor(resolved)
+    check(synthesised != null, "uriFor builds a link from the resolved zone id")
+    check(link.locationId(synthesised.toString()) == resolved, "round trip: what we synthesise, we must also accept")
+
+    // normaliseSerial agreeing with the pre-refactor inline logic KnownTags.locationIdFor
+    // used to carry itself, on the same case table known-tags-check.kt already pins.
+    val canonical = "04:A1:A8:52:AE:5C:80"
+    for ((input, why) in listOf(
+        "04:a1:a8:52:ae:5c:80" to "lowercase",
+        "04A1A852AE5C80" to "no separators",
+        "04-A1-A8-52-AE-5C-80" to "dashes",
+        "04 A1 A8 52 AE 5C 80" to "spaces",
+    )) {
+        check(Zones.normaliseSerial(input) == canonical, "normaliseSerial($why) matches the pre-refactor table")
+    }
+    check(Zones.normaliseSerial("04:A1:A8:52:AE:5C:81") != canonical, "one byte off still normalises to a DIFFERENT value")
+    check(Zones.normaliseSerial(null) == null, "null normalises to null")
+    check(Zones.normaliseSerial("   ") == null, "blank normalises to null")
+
+    // ---- ShiftStore's DB migration, read as text (cannot run off-device) ---------
+    // THE #1 THING THE OWNER MUST VERIFY BY HAND: this runs against the field phone's
+    // real, already-installed SQLite file on its very next launch after `adb install -r`.
+    val shiftStore = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/data/ShiftStore.kt").readText()
+    check(shiftStore.contains("null, 2)"), "ShiftStore is on database version 2")
+    check(
+        Regex("""if \(oldVersion == 1 && newVersion == 2\)""").containsMatchIn(shiftStore),
+        "onUpgrade has an explicit 1->2 branch",
+    )
+    val upgrade = shiftStore.substringAfter("override fun onUpgrade").substringBefore("\n\n    // ---- shifts")
+    check(!upgrade.contains("DROP TABLE"), "the 1->2 migration never DROPs a table — these rows are unpaid hours")
+    check(upgrade.contains("throw IllegalStateException"), "an unhandled version jump still refuses loudly rather than guessing")
+    check(shiftStore.contains("fun replaceRoster("), "the roster cache writes locations AND zones in one call")
+    check(shiftStore.contains("fun zones(): List<WireZone>"), "the cached zone table is readable back out")
+
+    // ---- TimeSheetViewModel's tap and material paths, read as text ---------------
+    val model = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetViewModel.kt").readText()
+    val writeTap = model.substringAfter("private fun writeTap(").substringBefore("\n    /**")
+    check(
+        !Regex("""running\.locationId == locationId""").containsMatchIn(writeTap),
+        "writeTap no longer compares raw tapped ids (decision-37's named risk)",
+    )
+    check(writeTap.contains("sameBuilding(running.locationId, locationId)"), "writeTap compares BUILDINGS, via Zones.buildingIdOf")
+
+    val submitMaterial = model.substringAfter("fun submitMaterial(typed: String): Boolean {").substringBefore("\n        return true")
+    check(
+        submitMaterial.contains("Zones.buildingIdOf(it, app.store.zones())"),
+        "submitMaterial resolves the open shift's place through Zones.buildingIdOf before it can reach a material request",
+    )
+    check(
+        !Regex("""enqueue\([^)]*locationId\s*=\s*_log\.value\.open\?\.locationId""").containsMatchIn(submitMaterial),
+        "THE RED CASE, shown RED before it was fixed: the raw open-shift place id (which may " +
+            "be a zone) must never reach materials.enqueue directly — that 422s on " +
+            "POST /material-requests (v.activeLocation is buildings-only, decision-6) and the " +
+            "row is classified BLOCKED, a silent-looking support ticket with no obvious cause",
+    )
 }
 
 // ---------------------------------------------------------------------------------

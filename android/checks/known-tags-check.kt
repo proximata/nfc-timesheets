@@ -3,6 +3,7 @@
 package io.github.qwadratic.nfctimesheets.checks
 
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.core.Zones
 import io.github.qwadratic.nfctimesheets.nfc.KnownTags
 
 /*
@@ -67,6 +68,19 @@ fun main() {
     check("uriFor rejects lenient uuid", link.uriFor("1-1-1-1-1"), null)
     // A serial is not a URL and must never be treated as one.
     check("serial is not a tag link", link.locationId(serial), null)
+
+    // --- KnownTags now DELEGATES its normalisation to core/Zones.kt (decision-44) ---
+    // What used to be an inline `.uppercase().filter{...}.chunked(2).joinToString(":")`
+    // in this file must still agree with itself, on the exact table above, now that it
+    // lives in one place instead of two.
+    check("Zones.normaliseSerial(canonical)", Zones.normaliseSerial(serial), serial)
+    check("Zones.normaliseSerial(lowercase)", Zones.normaliseSerial("04:a1:a8:52:ae:5c:80"), serial)
+    check("Zones.normaliseSerial(no separators)", Zones.normaliseSerial("04A1A852AE5C80"), serial)
+    check("Zones.normaliseSerial(dashes)", Zones.normaliseSerial("04-A1-A8-52-AE-5C-80"), serial)
+    check("Zones.normaliseSerial(spaces)", Zones.normaliseSerial("04 A1 A8 52 AE 5C 80"), serial)
+    check("Zones.normaliseSerial(one byte off) disagrees", Zones.normaliseSerial("04:A1:A8:52:AE:5C:81") == serial, false)
+    check("KnownTags.locationIdFor still agrees with Zones.normaliseSerial directly", KnownTags.locationIdFor(Zones.normaliseSerial("04a1a852ae5c80")), hoiv)
+
     if (failures == 0) println("known-tags-check: OK") else {
         println("known-tags-check: $failures FAILED")
         kotlin.system.exitProcess(1)

@@ -51,6 +51,7 @@ CORE=app/src/main/kotlin/io/github/qwadratic/nfctimesheets/core
 "$KOTLINC" -nowarn -cp "$JSON_JAR" -d "$OUT" \
   "$CORE"/TagLink.kt "$CORE"/ApiFailure.kt "$CORE"/TapInbox.kt "$CORE"/Wire.kt "$CORE"/SyncPlan.kt \
   "$CORE"/EnrolmentCode.kt "$CORE"/SessionCookie.kt "$CORE"/MaterialQueue.kt "$CORE"/ShiftSignal.kt \
+  "$CORE"/Zones.kt \
   checks/core-check.kt
 
 KOTLIN_HOME="$(dirname "$(dirname "$(command -v "$KOTLINC")")")"
@@ -62,7 +63,12 @@ STDLIB="$KOTLIN_HOME/lib/kotlin-stdlib.jar"
 # Adopted third-party tags (nfc/KnownTags). Compiled separately because it lives outside
 # core/ — it is still Android-free, which is the only reason this can run off-device.
 NFC=app/src/main/kotlin/io/github/qwadratic/nfctimesheets/nfc
+# Wire.kt declares WireZone (needed by core/Zones.kt) but its materialRequest() decoder
+# also references WireMaterialRequest, which lives in MaterialQueue.kt, which in turn
+# references ApiFailure — so this compile unit pulls in the same transitive set as the
+# main CoreCheck build above, even though this check calls none of that surface.
 "$KOTLINC" -nowarn -cp "$JSON_JAR" -d "$OUT" \
-  "$CORE"/TagLink.kt "$NFC"/KnownTags.kt checks/known-tags-check.kt
+  "$CORE"/TagLink.kt "$CORE"/ApiFailure.kt "$CORE"/MaterialQueue.kt "$CORE"/Wire.kt "$CORE"/Zones.kt \
+  "$NFC"/KnownTags.kt checks/known-tags-check.kt
 
 "$JAVA_BIN" -cp "$OUT:$JSON_JAR:$STDLIB" io.github.qwadratic.nfctimesheets.checks.KnownTagsCheck
