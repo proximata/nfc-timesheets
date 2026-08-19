@@ -263,6 +263,8 @@ node server/check-api.js              # API behaviour against a throwaway schema
 node server/routes/wellknown.test.js  # AASA / assetlinks / /t handler
 ./ops/check-autoclose.sh              # 8h auto-close SQL is correct and idempotent
 sh demo/check-guards.sh               # the demo scripts still refuse the live db and host
+node demo/probe-zones-revenue.mjs     # zone list/drawer + revenue ledger geometry, 1680/1440x900/390,
+                                       # dark+light; needs DB nfc_demo + API on :4319, PUBLIC_DIR=../web/out
 cd web && pnpm check                  # exact versions, en/de key parity, ICU plurals
 ```
 
