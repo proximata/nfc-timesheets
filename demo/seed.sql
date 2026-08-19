@@ -312,35 +312,34 @@ FROM locations l
 WHERE l.monthly_contract_cents IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
--- § A worker whose hourly rate NOBODY HAS SET, at two buildings on purpose.
+-- § A worker at TWO buildings, one of which she is the only person to clean.
 --
--- `hourly_rate_cents = 0` is the column default, i.e. "nobody has said what this person
--- costs" — not "this person is free". Eight surfaces refuse to price those hours at
--- 0,00 EUR and name the exclusion instead, and every one of those refusals needs a real
--- row underneath it or its check passes vacuously.
+-- WHAT THIS BLOCK USED TO BE. It seeded `hourly_rate_cents = 0` on purpose: the column
+-- default, meaning "nobody has said what this person costs" and NOT "this person is free".
+-- Eight surfaces refused to price those hours at 0,00 EUR and named the exclusion instead,
+-- and this row was what made those checks able to fail.
 --
--- TWO BUILDINGS, AND THE SECOND ONE IS THE POINT:
---   neubaugasse-25   she is the ONLY person who works it, so its whole labour is
---                    unpriced and its cost cell must read „Nicht bewertet“, never 0,00 €.
---   landstrasser-46  she works it ALONGSIDE priced colleagues, so the building has a real
---                    labour amount AND unpriced hours inside it. That is the realistic
---                    case and the one the /pl/ defect was raised for — 48:00 became 58:30
---                    at an unchanged margin. With only the all-or-nothing building seeded,
---                    a change that drops the caveat whenever `labour_cents > 0` stays
---                    fully green, so this row is what makes that check able to fail.
+-- decision-41 DELETED THE STATE. Migration 006 dropped the DEFAULT and added
+-- `CHECK (hourly_rate_cents > 0)`, so a rate of 0 is unrepresentable and this INSERT would
+-- refuse. The eight refusals went with it, so there is nothing left for the fixture to
+-- prove and a zero here would only stop the seed from loading at all.
 --
--- INSERTED AFTER § Contract prices ON PURPOSE. The calibration above derives each
--- building's price from the hours worked in it; these shifts contribute no labour cost (a
--- zero rate is excluded from the cost sum) but they do carry seconds, and seconds move
--- `target_minutes_per_month`. Running after it leaves every existing demo figure — every
--- price, every margin, every target — bit-for-bit what it was.
+-- The SHIFTS stay, and so does the shape they were chosen for: one building she is the sole
+-- cleaner of, one she shares with priced colleagues. That is still the realistic case for
+-- everything else that reads per-building labour.
+--
+-- INSERTED AFTER § Contract prices ON PURPOSE, and this is now a REAL change to the demo
+-- figures rather than a no-op: her hours used to carry seconds but no cost, and they now
+-- carry both. The calibration above ran before this block, so every contract price stays
+-- what it was and the two buildings simply look more expensive than they did — which is
+-- the truth the old fixture was hiding.
 --
 -- Dates: three in the previous calendar month, which is what /payroll/ and /pl/ open on,
 -- and two counted back from today, so the case is also inside the rolling 30-day window
 -- the shift log opens on. 07:00-10:30 Vienna wall clock = 3.5 payable hours each.
 -- ---------------------------------------------------------------------------
 INSERT INTO workers (name, email, hourly_rate_cents, active) VALUES
-  ('Ana Ilic', 'ana@example.test', 0, true);
+  ('Ana Ilic', 'ana@example.test', 1350, true);
 
 INSERT INTO shifts (worker_id, location_id, start_time, end_time, client_uuid)
 SELECT (SELECT id FROM workers WHERE email = 'ana@example.test'),
@@ -450,6 +449,112 @@ SELECT * FROM (VALUES
    now() - interval '18 days')
 ) AS v;
 
+-- ---------------------------------------------------------------------------
+-- § Zones, and the FOUR area states a screen has to tell apart (decision-43).
+--
+-- A zone is a place inside a building that gets cleaned and can carry a tag. IT IS NOT A
+-- COSTING UNIT: a shift is building-level, so no duration is attributable to a zone, and
+-- nothing here may ever grow a per-zone price.
+--
+--   donaufeld-101    three zones, ALL MEASURED   -> a real total, and EUR/m2 is answerable
+--   handelskai-94    two zones, ONE UNMEASURED   -> the sum is a FLOOR, every per-m2 NULL
+--   landstrasser-46  one zone, tag NOT MOUNTED   -> the resumable errand, mid-walk
+--   gumpendorfer-63  one ADOPTED tag, by serial  -> hardware somebody else mounted, no URL
+--   wagramer-4       ZERO ZONES, and it is ACTIVE
+--   neubaugasse-25   ZERO ZONES, and it is ACTIVE
+--
+-- THE LAST TWO ARE THE POINT AND THEY ARE PRODUCTION'S SHAPE. HOIV has one building, zero
+-- zones and a card already on its wall. If "no zones" is ever read as an operational state
+-- rather than a presentational one, that card stops clocking anybody in and no site visit
+-- can fix it. Two unzoned, active buildings here are what make that regression visible on
+-- the map, in the buildings table and on /pl/ at the same time.
+--
+-- The serial is the REAL one from the Arsenalstrasse tag: an NXP Mifare Ultralight EV1 that
+-- somebody else's system mounted, carrying no URL at all (46 bytes, our URI does not fit).
+-- ---------------------------------------------------------------------------
+INSERT INTO zones (location_id, name, note, area_sqm, tag_serial, tag_deployed_at)
+SELECT (SELECT id FROM locations WHERE slug = v.slug),
+       v.name, v.note, v.area_sqm, v.tag_serial,
+       CASE WHEN v.deployed THEN now() - interval '30 days' ELSE NULL END
+FROM (VALUES
+  ('donaufeld-101',   'Stiege 1',      'Links neben der Gegensprechanlage', 240.00::numeric, NULL::text, true),
+  ('donaufeld-101',   'Stiege 2',      'Neben dem Postkasten',              240.00,          NULL,       true),
+  ('donaufeld-101',   'Tiefgarage',    'Saeule bei der Einfahrt',           610.50,          NULL,       true),
+  -- Nobody has measured this one, and that is a SUPPORTED state: an invented m2 poisons
+  -- every EUR/m2 figure computed from it, so the building reports a floor instead.
+  ('handelskai-94',   'Buerogeschoss', 'Rechts der Lifttuer',               980.00,          NULL,       true),
+  ('handelskai-94',   'Stiegenhaus B', 'Kein Plan vorhanden',               NULL,            NULL,       true),
+  -- Mid-walk: the zone exists, the tag has not been put up. The list keeps offering
+  -- "Tag-Einrichtung fortsetzen" until somebody is standing at the right door.
+  ('landstrasser-46', 'Haupteingang',  'Noch anzubringen',                  310.00,          NULL,       false),
+  -- Adopted hardware: matched by SERIAL through /roster, never by a URL it does not have.
+  ('gumpendorfer-63', 'Ordination',    'Vorhandener Tag am Tuerstock',      95.00,           '04:A1:A8:52:AE:5C:80', true)
+) AS v(slug, name, note, area_sqm, tag_serial, deployed);
+
+-- A stood-down zone: history keeps naming the door a shift was tapped at, and its own tag
+-- stops resolving. The list shows it and says which it is.
+INSERT INTO zones (location_id, name, note, area_sqm, active)
+SELECT (SELECT id FROM locations WHERE slug = 'donaufeld-101'),
+       'Hof (Tag abgenommen)', 'Tag wurde bei der Fassadensanierung entfernt', 120.00, false;
+
+-- Tap facts, so "zuletzt getippt" is not uniformly empty. `start_zone_id` is a TAP FACT and
+-- never a cost split: the shift stays attached to the BUILDING (decision-43 section 4).
+UPDATE shifts s
+   SET start_zone_id = z.id, end_zone_id = z.id
+  FROM zones z
+ WHERE z.location_id = s.location_id
+   AND z.name = 'Stiege 1'
+   AND s.start_time > now() - interval '20 days';
+
+-- ---------------------------------------------------------------------------
+-- § Revenue: what the client ACTUALLY PAID, typed per building per month (decision-42).
+--
+-- FOUR STATES, and the screen must never collapse any two of them:
+--   entered            a figure somebody typed
+--   entered as 0       "they paid nothing this month" - a credit month, a dispute. REAL.
+--   corrected          a figure that REPLACED an earlier one; the earlier one is kept
+--   not entered        NO ROW AT ALL. Unknown, never 0, and never the contract value.
+--
+-- Two buildings are deliberately left with NO ROW for last month, so the P&L has to say
+-- "nicht eingetragen" and report its own total as a partial sum.
+-- ---------------------------------------------------------------------------
+INSERT INTO location_revenue (location_id, month, amount_cents, note, entered_by, entered_at)
+SELECT (SELECT id FROM locations WHERE slug = v.slug),
+       (date_trunc('month', now() AT TIME ZONE 'Europe/Vienna') - (v.months_back || ' months')::interval)::date,
+       v.amount_cents, v.note,
+       NULL,
+       now() - interval '9 days'
+FROM (VALUES
+  ('donaufeld-101',   1, 185000, NULL),
+  ('wagramer-4',      1,  96000, NULL),
+  ('gumpendorfer-63', 1,  42000, NULL),
+  -- A REAL ZERO. Not the unknown: this client paid nothing last month and said why.
+  ('neubaugasse-25',  1,      0, 'Gutschrift wegen Wasserschaden, Reinigung ausgesetzt'),
+  ('donaufeld-101',   2, 185000, NULL),
+  ('wagramer-4',      2,  96000, NULL)
+) AS v(slug, months_back, amount_cents, note);
+
+-- A CORRECTION IS AN INSERT, NEVER AN UPDATE IN PLACE. The superseded row keeps its amount,
+-- so the screen prints "geaendert 11.09. - vorher 1.250,00" instead of sending the director
+-- to the database. Both rows are written explicitly here: the superseded one first, then
+-- the one in force. The partial unique index admits exactly one live row per building-month
+-- and would refuse the other order.
+--
+-- `entered_by` is NULLABLE and is NULL here on purpose: demo/make-admin.mjs runs AFTER this
+-- seed, so there is no admin row to point at. The screen already has to render "eingetragen
+-- 03.09." with no name, because an admin can be deleted, and this is that branch.
+INSERT INTO location_revenue
+  (location_id, month, amount_cents, note, entered_by, entered_at, superseded_at, superseded_by)
+SELECT (SELECT id FROM locations WHERE slug = 'handelskai-94'),
+       (date_trunc('month', now() AT TIME ZONE 'Europe/Vienna') - interval '1 month')::date,
+       125000, 'Erste Ablesung', NULL,
+       now() - interval '9 days', now() - interval '3 days', NULL;
+
+INSERT INTO location_revenue (location_id, month, amount_cents, note, entered_by, entered_at)
+SELECT (SELECT id FROM locations WHERE slug = 'handelskai-94'),
+       (date_trunc('month', now() AT TIME ZONE 'Europe/Vienna') - interval '1 month')::date,
+       138000, 'Nachtrag Sonderreinigung', NULL, now() - interval '3 days';
+
 COMMIT;
 
 -- ---------------------------------------------------------------------------
@@ -467,15 +572,29 @@ UNION ALL SELECT 'shifts',              count(*)::text FROM shifts
 UNION ALL SELECT 'shifts open',         count(*)::text FROM shifts WHERE end_time IS NULL
 UNION ALL SELECT 'shifts unresolved',   count(*)::text FROM shifts
                                         WHERE auto_closed AND corrected_at IS NULL
--- The two halves of the rate-less fixture, printed so a seed that lost one is obvious
--- before a check has to say so. Both must be > 0.
-UNION ALL SELECT 'buildings wholly unpriced', count(*)::text FROM (
-            SELECT s.location_id FROM shifts s JOIN workers w ON w.id = s.worker_id
-             GROUP BY s.location_id
-            HAVING bool_and(w.hourly_rate_cents = 0)) q
-UNION ALL SELECT 'buildings mixed-rate',      count(*)::text FROM (
-            SELECT s.location_id FROM shifts s JOIN workers w ON w.id = s.worker_id
-             GROUP BY s.location_id
-            HAVING bool_or(w.hourly_rate_cents = 0)
-               AND bool_or(w.hourly_rate_cents > 0)) q
+-- Every wage is a real one now (decision-41). This must be 0 for ever: a row that got
+-- past the CHECK would mean the constraint is gone.
+UNION ALL SELECT 'workers without a rate', count(*)::text FROM workers
+                                        WHERE hourly_rate_cents <= 0
+-- The three area states, printed so a seed that lost one is obvious before a check has to
+-- say so. All three must be > 0 (decision-43).
+UNION ALL SELECT 'zones',               count(*)::text FROM zones
+UNION ALL SELECT 'zones unmeasured',    count(*)::text FROM zones
+                                        WHERE active AND area_sqm IS NULL
+UNION ALL SELECT 'buildings unzoned',   count(*)::text FROM locations l
+                                        WHERE NOT EXISTS (SELECT 1 FROM zones z
+                                                           WHERE z.location_id = l.id AND z.active)
+UNION ALL SELECT 'buildings fully measured', count(*)::text FROM locations l
+                                        WHERE EXISTS (SELECT 1 FROM zones z
+                                                       WHERE z.location_id = l.id AND z.active)
+                                          AND NOT EXISTS (SELECT 1 FROM zones z
+                                                           WHERE z.location_id = l.id AND z.active
+                                                             AND z.area_sqm IS NULL)
+-- Revenue: entered, corrected, a real 0, and months nobody has typed (decision-42).
+UNION ALL SELECT 'revenue entries live',  count(*)::text FROM location_revenue
+                                        WHERE superseded_at IS NULL
+UNION ALL SELECT 'revenue corrections',   count(*)::text FROM location_revenue
+                                        WHERE superseded_at IS NOT NULL
+UNION ALL SELECT 'revenue entered as 0',  count(*)::text FROM location_revenue
+                                        WHERE superseded_at IS NULL AND amount_cents = 0
 UNION ALL SELECT 'app_settings',        count(*)::text FROM app_settings;

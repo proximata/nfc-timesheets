@@ -79,6 +79,12 @@ const active = () =>
       id: el.id,
       cls: String(el.className),
       text: (el.getAttribute('aria-label') || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 48),
+      // Needed to fill a form by tabbing: which fields MUST be filled, whether they still
+      // are empty, and what shape of value the field wants. inputMode is how a money field
+      // is told apart from a name field without hard-coding either form's field order.
+      required: el.required === true,
+      value: typeof el.value === 'string' ? el.value : '',
+      inputMode: el.getAttribute('inputmode') || '',
       inOverlay: !!el.closest('.drawer, .modal'),
     }
   })()`)
@@ -154,8 +160,20 @@ async function journeyWorkers() {
   if (!firstField.found) return
   await typeHere(name)
 
-  // Required fields only: the drawer's own validation says which those are, so tab through
-  // and fill every visible text/number input rather than guessing the shape of the form.
+  // EVERY REQUIRED FIELD, filled by tabbing to it. Not just the name: since decision-41 the
+  // hourly rate is required too, and a journey that only fills the name stops testing
+  // "Enter on submit saves" and starts testing "the form refuses an empty rate" — which is
+  // a real behaviour, but it is the OTHER one, and it is asserted below.
+  for (let i = 0; i < 6; i++) {
+    const empty = await tabUntil(
+      (w) => w.inOverlay && w.tag === 'INPUT' && w.required && w.value === '',
+      { max: 12 },
+    )
+    if (!empty.found) break
+    // A rate is a rate, a name is a name: type something the field's own validator accepts.
+    await typeHere(empty.where.type === 'text' && empty.where.inputMode === 'decimal' ? '14,50' : `KB ${i}`)
+  }
+
   const filled = await page.eval(`(() => {
     const out = []
     for (const el of document.querySelectorAll('.drawer input')) {
@@ -165,6 +183,12 @@ async function journeyWorkers() {
     return out
   })()`)
   console.log(`       drawer fields: ${JSON.stringify(filled)}`)
+  const stillEmpty = filled.filter((f) => f.required && f.value === '')
+  record(
+    stillEmpty.length === 0,
+    'workers: every required field was reachable and filled by Tab alone',
+    `${filled.filter((f) => f.required).length} required, ${stillEmpty.length} still empty`,
+  )
 
   const submit = await tabUntil((w) => w.inOverlay && w.type === 'submit', { max: 20 })
   record(submit.found, 'workers: the submit button is reachable by Tab', submit.where.text)

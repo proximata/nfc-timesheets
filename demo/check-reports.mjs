@@ -326,6 +326,7 @@ async function main() {
       // A REAL RFC-4180 READER, not a `split(';')`: the note column can hold a semicolon,
       // and a quoted cell split by hand shifts every column after it by one.
       const rows = parseCsv(csv);
+      const header = rows[0];
       const dataRows = rows.slice(1, -1);
       const totalRow = rows.at(-1);
       assert("payroll: the CSV filename is Vienna-dated", /^payroll-\d{4}-\d{2}-\d{2}\.csv$/.test(files[0]), files[0]);
@@ -403,25 +404,41 @@ async function main() {
         `csv ${totalRow[3]}, screen ${footCents}`,
       );
 
-      // THE FILE MUST SAY WHAT THE SCREEN SAYS. /payroll/ prints „ein Betrag wird nicht
-      // berechnet – auch nicht 0,00 €" for a worker with no rate; the export used to ship
-      // `Ana Ilic;10.500;0;0;0.00;0` under it, and the accountant keeps the export. Rows
-      // only — the header and the total row are not people.
-      const noRateRows = dataRows.filter((cells) => cells[6]?.includes("Kein Stundensatz"));
+      // THE FILE MUST SAY WHAT THE SCREEN SAYS, and what both used to say is GONE.
+      //
+      // /payroll/ printed „ein Betrag wird nicht berechnet - auch nicht 0,00 EUR" for a
+      // worker with no rate, and the export used to ship `Ana Ilic;10.500;0;0;0.00;0` under
+      // it. decision-41 removed the state: `workers.hourly_rate_cents` lost its DEFAULT and
+      // gained CHECK (> 0) in migration 006, and the migration REFUSED to apply until the
+      // one rate-less row in production was dealt with by a human.
+      //
+      // So the assertion is inverted rather than deleted. Every row that reports hours must
+      // now report an amount too, and no row may carry the old copy: a file that starts
+      // saying „Kein Stundensatz" again is a file whose constraint has been dropped.
+      const noRateRows = dataRows.filter((cells) => cells.join(";").includes("Kein Stundensatz"));
       assert(
-        "payroll: the seeded period really contains a worker with no rate",
-        noRateRows.length > 0,
-        "without one, every assertion below passes vacuously",
-      );
-      assert(
-        "payroll: a worker with no rate carries NO amount in the CSV — not 0, not 0.00",
-        noRateRows.every((c) => c[2] === "" && c[3] === "" && c[4] === ""),
+        "payroll: no CSV row claims a worker has no rate - the state is unrepresentable",
+        noRateRows.length === 0,
         noRateRows.map((c) => c.join(";")).join(" | "),
       );
+      const withHours = dataRows.filter((c) => readsAsDe(c[1]).value > 0);
       assert(
-        "payroll: and that row still names her and her real hours",
-        noRateRows.every((c) => c[0].length > 0 && readsAsDe(c[1]).value > 0),
-        noRateRows.map((c) => c.join(";")).join(" | "),
+        "payroll: the seeded period really contains paid hours",
+        withHours.length > 0,
+        "without them, every assertion below passes vacuously",
+      );
+      assert(
+        "payroll: every row with hours carries a rate AND an amount",
+        withHours.every((c) => readsAsDe(c[2]).value > 0 && readsAsDe(c[3]).value > 0),
+        withHours.map((c) => c.join(";")).join(" | "),
+      );
+      // THE „Hinweis" COLUMN STAYS. Only the no-rate contribution to it went: it still
+      // carries decision-10's exclusions, and a file that lost the column entirely would be
+      // a file where a blank money cell has no explanation.
+      assert(
+        "payroll: the CSV still has its Hinweis column",
+        header.length >= 7 && header[6].length > 0,
+        JSON.stringify(header),
       );
       // The general form, so a future column shuffle cannot reintroduce it elsewhere: no
       // row may report hours worked and an amount of zero in the same breath.
@@ -431,9 +448,12 @@ async function main() {
         pricedAtZero.length === 0,
         pricedAtZero.map((c) => c.join(";")).join(" | "),
       );
+      // The total row's note is now about decision-10 ALONE: shifts whose end time nobody
+      // confirmed, and shifts still running. Empty is a legitimate answer here (nothing was
+      // excluded), which is why this asserts the two states rather than a fixed string.
       assert(
-        "payroll: the CSV total row says why it is short",
-        totalRow.join(";").includes("auch nicht 0,00"),
+        "payroll: the CSV total row explains an exclusion, or has nothing to explain",
+        totalRow[6] === "" || /Schicht/.test(totalRow[6]),
         JSON.stringify(totalRow.join(";")),
       );
     }
@@ -470,100 +490,118 @@ async function main() {
     // worker at 0, so ten and a half hours moved a building's hours from 48:00 to 58:30 and
     // its margin by NOTHING — and margin is what opens a conversation about a client's
     // contract. The hours are excluded from the cost, as on /payroll/, and NAMED here.
+    // SCOPED TO THE RESULT TABLE BY ITS CAPTION. /pl/ now carries TWO tables - the revenue
+    // ledger above and the result below - and `querySelectorAll('table.data-table')`
+    // silently read the ledger's columns as the result's. The caption is the only thing that
+    // tells them apart without hard-coding an order.
     const labourRows = await page.eval(`(() => {
-      const rows = [...document.querySelectorAll('table.data-table tbody tr')]
-      return rows.map((r) => ({
+      const table = [...document.querySelectorAll('table.data-table')]
+        .find((t) => /Umsatz, Kosten und Marge|Revenue, cost and margin/.test(t.querySelector('caption')?.textContent ?? ''))
+      if (!table) return null
+      return [...table.querySelectorAll('tbody tr')].map((r) => ({
         name: (r.children[0]?.textContent ?? '').trim(),
+        revenue: (r.children[2]?.textContent ?? '').trim(),
         labour: (r.children[3]?.textContent ?? '').trim(),
       }))
     })()`);
-    const labourCells = labourRows.map((r) => r.labour);
-    const unpricedCells = labourCells.filter((text) => text.includes("ohne Stundensatz"));
     assert(
-      "pl: the seeded period really contains labour nobody has priced",
-      unpricedCells.length > 0,
-      `labour cells: ${JSON.stringify(labourCells)}`,
+      "pl: the result table is found by its caption, not by its position",
+      labourRows !== null && labourRows.length > 0,
+      JSON.stringify(labourRows),
     );
-    assert(
-      "pl: the labour cell names the hours it could NOT price, beside the amount",
-      unpricedCells.every((text) => /nicht bewertet/.test(text) && /\d+:\d\d/.test(text)),
-      JSON.stringify(unpricedCells),
-    );
-    // A building whose ONLY hours carry no rate must not print 0,00 € as its cost — that is
-    // the same confident zero, one column to the left of the note that denies it. Built
-    // with `new RegExp` on purpose: `/\d,\d\d/` written inside an array literal is a
-    // literal backslash and matches nothing, which is a probe that cannot fail.
+    const labourCells = (labourRows ?? []).map((r) => r.labour);
+
+    // THE „no rate" CASE IS GONE AND ITS COPY WENT WITH IT (decision-41).
+    //
+    // What used to be asserted here: a building whose only hours were worked by somebody
+    // with no rate showed „Nicht bewertet" instead of 0,00 EUR, and a MIXED building showed
+    // a real amount plus a note naming the hours it could not price. Migration 006 made a
+    // wage of 0 unrepresentable, so `labour_seconds` and `labour_cents` now describe the
+    // same seconds and there is nothing left to disclaim.
+    //
+    // Inverted rather than deleted: every building with hours must state an amount, and no
+    // building may carry the old copy. A cell that says „nicht bewertet" again is a cell
+    // whose constraint has been dropped.
     const euroAmount = new RegExp(String.raw`\d[.,]\d\d\s*€`);
     const zeroEuro = new RegExp(String.raw`(^|[^\d])0,00\s*€`);
     assert(
-      "pl: the euro-amount regex really matches an amount, or the next assertion is vacuous",
+      "pl: the euro-amount regex really matches an amount, or the next assertions are vacuous",
       euroAmount.test("701,56 €") && zeroEuro.test("0,00 €") && !zeroEuro.test("10,00 €"),
     );
+    const stillUnpriced = labourCells.filter((t) => /nicht bewertet|ohne Stundensatz/i.test(t));
     assert(
-      "pl: a building whose whole labour is unpriced shows NO amount, not 0,00 €",
-      unpricedCells.every((text) => !zeroEuro.test(text)),
-      JSON.stringify(unpricedCells),
+      "pl: no labour cell claims an hour nobody could price",
+      stillUnpriced.length === 0,
+      JSON.stringify(stillUnpriced),
     );
-    // THE MIXED BUILDING, and it is the realistic one.
-    //
-    // A building where the rate-less worker is the ONLY worker has `labour_cents = 0`, so a
-    // change that only caveats a building whose WHOLE cost is missing still looks perfect
-    // against it. The case the /pl/ defect was actually raised for is the other one: she
-    // cleans alongside priced colleagues, the building shows a real amount, and the hours
-    // behind that amount are silently short — 48:00 became 58:30 at an unchanged margin.
-    // The seed carries both on purpose (demo/seed.sql § A worker whose hourly rate NOBODY
-    // HAS SET).
-    //
-    // BOTH ROWS ARE FOUND BY NAME, not by filtering on the note itself. Selecting the
-    // "mixed" rows with `text.includes('ohne Stundensatz')` looks equivalent and is not: the
-    // exact change these assertions exist to catch is the one that DELETES that note, so the
-    // filter empties, `.every()` on nothing is true, and the substantive assertion passes
-    // vacuously while the building silently under-reports its cost. Measured: with the note
-    // suppressed for any building that has priced labour, the filtered form stayed green.
+    const withHours = labourCells.filter((t) => /\d+:\d\d/.test(t));
+    assert(
+      "pl: the seeded period really contains buildings with hours",
+      withHours.length > 0,
+      `labour cells: ${JSON.stringify(labourCells)}`,
+    );
+    assert(
+      "pl: every building with hours states an amount for them",
+      withHours.every((t) => euroAmount.test(t)),
+      JSON.stringify(withHours),
+    );
+    // The two buildings the old fixture used, now carrying real amounts. Found BY NAME, so
+    // a change that deletes the rows rather than the copy cannot pass vacuously.
     const MIXED_BUILDING = "Aerztezentrum Landstrasse";
-    const WHOLLY_UNPRICED_BUILDING = "Studiohaus Neubaugasse";
-    const mixedRow = labourRows.find((r) => r.name.includes(MIXED_BUILDING));
-    const whollyRow = labourRows.find((r) => r.name.includes(WHOLLY_UNPRICED_BUILDING));
+    const SOLE_WORKER_BUILDING = "Studiohaus Neubaugasse";
+    const mixedRow = (labourRows ?? []).find((r) => r.name.includes(MIXED_BUILDING));
+    const soleRow = (labourRows ?? []).find((r) => r.name.includes(SOLE_WORKER_BUILDING));
     assert(
-      "pl: the seeded period really contains BOTH a mixed-rate building and a wholly unpriced one",
-      mixedRow !== undefined && whollyRow !== undefined,
-      `rows: ${JSON.stringify(labourRows.map((r) => r.name))}`,
+      "pl: both seeded buildings are on the report",
+      mixedRow !== undefined && soleRow !== undefined,
+      `rows: ${JSON.stringify((labourRows ?? []).map((r) => r.name))}`,
     );
     assert(
-      "pl: the MIXED building shows its amount AND names the hours it could not price",
-      mixedRow !== undefined &&
-        euroAmount.test(mixedRow.labour) &&
-        /nicht bewertet/.test(mixedRow.labour) &&
-        /\d+:\d\d/.test(mixedRow.labour),
-      JSON.stringify(mixedRow),
+      "pl: the building cleaned by ONE person now states a real cost, not a refusal",
+      soleRow !== undefined && euroAmount.test(soleRow.labour) && !zeroEuro.test(soleRow.labour),
+      JSON.stringify(soleRow),
     );
+
+    // *** THE ASSERTION decision-42 EXISTS FOR ***
+    //
+    // A month nobody has typed a payment for is UNKNOWN. Not 0,00 EUR, which would report a
+    // paying client as a total loss, and not the contract value, which would report money
+    // that may never have arrived. A TYPED 0 is a different, real answer and is shown as an
+    // amount - both branches must be on the same screen or one of them is untested.
+    const revenueCells = (labourRows ?? []).map((r) => r.revenue);
+    const notEntered = revenueCells.filter((t) => /Nicht eingetragen/.test(t));
     assert(
-      "pl: …and the wholly unpriced building states no amount at all",
-      whollyRow !== undefined &&
-        !euroAmount.test(whollyRow.labour) &&
-        /Nicht bewertet/.test(whollyRow.labour),
-      JSON.stringify(whollyRow),
+      "pl: a building with no revenue typed says so, and never 0,00 €",
+      notEntered.length > 0 && notEntered.every((t) => !zeroEuro.test(t)),
+      JSON.stringify(revenueCells),
     );
-    // Read the <li> ITSELF, not VISIBLE_TEXT: that walker only collects elements with no
-    // children, so a bullet containing a <Link> contributes the link's words and loses the
-    // sentence around them. Visibility is still asserted, on the bullet.
-    // BOTH plural branches, because the German inflects: one worker has „kein Stundensatz
-    // hinterlegt“, several have „keine Stundensätze hinterlegt“. A finder that only knows the
-    // singular passes today because the seed holds exactly one rate-less person, and stops
-    // finding the bullet at all the day a second one appears — which is the day it matters.
-    const methodUnpricedLabour = await page.eval(`(() => {
-      const li = [...document.querySelectorAll('.callout li')]
-        .find((el) => /kein(e)? Stundens(atz|ätze) hinterlegt/.test(el.textContent ?? ''))
-      if (!li) return null
-      return { text: li.textContent.trim(), visible: li.checkVisibility(), href: li.querySelector('a')?.getAttribute('href') ?? null }
+    // „vereinbart" beside „erhalten": the question the contract/revenue split buys.
+    assert(
+      "pl: the row names the AGREED figure beside the received one",
+      revenueCells.some((t) => /Vereinbart/.test(t)),
+      JSON.stringify(revenueCells),
+    );
+
+    // The method block must still carry the limitation that SURVIVED decision-41 - there is
+    // no rate history, so raising a wage still re-values last March - and must NOT carry the
+    // one that did not.
+    const method = await page.eval(`(() => {
+      const items = [...document.querySelectorAll('.callout li')].map((el) => el.textContent.trim())
+      return {
+        items,
+        rateHistory: items.some((t) => /Satzhistorie/.test(t)),
+        deadUnpriced: items.filter((t) => /kein(e)? Stundens(atz|ätze) hinterlegt/.test(t)),
+      }
     })()`);
     assert(
-      "pl: the method says the cost is short, visibly, and links to the fix",
-      methodUnpricedLabour !== null &&
-        methodUnpricedLabour.visible &&
-        methodUnpricedLabour.text.includes("auch nicht 0,00") &&
-        methodUnpricedLabour.href === "/workers/",
-      JSON.stringify(methodUnpricedLabour),
+      "pl: the method still names the missing RATE HISTORY (it survived decision-41)",
+      method.rateHistory,
+      JSON.stringify(method.items),
+    );
+    assert(
+      "pl: …and no longer claims anybody's hours are unpriced",
+      method.deadUnpriced.length === 0,
+      JSON.stringify(method.deadUnpriced),
     );
 
     // The one write: the drawer opens, traps focus, and Escape returns focus to its opener.

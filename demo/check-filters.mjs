@@ -515,7 +515,6 @@ async function main() {
     for (const truth of [
       ["the rate-history caveat survived the filter work", "nur ein Stundensatz"],
       ["the attribution rule survived the filter work", "begonnen hat"],
-      ["a rate-less worker is NAMED, never priced at 0,00 €", "Kein Stundensatz"],
     ]) {
       assert(
         `/payroll/: ${truth[0]}`,
@@ -523,10 +522,23 @@ async function main() {
           true,
       );
     }
+    // THE „no rate" TRUTH THAT USED TO BE ASSERTED HERE IS GONE, and its removal is the
+    // point rather than an omission: decision-41 made a wage of 0 unrepresentable, so
+    // „Kein Stundensatz" is copy for a state the column no longer admits. What replaces it
+    // is the assertion that the copy did not survive the state.
+    assert(
+      "/payroll/: no copy survives for a wage that cannot be missing",
+      (await page.eval(
+        `!document.body.textContent.includes('Kein Stundensatz') && !document.body.textContent.includes('ohne Stundensatz')`,
+      )) === true,
+    );
+    // The reconciliation line itself, which is about the ROW CAP and not about wages: the
+    // loaded shifts add up to exactly what the server totalled, or the screen says by how
+    // much they do not. „fehlt nichts" is the phrase both branches of that sentence share.
     assert(
       "/payroll/: the reconciliation is still claimed when nothing is filtered",
       (await page.eval(
-        `document.body.innerText.includes('Es fehlt nichts') || document.body.innerText.includes('zu niedrig')`,
+        `document.body.textContent.includes('fehlt nichts') || document.body.textContent.includes('fehlen')`,
       )) === true,
     );
 

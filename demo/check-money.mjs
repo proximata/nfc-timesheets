@@ -214,9 +214,15 @@ async function main() {
         says(screen, "läuft noch") && says(screen, String(days)),
         screen.bullets.find((b) => b.includes("läuft noch")) ?? "(no such sentence)",
       );
+      // WHAT THIS SENTENCE IS ABOUT CHANGED, AND THE CHANGE IS THE POINT (decision-42).
+      // It used to say the CONTRACT revenue accrued across the whole period while labour
+      // only existed for days that had happened. That accrual is deleted: revenue is now a
+      // typed monthly fact, and an unentered month is unknown rather than a growing
+      // fraction. What is left is the COST side - it still only contains days that exist -
+      // so a figure typed for a running month is compared against part of its own labour.
       assert(
-        `pl ${period}: it says revenue is counted for all of them and labour only to now`,
-        says(screen, "ganzen Zeitraum") && says(screen, "zu hoch"),
+        `pl ${period}: it says the cost is only partly recorded, so the margin is too high`,
+        says(screen, "nicht mehr auf Tage hochgerechnet") && says(screen, "zu hoch"),
       );
       assert(
         `pl ${period}: the margin cell itself carries the warning, not only the block below`,
@@ -275,112 +281,99 @@ async function main() {
         GROUP BY s.worker_id ORDER BY SUM(s.end_time - s.start_time) DESC LIMIT 1`,
     );
     const richName = sql(`SELECT name FROM workers WHERE id = ${RICH}`);
-    const noRateNames = sql(
-      "SELECT string_agg(name, ', ' ORDER BY name) FROM workers WHERE hourly_rate_cents = 0",
+
+    // ================================================================================
+    // A2 · A WAGE CANNOT BE ZERO, AND THE DATABASE IS WHAT SAYS SO (decision-41)
+    // ================================================================================
+    //
+    // WHAT THIS SECTION USED TO DO. It set `hourly_rate_cents = 0` on the busiest earner
+    // and then read the screen: „Nicht gezählt" had to count the rate-less PEOPLE and not
+    // only the blocked shifts, the „Stunden" sub-line had to name the hours that carried no
+    // amount, and the row had to say „Kein Stundensatz" / „Nicht bewertet". That whole
+    // journey existed because a real person's work was sitting in the hours column with no
+    // money beside it and the two headline numbers could not be reconciled (journey D14).
+    //
+    // MIGRATION 006 DELETED THE STATE instead of describing it better: the column lost its
+    // DEFAULT and gained `CHECK (hourly_rate_cents > 0)`, and the migration REFUSED to
+    // apply until the one rate-less row in production was dealt with by a human.
+    //
+    // So the strongest available assertion is no longer about copy at all. It is that the
+    // state CANNOT BE CREATED - checked by trying, against the real database, and requiring
+    // the attempt to fail. A screen assertion would go green the day somebody drops the
+    // constraint; this one does not.
+    let refused = null;
+    try {
+      exec(`UPDATE workers SET hourly_rate_cents = 0 WHERE id = ${RICH}`);
+    } catch (error) {
+      refused = String(error.stderr ?? error.message ?? error);
+    }
+    assert(
+      "db: setting a wage to 0 is REFUSED by the column, not by a screen",
+      refused !== null && /workers_rate_positive|violates check constraint/i.test(refused),
+      refused === null
+        ? "the UPDATE succeeded - the CHECK is gone and every screen below is describing a state that can come back"
+        : refused.split("\n")[0],
+    );
+    // The row is untouched: a refused UPDATE is a refused UPDATE, not a partial one.
+    assert(
+      "db: the refused UPDATE left the wage exactly as it was",
+      Number(sql(`SELECT hourly_rate_cents FROM workers WHERE id = ${RICH}`)) > 0,
+      sql(`SELECT hourly_rate_cents FROM workers WHERE id = ${RICH}`),
+    );
+    assert(
+      "db: no worker anywhere carries a wage of 0",
+      Number(sql("SELECT count(*) FROM workers WHERE hourly_rate_cents <= 0")) === 0,
+      sql("SELECT count(*) FROM workers WHERE hourly_rate_cents <= 0"),
     );
 
-    // STATE 1 — nfc_demo as seeded: two workers ship with no rate.
-    const seeded = await read(page, "/payroll/?period=lastMonth", "payroll-seeded");
-    const seededPay = de(cell(seeded, "Auszuzahlen").v);
-    const seededExcluded = cell(seeded, "Nicht gezählt");
-    const seededHours = cell(seeded, "Stunden");
-    const seededNoRateRows = seeded.rows.filter((r) => r.tds.some((td) => td.includes("Kein Stundensatz")));
+    // AND THE COPY WENT WITH THE STATE. Every screen that used to explain a missing wage
+    // must now be silent about it - a sentence describing an impossible state teaches the
+    // director something untrue, and nobody would ever see it fail.
+    const cleanPayroll = await read(page, "/payroll/?period=lastMonth", "payroll-all-rated");
+    const excluded = cell(cleanPayroll, "Nicht gezählt");
+    const hoursCell = cell(cleanPayroll, "Stunden");
     console.log(
-      `  · as seeded (${noRateNames} have no rate): Auszuzahlen ${cell(seeded, "Auszuzahlen").v}, ` +
-        `Stunden ${seededHours.v} („${seededHours.sub}“), Nicht gezählt ${seededExcluded.v} („${seededExcluded.sub}“)`,
+      `  · every wage is real: Auszuzahlen ${cell(cleanPayroll, "Auszuzahlen").v}, ` +
+        `Stunden ${hoursCell.v} („${hoursCell.sub}“), Nicht gezählt ${excluded.v} („${excluded.sub}“)`,
     );
     assert(
-      "payroll: „Nicht gezählt“ counts the rate-less PEOPLE, not only the blocked shifts",
-      Number(seededExcluded.v) >= seededNoRateRows.length && seededNoRateRows.length > 0,
-      `cell = ${seededExcluded.v}, rows with „Kein Stundensatz“ = ${seededNoRateRows.length}`,
+      "payroll: nothing on the screen claims a worker has no rate",
+      !says(cleanPayroll, "Kein Stundensatz") &&
+        !says(cleanPayroll, "ohne Stundensatz") &&
+        !says(cleanPayroll, "Nicht bewertet"),
+      `${richName}: the copy for a state the column no longer admits`,
     );
     assert(
-      "payroll: its sub-line names them as people, in the words the rows use",
-      seededExcluded.sub.includes("ohne Stundensatz"),
-      `sub = „${seededExcluded.sub}“`,
+      "payroll: „Nicht gezählt“ now counts SHIFTS alone (decision-10), and says which",
+      /Schicht/.test(excluded.sub) || excluded.v === "0",
+      `v = „${excluded.v}“, sub = „${excluded.sub}“`,
     );
-    // The hours cell and the amount cell must reconcile FROM THE SCREEN (journey D14).
-    const unvaluedShown = de(seededHours.sub.replace(/^[^0-9]*/, ""));
-    const unvaluedRows = seededNoRateRows.reduce((sum, r) => sum + (de(r.tds[0]) ?? 0), 0);
     assert(
-      "payroll: the „Stunden“ sub-line names the hours that carry no amount",
-      unvaluedShown !== null && Math.abs(unvaluedShown - unvaluedRows) < 0.02,
-      `sub = „${seededHours.sub}“ vs ${unvaluedRows.toFixed(2)} in the unvalued rows`,
+      "payroll: the „Stunden“ sub-line has nothing extra to explain",
+      hoursCell.sub === "Nur Schichten mit bestätigter Endzeit",
+      `sub = „${hoursCell.sub}“`,
+    );
+    // THE LIMITATION THAT SURVIVED, and deleting it alongside the others is the likeliest
+    // mistake in the whole change: there is still no rate history, so raising a wage still
+    // re-values last March.
+    assert(
+      "payroll: the rate-HISTORY caveat is still there (it is a different limitation)",
+      says(cleanPayroll, "nur ein Stundensatz"),
+    );
+    // Every payable hour now carries an amount, so the two headline numbers reconcile by
+    // construction - which is what journey D14 was actually asking for.
+    const rows = cleanPayroll.rows.filter((r) => (de(r.tds[0]) ?? 0) > 0);
+    assert(
+      "payroll: the period really contains paid hours",
+      rows.length > 0,
+      "without them the assertion below is vacuous",
+    );
+    assert(
+      "payroll: every row with hours states a rate AND an amount",
+      rows.every((r) => (de(r.tds[1]) ?? 0) > 0 && (de(r.tds[2]) ?? 0) > 0),
+      JSON.stringify(rows.map((r) => [r.head, ...r.tds.slice(0, 3)])),
     );
 
-    // STATE 2 — every worker rated, in a month with no open and no unresolved shift.
-    // The negative twin: the cell must be able to say „nothing“, or it says nothing at all.
-    exec("UPDATE workers SET hourly_rate_cents = 1450 WHERE hourly_rate_cents = 0");
-    const rated = await read(page, "/payroll/?period=lastMonth", "payroll-all-rated");
-    const ratedExcluded = cell(rated, "Nicht gezählt");
-    const ratedHours = cell(rated, "Stunden");
-    console.log(
-      `  · every worker rated: Auszuzahlen ${cell(rated, "Auszuzahlen").v}, ` +
-        `Stunden ${ratedHours.v} („${ratedHours.sub}“), Nicht gezählt ${ratedExcluded.v} („${ratedExcluded.sub}“)`,
-    );
-    assert(
-      "payroll (nothing excluded): the cell is 0 and calm",
-      ratedExcluded.v === "0" && ratedExcluded.calm === true,
-      `v = „${ratedExcluded.v}“, calm = ${ratedExcluded.calm}`,
-    );
-    assert(
-      "payroll (nothing excluded): the sub-line says so and names no person",
-      !ratedExcluded.sub.includes("ohne Stundensatz"),
-      `sub = „${ratedExcluded.sub}“`,
-    );
-    assert(
-      "payroll (nothing excluded): the „Stunden“ sub-line says nothing extra",
-      ratedHours.sub === "Nur Schichten mit bestätigter Endzeit",
-      `sub = „${ratedHours.sub}“`,
-    );
-    const ratedPay = de(cell(rated, "Auszuzahlen").v);
-
-    // STATE 3 — the busiest earner loses their rate. The gallery's own evidence.
-    exec(`UPDATE workers SET hourly_rate_cents = 0 WHERE id = ${RICH}`);
-    const norate = await read(page, "/payroll/?period=lastMonth", "payroll-norate-busiest");
-    const noratePay = de(cell(norate, "Auszuzahlen").v);
-    const norateExcluded = cell(norate, "Nicht gezählt");
-    const norateHours = cell(norate, "Stunden");
-    const drop = (ratedPay ?? 0) - (noratePay ?? 0);
-    console.log(
-      `  · ${richName} (the busiest) made rate-less: Auszuzahlen ${cell(norate, "Auszuzahlen").v} ` +
-        `— ${drop.toFixed(2)} € less — Stunden ${norateHours.v} („${norateHours.sub}“), ` +
-        `Nicht gezählt ${norateExcluded.v} („${norateExcluded.sub}“)`,
-    );
-    assert(
-      "payroll: money left the payout, so the count must not still read 0",
-      drop > 100 && Number(norateExcluded.v) > 0,
-      `${drop.toFixed(2)} € missing, cell = „${norateExcluded.v}“`,
-    );
-    assert(
-      "payroll: the count is exactly the number of people it excluded",
-      Number(norateExcluded.v) === 1,
-      `cell = „${norateExcluded.v}“ for one rate-less worker and no blocked shift`,
-    );
-    assert(
-      "payroll: the cell is no longer calm while a wage is missing",
-      norateExcluded.calm === false,
-    );
-    // The hours are unchanged and the amount is not — which is precisely what the sub-line
-    // has to explain, or the two headline numbers cannot be reconciled.
-    assert(
-      "payroll: the hours total did not move, only the amount did",
-      de(norateHours.v) === de(ratedHours.v),
-      `${norateHours.v} vs ${ratedHours.v}`,
-    );
-    const norateUnvalued = de(norateHours.sub.replace(/^[^0-9]*/, ""));
-    const richRow = norate.rows.find((r) => r.head.includes(richName));
-    assert(
-      "payroll: the „Stunden“ sub-line names exactly that person's hours",
-      norateUnvalued !== null && Math.abs(norateUnvalued - (de(richRow?.tds[0] ?? "") ?? -1)) < 0.02,
-      `sub = „${norateHours.sub}“, row = ${richRow?.tds[0] ?? "(no row)"}`,
-    );
-    assert(
-      "payroll: the caveat prose and the per-row column are untouched",
-      says(norate, "kein Stundensatz hinterlegt") &&
-        (richRow?.tds ?? []).some((td) => td.includes("Kein Stundensatz")) &&
-        (richRow?.tds ?? []).some((td) => td.includes("Nicht bewertet")),
-    );
   } finally {
     page.close();
     child.kill();

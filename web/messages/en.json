@@ -397,7 +397,6 @@
     "colAddress": "Address",
     "colClient": "Client and contact",
     "colContract": "Contract and time in the selected month",
-    "colTag": "NFC tag URL",
     "colShare": "Client link",
     "colStatus": "Status",
     "colActions": "Actions",
@@ -463,7 +462,7 @@
     "fieldZoneNote": "Where exactly the tag is",
     "zoneNoteHint": "For example “left of the intercom”. It helps the next person who has to find the tag.",
     "fieldZoneActive": "Active – tapping this zone’s tag starts a shift",
-    "colZones": "Zones and area",
+    "colZones": "Zones, area and tag",
     "zonesManage": "Manage zones",
     "zonesHeading": "Zones of {name}",
     "zonesClose": "Close the zone list",
@@ -517,7 +516,7 @@
     "errorSerialShape": "That does not look like a serial. At least four bytes in hexadecimal are expected, for example 04:A1:A8:52:AE:5C:80.",
     "tagLegacySummary": "Building tag (existing)",
     "tagLegacyHint": "This URL belongs to the whole building and not to a zone. New tags belong on a zone; this line is here because cards already on walls carry this URL and it has to be readable and re-writable.",
-    "statusUnzoned": "No zone yet – area unknown"
+    "statusUnzoned": "No zone yet"
   },
   "clients": {
     "heading": "Clients",
@@ -889,7 +888,7 @@
     "answerRevenue": "Revenue",
     "answerBaseline": "Target margin {percent}",
     "answerNoBaseline": "No target margin set",
-    "answerFuture": "{days, plural, =0 {Period still running – only part of the cost exists yet} one {# day still ahead – only part of the cost exists yet} other {# days still ahead – only part of the cost exists yet}}",
+    "answerFuture": "{days, plural, =0 {Period still running – only part of the cost exists yet, so the margin is too high} one {# day still ahead – only part of the cost exists yet, so the margin is too high} other {# days still ahead – only part of the cost exists yet, so the margin is too high}}",
     "methodFuture": "{days, plural, =0 {This period is still running: today is only partly over.} one {This period is still running: # of {periodDays} days falls after today, which is itself only partly over.} other {This period is still running: # of {periodDays} days fall after today, which is itself only partly over.}} Revenue is no longer projected across days – a month with no entry stays unknown. Labour and materials, however, only exist for days that have happened: entering the revenue for a month that is still running compares it against part of its own cost, so the profit and the margin both come out too high. A finished period such as “Last month” is unaffected.",
     "baselineOpen": "Set target margin",
     "cancel": "Cancel",

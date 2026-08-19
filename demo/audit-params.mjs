@@ -214,11 +214,26 @@ console.log('\n=== 2 · the duplicate-parameter trap ===')
 // ---------------------------------------------------------------------------------------
 console.log('\n=== 2b · an UPPERCASED uuid: parses one way, matches the other ===')
 // `UUID_RE` in lib/filters.ts is case-INSENSITIVE, so `?location=DA39EA4D-…` is accepted as
-// well formed; the row lookup is `location.id === filters.location`, which is case-SENSITIVE.
-// A URL a human would call correct therefore lands on „unbekannt". That is not a crash and it
-// is not another object's data — the „two wrongs, two answers" contract still holds — but it
-// is a linkable URL that stops working when a mail client, a spreadsheet or a phone keyboard
-// changes its case. Asserted so the behaviour is pinned rather than discovered twice.
+// well formed. The row lookup USED to be a case-SENSITIVE `location.id === filters.location`,
+// so a URL a human would call correct landed on „unbekannt" — defect F4, fixed by TASK-174,
+// which folds case in `toUuid` at the parse boundary. Asserted so it cannot regress: UUIDs get
+// uppercased in transit (Windows/.NET, several tag writers), and decision-21 puts the location
+// UUID in the tag URI.
+//
+// THE THIRD ASSERTION WAS COUPLED TO THE DEFECT AND HAD TO BE REWRITTEN. It read
+// `upper.drawer === false`, which was only ever true BECAUSE the uppercased uuid resolved to
+// nothing and therefore opened no panel. Once TASK-174 landed, the second assertion („it still
+// finds its building") and the third („no drawer") became mutually unsatisfiable: on `/`,
+// finding a building IS opening its Objektpanel (decision-38, decision-39). A check that
+// cannot be green is not a check. What the assertion's own name asks — „it never shows ANOTHER
+// building" — is a comparison against the lower-case case, so that is what it now compares:
+// same row count, same SET of object names, same filter chips.
+//
+// `drawer` is deliberately NOT in the equality, only in the evidence line. Whether `.drawer`
+// has mounted at the moment of the read depends on when the panel's fetch settles, and it was
+// observed both ways at the same settle on the same build — an assertion on it is a flaky
+// check, which is its own defect. It carries no information the other three lack either: a
+// panel opened on a DIFFERENT building would change `chips`, which is the thing being asked.
 {
   await page.goto(`${BASE}/locations/`, { settle: 1200 })
   const uuid = await page.eval(
@@ -240,10 +255,14 @@ console.log('\n=== 2b · an UPPERCASED uuid: parses one way, matches the other =
       ? `„unbekannt" — the shape check is case-insensitive, the row lookup is not: ${upper.chips.join(' | ')}`
       : upper.chips.join(' | '),
   )
+  const sameNames = upper.names.join('|') === lower.names.join('|')
+  const sameChips = upper.chips.join('|') === lower.chips.join('|')
   record(
-    upper.rows === lower.rows && upper.drawer === false,
+    upper.rows === lower.rows && sameNames && sameChips,
     '…and whatever it decides, it never shows another building',
-    `upper rows=${upper.rows} lower rows=${lower.rows}`,
+    `upper rows=${upper.rows} drawer=${upper.drawer} · lower rows=${lower.rows} drawer=${lower.drawer}` +
+      (sameNames ? ' · same objects' : ` · OBJECTS DIFFER: ${upper.names.join(',')} vs ${lower.names.join(',')}`) +
+      (sameChips ? ' · same chips' : ` · CHIPS DIFFER: „${upper.chips.join(',')}" vs „${lower.chips.join(',')}"`),
   )
 }
 

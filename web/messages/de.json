@@ -397,7 +397,6 @@
     "colAddress": "Adresse",
     "colClient": "Kunde und Ansprechperson",
     "colContract": "Vertrag und Zeit im gewählten Monat",
-    "colTag": "NFC-Tag-URL",
     "colShare": "Kundenlink",
     "colStatus": "Status",
     "colActions": "Aktionen",
@@ -463,7 +462,7 @@
     "fieldZoneNote": "Wo genau hängt der Tag",
     "zoneNoteHint": "Zum Beispiel „links neben der Gegensprechanlage“. Hilft dem nächsten Menschen, der den Tag suchen muss.",
     "fieldZoneActive": "Aktiv – der Tag dieser Zone startet eine Schicht",
-    "colZones": "Zonen und Fläche",
+    "colZones": "Zonen, Fläche und Tag",
     "zonesManage": "Zonen verwalten",
     "zonesHeading": "Zonen von {name}",
     "zonesClose": "Zonenliste schließen",
@@ -517,7 +516,7 @@
     "errorSerialShape": "Das sieht nicht nach einer Seriennummer aus. Erwartet werden mindestens vier Bytes in Hexadezimalschreibweise, zum Beispiel 04:A1:A8:52:AE:5C:80.",
     "tagLegacySummary": "Gebäude-Tag (Bestand)",
     "tagLegacyHint": "Diese URL gehört zum ganzen Objekt und nicht zu einer Zone. Neue Tags gehören an eine Zone; diese Zeile steht hier, weil bereits angebrachte Karten diese URL tragen und man sie lesen oder neu schreiben können muss.",
-    "statusUnzoned": "Noch keine Zone – Fläche unbekannt"
+    "statusUnzoned": "Ohne Zone"
   },
   "clients": {
     "heading": "Kunden",
@@ -889,7 +888,7 @@
     "answerRevenue": "Umsatz",
     "answerBaseline": "Zielmarge {percent}",
     "answerNoBaseline": "Keine Zielmarge gesetzt",
-    "answerFuture": "{days, plural, =0 {Zeitraum läuft noch – Kosten erst zum Teil erfasst} one {# Tag liegt noch vor uns – Kosten erst zum Teil erfasst} other {# Tage liegen noch vor uns – Kosten erst zum Teil erfasst}}",
+    "answerFuture": "{days, plural, =0 {Zeitraum läuft noch – Kosten erst zum Teil erfasst, Marge zu hoch} one {# Tag liegt noch vor uns – Kosten erst zum Teil erfasst, Marge zu hoch} other {# Tage liegen noch vor uns – Kosten erst zum Teil erfasst, Marge zu hoch}}",
     "methodFuture": "{days, plural, =0 {Dieser Zeitraum läuft noch: Der heutige Tag ist erst zum Teil vergangen.} one {Dieser Zeitraum läuft noch: # von {periodDays} Tagen liegt nach dem heutigen Tag, der selbst erst zum Teil vergangen ist.} other {Dieser Zeitraum läuft noch: # von {periodDays} Tagen liegen nach dem heutigen Tag, der selbst erst zum Teil vergangen ist.}} Der Umsatz wird nicht mehr auf Tage hochgerechnet – ein Monat ohne Eintrag bleibt unbekannt. Arbeit und Material entstehen aber nur an bereits vergangenen Tagen: Wer den Umsatz eines laufenden Monats schon einträgt, vergleicht ihn mit einem Teil seiner Kosten, und Ergebnis und Marge fallen zu hoch aus. Ein abgeschlossener Zeitraum wie „Voriger Monat“ ist davon nicht betroffen.",
     "baselineOpen": "Zielmarge festlegen",
     "cancel": "Abbrechen",

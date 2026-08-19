@@ -1548,7 +1548,6 @@ export default function LocationsPage() {
                 <th scope="col">{t('colClient')}</th>
                 <th scope="col">{t('colContract')}</th>
                 <th scope="col">{t('colZones')}</th>
-                <th scope="col">{t('colTag')}</th>
                 <th scope="col">{t('colShare')}</th>
                 <th scope="col">{t('colStatus')}</th>
                 <th scope="col">{t('colActions')}</th>
@@ -1625,12 +1624,25 @@ export default function LocationsPage() {
                       the place that fixes it, and it never scolds: nothing is broken.
                     */}
                     <td>
-                      <Link href={filterHref('/locations/', { zones: location.id })}>
+                      {/*
+                        A BUTTON, not a <Link>. `?zones=` opens a panel on the route this
+                        row is already on, and a same-route <Link> is a router push that
+                        emits no `popstate` — `useFilters` reads the URL on mount and on
+                        popstate, so the link would change the address bar and nothing
+                        else. 'push' is the documented mode for opening a panel: back
+                        closes it, which is what everyone expects from something that
+                        appeared over what they were reading (lib/filters.ts).
+                      */}
+                      <button
+                        type="button"
+                        className="btn btn-quiet"
+                        onClick={() => setFilters({ zones: location.id }, 'push')}
+                      >
                         {t('zonesManage')}
                         <span className="visually-hidden">
                           {t('forLocation', { name: location.name })}
                         </span>
-                      </Link>
+                      </button>
                       <span className="shift-state-note num">
                         {areaSentence(areaOf(location.id))}
                       </span>
@@ -1640,8 +1652,6 @@ export default function LocationsPage() {
                       {liveZonesOf(location.id).length === 0 && location.active ? (
                         <span className="shift-state-note">{t('zonesNoneStillWorks')}</span>
                       ) : null}
-                    </td>
-                    <td>
                       {/*
                         THE BUILDING TAG IS NOW A COLLAPSED, READ-ONLY DISCLOSURE
                         (decision-43 §7). Tag writing moved onto the zone, but this string
