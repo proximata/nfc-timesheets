@@ -8,6 +8,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import io.github.qwadratic.nfctimesheets.core.SyncPlan.QueuedShift
 import io.github.qwadratic.nfctimesheets.core.WireLocation
 import io.github.qwadratic.nfctimesheets.core.WireShift
+import io.github.qwadratic.nfctimesheets.core.WireZone
 import java.time.Instant
 import java.util.UUID
 
@@ -25,7 +26,7 @@ import java.util.UUID
  * outside this file talks in [QueuedShift] and [LocalShift]; swapping the implementation
  * is one file.
  */
-class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext, "timesheets.db", null, 1) {
+class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext, "timesheets.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
         // client_uuid is the PRIMARY KEY, not an afterthought: it is the idempotency key
@@ -59,11 +60,37 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext
             )
             """.trimIndent(),
         )
+        createZonesTable(db)
+    }
+
+    /**
+     * decision-44: the roster-cached adopted-tag map. Cleared and repopulated by
+     * [replaceRoster], same as `locations`. `tag_serial` is nullable — a zone with no
+     * adopted tag on it (the ordinary case, since most zones will only ever carry a
+     * proper URL tag) still rides along so a name is cached for it.
+     */
+    private fun createZonesTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE zones (
+              id          TEXT PRIMARY KEY,
+              location_id TEXT NOT NULL,
+              name        TEXT NOT NULL,
+              tag_serial  TEXT
+            )
+            """.trimIndent(),
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Version 1 is the first release; there is nothing to migrate FROM. When there is,
-        // write the ALTER TABLE here. Never DROP: these rows are somebody's unpaid hours.
+        // THIS RUNS AGAINST THE FIELD PHONE'S REAL, ALREADY-INSTALLED FILE on its next
+        // launch after `adb install -r`. Never DROP: these rows are somebody's unpaid
+        // hours. version 1 -> 2 only ADDS the zones table; shifts and locations are
+        // untouched.
+        if (oldVersion == 1 && newVersion == 2) {
+            createZonesTable(db)
+            return
+        }
         throw IllegalStateException("no migration from $oldVersion to $newVersion")
     }
 
@@ -169,8 +196,12 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext
 
     // ---- locations -----------------------------------------------------------------
 
-    /** Replace the cached roster. Locations that are gone drop out. */
-    fun replaceLocations(locations: List<WireLocation>) {
+    /**
+     * Replace the cached roster: locations AND zones, one transaction. Rows that are gone
+     * drop out of both tables. `zones` may be empty forever — that is HOIV's shape today
+     * (decision-43 §3) and is not an error.
+     */
+    fun replaceRoster(locations: List<WireLocation>, zones: List<WireZone>) {
         writableDatabase.run {
             beginTransaction()
             try {
@@ -187,12 +218,53 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext
                         SQLiteDatabase.CONFLICT_REPLACE,
                     )
                 }
+                delete("zones", null, null)
+                for (zone in zones) {
+                    insertWithOnConflict(
+                        "zones",
+                        null,
+                        ContentValues().apply {
+                            put("id", zone.id)
+                            put("location_id", zone.locationId)
+                            put("name", zone.name)
+                            put("tag_serial", zone.tagSerial)
+                        },
+                        SQLiteDatabase.CONFLICT_REPLACE,
+                    )
+                }
                 setTransactionSuccessful()
             } finally {
                 endTransaction()
             }
         }
     }
+
+    /**
+     * The cached zone table — empty until an admin creates HOIV's first zone
+     * (decision-44). Read by [io.github.qwadratic.nfctimesheets.nfc.ScanActivity] to
+     * resolve a scanned serial, and by [io.github.qwadratic.nfctimesheets.core.Zones]
+     * callers in the ViewModel to translate a tapped place into its building.
+     */
+    fun zones(): List<WireZone> = readableDatabase
+        .query("zones", null, null, null, null, null, null)
+        .use { cursor ->
+            val idIdx = cursor.getColumnIndexOrThrow("id")
+            val locationIdIdx = cursor.getColumnIndexOrThrow("location_id")
+            val nameIdx = cursor.getColumnIndexOrThrow("name")
+            val tagSerialIdx = cursor.getColumnIndexOrThrow("tag_serial")
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(
+                        WireZone(
+                            id = cursor.getString(idIdx),
+                            locationId = cursor.getString(locationIdIdx),
+                            name = cursor.getString(nameIdx),
+                            tagSerial = if (cursor.isNull(tagSerialIdx)) null else cursor.getString(tagSerialIdx),
+                        ),
+                    )
+                }
+            }
+        }
 
     /**
      * Location UUID -> display name. A MISSING NAME IS COSMETIC; a missing shift is
