@@ -45,7 +45,10 @@ trap cleanup EXIT
 createdb "$SCRATCH"
 psql -q -v ON_ERROR_STOP=1 -d "$SCRATCH" -f "$SCHEMA"
 psql -q -v ON_ERROR_STOP=1 -d "$SCRATCH" <<SQLFIXTURES
-INSERT INTO workers (id, name) VALUES (1, 'Check Worker One'), (2, 'Check Worker Two');
+-- A rate is supplied even though this fixture is built from 001 only: 006 drops the
+-- column's DEFAULT (decision-41), so the day this check is pointed at the full migration
+-- set an omitted rate raises 23502. Cheaper to be right now than to debug it then.
+INSERT INTO workers (id, name, hourly_rate_cents) VALUES (1, 'Check Worker One', 1500), (2, 'Check Worker Two', 1500);
 INSERT INTO locations (id, slug, name) VALUES ('$LOC', 'check-loc', 'Check Location');
 -- stale: worker 1, open, started 9h ago -> must be auto-closed
 INSERT INTO shifts (worker_id, location_id, start_time, client_uuid)
