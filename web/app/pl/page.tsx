@@ -678,10 +678,7 @@ export default function PlPage() {
               // below already had, on the cell a director reads FIRST. With no figure typed
               // anywhere (production, day one) this printed a confident 0,00 €, and the
               // sub-line naming the empty scope is a caption, not the number.
-              v:
-                totals.revenueCents === null
-                  ? t('revenueUnknown')
-                  : money(totals.revenueCents),
+              v: totals.revenueCents === null ? t('revenueUnknown') : money(totals.revenueCents),
               // NOT calm while months are missing: this is a PARTIAL SUM wearing the
               // label of a total, and the number that is too small is the one a director
               // would take to mean a bad quarter.
