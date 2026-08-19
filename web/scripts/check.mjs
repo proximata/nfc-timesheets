@@ -1557,7 +1557,11 @@ check('/locations/: an unzoned building is a PRESENTATION state, never an operat
   for (const locale of LOCALES) {
     const flat = dictionaries[locale]
     const claim = locale === 'de' ? /Schicht/ : /shift/i
-    assert.match(flat['locations.zonesNoneStillWorks'], claim, `${locale}: the active branch says the tag still works`)
+    assert.match(
+      flat['locations.zonesNoneStillWorks'],
+      claim,
+      `${locale}: the active branch says the tag still works`,
+    )
     assert.doesNotMatch(
       flat['locations.statusUnzoned'],
       claim,
