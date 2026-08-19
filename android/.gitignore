@@ -15,6 +15,10 @@ app/build/
 captures/
 .cxx/
 
+# Signed APKs staged for sideloading. A binary, not a source artifact: it is rebuilt from
+# a tagged commit, and a 1.6 MB blob in git history cannot be un-pushed later.
+dist/
+
 # Google services config, if push is ever added (decision: not in the first pass)
 app/google-services.json
 

@@ -32,14 +32,18 @@ convenience copy; if they ever disagree with `branding.json`, `branding.json` wi
 - Team ID: `6Y842FE8Q4`
 - Bundle ID: `io.github.qwadratic.NFCTimeSheets`
 - TestFlight: active, internal track
-- Associated Domains: `applinks:timesheets.exe.xyz` (literal in the entitlement on purpose —
-  templating it makes an unconfigured build emit `applinks:` and kills universal links)
+- Associated Domains: a literal in the entitlement on purpose — templating it makes an
+  unconfigured build emit `applinks:` and kills universal links. It currently reads
+  `applinks:schimmer-glanz.exe.xyz`, i.e. the RENAMEABLE host: iOS is not yet on the two-host
+  model (decision-40). Works today because the API host serves the association files too.
 
 ### Hosting
 
 - **API + DB**: exe.dev VM `timesheets.exe.xyz` (SSH: `ssh timesheets.exe.xyz`). **systemd** + Postgres on localhost. No Docker (decision-1); systemd replaced PM2 (decision-18). Supabase is deferred, not rejected (decision-16).
 - **Frontend**: static Next.js export served by the same Node API process (decision-16). NOT Vercel — decision-11 is superseded. Cloudflare Pages (decision-14) is deferred.
-- **AASA**: served from API server (same as timesheets.exe.xyz or Supabase edge function)
+- **AASA + assetlinks + `/t`**: served from the TAG host `timesheets.exe.xyz` — its own tiny VM,
+  stock nginx, three static files, public proxy, no DB and no code (`ops/tag-host/`,
+  decision-40). The API host serves the same bytes as a fallback.
 - Auto TLS via exe.dev proxy (API) and Vercel (frontend)
 
 ### Workflow Review Gate
@@ -71,6 +75,10 @@ Decision checklist (keep updated as decisions are added):
 - Supabase (decision-12) DEFERRED and its free-tier risk (decision-13) MOOTED by decision-16
 - Cloudflare Pages for the admin panel (decision-14) DEFERRED by decision-16
 - Tag hostname stays `timesheets.exe.xyz`, tags left unlocked (decision-15)
+- TWO HOSTS: `tagHost` (timesheets.exe.xyz) is PERMANENT — it is written on physical cards and
+  serves only the association files + `/t`; `apiHost` (schimmer-glanz.exe.xyz) is renameable.
+  The app parses the tag host and talks to the API host. The API host must NEVER be in an
+  `autoVerify` intent filter. `ops/branding.json` carries both (decision-40, amends d15 + d24)
 - Everything server-side on the one exe.dev VM; no framework, no ORM, no router (decision-16)
 - next-intl, English messages for MVP (decision-17)
 - systemd, not PM2 (decision-18)
