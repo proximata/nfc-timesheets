@@ -348,6 +348,26 @@ async function main() {
       /Schicht/.test(excluded.sub) || excluded.v === "0",
       `v = „${excluded.v}“, sub = „${excluded.sub}“`,
     );
+    // AN INDEPENDENT ORACLE FOR THE NUMBER ITSELF, not only its vocabulary. The assertion
+    // above passes for ANY count once a shift exclusion exists at all — "Keine Schicht
+    // offen oder unbestätigt" contains "Schicht" whether the true count is 0 or wrong. A
+    // phantom term added to `excludedCount` (the exact shape of TASK-176's bug, mirrored)
+    // sailed through it. So the screen's number is checked against the same predicate
+    // web/lib/shifts.ts `blocksPayroll` names — computed here, from SQL, independently of
+    // the page under test — for the SAME half-open Vienna month `admin.js adminData` uses.
+    const excludedOracle = Number(
+      sql(
+        `SELECT count(*) FROM shifts s
+           WHERE s.start_time >= date_trunc('month', now() AT TIME ZONE 'Europe/Vienna' - interval '1 month')
+             AND s.start_time <  date_trunc('month', now() AT TIME ZONE 'Europe/Vienna')
+             AND (s.end_time IS NULL OR (s.auto_closed AND s.corrected_at IS NULL))`,
+      ),
+    );
+    assert(
+      "payroll: „Nicht gezählt“ IS the shift count, not merely near it",
+      excluded.v === String(excludedOracle),
+      `screen „${excluded.v}“, db ${excludedOracle}`,
+    );
     assert(
       "payroll: the „Stunden“ sub-line has nothing extra to explain",
       hoursCell.sub === "Nur Schichten mit bestätigter Endzeit",
