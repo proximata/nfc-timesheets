@@ -435,6 +435,52 @@ async function run() {
             .join(' | '),
         )
 
+        // ...AND AGAINST WHAT /locations/ ACTUALLY PRINTED, which is not the same claim.
+        //
+        // The assertion above is named "/pl/ derives the SAME area as /locations/" and does
+        // not compare the two screens at all: `clientState` there is re-derived from the raw
+        // zone rows, so it is server-vs-oracle twice over. MEASURED — mutant M4 deleted the
+        // `incomplete` branch of lib/area.ts sumArea, /locations/ printed "980 m² gesamt aus
+        // 2 Zonen" for a building whose Tiefgarage nobody has measured, /pl/ went on saying
+        // `area_incomplete`, and this assertion stayed GREEN under its own title while the
+        // two screens disagreed about one building.
+        //
+        // So: the SERVER's answer against the SENTENCE RENDERED by lib/area.ts. That is the
+        // drift the comment above describes — a director reading 980 m² on one screen and
+        // quoting €/m² computed from something else on the other — and now it is the thing
+        // being asserted rather than the thing being explained.
+        const shownState = (b) =>
+          b.saysFloor ? 'incomplete' : b.saysTotal ? 'complete' : b.saysNone ? 'none' : 'unstated'
+        const crossed = areaTruth
+          .map((shown) => {
+            const server = plArea.find((p) => p.name.split(',')[0].trim() === shown.name.trim())
+            if (server === undefined) return null
+            return {
+              name: shown.name,
+              printed: shownState(shown),
+              server: server.serverState,
+              printedHundredths: shown.got,
+              serverHundredths: server.serverHundredths,
+              agree:
+                shownState(shown) === server.serverState &&
+                (server.serverState !== 'complete' || shown.got === server.serverHundredths),
+            }
+          })
+          .filter((x) => x !== null)
+        record(
+          crossed.length > 0 && crossed.every((x) => x.agree),
+          `${tag} the SENTENCE on /locations/ and the SERVER's /pl/ answer are the same fact`,
+          crossed.length === 0
+            ? 'no building appears on both screens — the comparison is vacuous'
+            : crossed
+                .map(
+                  (x) =>
+                    `${x.name}: screen ${x.printed}${x.printedHundredths === null ? '' : ` ${x.printedHundredths / 100} m²`}` +
+                    `${x.agree ? ' =' : ' ≠'} server ${x.server}${x.serverHundredths === null ? '' : ` ${x.serverHundredths / 100} m²`}`,
+                )
+                .join(' | '),
+        )
+
         // The building tag is a COLLAPSED disclosure, and it still contains the URI.
         const disclosure = await page.eval(`(() => {
           const d = document.querySelector('details.tag-disclosure')
