@@ -30,7 +30,7 @@ import path from "node:path";
 
 const [url, out] = process.argv.slice(2);
 if (!url || !out) {
-  console.error("usage: screenshot.mjs <url> <out.png> [--cookie n=v] [--wait-text s] [--height N]");
+  console.error("usage: screenshot.mjs <url> <out.png> [--cookie n=v] [--wait-text s] [--wait-gone s] [--height N]");
   process.exit(2);
 }
 const arg = (name, fallback = null) => {
@@ -39,6 +39,12 @@ const arg = (name, fallback = null) => {
 };
 const cookie = arg("--cookie");
 const waitText = arg("--wait-text");
+// WAIT FOR A TRANSIENT STATE TO END, not just for a final one to appear. The home screen's
+// map says "Karte wird geladen" and resolves seconds later into ready / blocked / timeout;
+// shooting as soon as the building list appears catches it mid-flight and reports whichever
+// state the race happened to land in. Naming the LOADING text and waiting for it to go is
+// the only way to photograph a terminal state.
+const waitGone = arg("--wait-gone");
 const height = Number(arg("--height", "1600"));
 
 const CHROME = process.env.CHROME_BIN
@@ -103,6 +109,12 @@ async function main() {
   await send("Page.enable");
   await send("Runtime.enable");
   await send("Network.enable");
+  // THE CONSOLE, KEPT. A page can render every row it was asked for and still be broken in
+  // a way only the console names — the Google Maps loader reports a referrer-key rejection
+  // as `RefererNotAllowedMapError` and otherwise just leaves an empty grey box, which looks
+  // exactly like "still loading". Written next to the screenshot so the caller can assert
+  // on it instead of squinting at a png.
+  await send("Log.enable").catch(() => {});
   if (cookie) {
     const eq = cookie.indexOf("=");
     await send("Network.setCookie", {
@@ -137,16 +149,14 @@ async function main() {
       expression: "document.body.innerText",
       returnByValue: true,
     });
-    if (!waitText || String(result.value ?? "").includes(waitText)) seen = true;
+    const text = String(result.value ?? "");
+    const appeared = !waitText || text.includes(waitText);
+    const gone = !waitGone || !text.includes(waitGone);
+    if (appeared && gone) seen = true;
   }
-  if (!seen) {
-    const { result } = await send("Runtime.evaluate", {
-      expression: "document.body.innerText.slice(0, 600)",
-      returnByValue: true,
-    });
-    throw new Error(`never rendered "${waitText}". Page said:\n${result.value}`);
-  }
-
+  // THE SHOT IS TAKEN EVEN WHEN THE WAIT FAILED. A page that never rendered what it was
+  // asked for is exactly the page somebody will want to look at, and throwing before the
+  // capture leaves the caller with a sentence instead of the evidence.
   const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
   await writeFile(out, Buffer.from(shot.data, "base64"));
 
@@ -157,6 +167,23 @@ async function main() {
     returnByValue: true,
   });
   await writeFile(out.replace(/\.png$/, ".txt"), String(result.value ?? ""));
+
+  // Every request the page made that came back 4xx/5xx, with its URL. A bare "[error]
+  // Failed to load resource: 404" in the console names nothing, and a page whose map is a
+  // grey box because ONE script 404'd is indistinguishable from one that is still loading.
+  const failedRequests = events
+    .filter((e) => e.method === "Network.responseReceived" && e.params.response.status >= 400)
+    .map((e) => `${e.params.response.status} ${e.params.response.url}`)
+    .join("\n");
+
+  const console_ = events
+    .filter((e) => e.method === "Runtime.consoleAPICalled" || e.method === "Log.entryAdded")
+    .map((e) => e.method === "Log.entryAdded"
+      ? `[${e.params.entry.level}] ${e.params.entry.text}`
+      : `[${e.params.type}] ${(e.params.args ?? []).map((a) => a.value ?? a.description ?? a.type).join(" ")}`)
+    .join("\n");
+  await writeFile(out.replace(/\.png$/, ".console.txt"), `${console_}\n${failedRequests}\n`);
+  if (!seen) throw new Error(`never settled (want "${waitText}", without "${waitGone}") — see ${out} and its .txt`);
   console.log(out);
 }
 
@@ -167,5 +194,14 @@ try {
   process.exitCode = 1;
 } finally {
   chrome.kill();
-  await rm(profile, { recursive: true, force: true });
+  // Chrome is still flushing its profile when kill() returns, so a straight rm races it and
+  // dies ENOTEMPTY — which then buries whatever the real failure was under a stack trace.
+  for (let i = 0; i < 20; i++) {
+    try {
+      await rm(profile, { recursive: true, force: true });
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
 }

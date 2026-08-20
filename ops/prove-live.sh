@@ -128,6 +128,53 @@ cleanup() {
     DELETE FROM operators WHERE name LIKE '${MARK}%';
     COMMIT;" >/dev/null || { echo "  FAIL: cleanup TRANSACTION FAILED — rows may survive" >&2; rc=1; FAILED=1; }
 
+  # THE MAP, AFTER THE DELETES AND BEFORE THE ADMIN GOES. This is the closing claim of the
+  # whole run — "HOIV present with its pin, no test buildings" — and it is the one claim a
+  # row count cannot make: the pin is drawn by the director's browser from a Maps browser
+  # key that is REFERRER-LOCKED to this host, so it can only be seen from here. The
+  # screenshot has to happen while the throwaway session still exists, hence the ordering.
+  if [ -f "$ADMIN_JAR" ]; then
+    # "Karte wird geladen" is de.json's `home.mapLoading`. Waiting for it to GO is what makes
+    # the state below a measurement instead of a race — the first version of this shot fired
+    # the moment the building list appeared and reported the map as fine, seconds before
+    # Google rejected the key.
+    shot "/" "05-map-after-cleanup.png" "HOIV" "Karte wird geladen"
+    if [ -f "$SHOTS/05-map-after-cleanup.txt" ]; then
+      /usr/bin/grep -q "$MARK" "$SHOTS/05-map-after-cleanup.txt" \
+        && bad "the director's home screen still shows this run's test data" \
+        || ok "the home screen lists HOIV and nothing this run created"
+
+      # AND THE MAP ITSELF, WHICH IS NOT THE SAME CLAIM. An unauthorised browser key does
+      # not fail the script load: Google serves the file, `new Map()` succeeds, and what
+      # renders is a grey box that is indistinguishable from "still loading" (web/lib/map.ts
+      # says exactly this). The only witness is the console, so it is read.
+      #
+      # TWO-WAY ON PURPOSE. EXPECT_MAP records the state this repo believes production is
+      # in. Today that is `blocked` (TASK-206). The day somebody adds the referrer in the
+      # Cloud Console this goes RED — which is the point: the fix has to reach the docs that
+      # currently tell the director his map is broken.
+      # Classified from THE SENTENCE THE DIRECTOR READS (de.json home.mapBlocked /
+      # home.mapReady), with Google's own console error as corroboration. The console alone
+      # would be a check on a log line; the sentence is the product.
+      local seen_map="unknown"
+      /usr/bin/grep -q 'Auf der Karte:' "$SHOTS/05-map-after-cleanup.txt" && seen_map="drawn"
+      /usr/bin/grep -q 'Kartenschluessel\|Kartenschlüssel wird für diese Adresse abgelehnt' "$SHOTS/05-map-after-cleanup.txt" && seen_map="blocked"
+      if [ "$seen_map" = "blocked" ]; then
+        /usr/bin/grep -q 'RefererNotAllowedMapError' "$SHOTS/05-map-after-cleanup.console.txt" 2>/dev/null \
+          && ok "Google's own words for it: $(/usr/bin/grep -o 'RefererNotAllowedMapError' "$SHOTS/05-map-after-cleanup.console.txt" | head -1)" \
+          || bad "the screen says the key is refused but the console does not — it may be the QUOTA, not the referrer"
+      fi
+      if [ "$seen_map" = "${EXPECT_MAP:-blocked}" ]; then
+        ok "the map is '$seen_map', as recorded (EXPECT_MAP=${EXPECT_MAP:-blocked})"
+        [ "$seen_map" = "blocked" ] && printf '  note: %s\n' \
+          "HOIV has coordinates and is on the list, but NO PIN IS DRAWN: Google answers RefererNotAllowedMapError for $BASE/ (TASK-206). Authorise that referrer on the browser key, then re-run with EXPECT_MAP=drawn."
+      else
+        bad "the map is now '$seen_map' and this repo still says '${EXPECT_MAP:-blocked}' — update TASK-206 and CORE-FLOW, then re-run with EXPECT_MAP=$seen_map"
+        rc=1
+      fi
+    fi
+  fi
+
   local gone
   gone=$(ssh "$HOST" "sudo bash -c 'set -a; . /etc/nfc/env; set +a; node /srv/nfc/ops/smoke-admin.mjs delete $ADMIN_EMAIL'" 2>&1 | tail -1)
   [ "$gone" = "deleted 1" ] && ok "the throwaway admin is gone ($gone)" || bad "throwaway admin: $gone"
@@ -223,13 +270,15 @@ logline() {
 # own — a missing Chrome must not turn a production proof into a red — but a screenshot that
 # rendered the WRONG THING is, because that is the failure it exists to catch.
 shot() {
-  local page="$1" file="$2" wait_for="$3"
+  local page="$1" file="$2" wait_for="$3" wait_gone="${4:-}"
   local token
   token=$(/usr/bin/grep -E '\bts_session\b' "$ADMIN_JAR" | awk '{print $NF}')
   [ -n "$token" ] || { bad "no ts_session cookie to screenshot with"; return; }
   mkdir -p "$SHOTS"
+  local extra=()
+  [ -n "$wait_gone" ] && extra=(--wait-gone "$wait_gone")
   if node ops/screenshot.mjs "$BASE$page" "$SHOTS/$file" --cookie "ts_session=$token" \
-        --wait-text "$wait_for" --height 1400 >/dev/null 2>"$TMP/shot.err"; then
+        --wait-text "$wait_for" "${extra[@]}" --height 1400 >/dev/null 2>"$TMP/shot.err"; then
     ok "screen: $page rendered '$wait_for' -> docs/media/prove-live/$file"
   else
     bad "screen: $page never rendered '$wait_for' — $(tail -2 "$TMP/shot.err" | tr '\n' ' ')"
