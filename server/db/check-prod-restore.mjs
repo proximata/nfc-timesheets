@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 // THE PRE-DEPLOY CHECK FOR MIGRATION 006. Run it before touching the live box.
 //
+// *** THAT DEPLOY HAPPENED ON 2026-08-20: production is at 008. ***
+// This file rehearses a window that is now shut, so it needs a dump taken BEFORE it — any
+// nfc-*.sql.gz in /var/backups/nfc older than 2026-08-20T21:25Z, while the 14-day retention
+// still holds one. Handed a migrated dump it now says so and exits 1 rather than dying on
+// `'8' !== '5'` with a stack trace. When the last 005 dump ages out, this check has done its
+// job and retires; what watches the LIVE box from then on is ops/smoke-live.sh, which drives
+// the same claims over HTTP against the real host and cleans up after itself.
+//
 //   ssh schimmer-glanz.exe.xyz 'sudo -n cat /var/backups/nfc/nfc-<newest>.sql.gz' > /tmp/nfc.sql.gz
 //   node server/db/check-prod-restore.mjs /tmp/nfc.sql.gz
 //
@@ -132,7 +140,17 @@ try {
     die(`the dump did not restore: ${message.trim().split("\n").slice(0, 3).join(" / ")}`);
   }
   const applied = psql("SELECT count(*) FROM schema_migrations");
-  assert.equal(applied, "5", `the dump must be at migration 005, found ${applied}`);
+  if (applied !== "5") {
+    // A DIAGNOSIS, NOT AN AssertionError. This is a pre-deploy gate: the operator running it
+    // is standing in front of a deploy window, and a raw stack reads as "the tooling is
+    // broken" — the exact failure this file has already been fixed for once.
+    die(
+      `this dump is at migration ${applied}, and every phase below rehearses applying 006/007/008 ` +
+        `to a database that has not seen them. Production reached 008 on 2026-08-20, so a dump ` +
+        `taken after that cannot exercise this file.`,
+      "use a dump from BEFORE that deploy (ls -t /var/backups/nfc | tail), or, for the LIVE box, run ./ops/smoke-live.sh",
+    );
+  }
   ok(`restored: ${psql(
     "SELECT (SELECT count(*) FROM workers) || ' workers, ' || (SELECT count(*) FROM locations) || ' locations, ' || (SELECT count(*) FROM shifts) || ' shifts'",
   )}, 5 migrations`);
