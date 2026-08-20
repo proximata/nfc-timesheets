@@ -4,6 +4,29 @@ Last reader before the owner. Written at `8c01fb6`, tree clean.
 Everything below was re-run by this agent, not copied from the two reports it reconciles.
 Where the reports disagreed with the machine, the machine won.
 
+> ## DEPLOYED 2026-08-20 21:25Z — §1's four `✗`s are now `✓`
+>
+> Production is at **8 migrations** and serves every route this file called 404. The APK is
+> published (`GET /app/version` → 0.4.1 (6)), the operator routes answer, `/tags/` renders,
+> and 82 live assertions passed against the real box with the database left exactly as it
+> was found (`./ops/smoke-live.sh`).
+>
+> **What that changes in the stairwell, in one line each:**
+>
+> | step | it said | it now says |
+> |---|---|---|
+> | 1 · install | carry 0.4.0-5 | carry **0.4.1-6** — the guarded write |
+> | 3 · the report | „…Meldung an das Buero ist fehlgeschlagen (not_found)" | **„An das Buero gemeldet."** |
+> | 4 · tap the new card | `422 unknown_location` | **`422 tag_unbound`** — same outcome, no shift |
+> | 5 · self-update | unavailable | **offers 0.4.1 (6)**, sha-checked |
+>
+> The writing screen now needs a `Betreiber-Code` first, and issuing one finally works:
+> admin → Betreiber → code → `Betreiber-Code` on the phone.
+>
+> **Unchanged, and still the whole point of the trip:** nothing here has touched real
+> hardware. Step 2 (the Ultralight must be refused) and step 1b (a mounted card must be
+> refused) are proven only against fake cards.
+
 ---
 
 ## 1. The verdict on the six things
@@ -13,14 +36,17 @@ Where the reports disagreed with the machine, the machine won.
 
 | # | What the owner needs | lab | field | why |
 |---|---|---|---|---|
-| 1 | self-update | ✓ | **✗** | `GET /app/version` → **404 on production** |
+| 1 | self-update | ✓ | ✓ | `GET /app/version` → `published: true`, 0.4.1 (6) |
 | 2 | writing a tag | ✓ | ⚠ | phone-local, works — but **no card has ever been written** |
-| 3 | reporting the tag to the office | ✓ | **✗** | `POST /operator/tags` → **404 on production** |
-| 4 | admin turning it into a building/zone | ✓ | **✗** | no routes, no `/tags/` page, **DB at migration 005** |
-| 5 | a tap opening a shift | ✓ | ✓ | this is what runs in the field now |
-| 6 | a tap on an unbound tag being harmless | ✓ | ✓ | 422, no shift, a German sentence — two ways |
+| 3 | reporting the tag to the office | ✓ | ✓ | `POST /operator/tags` → 201, lands UNBOUND |
+| 4 | admin turning it into a building/zone | ✓ | ✓ | `/tags/` renders, resolve-zone → 201, **DB at 008** |
+| 5 | a tap opening a shift | ✓ | ✓ | old-shape body, wall uuid, 201, zone NULL |
+| 6 | a tap on an unbound tag being harmless | ✓ | ✓ | 422 `tag_unbound`, no shift row |
 
-**Two of six work in the field. Four are finished, checked, and not deployed.**
+**Six of six answer in the field. The one ⚠ is hardware, and no server can close it.**
+
+> The rest of §1 is kept as written on deploy morning, because the probe transcript below is
+> what the deploy was measured against. It is history now, not status.
 
 ### The thing neither report said
 
@@ -267,7 +293,11 @@ Anything else on this list is a card you can mount or a feature that is simply n
   number that would let an over-large message through — step 2 of the script is what settles it.
 - Tag pulled mid-write, NFC toggled off mid-write, screen locked, app force-stopped mid-write.
 - Android 9 vs 16. Only one phone has been used.
-- Anything in production: **nothing was deployed and nothing on the VM was changed.**
+- ~~Anything in production: nothing was deployed~~ — **DEPLOYED 2026-08-20 21:25Z.** 8
+  migrations, both new route files, the APK published, both hosts verified, 82 live
+  assertions green and the database left exactly as found (`./ops/smoke-live.sh`, TASK-221).
+  What production still cannot tell you is anything on this list above it: every remaining
+  unknown here is a phone, a card, or an Android version.
 - ~~Decisions 41–44 are still PROPOSED~~ — **RULED 2026-08-19: 41, 42, 43, 44 ACCEPTED;
   decision-37 marked `superseded` with the four contradictions written into its own file.**
   The consequence 43 was written to prevent was then checked against the real production row,

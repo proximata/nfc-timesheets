@@ -24,6 +24,9 @@ Conventions come from `backlog/docs/runbook-vm-provisioning.md`:
 | `backup/restore-test.sh` | ships in the artifact → `/srv/nfc/ops/backup/restore-test.sh` |
 | `check-autoclose.sh` | dev/CI only, never installed |
 | `deploy.sh` | dev/CI only, runs on the **laptop**, never installed |
+| `publish-apk.sh` | dev/CI only, runs on the **laptop** — puts the APK + manifest in `/srv/nfc/releases/` |
+| `smoke-live.sh` | dev/CI only, runs on the **laptop** — drives the LIVE host and cleans up after itself |
+| `smoke-admin.mjs` | ships in the artifact → `/srv/nfc/ops/smoke-admin.mjs` (used only by `smoke-live.sh`) |
 
 ## Install order
 
@@ -55,10 +58,31 @@ before the restart, which hand-typed rsyncs reliably forget:
 | `server/` | `/srv/nfc/` | `server.js`, `instrument.mjs`, `lib/`, `routes/`, `db/`, `wellknown/`, `node_modules/` |
 | `web/out/` | `/srv/nfc/public/` | the static admin export (`PUBLIC_DIR` default) |
 | `ops/` | `/srv/nfc/ops/` | units, `autoclose.sql`, backup scripts |
+| `android/dist/*.apk` | `/srv/nfc/releases/` | the published build + `latest.json` — **`publish-apk.sh`, never `deploy.sh`** |
+
+`deploy.sh` EXCLUDES `releases/` from its `--delete` rsync on purpose. `server/releases/`
+holds one README and no binary, so without that exclude every deploy would delete the
+published APK and leave `latest.json` naming a file that is gone: `/app/version` keeps
+saying "published", `/app/download` starts 404ing, and the worker sees an update offered
+and then failing. Step 7b of a deploy READS the live manifest back and warns if it has
+drifted from the file beside it.
 
 `chown -R app:app /srv/nfc` and `chmod +x /srv/nfc/ops/backup/*.sh` are done by the script.
 On a **first** deploy the unit does not exist yet, so step 6 fails — finish §3–§5 below and
 re-run.
+
+### 2a. Publish the Android build (self-update)
+
+```bash
+RELEASE_NOTES="Was der Betreiber am Telefon liest." ./ops/publish-apk.sh
+./ops/publish-apk.sh --verify        # read-only: is the live manifest still true?
+```
+
+versionCode and versionName are read out of the APK's **binary manifest** with
+`apkanalyzer`, never out of the filename — `android/dist/` has already held an artefact
+whose name lied about its bytes (CORE-FLOW §3), and the script refuses a mislabelled file
+rather than publishing the lie. After the rsync it downloads the APK back over HTTPS and
+compares it byte for byte with the local one.
 
 ### 2b. Schema
 
@@ -111,6 +135,20 @@ Then pick an offsite target: `backup/pg-backup.sh` has one clearly marked `TODO(
 block with three concrete options (rclone / restic / rsync-over-ssh). Nothing is chosen and
 no credentials are invented — the owner picks one. **Until that is done there is no backup,
 only a second copy on the same failing disk.**
+
+### 7. Smoke-test the live box
+
+```bash
+./ops/smoke-live.sh                  # defaults to ops/branding.json apiHost
+```
+
+82 assertions over real HTTP: every admin page and read route, every auth gate refusing,
+operator enrolment → tag report → admin resolve → tap, the OLD-SHAPE `POST /shifts/open`
+the field APK sends, and the unbound tap that must stay harmless. It WRITES — a marked
+worker, operator, tag, zone and shift — because all four shipped features are writes, and
+every row is deleted from a trap and then **counted** to prove production is as it was
+found. It never touches the director's admin row: it creates a throwaway admin with a
+random password and deletes it in the same trap.
 
 ## Operating
 
