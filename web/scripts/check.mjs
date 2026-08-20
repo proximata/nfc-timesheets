@@ -215,10 +215,7 @@ assert.deepEqual(
 )
 assert.deepEqual(
   pluralBranchesOf('{a, plural, one {x} other {{b, plural, other {y}}}}'),
-  [
-    ['one', 'other'],
-    ['other'],
-  ],
+  [['one', 'other'], ['other']],
   'a plural nested inside a plural branch is still a plural',
 )
 
