@@ -803,7 +803,24 @@ try {
   // The other side of the gate: it now says the file WOULD apply, and it still writes
   // nothing. A dry run that quietly committed would be worse than no dry run — it would
   // migrate production from a step whose whole promise is that it does not.
-  assert.match(dryRun(), /would apply 006_zones_revenue_rates\.sql/, "--dry-run must clear once the rate is real");
+  //
+  // THREE files are pending here, not one: 006, 007, AND 008. 008 is the FIRST migration in
+  // this tree with a real cross-file dependency (`tag_aliases.zone_id -> zones`, `zones`
+  // itself only existing once 006 has *committed*; `reported_tags.reported_by_operator_id
+  // -> operators`, same story with 007). migrate.js's own comment on `--dry-run` names
+  // exactly this: each pending file is dry-run in ITS OWN rolled-back transaction, so a file
+  // that depends on an EARLIER PENDING file's DDL "will report a false failure — LOUDLY,
+  // which is the right way round for a gate". 008 hitting that here, for the first time, is
+  // therefore expected, not a regression — `err.stdout` still carries everything printed
+  // before the chain broke, which is all THIS assertion needs. 008's OWN dry-run is checked
+  // on its own, correctly, once 006 and 007 have actually landed below.
+  let dryRunOutput;
+  try {
+    dryRunOutput = dryRun();
+  } catch (err) {
+    dryRunOutput = err.stdout ?? "";
+  }
+  assert.match(dryRunOutput, /would apply 006_zones_revenue_rates\.sql/, "--dry-run must clear once the rate is real");
   assert.equal(
     liveQuery("SELECT to_regclass('public.zones') IS NULL;"),
     "t",
@@ -866,6 +883,11 @@ try {
   );
 
   apply("006_zones_revenue_rates.sql");
+  // `apply()` runs the file DIRECTLY, the same shortcut used for 001-005 above (and for the
+  // same stated reason — this harness predates schema_migrations existing at all). Recorded
+  // here by hand so a LATER --dry-run (008's, below) correctly reads 006 as already applied
+  // instead of trying to redo its DDL and colliding with what is now really on disk.
+  liveQuery("INSERT INTO schema_migrations (filename) VALUES ('006_zones_revenue_rates.sql');");
   assert.equal(
     liveQuery("SELECT to_regclass('public.zones') IS NOT NULL AND to_regclass('public.location_revenue') IS NOT NULL;"),
     "t",
@@ -908,6 +930,7 @@ try {
   const adminsBefore007 = colSnapshot("admins");
 
   apply("007_operator_identity.sql");
+  liveQuery("INSERT INTO schema_migrations (filename) VALUES ('007_operator_identity.sql');"); // same reason as 006, above
 
   assert.equal(
     liveQuery(
@@ -921,11 +944,42 @@ try {
   assert.equal(colSnapshot("admins"), adminsBefore007, "admins must be BYTE-IDENTICAL after 007 — decision-45 §5, the admin login is untouched");
   assert.equal(liveQuery("SELECT count(*) FROM operators;"), "0", "007 must invent no operator, same convention 006 states for zones");
 
+  // --- 008 on top of live data: composes with 006 AND 007, invents nothing -----------
+  //
+  // Now that 006 and 007 have actually COMMITTED, --dry-run must cleanly clear 008 on its
+  // own — the failure exercised above was specifically about 006/007/008 all being PENDING
+  // at once; with the first two real, 008's FKs into `zones` and `operators` resolve fine.
+  assert.match(
+    dryRun(),
+    /would apply 008_reported_tags\.sql/,
+    "--dry-run must clear 008 once its dependencies (zones, operators) are real, not merely pending",
+  );
+
+  apply("008_reported_tags.sql");
+  assert.equal(
+    liveQuery(
+      "SELECT to_regclass('public.reported_tags') IS NOT NULL AND to_regclass('public.tag_aliases') IS NOT NULL;",
+    ),
+    "t",
+    "008 must create reported_tags and tag_aliases",
+  );
+  assert.equal(liveQuery("SELECT count(*) FROM reported_tags;"), "0", "008 must invent no reported tag");
+  assert.equal(liveQuery("SELECT count(*) FROM tag_aliases;"), "0", "008 must invent no alias");
+  // The FKs are load-bearing, not decorative: prove they are actually enforced, not just
+  // present as columns.
+  assert.throws(
+    () => liveQuery("INSERT INTO tag_aliases (id, zone_id) VALUES (gen_random_uuid(), gen_random_uuid())"),
+    /violates foreign key constraint/,
+    "tag_aliases.zone_id must actually reference a real zone, not merely be a uuid column",
+  );
+
   console.log(
     "OK check-migrate: migrations apply once, re-run is a no-op, seed is idempotent, " +
       "003+004+005 apply on top of 001+002 with live data, 005's contract backfill is idempotent, " +
-      "006 refuses a rate-less worker before applying cleanly over live rows, and 007 composes " +
-      "with 006 (blocked transitively by filename order while 006 refuses) leaving workers/admins untouched",
+      "006 refuses a rate-less worker before applying cleanly over live rows, 007 composes with " +
+      "006 (blocked transitively by filename order while 006 refuses) leaving workers/admins " +
+      "untouched, and 008 composes with both once they are real (its --dry-run correctly refuses " +
+      "while they are merely pending) and invents neither a tag nor an alias",
   );
 } finally {
   for (const db of [DB_NAME, LIVE_DB_NAME]) {

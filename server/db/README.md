@@ -18,6 +18,9 @@ migrations/006_zones_revenue_rates.sql   zones (+ area, tag_serial), location_re
 migrations/007_operator_identity.sql   operators, phone_identities (the cross-table phone
                           uniqueness registry), operator_sessions — workers/admins
                           untouched (decision-45)
+migrations/008_reported_tags.sql   reported_tags (an UNBOUND tag an operator wrote and
+                          reported, before any zone or building claims it) and tag_aliases
+                          (an existing zone adopting a SECOND physical tag) — this iteration
 migrate.js                runner: applies migrations/*.sql once each, in lexical order
 seed.sql                  DEV ONLY sample data
 check-migrate.js          runnable check (see bottom)
