@@ -262,6 +262,47 @@ try {
     ok("phone_identities_pkey + both UNIQUEs refuse every direct-SQL seating of a taken number");
   });
 
+  await test("a registry row must always claim SOMEBODY — on the way in, and on the way out", async () => {
+    // ADDED AFTER MUTATION: `phone_identities_claims CHECK (worker_id IS NOT NULL OR
+    // operator_id IS NOT NULL)` could be replaced with `CHECK (true)` and every assertion
+    // in this file still passed. The registry's meaning is "this number belongs to
+    // someone"; a row claiming nobody silently converts it into a list of strings that
+    // reserves numbers against people who no longer exist.
+
+    // 1 · on the way IN
+    await assert.rejects(
+      () => db.query("INSERT INTO phone_identities (phone_e164) VALUES ('+436649005507')"),
+      (e) => e.code === "23514",
+      "a row that claims neither a worker nor an operator must be refused outright",
+    );
+
+    // 2 · on the way OUT, and this is the sharp one. worker_id is ON DELETE SET NULL, so
+    // deleting the last person a row claims drives it to (NULL, NULL) as part of the SAME
+    // statement's FK action. CHECK constraints are per-row-immediate, never deferred, so
+    // the DELETE FROM workers itself aborts. That is not a defect — it is the registry
+    // refusing to decay into a reservation nobody owns — and it is exactly the fact
+    // ops/reset-w1.sql §4 has to detach around. Asserted HERE so it is a property of the
+    // schema rather than a quirk discovered inside one ops script.
+    const doomed = Number(
+      (await db.query("INSERT INTO workers (name, hourly_rate_cents) VALUES ('Doomed Claimant', 1500) RETURNING id")).rows[0].id,
+    );
+    await db.query("INSERT INTO phone_identities (phone_e164, worker_id) VALUES ('+436649005508', $1)", [doomed]);
+    await assert.rejects(
+      () => db.query("DELETE FROM workers WHERE id = $1", [doomed]),
+      (e) => e.code === "23514",
+      "deleting the only claimant must ABORT rather than leave a row that claims nobody",
+    );
+    // ...and the documented cleanup is what makes the delete possible again.
+    await db.query("DELETE FROM phone_identities WHERE phone_e164 = '+436649005508'");
+    await db.query("DELETE FROM workers WHERE id = $1", [doomed]);
+    assert.equal(
+      Number((await db.query("SELECT count(*) AS n FROM phone_identities WHERE worker_id IS NULL AND operator_id IS NULL")).rows[0].n),
+      0,
+      "no registry row may claim nobody",
+    );
+    ok("phone_identities_claims holds in both directions: refused on INSERT, and it ABORTS the delete of a row's last claimant");
+  });
+
   await test("a CONCURRENT cross-kind race: the loser is blocked on a row lock, then loses on the PK", async () => {
     // Two REAL connections. `psql -c` cannot hold a lock open across statements, so a
     // subprocess pair would prove serialisation-after-the-fact, never "B waited on A".
