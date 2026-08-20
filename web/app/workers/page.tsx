@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useFormatter, useTranslations } from 'next-intl'
 import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from 'react'
@@ -60,6 +61,9 @@ const EMAIL_RE = /^[^\s@,]+@[^\s@,.]+(\.[^\s@,.]+)+$/
  * mobiles, landlines and foreign numbers, and a stricter rule would reject real ones.
  */
 const PHONE_RE = /^[0-9+()/.\s-]{4,40}$/
+
+/** /operators/ left the sidebar (decision-39) and this is its permanent way in. */
+const OPERATORS_PATH = '/operators/'
 
 type Draft = {
   /** Absent = create. Present = update that row. */
@@ -563,7 +567,15 @@ export default function WorkersPage() {
         </section>
       )}
 
-      <ListPanel title={t('listHeading')} padded={workers === null}>
+      <ListPanel
+        title={t('listHeading')}
+        padded={workers === null}
+        action={
+          <Link className="btn btn-quiet" href={OPERATORS_PATH}>
+            {t('operatorsLink')}
+          </Link>
+        }
+      >
         {workers === null ? (
           <p role="status">{t('loading')}</p>
         ) : workers.length === 0 ? (

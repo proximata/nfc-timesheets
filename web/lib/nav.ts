@@ -86,7 +86,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
  * Kept as data, not as a comment, because `pnpm check` reads it: each of these must keep at
  * least one inbound link from a screen that is not itself.
  */
-export const OFF_NAV_ROUTES: readonly string[] = ['/contracts/', '/analytics/', '/inventory/']
+export const OFF_NAV_ROUTES: readonly string[] = [
+  '/contracts/',
+  '/analytics/',
+  '/inventory/',
+  '/operators/',
+]
 
 /**
  * Derived, and kept so nothing that imports the flat list breaks. One line, and it removes
