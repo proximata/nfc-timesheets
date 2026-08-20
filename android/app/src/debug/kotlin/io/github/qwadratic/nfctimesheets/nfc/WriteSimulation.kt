@@ -2,6 +2,7 @@ package io.github.qwadratic.nfctimesheets.nfc
 
 import io.github.qwadratic.nfctimesheets.core.NdefTag
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.core.WriteGuard
 
 /**
  * DEBUG BUILDS ONLY. There is a file with this exact name and package in `src/release/`
@@ -31,7 +32,23 @@ data class WriteSimulation(
     val writable: Boolean,
     /** What the card holds after the write. null = the read-back itself failed. */
     val corrupt: (ByteArray) -> ByteArray?,
+    /**
+     * What the card ALREADY holds, minted from the build's own [TagLink]. null = blank.
+     * Drives the TASK-220 overwrite guard.
+     *
+     * A FUNCTION OF TagLink and not a constant: the tag host is typed once, in
+     * branding.properties, and android/checks fails on any occurrence of it under app/src.
+     * A simulation with its own copy of the host would also be a simulation that keeps
+     * passing after the host changes.
+     */
+    val initial: (TagLink) -> ByteArray? = { null },
 )
+
+/**
+ * The building in production. A card carrying this id is a card on a wall at the client's
+ * building, which is exactly the card the overwrite guard exists to refuse.
+ */
+private const val HOIV_LOCATION = "c3c37d4a-ca0a-42c5-b248-9704b9907ec7"
 
 fun writeSimulations(): List<WriteSimulation> = listOf(
     WriteSimulation("NTAG213, 137 bytes — writes and verifies", 137, true) { it },
@@ -42,6 +59,22 @@ fun writeSimulations(): List<WriteSimulation> = listOf(
     },
     WriteSimulation("verify fails: the card reads back empty", 137, true) { null },
     WriteSimulation("verify fails: truncated mid-write", 137, true) { it.copyOfRange(0, it.size - 6) },
+    // TASK-220, without a card: the emulator has no NFC, so this is the only way to see the
+    // refusal, the confirmation box and the override on a screen before a stairwell.
+    WriteSimulation(
+        label = "a MOUNTED card — already holds the HOIV id",
+        capacity = 137,
+        writable = true,
+        corrupt = { it },
+        initial = { link -> NdefTag.message(link.uriFor(HOIV_LOCATION)?.toString()) },
+    ),
+    WriteSimulation(
+        label = "a foreign card — holds somebody else's URL",
+        capacity = 137,
+        writable = true,
+        corrupt = { it },
+        initial = { NdefTag.message("https://example.com/hello") },
+    ),
 )
 
 /**
@@ -52,6 +85,7 @@ fun runSimulation(
     simulation: WriteSimulation,
     tagLink: TagLink,
     locationId: String?,
+    confirmedOverwriteOf: String? = null,
 ): TagWriter.Outcome {
     val serial = "SIMULATED"
     val plan = NdefTag.plan(tagLink, locationId, simulation.capacity, simulation.writable)
@@ -64,6 +98,20 @@ fun runSimulation(
         is NdefTag.Plan.Write -> Unit
     }
     val write = plan as NdefTag.Plan.Write
+
+    // The overwrite guard, run by the SAME functions TagWriter calls. The mounted-card
+    // scenario's `initial` is a real encoded message, so this is the real classification.
+    val existing = WriteGuard.classify(tagLink, simulation.initial(tagLink))
+    when (val verdict = WriteGuard.decide(existing, write.locationId, confirmedOverwriteOf)) {
+        is WriteGuard.Verdict.Occupied -> return TagWriter.Outcome.Refused.Occupied(
+            serial = serial,
+            onTag = verdict.onTag,
+            offered = verdict.offered,
+            token = verdict.token,
+        )
+        is WriteGuard.Verdict.Proceed -> Unit
+    }
+
     val readBack = simulation.corrupt(write.bytes)
     if (!NdefTag.verified(write.bytes, readBack)) {
         return TagWriter.Outcome.Unverified(
@@ -78,5 +126,6 @@ fun runSimulation(
         serial = serial,
         bytes = write.bytes.size,
         capacity = simulation.capacity,
+        replaced = existing,
     )
 }

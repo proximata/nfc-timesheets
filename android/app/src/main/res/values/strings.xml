@@ -272,7 +272,7 @@
 
     <!-- Tag schreiben (Betreiber). Der einzige Bildschirm, der einen physischen Gegenstand veraendert. -->
     <string name="write_title">Tag beschreiben</string>
-    <string name="write_hint">Halte einen leeren NTAG213 an das Telefon. Der Tag wird beschrieben, danach sofort zurueckgelesen und Byte fuer Byte verglichen. Erst wenn das stimmt, gilt er als fertig.</string>
+    <string name="write_hint">Halte einen leeren NTAG213 an das Telefon. Der Tag wird zuerst gelesen, dann beschrieben, danach sofort zurueckgelesen und Byte fuer Byte verglichen. Erst wenn das stimmt, gilt er als fertig. Eine Karte, die bereits eine unserer IDs traegt, wird nicht ueberschrieben.</string>
     <string name="write_pending_id">Neue Tag-ID: %1$s</string>
     <string name="write_waiting">Warte auf Tag …</string>
     <string name="write_ok">Geschrieben und geprueft.\n\nID: %1$s\n%2$d von %3$d Byte belegt\nSeriennummer: %4$s</string>
@@ -291,4 +291,11 @@
     <string name="write_operator_enrol">Anmelden</string>
     <string name="write_report_retry">Meldung erneut senden</string>
     <string name="write_open">Tag beschreiben</string>
+    <string name="write_needs_operator_to_write">Dieses Telefon ist nicht als Betreiber angemeldet. Tags koennen nur Betreiber beschreiben. Bitte den Betreiber-Code eingeben. Solange kein Code eingegeben ist, liest dieser Bildschirm gar keine Karte.</string>
+    <string name="write_occupied">NICHT beschrieben. Diese Karte traegt bereits die ID %1$s — das ist eine montierte Karte an einer Tuer. Wird sie ueberschrieben, funktioniert diese Tuer fuer alle Reinigungskraefte nicht mehr, bis das Buero die neue ID zuordnet. Der Tag wurde nicht veraendert.\n\nWenn die Karte wirklich ueberschrieben werden soll: die letzten sechs Zeichen der alten ID eingeben (%2$s) und bestaetigen, dann die Karte erneut anhalten.</string>
+    <string name="write_confirm_label">Letzte sechs Zeichen der alten ID (%1$s)</string>
+    <string name="write_confirm_button">Ueberschreiben bestaetigen</string>
+    <string name="write_confirm_armed">Ueberschreiben freigegeben — nur fuer die Karte mit der ID %1$s. Karte jetzt erneut anhalten. Nach dem Schreiben gilt die Freigabe nicht mehr.</string>
+    <string name="write_replaced_ours">ACHTUNG: Diese Karte trug vorher unsere ID %1$s. Diese ID ist jetzt weg. Falls die Karte an einer Tuer montiert war, muss das Buero die neue ID dieser Tuer zuordnen.</string>
+    <string name="write_replaced_foreign">Hinweis: Die Karte war nicht leer, der Inhalt war aber keiner von uns (%1$s) und wurde ueberschrieben.</string>
 </resources>

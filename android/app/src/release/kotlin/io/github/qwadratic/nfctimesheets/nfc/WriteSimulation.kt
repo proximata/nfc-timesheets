@@ -33,4 +33,5 @@ fun runSimulation(
     simulation: WriteSimulation,
     tagLink: TagLink,
     locationId: String?,
+    confirmedOverwriteOf: String? = null,
 ): TagWriter.Outcome = TagWriter.Outcome.Refused.BadId(locationId)

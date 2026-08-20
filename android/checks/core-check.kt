@@ -40,6 +40,7 @@ import io.github.qwadratic.nfctimesheets.core.TapInbox
 import io.github.qwadratic.nfctimesheets.core.NdefTag
 import io.github.qwadratic.nfctimesheets.core.Wire
 import io.github.qwadratic.nfctimesheets.core.WireZone
+import io.github.qwadratic.nfctimesheets.core.WriteGuard
 import io.github.qwadratic.nfctimesheets.core.Zones
 import org.json.JSONObject
 import java.io.File
@@ -100,6 +101,7 @@ fun main() {
     updateCheck()
     ndefTag()
     theWriteSurface()
+    theOverwriteGuard()
 
     if (failed) exitProcess(1)
     println("core-check: OK")
@@ -1953,6 +1955,161 @@ private fun theWriteSurface() {
         writers == listOf("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/nfc/TagWriter.kt"),
         "writeNdefMessage is called from exactly one file, and it is TagWriter: $writers",
     )
+}
+
+// ---------------------------------------------------------------------------------
+// 16c. THE OVERWRITE GUARD, AND THE ROLE THAT GATES THE WRITE.   (TASK-220)
+//
+//      checks/tag-writer-check.kt § 1b drives the guard through the real TagWriter against
+//      a fake card, which is the strong half. Two things it cannot reach live here:
+//
+//        - core/WriteGuard's own decision table, run directly, including the confirmation
+//          token. Cheap, and it is the code the screen calls to enable its button.
+//        - nfc/WriteTagActivity, which imports Compose and android.nfc and therefore
+//          compiles nowhere off a device. Its two structural properties are asserted
+//          against the SOURCE, with comments stripped, exactly as § 16b does: reader mode
+//          is not started without an operator session, and the write is not performed
+//          without one either.
+//
+//      AND THE PROPERTY THAT MATTERS MOST IS A NEGATIVE ONE: none of this is on the
+//      clock-in path. A guard that made a tap slower or more fragile would be a worse bug
+//      than the one it fixes — a cleaner who cannot clock in is not paid. So the tap path
+//      is swept for any mention of the writer or the guard, and there must be none.
+// ---------------------------------------------------------------------------------
+private fun theOverwriteGuard() {
+    val mounted = NdefTag.message("https://$host/t?l=$UUID_A")!!
+
+    // ---- classify: what is on the card --------------------------------------------
+    check(WriteGuard.classify(tags, null) == WriteGuard.Existing.Blank, "an empty card is Blank")
+    check(WriteGuard.classify(tags, ByteArray(0)) == WriteGuard.Existing.Blank, "zero bytes is Blank")
+    check(
+        WriteGuard.classify(tags, mounted) == WriteGuard.Existing.Ours(UUID_A),
+        "a card carrying one of our ids is Ours: ${WriteGuard.classify(tags, mounted)}",
+    )
+    // A LEGACY host is still one of ours. The rename already killed a tag once; a card
+    // written before it is on a wall and must not be classified as somebody else's rubbish.
+    val legacy = legacyHosts.firstOrNull { it != host }
+    check(legacy != null, "branding still lists a legacy tag host, or the row below proves nothing")
+    if (legacy != null) {
+        check(
+            WriteGuard.classify(tags, NdefTag.message("https://$legacy/t?l=$UUID_A")) ==
+                WriteGuard.Existing.Ours(UUID_A),
+            "a card on a LEGACY host is still one of ours",
+        )
+    }
+    check(
+        WriteGuard.classify(tags, NdefTag.message("https://example.com/x")) is WriteGuard.Existing.Foreign,
+        "somebody else's URL is Foreign",
+    )
+    check(
+        WriteGuard.classify(tags, byteArrayOf(0x11, 0x22)) is WriteGuard.Existing.Foreign,
+        "bytes that decode to nothing are Foreign, not Blank — a card we cannot read is not an empty card",
+    )
+    // THE SECOND OPINION. core/NdefTag is strict by design and returns null for a long-form
+    // record; the platform decoder reads it fine. A card of ours written by another tool
+    // must not fall through to Foreign and be silently overwritten.
+    check(
+        WriteGuard.classify(tags, byteArrayOf(0x11, 0x22), alsoRead = "https://$host/t?l=$UUID_A") ==
+            WriteGuard.Existing.Ours(UUID_A),
+        "a card only the PLATFORM decoder can read is still recognised as ours",
+    )
+
+    // ---- decide: may it be written ------------------------------------------------
+    check(
+        WriteGuard.decide(WriteGuard.Existing.Blank, UUID_B) is WriteGuard.Verdict.Proceed,
+        "a blank card writes",
+    )
+    check(
+        WriteGuard.decide(WriteGuard.Existing.Foreign("x"), UUID_B) is WriteGuard.Verdict.Proceed,
+        "a foreign card writes — it destroys nothing of ours",
+    )
+    check(
+        WriteGuard.decide(WriteGuard.Existing.Ours(UUID_A), UUID_A) is WriteGuard.Verdict.Proceed,
+        "THE RETRY PATH: the same id over the same card still writes",
+    )
+    check(
+        WriteGuard.decide(WriteGuard.Existing.Ours(UUID_A), UUID_A.uppercase()) is WriteGuard.Verdict.Proceed,
+        "...and the id is compared canonically, not as typed",
+    )
+    val occupied = WriteGuard.decide(WriteGuard.Existing.Ours(UUID_A), UUID_B)
+    check(occupied is WriteGuard.Verdict.Occupied, "a DIFFERENT id on the card is refused: $occupied")
+    check(
+        (occupied as? WriteGuard.Verdict.Occupied)?.onTag == UUID_A &&
+            occupied.offered == UUID_B,
+        "the refusal names both ids, or the operator cannot tell which card is in their hand",
+    )
+    check(
+        WriteGuard.decide(WriteGuard.Existing.Ours(UUID_A), UUID_B, confirmedFor = UUID_A)
+            is WriteGuard.Verdict.Proceed,
+        "confirming THE ID ON THE CARD lets it through",
+    )
+    check(
+        WriteGuard.decide(WriteGuard.Existing.Ours(UUID_A), UUID_B, confirmedFor = UUID_B)
+            is WriteGuard.Verdict.Occupied,
+        "confirming the id being OFFERED authorises nothing — it is not what is being destroyed",
+    )
+    check(
+        WriteGuard.decide(WriteGuard.Existing.Ours(UUID_A), UUID_B, confirmedFor = "yes")
+            is WriteGuard.Verdict.Occupied,
+        "a confirmation that is not a uuid authorises nothing",
+    )
+
+    // ---- the token the operator has to type ----------------------------------------
+    check(WriteGuard.token(UUID_A) == UUID_A.takeLast(6), "the token is the last six characters of the id")
+    check(WriteGuard.confirms(UUID_A, UUID_A.takeLast(6)), "the token confirms")
+    check(WriteGuard.confirms(UUID_A, "  ${UUID_A.takeLast(6).uppercase()}  "), "case and space are forgiven")
+    check(WriteGuard.confirms(UUID_A, UUID_A), "the whole id confirms too")
+    check(!WriteGuard.confirms(UUID_A, UUID_B.takeLast(6)), "another card's token does not confirm")
+    check(!WriteGuard.confirms(UUID_A, ""), "an empty box does not confirm")
+    check(!WriteGuard.confirms(UUID_A, null), "nothing typed does not confirm")
+    check(!WriteGuard.confirms(UUID_A, "ja"), "a generic yes does not confirm")
+    check(!WriteGuard.confirms(null, "anything"), "there is nothing to confirm without an id")
+
+    // ---- the screen: the role gates the WRITE, not just the report -----------------
+    val screen = strippedOfComments(
+        File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/nfc/WriteTagActivity.kt").readText(),
+    )
+    check(screen.contains("operatorCookies.header() != null"), "the screen reads the operator session off disk")
+    // Off DISK and not off the network: the operator is in a stairwell. A gate that needs a
+    // round trip is a gate that fails shut exactly where it is used.
+    check(
+        Regex("""private fun startReaderMode\(\) \{\s*if \(!operatorReady\) return""").containsMatchIn(screen),
+        "reader mode is not started at all without an operator session",
+    )
+    check(
+        Regex("""private fun onTag\(tag: Tag\) \{\s*if \(!operatorReady\) return""").containsMatchIn(screen),
+        "and the write itself refuses without one, behind the reader-mode gate",
+    )
+    check(
+        screen.indexOf("if (!operatorReady) return") < screen.indexOf("app.tagWriter.write"),
+        "the gate is BEFORE the write, not a message printed after it",
+    )
+    check(screen.contains("confirmedOverwriteOf = confirmedFor"), "the screen hands its confirmation to the writer")
+    check(
+        screen.contains("WriteGuard.confirms(occupied.onTag, confirmText)"),
+        "the confirm button is enabled by WriteGuard, not by a local string comparison",
+    )
+
+    // ---- and none of it is anywhere near a clock-in --------------------------------
+    // The tap path, named file by file. A cleaner's tap must not touch the writer, the
+    // guard, or the operator session: not for correctness reasons — for a cleaner who is
+    // standing at a door at 05:00 and is not paid if this is slow or fragile.
+    val tapPath = listOf(
+        "NfcTapActivity.kt", "MainActivity.kt", "nfc/ScanActivity.kt", "nfc/KnownTags.kt",
+        "data/ShiftStore.kt", "data/ShiftSync.kt", "core/TapInbox.kt", "core/TagLink.kt",
+    )
+    for (name in tapPath) {
+        val file = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/$name")
+        check(file.exists(), "the tap path still contains $name")
+        if (!file.exists()) continue
+        val code = strippedOfComments(file.readText())
+        for (forbidden in listOf("WriteGuard", "TagWriter", "tagWriter", "operatorCookies", "operatorApi")) {
+            check(
+                !code.contains(forbidden),
+                "$name touches $forbidden — the clock-in path must not know the write side exists",
+            )
+        }
+    }
 }
 
 /**

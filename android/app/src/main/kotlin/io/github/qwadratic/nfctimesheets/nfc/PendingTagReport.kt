@@ -1,6 +1,7 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
 import android.content.Context
+import io.github.qwadratic.nfctimesheets.core.WriteGuard
 
 /**
  * The one physical fact this app must never lose: a tag WAS WRITTEN and the server does not
@@ -37,6 +38,13 @@ class PendingTagReport(context: Context) {
             .putString(KEY_SERIAL, written.serial)
             .putInt(KEY_BYTES, written.bytes)
             .putInt(KEY_CAPACITY, written.capacity)
+            // WHAT THIS CARD REPLACED, kept across the process death too. A card written
+            // over a card that already carried one of our ids is the one case where the
+            // office may have to go and look at a wall; a restored screen that says the
+            // card was blank would be the app quietly forgetting the only interesting
+            // thing about it.
+            .putString(KEY_REPLACED_KIND, kindOf(written.replaced))
+            .putString(KEY_REPLACED_DETAIL, detailOf(written.replaced))
             .commit()
     }
 
@@ -51,7 +59,17 @@ class PendingTagReport(context: Context) {
             serial = serial,
             bytes = prefs.getInt(KEY_BYTES, -1),
             capacity = prefs.getInt(KEY_CAPACITY, -1),
+            replaced = replaced(),
         )
+    }
+
+    private fun replaced(): WriteGuard.Existing {
+        val detail = prefs.getString(KEY_REPLACED_DETAIL, "").orEmpty()
+        return when (prefs.getString(KEY_REPLACED_KIND, KIND_BLANK)) {
+            KIND_OURS -> WriteGuard.Existing.Ours(detail)
+            KIND_FOREIGN -> WriteGuard.Existing.Foreign(detail)
+            else -> WriteGuard.Existing.Blank
+        }
     }
 
     /** The server now knows. Same commit()-not-apply() reasoning as [save]. */
@@ -60,11 +78,28 @@ class PendingTagReport(context: Context) {
     }
 
     private companion object {
+        fun kindOf(existing: WriteGuard.Existing): String = when (existing) {
+            is WriteGuard.Existing.Ours -> KIND_OURS
+            is WriteGuard.Existing.Foreign -> KIND_FOREIGN
+            WriteGuard.Existing.Blank -> KIND_BLANK
+        }
+
+        fun detailOf(existing: WriteGuard.Existing): String = when (existing) {
+            is WriteGuard.Existing.Ours -> existing.locationId
+            is WriteGuard.Existing.Foreign -> existing.summary
+            WriteGuard.Existing.Blank -> ""
+        }
+
         const val FILE = "pending_tag_report"
         const val KEY_LOCATION_ID = "location_id"
         const val KEY_URI = "uri"
         const val KEY_SERIAL = "serial"
         const val KEY_BYTES = "bytes"
         const val KEY_CAPACITY = "capacity"
+        const val KEY_REPLACED_KIND = "replaced_kind"
+        const val KEY_REPLACED_DETAIL = "replaced_detail"
+        const val KIND_BLANK = "blank"
+        const val KIND_OURS = "ours"
+        const val KIND_FOREIGN = "foreign"
     }
 }

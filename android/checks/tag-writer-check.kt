@@ -4,6 +4,7 @@ import android.nfc.NdefMessage
 import android.nfc.Tag
 import io.github.qwadratic.nfctimesheets.core.NdefTag
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.core.WriteGuard
 import io.github.qwadratic.nfctimesheets.nfc.TagWriter
 import java.io.File
 import kotlin.system.exitProcess
@@ -62,15 +63,20 @@ private const val HOIV_LOCATION = "c3c37d4a-ca0a-42c5-b248-9704b9907ec7"
 private fun tag(uid: String = "04A2B3C4D5E680", vararg techs: String = arrayOf("android.nfc.tech.Ndef")) =
     Tag(uid.chunked(2).map { it.toInt(16).toByte() }.toByteArray(), arrayOf(*techs))
 
-private fun run(card: FakeCard, locationId: String? = HOIV_LOCATION): TagWriter.Outcome {
+private fun run(
+    card: FakeCard,
+    locationId: String? = HOIV_LOCATION,
+    confirmedOverwriteOf: String? = null,
+): TagWriter.Outcome {
     TagBus.present(card)
-    return writer.write(tag(), locationId)
+    return writer.write(tag(), locationId, confirmedOverwriteOf)
 }
 
 fun main() {
     showTheBytes()
     theTapConverges()
     happyPath()
+    aMountedCardIsNotOverwritten()
     capacityIsCheckedBeforeAnyWrite()
     theReadBackActuallyCompares()
     theCardIsNeverLocked()
@@ -262,26 +268,39 @@ private fun happyPath() {
     check(
         TagBus.calls == listOf(
             "Ndef.get", "connect", "getMaxSize", "isWritable",
+            // The overwrite guard's read. It is HERE, before the write, or it is decoration:
+            // "is this card already on a wall" answered after the card has been changed is
+            // not an answer, it is a post-mortem.
+            "getNdefMessage",
             TagBus.calls.first { it.startsWith("writeNdefMessage") },
             "getNdefMessage", "close",
         ),
-        "EXACT call order — facts, then decision, then write, then re-read: ${TagBus.trace()}",
+        "EXACT call order — facts, decision, READ WHAT IS THERE, write, re-read: ${TagBus.trace()}",
     )
     check(
         TagBus.calls.indexOf("getMaxSize") < TagBus.calls.indexOfFirst { it.startsWith("writeNdefMessage") },
         "capacity is read BEFORE the write, on the happy path too",
     )
+    // lastIndexOf, not indexOf: there are TWO reads now. The first is the overwrite guard's,
+    // BEFORE the write; the read-back is the last one. Comparing against the first would
+    // compare the write against the guard's read and go green while the read-back was
+    // deleted — which is the failure this line exists to catch.
     check(
-        TagBus.calls.indexOfFirst { it.startsWith("writeNdefMessage") } < TagBus.calls.indexOf("getNdefMessage"),
+        TagBus.calls.indexOfFirst { it.startsWith("writeNdefMessage") } < TagBus.calls.lastIndexOf("getNdefMessage"),
         "the read-back happens AFTER the write, or it is reading the old card",
     )
+    check(
+        TagBus.calls.count { it == "getNdefMessage" } == 2,
+        "exactly two reads: what the card said before, and what it says after: ${TagBus.trace()}",
+    )
 
-    // A card that already holds a DIFFERENT valid message is simply overwritten. This is
-    // also the case that would pass spuriously against a cache: the stub's cachedNdefMessage
-    // throws, so reaching for it here is a crash rather than a green tick.
+    // A card that already holds a DIFFERENT one of our ids is NOT overwritten — TASK-220,
+    // driven in full below. Kept here because this is where the opposite used to be
+    // asserted, and because the whole point is that the happy path stops at this card.
     val other = NdefTag.message("https://$host/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301")!!
     val over = run(FakeCard(capacity = 137, initial = other))
-    check(over is TagWriter.Outcome.Written, "a card holding another building's URI is overwritten: $over")
+    check(over is TagWriter.Outcome.Refused.Occupied, "a card holding another building's id is REFUSED: $over")
+    check(!TagBus.wroteAnything(), "...and nothing was written to it: ${TagBus.trace()}")
 
     // The card that already holds EXACTLY what we are about to write. Byte equality alone
     // cannot tell this apart from a no-op, so the only thing that makes the Written verdict
@@ -290,6 +309,190 @@ private fun happyPath() {
     val again = run(FakeCard(capacity = 137, initial = same))
     check(again is TagWriter.Outcome.Written, "re-writing the same URI is fine: $again")
     check(TagBus.wroteAnything(), "...and it was a REAL write, not a read-back of what was already there")
+}
+
+// ---------------------------------------------------------------------------------
+// 1b. A CARD THAT IS ALREADY ON A WALL IS NOT OVERWRITTEN.   (TASK-220)
+//
+//     THE DEFECT, driven at this exact harness before the fix: a card pre-loaded with the
+//     live HOIV bytes, presented to a screen offering a fresh unbound id, came back
+//     `Written` — "Geschrieben und geprueft" — and the card now held the new id. That door
+//     then answers 422 for every cleaner until an admin claims the new id, and nothing on
+//     the phone said a word. It is the only defect in this repo that destroys something
+//     PHYSICAL: the fix cannot be verified against hardware here, so it is verified against
+//     the observed call log instead — a refusal is only a refusal if `writeNdefMessage`
+//     does not appear.
+//
+//     THE TABLE IS THE CHECK. Every kind of card an operator can be holding, run through
+//     the real TagWriter, printed with what came back and whether the card was touched.
+//     The three columns that matter are the outcome, the `wrote?` column, and the fact that
+//     the same table contains cards that DO write — a guard that refuses everything would
+//     satisfy half these rows and is caught by the other half.
+// ---------------------------------------------------------------------------------
+
+/** A different building. Anything but the id the screen is offering. */
+private const val OTHER_LOCATION = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+
+private class Case(
+    val what: String,
+    val card: () -> FakeCard,
+    val offered: String? = HOIV_LOCATION,
+    val confirmed: String? = null,
+    val expect: String,
+    val expectWrite: Boolean,
+    val verdict: (TagWriter.Outcome) -> Boolean,
+)
+
+private fun aMountedCardIsNotOverwritten() {
+    val ours = NdefTag.message("https://$host/t?l=$OTHER_LOCATION")!!
+    val legacyHost = legacyHosts.firstOrNull { it != host }
+    val oursOnLegacyHost = legacyHost?.let { NdefTag.message("https://$it/t?l=$OTHER_LOCATION")!! }
+    val foreignUrl = NdefTag.message("https://example.com/loyalty-card")!!
+    // A Text record: same length class, no URL at all. NFC Tools writes these by default.
+    val foreignText = NdefTag.message("https://example.com/x")!!.copyOf().also { it[3] = 0x54 }
+    // Bytes that are not a well-formed message at all. The platform parser throws on these;
+    // a card we cannot read is not a card of ours, so it is foreign, not fatal.
+    val rubbish = byteArrayOf(0x11, 0x22, 0x33, 0x44, 0x55)
+
+    val cases = listOf(
+        Case(
+            what = "blank NTAG213",
+            card = { FakeCard(capacity = 137) },
+            expect = "Written, replaced=Blank",
+            expectWrite = true,
+        ) { it is TagWriter.Outcome.Written && it.replaced == WriteGuard.Existing.Blank },
+        Case(
+            what = "OUR id, the SAME one offered (failed-verify retry)",
+            card = { FakeCard(capacity = 137, initial = NdefTag.message("https://$host/t?l=$HOIV_LOCATION")) },
+            expect = "Written — the retry path must survive",
+            expectWrite = true,
+        ) { it is TagWriter.Outcome.Written && it.replaced == WriteGuard.Existing.Ours(HOIV_LOCATION) },
+        Case(
+            what = "OUR id, a DIFFERENT one — A MOUNTED CARD",
+            card = { FakeCard(capacity = 137, initial = ours) },
+            expect = "Refused.Occupied, card untouched",
+            expectWrite = false,
+        ) { it is TagWriter.Outcome.Refused.Occupied && it.onTag == OTHER_LOCATION },
+        Case(
+            what = "OUR id on a LEGACY host — still a mounted card",
+            card = { FakeCard(capacity = 137, initial = oursOnLegacyHost ?: ours) },
+            expect = "Refused.Occupied",
+            expectWrite = false,
+        ) { it is TagWriter.Outcome.Refused.Occupied && it.onTag == OTHER_LOCATION },
+        Case(
+            what = "mounted card + the WRONG id confirmed",
+            card = { FakeCard(capacity = 137, initial = ours) },
+            confirmed = HOIV_LOCATION,
+            expect = "Refused.Occupied — a confirmation is bound to ONE card",
+            expectWrite = false,
+        ) { it is TagWriter.Outcome.Refused.Occupied },
+        Case(
+            what = "mounted card + THE RIGHT id confirmed",
+            card = { FakeCard(capacity = 137, initial = ours) },
+            confirmed = OTHER_LOCATION,
+            expect = "Written, replaced=Ours",
+            expectWrite = true,
+        ) { it is TagWriter.Outcome.Written && it.replaced == WriteGuard.Existing.Ours(OTHER_LOCATION) },
+        Case(
+            what = "foreign card — somebody else's URL",
+            card = { FakeCard(capacity = 137, initial = foreignUrl) },
+            expect = "Written, replaced=Foreign",
+            expectWrite = true,
+        ) { it is TagWriter.Outcome.Written && it.replaced is WriteGuard.Existing.Foreign },
+        Case(
+            what = "foreign card — a Text record",
+            card = { FakeCard(capacity = 137, initial = foreignText) },
+            expect = "Written, replaced=Foreign",
+            expectWrite = true,
+        ) { it is TagWriter.Outcome.Written && it.replaced is WriteGuard.Existing.Foreign },
+        Case(
+            what = "foreign card — bytes that are not a message at all",
+            card = { FakeCard(capacity = 137, initial = rubbish) },
+            expect = "Written, replaced=Foreign(unlesbar)",
+            expectWrite = true,
+        ) {
+            it is TagWriter.Outcome.Written &&
+                it.replaced == WriteGuard.Existing.Foreign(WriteGuard.UNREADABLE)
+        },
+        Case(
+            what = "UNREADABLE — card leaves the field before the read",
+            card = { FakeCard(capacity = 137, initial = ours, preReadThrows = "tag lost before the guard read") },
+            expect = "Lost, card untouched",
+            expectWrite = false,
+        ) { it is TagWriter.Outcome.Lost },
+        Case(
+            what = "TOO SMALL — the 46-byte foreign Ultralight",
+            card = { FakeCard(capacity = 46, initial = ours) },
+            expect = "Refused.TooSmall, card untouched",
+            expectWrite = false,
+        ) { it is TagWriter.Outcome.Refused.TooSmall },
+    )
+
+    val rows = StringBuilder()
+    for (case in cases) {
+        val outcome = run(case.card(), case.offered, case.confirmed)
+        val wrote = TagBus.wroteAnything()
+        rows.append(
+            "  %-52s %-5s  %s\n".format(
+                case.what,
+                if (wrote) "WRITE" else "—",
+                outcome.javaClass.simpleName + (
+                    (outcome as? TagWriter.Outcome.Written)?.let { " replaced=${it.replaced}" }
+                        ?: (outcome as? TagWriter.Outcome.Refused.Occupied)
+                            ?.let { " onTag=${it.onTag} token=${it.token}" }
+                        ?: ""
+                    ),
+            ),
+        )
+        check(case.verdict(outcome), "${case.what}: expected ${case.expect}, got $outcome")
+        check(
+            wrote == case.expectWrite,
+            "${case.what}: the card was ${if (wrote) "WRITTEN TO" else "not touched"} " +
+                "and should ${if (case.expectWrite) "have been" else "NOT have been"}: ${TagBus.trace()}",
+        )
+        check(TagBus.calls.lastOrNull() == "close", "${case.what}: the tag is released: ${TagBus.trace()}")
+    }
+
+    check(legacyHost != null, "no legacy host in branding.properties — the legacy-host row degenerates")
+
+    println(
+        "\n  WHAT THE OPERATOR MAY BE HOLDING  (real TagWriter, observed call log)\n\n" +
+            "  %-52s %-5s  %s\n".format("card presented", "wrote", "outcome") +
+            "  " + "-".repeat(100) + "\n" + rows,
+    )
+
+    // THE REFUSAL IS DECIDED BEFORE THE WRITE, not reported after it. The order in the log
+    // is the only thing that can say so.
+    run(FakeCard(capacity = 137, initial = ours))
+    check(
+        TagBus.calls == listOf("Ndef.get", "connect", "getMaxSize", "isWritable", "getNdefMessage", "close"),
+        "a mounted card is read and released, and nothing else: ${TagBus.trace()}",
+    )
+
+    // THE OVERRIDE IS SPECIFIC. Not "are you sure" — the operator types back the last six
+    // characters of the id that is about to be destroyed, off the screen.
+    val occupied = run(FakeCard(capacity = 137, initial = ours)) as TagWriter.Outcome.Refused.Occupied
+    check(occupied.token == "e82c3301".takeLast(6), "the token is the last six of the id on the card: ${occupied.token}")
+    check(occupied.offered == HOIV_LOCATION, "the refusal also names what would have been written")
+    check(WriteGuard.confirms(occupied.onTag, occupied.token), "the printed token is what unlocks it")
+    check(WriteGuard.confirms(occupied.onTag, " ${occupied.token.uppercase()} "), "case and space are forgiven")
+    check(!WriteGuard.confirms(occupied.onTag, ""), "an empty box confirms nothing")
+    check(!WriteGuard.confirms(occupied.onTag, "ja"), "a generic yes confirms nothing")
+    check(
+        !WriteGuard.confirms(occupied.onTag, WriteGuard.token(HOIV_LOCATION)),
+        "THE OBVIOUS WRONG THING: the token of the id being OFFERED (it is on the same screen) does not confirm",
+    )
+
+    // ...and the override, once used, is used up: the same confirmation presented with a
+    // THIRD card refuses again. The screen clears it after a write; this is the property
+    // underneath that, in TagWriter, where it cannot be lost to a Compose recomposition.
+    val third = NdefTag.message("https://$host/t?l=11111111-2222-4333-8444-555555555599")!!
+    val stillRefused = run(FakeCard(capacity = 137, initial = third), confirmedOverwriteOf = OTHER_LOCATION)
+    check(
+        stillRefused is TagWriter.Outcome.Refused.Occupied,
+        "a confirmation for one card does not authorise the next card: $stillRefused",
+    )
+    check(!TagBus.wroteAnything(), "...and that next card was not touched")
 }
 
 // ---------------------------------------------------------------------------------

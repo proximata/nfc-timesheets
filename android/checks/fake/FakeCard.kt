@@ -42,8 +42,17 @@ class FakeCard(
     val connectThrows: String? = null,
     /** Non-null = `writeNdefMessage()` throws it. The card is then left holding [initial]. */
     val writeThrows: String? = null,
-    /** Non-null = the read-back itself throws, rather than returning bytes. */
+    /**
+     * Non-null = the read-back itself throws, rather than returning bytes.
+     *
+     * The read-back ONLY. There are two reads of the card now — the overwrite guard reads
+     * what the card already says BEFORE writing (TASK-220), and the verify reads it after —
+     * and they must be able to fail independently, or a single flag would silently move the
+     * failure to whichever read happens to come first. See [preReadThrows].
+     */
     val readThrows: String? = null,
+    /** Non-null = the read BEFORE the write throws. The card is untouched either way. */
+    val preReadThrows: String? = null,
     /**
      * What the card holds AFTER a successful write. `null` = the read comes back empty.
      * The default is an honest card: it holds what it was given.
@@ -52,6 +61,9 @@ class FakeCard(
 ) {
     /** Mutated by the stub when a write lands. */
     var content: ByteArray? = initial
+
+    /** Set by the stub the moment a write lands, so a read knows which read it is. */
+    var written: Boolean = false
 }
 
 /** The one card currently presented, and every call made to it, in order. */

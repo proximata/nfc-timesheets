@@ -203,7 +203,7 @@
 
     <!-- Write a tag (operator). The only screen that changes a physical object. -->
     <string name="write_title">Write a tag</string>
-    <string name="write_hint">Hold a blank NTAG213 to the phone. The tag is written, read straight back and compared byte for byte. Only then does it count as done.</string>
+    <string name="write_hint">Hold a blank NTAG213 to the phone. The tag is read first, then written, then read straight back and compared byte for byte. Only then does it count as done. A card that already carries one of our ids is not overwritten.</string>
     <string name="write_pending_id">New tag id: %1$s</string>
     <string name="write_waiting">Waiting for a tag …</string>
     <string name="write_ok">Written and verified.\n\nId: %1$s\n%2$d of %3$d bytes used\nSerial: %4$s</string>
@@ -222,4 +222,11 @@
     <string name="write_operator_enrol">Sign in</string>
     <string name="write_report_retry">Send the report again</string>
     <string name="write_open">Write a tag</string>
+    <string name="write_needs_operator_to_write">This phone is not signed in as an operator. Only operators can write tags. Enter the operator code. Until you do, this screen does not read a card at all.</string>
+    <string name="write_occupied">NOT written. This card already carries the id %1$s — that is a card mounted at a door. Overwriting it stops that door working for every cleaner until the office assigns the new id. The tag was not changed.\n\nIf you really mean to overwrite it: type the last six characters of the old id (%2$s), confirm, then present the card again.</string>
+    <string name="write_confirm_label">Last six characters of the old id (%1$s)</string>
+    <string name="write_confirm_button">Confirm overwrite</string>
+    <string name="write_confirm_armed">Overwrite allowed — for the card carrying id %1$s only. Present that card again now. The permission is spent once it is written.</string>
+    <string name="write_replaced_ours">WARNING: this card previously carried our id %1$s. That id is gone. If the card was mounted at a door, the office has to assign the new id to that door.</string>
+    <string name="write_replaced_foreign">Note: the card was not empty, but what it held was not ours (%1$s) and has been overwritten.</string>
 </resources>

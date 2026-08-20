@@ -45,16 +45,29 @@ class Ndef private constructor() {
         // in between.
         val bytes = message.toByteArray()
         TagBus.log("writeNdefMessage[${bytes.joinToString("") { "%02x".format(it) }}]")
+        TagBus.card.written = true
         TagBus.card.writeThrows?.let { throw java.io.IOException(it) }
         TagBus.card.content = TagBus.card.onWrite(bytes)
     }
 
-    /** `getNdefMessage()` — RE-READS the card. This is the one the read-back must use. */
+    /**
+     * `getNdefMessage()` — RE-READS the card. Called TWICE per write now: once by the
+     * overwrite guard, to find out whether this card is already one of ours (TASK-220), and
+     * once after the write to verify it. Which failure applies is decided by whether a write
+     * has happened yet, so the harness can break either read on its own — a card that cannot
+     * be read BEFORE a write must not be written to at all, and that is a different claim
+     * from a read-back that fails afterwards.
+     *
+     * Content that is not a well-formed message throws FormatException out of the parser,
+     * exactly as the platform does. That is a foreign card, not a broken one.
+     */
     val ndefMessage: NdefMessage?
         get() {
             TagBus.log("getNdefMessage")
-            TagBus.card.readThrows?.let { throw java.io.IOException(it) }
-            val content = TagBus.card.content ?: return null
+            val card = TagBus.card
+            val fails = if (card.written) card.readThrows else card.preReadThrows
+            fails?.let { throw java.io.IOException(it) }
+            val content = card.content ?: return null
             return NdefMessage(content)
         }
 

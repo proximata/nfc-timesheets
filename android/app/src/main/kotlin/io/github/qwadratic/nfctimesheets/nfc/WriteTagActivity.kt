@@ -33,6 +33,7 @@ import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
+import io.github.qwadratic.nfctimesheets.core.WriteGuard
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -60,6 +61,24 @@ import java.util.UUID
  * NOTHING HERE OPENS OR CLOSES A SHIFT, and it cannot: it talks through
  * TimeSheetsApplication.operatorApi, which carries the `ts_operator` cookie, and no route
  * that touches a shift accepts one (decision-45).
+ *
+ * TWO GUARDS LIVE HERE AND NOWHERE ELSE (TASK-220). Both are about the same accident: this
+ * screen used to write whatever card it saw, including a working one on a wall, and say
+ * "Geschrieben und geprueft."
+ *
+ *   1. THE ROLE GATES THE WRITE, not just the report. Reader mode is not enabled at all
+ *      without an operator session on this phone, so a phone that is not an operator's is
+ *      never even handed a tag by the NFC service — the write is unreachable rather than
+ *      refused. It used to be the other way round: anybody could open this screen from
+ *      Erfassen and write a card, and the `ts_operator` cookie only decided whether the
+ *      OFFICE was told about it afterwards.
+ *   2. A CARD THAT ALREADY HOLDS ONE OF OUR IDS IS REFUSED (core/WriteGuard), and the
+ *      override is not a shrug: the operator types back the last six characters of the id
+ *      they are about to destroy, and that authorises that ONE card.
+ *
+ * NEITHER GUARD IS ON THE CLOCK-IN PATH. A cleaner's tap goes to NfcTapActivity and never
+ * constructs this class, this activity's reader mode is foreground-only, and the operator
+ * session is read from disk — no network call, nothing to be slow, nothing to fail.
  */
 class WriteTagActivity : ComponentActivity() {
 
@@ -77,6 +96,25 @@ class WriteTagActivity : ComponentActivity() {
     private var report by mutableStateOf<ReportState>(ReportState.Idle)
     private var operatorCode by mutableStateOf("")
     private var busy by mutableStateOf(false)
+
+    /**
+     * Is this phone an operator's? Read off the stored `ts_operator` cookie — from DISK,
+     * never from a request: the operator is in a stairwell with no signal, and a gate that
+     * needs the network is a gate that fails shut at the one moment it is used. Enrolment
+     * (which does need the network) happened once, at a desk.
+     */
+    private var operatorReady by mutableStateOf(false)
+
+    /**
+     * The location id currently on a card that the operator has EXPLICITLY confirmed
+     * destroying. Null on every ordinary write. Handed to TagWriter, which compares it
+     * against the id read off the card in the field, so it cannot drift onto the next card.
+     * Cleared the moment a write succeeds.
+     */
+    private var confirmedFor by mutableStateOf<String?>(null)
+
+    /** What the operator has typed into the confirmation box. */
+    private var confirmText by mutableStateOf("")
 
     private sealed interface ReportState {
         data object Idle : ReportState
@@ -126,6 +164,17 @@ class WriteTagActivity : ComponentActivity() {
                             style = MaterialTheme.typography.bodySmall,
                         )
 
+                        // THE ROLE GATE, said out loud. The reader mode behind it is simply
+                        // never started, so this is an explanation and not a warning about
+                        // something that might still happen.
+                        if (!operatorReady) {
+                            Text(
+                                stringResource(R.string.write_needs_operator_to_write),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+
                         // liveRegion: the operator is holding a phone against a wall and
                         // cannot hunt the screen for what changed.
                         Text(
@@ -135,7 +184,30 @@ class WriteTagActivity : ComponentActivity() {
                         )
                         Text(text = reportText(), style = MaterialTheme.typography.bodySmall)
 
-                        if (report is ReportState.NeedsOperator) {
+                        // THE OVERRIDE FOR A MOUNTED CARD. Shown only when a card carrying
+                        // one of our ids has actually been presented, and it names that id:
+                        // an always-visible "overwrite anyway" switch is a switch that ends
+                        // up left on.
+                        val occupied = outcome as? TagWriter.Outcome.Refused.Occupied
+                        if (occupied != null && confirmedFor != occupied.onTag) {
+                            OutlinedTextField(
+                                value = confirmText,
+                                onValueChange = { confirmText = it },
+                                label = { Text(stringResource(R.string.write_confirm_label, occupied.token)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Button(
+                                onClick = {
+                                    confirmedFor = occupied.onTag
+                                    confirmText = ""
+                                },
+                                enabled = WriteGuard.confirms(occupied.onTag, confirmText),
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) { Text(stringResource(R.string.write_confirm_button)) }
+                        }
+
+                        if (!operatorReady || report is ReportState.NeedsOperator) {
                             OutlinedTextField(
                                 value = operatorCode,
                                 onValueChange = { operatorCode = it },
@@ -165,7 +237,9 @@ class WriteTagActivity : ComponentActivity() {
                         // loop has nothing to iterate and the buttons do not exist.
                         for (simulation in writeSimulations()) {
                             OutlinedButton(
-                                onClick = { apply(runSimulation(simulation, app.tagLink, pendingId)) },
+                                onClick = {
+                                    apply(runSimulation(simulation, app.tagLink, pendingId, confirmedFor))
+                                },
                                 modifier = Modifier.heightIn(min = 48.dp),
                             ) { Text("▶ ${simulation.label}") }
                         }
@@ -193,6 +267,21 @@ class WriteTagActivity : ComponentActivity() {
      */
     override fun onResume() {
         super.onResume()
+        // Re-read on every resume, not once in onCreate: enrolment can have happened in
+        // another screen, and a session can have been cleared while this one was in the
+        // background.
+        operatorReady = app.operatorCookies.header() != null
+        startReaderMode()
+    }
+
+    /**
+     * NO OPERATOR SESSION, NO READER MODE. The gate is the absence of the callback, not a
+     * refusal inside it: with reader mode never enabled the NFC service does not deliver a
+     * tag to this screen at all, so there is no code path on a non-operator phone on which
+     * a card is touched.
+     */
+    private fun startReaderMode() {
+        if (!operatorReady) return
         val nfc = adapter ?: return
         if (!nfc.isEnabled) return
         val flags = NfcAdapter.FLAG_READER_NFC_A or
@@ -213,13 +302,22 @@ class WriteTagActivity : ComponentActivity() {
 
     /** Called off the main thread by the NFC service. The write happens right here. */
     private fun onTag(tag: Tag) {
-        val result = app.tagWriter.write(tag, pendingId)
+        // Belt and braces behind the reader-mode gate: disableReaderMode is asynchronous,
+        // so a tag dispatched microseconds after a session was cleared could still land
+        // here. Nothing is written and nothing is said — the screen already says why.
+        if (!operatorReady) return
+        val result = app.tagWriter.write(tag, pendingId, confirmedOverwriteOf = confirmedFor)
         runOnUiThread { apply(result) }
     }
 
     private fun apply(result: TagWriter.Outcome) {
         outcome = result
         if (result is TagWriter.Outcome.Written) {
+            // The confirmation is SPENT. It authorised one card; the next card presented
+            // starts from refused again, which is the difference between a confirmation and
+            // a mode the operator forgot they were in.
+            confirmedFor = null
+            confirmText = ""
             // Persisted BEFORE the report is even attempted — see nfc/PendingTagReport.kt.
             // A process death between this line and a successful report must still leave
             // the operator able to retry, not a screen that has forgotten the card exists.
@@ -265,6 +363,11 @@ class WriteTagActivity : ComponentActivity() {
                 app.operatorApi.operatorEnrol(code)
                 operatorCode = ""
                 busy = false
+                // The gate opens here, and reader mode has to be started by hand: onResume
+                // already ran, and without this the operator enrols, sees nothing change,
+                // and presents a card to a screen that is not listening.
+                operatorReady = app.operatorCookies.header() != null
+                startReaderMode()
                 // Straight back to the thing the operator was trying to do.
                 (outcome as? TagWriter.Outcome.Written)?.let { sendReport(it.locationId) }
                     ?: run { report = ReportState.Idle }
@@ -279,8 +382,15 @@ class WriteTagActivity : ComponentActivity() {
     }
 
     private fun outcomeText(): String = when (val o = outcome) {
-        null -> getString(R.string.write_waiting)
-        is TagWriter.Outcome.Written -> getString(R.string.write_ok, o.locationId, o.bytes, o.capacity, o.serial)
+        null -> if (operatorReady) getString(R.string.write_waiting) else ""
+        is TagWriter.Outcome.Written ->
+            getString(R.string.write_ok, o.locationId, o.bytes, o.capacity, o.serial) + replacedNote(o.replaced)
+        is TagWriter.Outcome.Refused.Occupied ->
+            if (confirmedFor == o.onTag) {
+                getString(R.string.write_confirm_armed, o.onTag)
+            } else {
+                getString(R.string.write_occupied, o.onTag, o.token)
+            }
         is TagWriter.Outcome.Refused.TooSmall -> getString(R.string.write_too_small, o.capacity, o.needed)
         is TagWriter.Outcome.Refused.ReadOnly -> getString(R.string.write_read_only)
         is TagWriter.Outcome.Refused.NoCapacity -> getString(R.string.write_no_capacity)
@@ -289,6 +399,18 @@ class WriteTagActivity : ComponentActivity() {
         is TagWriter.Outcome.Refused.BadId -> getString(R.string.write_bad_id)
         is TagWriter.Outcome.Unverified -> getString(R.string.write_unverified, o.reason)
         is TagWriter.Outcome.Lost -> getString(R.string.write_lost)
+    }
+
+    /**
+     * WHAT THIS CARD REPLACED. Blank is the ordinary case and says nothing; the other two
+     * are worth a line each, and they are DIFFERENT lines — a foreign card is somebody
+     * else's rubbish and costs nothing, while one of our own ids being gone may mean a door
+     * somewhere has to be re-labelled.
+     */
+    private fun replacedNote(replaced: WriteGuard.Existing): String = when (replaced) {
+        WriteGuard.Existing.Blank -> ""
+        is WriteGuard.Existing.Foreign -> "\n\n" + getString(R.string.write_replaced_foreign, replaced.summary)
+        is WriteGuard.Existing.Ours -> "\n\n" + getString(R.string.write_replaced_ours, replaced.locationId)
     }
 
     private fun reportText(): String = when (val r = report) {

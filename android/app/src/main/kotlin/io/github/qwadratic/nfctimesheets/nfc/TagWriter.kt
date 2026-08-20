@@ -1,11 +1,13 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
+import android.nfc.FormatException
 import android.nfc.NdefMessage
 import android.nfc.Tag
 import android.nfc.tech.Ndef
 import android.nfc.tech.NdefFormatable
 import io.github.qwadratic.nfctimesheets.core.NdefTag
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.core.WriteGuard
 import io.github.qwadratic.nfctimesheets.core.Zones
 
 /**
@@ -18,14 +20,22 @@ import io.github.qwadratic.nfctimesheets.core.Zones
  *
  *   1. read the tag's own facts        — capacity, writability. NOTHING is written yet.
  *   2. DECIDE, in pure code            — core/NdefTag.plan(), which android/checks can run
- *   3. only then write                 — and only the exact byte array the decision carried
- *   4. read the card back and COMPARE  — byte for byte, against what we believe we wrote
+ *   3. read WHAT THE CARD ALREADY SAYS — and refuse a card that carries one of OUR ids
+ *   4. only then write                 — and only the exact byte array the decision carried
+ *   5. read the card back and COMPARE  — byte for byte, against what we believe we wrote
  *
  * Step 2 is where the 46-byte tag is refused. That number is not hypothetical: the tag
  * already mounted at HOIV holds 46 bytes, our message is 64, and a phone that wrote anyway
  * would leave a card holding neither the old content nor the new.
  *
- * Step 4 is not decoration. `writeNdefMessage` returning without throwing means the tag
+ * Step 3 is TASK-220, and it is the only step that protects a card that is ALREADY WORKING.
+ * Steps 1, 2 and 5 all guard the card in the operator's hand; none of them had anything to
+ * say about the card on the wall, so presenting a mounted tag overwrote it and reported
+ * success. The question "what is on this card already" is answered in core/WriteGuard.kt,
+ * off-device, and a card holding one of our ids is refused until the operator types back
+ * the six characters of the id they are about to destroy.
+ *
+ * Step 5 is not decoration. `writeNdefMessage` returning without throwing means the tag
  * acknowledged the writes, not that the bytes are correct — a card pulled out of the field
  * mid-write, a flaky NTAG clone, or a tag someone else's phone also touched all produce a
  * silent success. The only statement worth making about a card about to be screwed to a
@@ -51,6 +61,12 @@ class TagWriter(private val tagLink: TagLink) {
             val serial: String,
             val bytes: Int,
             val capacity: Int,
+            /**
+             * What the card held BEFORE this write — normally [WriteGuard.Existing.Blank].
+             * Carried so the screen can say "this card was not empty" instead of leaving
+             * the operator to find out from a door that stopped working.
+             */
+            val replaced: WriteGuard.Existing = WriteGuard.Existing.Blank,
         ) : Outcome
 
         /** Refused BEFORE any write. The card is untouched. */
@@ -73,6 +89,19 @@ class TagWriter(private val tagLink: TagLink) {
 
             /** We could not even encode a message for this id. A bug, surfaced not swallowed. */
             data class BadId(val locationId: String?) : Refused
+
+            /**
+             * THE CARD IS ALREADY ONE OF OURS, and it carries a DIFFERENT id from the one
+             * being offered — i.e. it is almost certainly screwed to a wall and working.
+             * Refused before any write (TASK-220). [token] is what the operator must type
+             * to override it; see core/WriteGuard.
+             */
+            data class Occupied(
+                val serial: String,
+                val onTag: String,
+                val offered: String,
+                val token: String,
+            ) : Refused
         }
 
         /**
@@ -89,8 +118,14 @@ class TagWriter(private val tagLink: TagLink) {
     /**
      * Write [locationId] onto [tag]. Blocking; call off the main thread (reader-mode
      * callbacks already arrive off it).
+     *
+     * @param confirmedOverwriteOf the location id the OPERATOR has explicitly confirmed
+     *        destroying, typed back character by character on the screen. Null on every
+     *        ordinary write. It authorises exactly that one id: presenting a different
+     *        mounted card is refused again, because [WriteGuard.decide] compares it against
+     *        the id read off the card in the field and not against "something was confirmed".
      */
-    fun write(tag: Tag, locationId: String?): Outcome {
+    fun write(tag: Tag, locationId: String?, confirmedOverwriteOf: String? = null): Outcome {
         val serial = Zones.normaliseSerial(tag.id.joinToString("") { "%02X".format(it) }) ?: "?"
         val techs = tag.techList.map { it.substringAfterLast('.') }
 
@@ -139,7 +174,41 @@ class TagWriter(private val tagLink: TagLink) {
                 return Outcome.Refused.BadId(locationId)
             }
 
-            // ---- 3. the write ----------------------------------------------------------
+            // ---- 3. WHAT THE CARD ALREADY SAYS (TASK-220) ------------------------------
+            // A live RE-READ, never cachedNdefMessage: the cache is what the tag said at
+            // dispatch time, and deciding whether to destroy a mounted card off a cache is
+            // deciding off a card that may not be the one in the field any more.
+            //
+            // A FormatException here is CONTENT WE CANNOT PARSE, which cannot be one of
+            // ours and is therefore foreign — the card is someone else's, and writing it is
+            // fine. An IOException is the TAG LEAVING THE FIELD, which is Lost: nothing has
+            // been written at this point, and guessing "probably blank" is exactly how a
+            // mounted card gets overwritten by a phone that could not read it properly.
+            val existing = try {
+                val onCard = ndef.ndefMessage
+                WriteGuard.classify(
+                    tagLink,
+                    onCard?.toByteArray(),
+                    // The platform's own reading of the same card — see WriteGuard.classify.
+                    onCard?.records?.firstOrNull()?.toUri(),
+                )
+            } catch (_: FormatException) {
+                WriteGuard.Existing.Foreign(WriteGuard.UNREADABLE)
+            } catch (e: Exception) {
+                return Outcome.Lost(serial, e.javaClass.simpleName)
+            }
+
+            when (val verdict = WriteGuard.decide(existing, write.locationId, confirmedOverwriteOf)) {
+                is WriteGuard.Verdict.Occupied -> return Outcome.Refused.Occupied(
+                    serial = serial,
+                    onTag = verdict.onTag,
+                    offered = verdict.offered,
+                    token = verdict.token,
+                )
+                is WriteGuard.Verdict.Proceed -> Unit
+            }
+
+            // ---- 4. the write ----------------------------------------------------------
             try {
                 ndef.writeNdefMessage(message)
             } catch (e: Exception) {
@@ -147,7 +216,7 @@ class TagWriter(private val tagLink: TagLink) {
                 return Outcome.Unverified(serial, e.javaClass.simpleName, onTag = null)
             }
 
-            // ---- 4. read it back off the card and compare ------------------------------
+            // ---- 5. read it back off the card and compare ------------------------------
             // getNdefMessage() on a connected Ndef re-reads the tag; it is not a cache.
             // cachedNdefMessage IS the dispatch-time cache and must never be used here —
             // it would compare our bytes against what the tag said BEFORE we wrote, which
@@ -179,6 +248,7 @@ class TagWriter(private val tagLink: TagLink) {
                 serial = serial,
                 bytes = write.bytes.size,
                 capacity = capacity,
+                replaced = existing,
             )
         } finally {
             runCatching { ndef.close() }
