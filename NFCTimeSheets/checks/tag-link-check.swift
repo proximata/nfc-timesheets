@@ -48,6 +48,15 @@ check(TagLink.locationId(from: URL(string: "https://schimmer-glanz.exe.xyz/t/?l=
 check(TagLink.locationId(from: URL(string: "https://\(TagLink.host.uppercased())/t?x=1&l=3f2504e0-4f89-11d3-9a0c-0305e82c3301")!)
         != nil, "host case-insensitive, extra query params ignored")
 
+// A PERCENT-ENCODED SPACE IS ACCEPTED, ON BOTH PLATFORMS, AND THAT IS PINNED RATHER THAN
+// TIDIED. %20 is unescaped to a real space by both decoders and then trimmed off by the
+// uuid normaliser, so such a tag scans here and on Android. It is not a shape this app ever
+// WRITES — the Android writer refuses the id outright — so the only way to meet one is a
+// card someone else made. What matters is that the two platforms agree about it; a change
+// to either decoder that made one of them start refusing it turns this line red.
+check(TagLink.locationId(from: URL(string: "https://schimmer-glanz.exe.xyz/t?l=%203f2504e0-4f89-11d3-9a0c-0305e82c3301")!)
+        == "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "a %20-prefixed uuid is accepted, as on Android")
+
 // Rejected shapes. Everything here would otherwise reach the server off an unlocked tag.
 let bad = [
     "https://schimmer-glanz.exe.xyz/t?l=westbahnhof",              // a SLUG, not a uuid (decision-21)

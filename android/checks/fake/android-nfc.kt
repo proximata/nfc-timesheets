@@ -13,6 +13,50 @@ class Tag(val id: ByteArray, val techList: Array<String>)
 class FormatException(message: String) : Exception(message)
 
 /**
+ * A single NDEF record, and THE TAP-SIDE DECODER.
+ *
+ * This is not decoration on the stub. NfcTapActivity does not use core/NdefTag to read a
+ * tapped tag — on Android <= 15 it pulls the URI out with the PLATFORM's
+ * `NdefRecord.toUri()`, and on Android 16+ the NFC service does the same expansion before
+ * it ever fires ACTION_VIEW. So the bytes we burn are written by one decoder and read back
+ * in the field by a different one, and "a tag we write parses like a tag on the wall" is a
+ * claim about those two AGREEING.
+ *
+ * [toUri] therefore implements the NFC Forum RTD-URI abbreviation table IN FULL, all 36
+ * entries, exactly as the platform does — and deliberately unlike core/NdefTag, which
+ * accepts only the five https/http forms and refuses the rest rather than guessing. Two
+ * implementations that disagree about `0x23` and agree about `0x04` is the point: the
+ * agreement on our card is then a real result and not the same code checked twice.
+ */
+class NdefRecord(
+    val tnf: Int,
+    val type: ByteArray,
+    val id: ByteArray?,
+    val payload: ByteArray,
+) {
+    /** The URI this record carries, or null if it is not a Well Known 'U' record. */
+    fun toUri(): String? {
+        if (tnf != 0x01) return null
+        if (!type.contentEquals(byteArrayOf(0x55))) return null
+        if (payload.isEmpty()) return null
+        val prefix = URI_PREFIXES.getOrNull(payload[0].toInt() and 0xFF) ?: return null
+        return prefix + payload.copyOfRange(1, payload.size).toString(Charsets.UTF_8)
+    }
+
+    private companion object {
+        /** NFC Forum RTD-URI 1.0 § 3.2.2, in full. Index = abbreviation code. */
+        val URI_PREFIXES = listOf(
+            "", "http://www.", "https://www.", "http://", "https://", "tel:", "mailto:",
+            "ftp://anonymous:anonymous@", "ftp://ftp.", "ftps://", "sftp://", "smb://",
+            "nfs://", "ftp://", "dav://", "news:", "telnet://", "imap:", "rtsp://", "urn:",
+            "pop:", "sip:", "sips:", "tftp:", "btspp://", "btl2cap://", "btgoep://",
+            "tcpobex://", "irdaobex://", "file://", "urn:epc:id:", "urn:epc:tag:",
+            "urn:epc:pat:", "urn:epc:raw:", "urn:epc:", "urn:nfc:",
+        )
+    }
+}
+
+/**
  * An NDEF message, parsed and re-serialised INDEPENDENTLY of core/NdefTag.
  *
  * This is the second opinion in TagWriter's `NdefMessage(bytes).toByteArray() == bytes`
@@ -31,9 +75,7 @@ class FormatException(message: String) : Exception(message)
  */
 class NdefMessage(bytes: ByteArray) {
 
-    private class Rec(val tnf: Int, val type: ByteArray, val id: ByteArray?, val payload: ByteArray)
-
-    private val records: List<Rec> = parse(bytes)
+    val records: List<NdefRecord> = parse(bytes)
 
     fun toByteArray(): ByteArray {
         val out = ArrayList<Byte>()
@@ -61,9 +103,9 @@ class NdefMessage(bytes: ByteArray) {
         return out.toByteArray()
     }
 
-    private fun parse(bytes: ByteArray): List<Rec> {
+    private fun parse(bytes: ByteArray): List<NdefRecord> {
         if (bytes.isEmpty()) throw FormatException("empty message")
-        val out = ArrayList<Rec>()
+        val out = ArrayList<NdefRecord>()
         var i = 0
         var seenEnd = false
         while (i < bytes.size) {
@@ -106,7 +148,7 @@ class NdefMessage(bytes: ByteArray) {
             val type = bytes.copyOfRange(i, i + typeLength); i += typeLength
             val id = if (il) bytes.copyOfRange(i, i + idLength).also { i += idLength } else null
             val payload = bytes.copyOfRange(i, i + payloadLength); i += payloadLength
-            out.add(Rec(tnf, type, id, payload))
+            out.add(NdefRecord(tnf, type, id, payload))
             if (me) seenEnd = true
         }
         if (!seenEnd) throw FormatException("no record carried ME")

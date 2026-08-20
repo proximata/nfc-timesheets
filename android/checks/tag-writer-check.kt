@@ -1,5 +1,6 @@
 package io.github.qwadratic.nfctimesheets.checks
 
+import android.nfc.NdefMessage
 import android.nfc.Tag
 import io.github.qwadratic.nfctimesheets.core.NdefTag
 import io.github.qwadratic.nfctimesheets.core.TagLink
@@ -68,6 +69,7 @@ private fun run(card: FakeCard, locationId: String? = HOIV_LOCATION): TagWriter.
 
 fun main() {
     showTheBytes()
+    theTapConverges()
     happyPath()
     capacityIsCheckedBeforeAnyWrite()
     theReadBackActuallyCompares()
@@ -89,8 +91,16 @@ fun main() {
 // ---------------------------------------------------------------------------------
 private fun showTheBytes() {
     val outcome = run(FakeCard(capacity = 137))
-    val written = TagBus.calls.first { it.startsWith("writeNdefMessage") }
-        .substringAfter('[').substringBefore(']')
+    // A check that DIES before its first assertion prints a stack trace and exits, and a
+    // stack trace is not a verdict: whoever reads the output learns that Kotlin threw, not
+    // that the app would refuse to write a card. Every mutation that breaks the encoder
+    // lands here first, so this is the line that has to say what happened.
+    val writeCall = TagBus.calls.firstOrNull { it.startsWith("writeNdefMessage") }
+    if (writeCall == null) {
+        check(false, "NOTHING WAS WRITTEN to a healthy 137-byte card. Outcome: $outcome; calls: ${TagBus.trace()}")
+        return
+    }
+    val written = writeCall.substringAfter('[').substringBefore(']')
     val bytes = written.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     val payloadLength = bytes[2].toInt() and 0xFF
@@ -149,6 +159,88 @@ private fun showTheBytes() {
     check(
         bytes.contentEquals(NdefTag.message("https://$host/t?l=$HOIV_LOCATION")!!),
         "the bytes on the card are the bytes NdefTag planned — nothing recomputes them downstream",
+    )
+}
+
+// ---------------------------------------------------------------------------------
+// 0b. CONVERGENCE: A TAG WE WRITE, TAPPED, IS A TAG ON THE WALL.
+//
+//     The bytes are burnt by core/NdefTag. They are read back in the field by something
+//     else entirely: NfcTapActivity pulls the URI out of a tapped tag with the PLATFORM's
+//     NdefRecord.toUri() on Android <= 15, and on Android 16+ the NFC service does the same
+//     expansion itself before ACTION_VIEW ever fires. Two decoders, one card. "It round-
+//     trips through NdefTag" says nothing about the one that runs in a stairwell.
+//
+//     checks/fake/android-nfc.kt implements toUri() over the FULL 36-entry RTD-URI table,
+//     the way the platform does and deliberately unlike NdefTag, which accepts five codes
+//     and refuses the rest. So the two agreeing on our card is a result rather than the
+//     same code run twice.
+//
+//     WHAT IS STILL NOT PROVEN HERE: that Android's REAL toUri() behaves like this table.
+//     Only a phone settles that. What this settles is that our bytes carry a shape both
+//     independent implementations read identically, which is the part that can be got
+//     wrong at a desk.
+// ---------------------------------------------------------------------------------
+private fun theTapConverges() {
+    val outcome = run(FakeCard(capacity = 137))
+    val onCard = TagBus.card.content
+    if (outcome !is TagWriter.Outcome.Written || onCard == null) {
+        check(false, "NOTHING WAS WRITTEN to a healthy 137-byte card, so convergence cannot be tested: $outcome")
+        return
+    }
+
+    // The card's own bytes, through the PLATFORM parser, exactly as a tap does it.
+    val records = NdefMessage(onCard).records
+    check(records.size == 1, "a tapped card holds exactly one record: ${records.size}")
+    val tapped = records.first().toUri()
+    check(tapped == "https://$host/t?l=$HOIV_LOCATION", "the platform decoder reads the same URI: $tapped")
+    check(
+        tapped == NdefTag.uriFrom(onCard),
+        "THE TWO DECODERS AGREE: platform '$tapped' vs NdefTag '${NdefTag.uriFrom(onCard)}'",
+    )
+    check(
+        tagLink.locationId(tapped) == HOIV_LOCATION,
+        "THE CONVERGENCE: tapped, the card we wrote parses to the production location",
+    )
+
+    // The tag physically mounted at the client's building was written months ago by NFC
+    // Tools, not by this app. Byte-identical, or the two are not the same kind of tag.
+    val wallHost = "timesheets" + ".exe" + ".xyz"
+    val wall = NdefTag.message("https://$wallHost/t?l=$HOIV_LOCATION")
+    check(
+        wall?.contentEquals(onCard) == true,
+        "a card we write is byte-identical to the one already on the wall",
+    )
+
+    // THE '+' TRAP, ON THE TAP SIDE. java.net.URLDecoder implements form encoding, where
+    // '+' MEANS space, so "?l=+<uuid>" would decode to " <uuid>", trim clean and be
+    // ACCEPTED on Android while iOS refuses the same card. TagLink escapes '+' to %2B
+    // before decoding to stop that. Here it is re-tested where it actually bites: a card
+    // carrying '+' , read by the platform decoder, tapped.
+    val plusCard = NdefTag.message("https://$host/t?l=+$HOIV_LOCATION")!!
+    val plusTapped = NdefMessage(plusCard).records.first().toUri()
+    check(plusTapped == "https://$host/t?l=+$HOIV_LOCATION", "the platform decoder leaves '+' alone: $plusTapped")
+    check(
+        tagLink.locationId(plusTapped) == null,
+        "THE TRAP: a '+' card is refused on the TAP path too, not just in the encoder",
+    )
+    // ...and such a card can never be produced by this writer in the first place.
+    val plusOutcome = run(FakeCard(capacity = 137), locationId = "+$HOIV_LOCATION")
+    check(plusOutcome is TagWriter.Outcome.Refused.BadId, "a '+' id never reaches a card: $plusOutcome")
+    check(!TagBus.wroteAnything(), "a '+' id writes nothing")
+
+    // A percent-encoded space is the same trap wearing a different hat.
+    val encodedSpace = NdefTag.message("https://$host/t?l=%20$HOIV_LOCATION")!!
+    val spaceTapped = NdefMessage(encodedSpace).records.first().toUri()
+    check(
+        tagLink.locationId(spaceTapped) == HOIV_LOCATION,
+        "a %20-prefixed uuid IS accepted (URLDecoder unescapes it, then it trims) — pinned, " +
+            "so a change to the decoder cannot alter it unnoticed: $spaceTapped",
+    )
+    // ...but this writer cannot mint one, which is what keeps it off a card.
+    check(
+        run(FakeCard(capacity = 137), locationId = "%20$HOIV_LOCATION") is TagWriter.Outcome.Refused.BadId,
+        "a %20-prefixed id never reaches a card either",
     )
 }
 
