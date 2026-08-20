@@ -229,6 +229,24 @@ async function setViewport(page, width, height) {
   if (actual !== width) throw new Error(`viewport override did not take: ${width} → ${actual}`)
 }
 
+/**
+ * Did `selector` show up? TRUE/FALSE, never a throw.
+ *
+ * `page.waitFor` throws, which aborts the run — and a mutant that removes a confirmation
+ * dialog then surfaces as "the probe crashed" instead of "nothing asked before revoking a
+ * code". Measured: demo/operator-mutants.sh's `revoke-direct` was reported as caught for the
+ * wrong reason until this existed. A missing overlay is a VERDICT about the screen, so it is
+ * returned as one.
+ */
+async function appears(page, selector, { timeout = 5000 } = {}) {
+  try {
+    await page.waitFor(`document.querySelector('${selector}')`, { timeout })
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function press(page, key) {
   const code = key === 'Tab' ? 9 : key === 'Escape' ? 27 : 0
   for (const type of ['keyDown', 'keyUp']) {
@@ -451,6 +469,14 @@ async function main() {
 
     // ---- 2 · the form marks required, and required vs optional is VISIBLE -------------
     await openDrawer(page)
+    // The hint on an EMPTY field, captured before anything is typed. It is not the same
+    // string as the one visible during the collision: `help=` swaps the standing hint for
+    // the „Wird gespeichert als: …" preview the moment the number parses, so any rule
+    // written into `phoneHint` is GONE from the screen exactly when it is being broken.
+    // §4 needs both, and TASK-215 needs to know it.
+    const emptyHint = await page.eval(
+      `(document.querySelector('.drawer .field-hint')?.textContent || '').trim()`,
+    )
     const fields = await page.eval(`(() => {
       return [...document.querySelectorAll('.drawer .field')].map((f) => ({
         label: (f.querySelector('label')?.childNodes[0]?.nodeValue || '').trim(),
@@ -542,11 +568,13 @@ async function main() {
         errs,
       }
     })()`)
+    const namesWorker = /Mitarbeiter|Reinigungskraft|worker/i
     assert(
       'the screen says an operator phone cannot also be a worker phone',
-      saysWorker.inHint || saysWorker.inRefusal,
-      `hint="${saysWorker.hint}" refusal="${saysWorker.errs}" ` +
-        `(the word appears elsewhere on the screen: ${saysWorker.onScreen} — the "Auch Mitarbeiter" column)`,
+      namesWorker.test(emptyHint) || saysWorker.inHint || saysWorker.inRefusal,
+      `hint on an empty field="${emptyHint}" · hint during the collision="${saysWorker.hint}" · ` +
+        `refusal="${saysWorker.errs}" (the word IS on the screen elsewhere: ${saysWorker.onScreen} — ` +
+        `the "Auch Mitarbeiter" column, which says the opposite)`,
     )
 
     await press(page, 'Escape')
@@ -634,17 +662,20 @@ async function main() {
 
     // ---- 7 · revoke, through the confirmation ------------------------------------------
     await page.eval(`(${rowButton(PROBE_NAME, 'Zugangscode sperren')}).click()`)
-    await page.waitFor(`document.querySelector('.modal')`, { timeout: 8000, label: 'revoke modal' })
-    const revokeModal = await page.eval(
-      `document.querySelector('.modal').innerText.replace(/\\s+/g, ' ')`,
-    )
+    const revokeAsked = await appears(page, '.modal')
+    const revokeModal = revokeAsked
+      ? await page.eval(`document.querySelector('.modal').innerText.replace(/\\s+/g, ' ')`)
+      : ''
     await page.screenshot(`${SHOTS}/revoke-confirm.png`)
     assert(
       'revoke: the confirmation names the person and says the code stops working at once',
-      revokeModal.includes(PROBE_NAME) && /sofort nicht mehr/.test(revokeModal),
-      revokeModal.slice(0, 160),
+      revokeAsked && revokeModal.includes(PROBE_NAME) && /sofort nicht mehr/.test(revokeModal),
+      revokeAsked
+        ? revokeModal.slice(0, 160)
+        : 'NOTHING ASKED — one click blocked the code, with no way back and no confirmation',
     )
-    await page.clickText('Zugangscode sperren', { selector: '.modal footer button.btn-danger' })
+    if (revokeAsked)
+      await page.clickText('Zugangscode sperren', { selector: '.modal footer button.btn-danger' })
     await sleep(1500)
     const afterRevoke = await page.eval(rowText(PROBE_NAME))
     assert(
@@ -681,17 +712,22 @@ async function main() {
     // ---- 9 · deactivate, and what the confirmation admits -----------------------------
     await openOperators(page)
     await page.eval(`(${rowButton(PROBE_NAME, 'Deaktivieren')}).click()`)
-    await page.waitFor(`document.querySelector('.modal')`, { timeout: 8000, label: 'confirm' })
-    const confirmText = await page.eval(
-      `document.querySelector('.modal').innerText.replace(/\\s+/g, ' ')`,
-    )
+    const deactivateAsked = await appears(page, '.modal')
+    const confirmText = deactivateAsked
+      ? await page.eval(`document.querySelector('.modal').innerText.replace(/\\s+/g, ' ')`)
+      : ''
     await page.screenshot(`${SHOTS}/deactivate-confirm.png`)
     assert(
       'deactivate: the confirmation names the person AND admits it cannot be undone here',
-      confirmText.includes(PROBE_NAME) && /nicht rückgängig/.test(confirmText),
-      confirmText.slice(0, 200),
+      deactivateAsked &&
+        confirmText.includes(PROBE_NAME) &&
+        /nicht rückgängig/.test(confirmText),
+      deactivateAsked
+        ? confirmText.slice(0, 200)
+        : 'NOTHING ASKED — one click deactivated a person whom this screen cannot reactivate',
     )
-    await page.clickText('Deaktivieren', { selector: '.modal footer button.btn-danger' })
+    if (deactivateAsked)
+      await page.clickText('Deaktivieren', { selector: '.modal footer button.btn-danger' })
     await sleep(1500)
     const afterDeactivate = await page.eval(rowText(PROBE_NAME))
     await page.screenshot(`${SHOTS}/after-deactivate.png`)

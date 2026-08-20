@@ -58,9 +58,14 @@
 #                  monitor, 1.5:1 on the panel. audit-contrast's own recipe.
 #   dot-not-word   Status becomes a coloured dot instead of „Aktiv"/„Inaktiv". Colour is then
 #                  the ONLY signal, which decision-43 forbids and greyscale exposes.
-#   gap-closed     the OPPOSITE direction: TASK-215's sentence is added to both locales, and
-#                  the KNOWN_GAPS entry must go STALE and exit 1. A named gap that cannot
-#                  detect its own fix is an excuse with no expiry date.
+#   gap-closed     the OPPOSITE direction: TASK-215's sentence is added to the hint, and the
+#                  KNOWN_GAPS entry must go STALE and exit 1. A named gap that cannot detect
+#                  its own fix is an excuse with no expiry date. THIS MUTANT ALREADY EARNED
+#                  ITS KEEP: the first version of the gap assertion read the hint only DURING
+#                  the collision, and at that moment the hint has been swapped for the „Wird
+#                  gespeichert als: …" preview — so the sentence was written, invisible, and
+#                  the gap stayed green. That is a fact about the screen, not about the probe,
+#                  and it is written into TASK-215.
 #
 # Every mutant is restored in an EXIT trap and the run ends by asserting `git status
 # --porcelain web/` is empty. A mutant left on disk is worse than no mutation test, because
@@ -359,13 +364,23 @@ fi
 if selected no-trap; then
 echo ""
 echo "=== MUTANT no-trap · Tab walks out of the overlay into the page behind ==="
+# NOT `return` right after the Tab guard: tsconfig has allowUnreachableCode off, so that
+# mutant does not compile and „the mutant did not build" is not a measurement. This one
+# compiles, and it is the better inverse anyway — focus that lands OUTSIDE is still pulled
+# back, only the wrap at the two edges is gone, which is the classic half-built trap.
 apply "$OVERLAY" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p, encoding='utf-8').read()
-old = "      if (event.key !== 'Tab') return"
-new = "      if (event.key !== 'Tab') return\n      return"
-assert old in s, 'no-trap site not found'
-open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+pairs = [
+  ("if (event.shiftKey && (!inside || active === firstItem)) {",
+   "if (event.shiftKey && !inside) {"),
+  ("} else if (!event.shiftKey && (!inside || active === lastItem)) {",
+   "} else if (!event.shiftKey && !inside) {"),
+]
+for old, new in pairs:
+    assert old in s, 'no-trap site not found: ' + old
+    s = s.replace(old, new, 1)
+open(p, 'w', encoding='utf-8').write(s)
 PY
 [ $? -eq 0 ] || exit 1
 run no-trap "cycles inside"
