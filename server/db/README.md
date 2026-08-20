@@ -205,7 +205,34 @@ psql "$DATABASE_URL" -c "DELETE FROM workers WHERE id = 6"                      
 
 `DELETE` is only safe while that worker has **no** shifts, material requests or sessions —
 check first, because the FKs are not `ON DELETE CASCADE` and a row with history will
-(correctly) refuse.
+(correctly) refuse. Note that it also destroys any **live enrolment code** on the row: the
+`TTL Test` record above carries an unredeemed one. That is fine for a leftover test worker
+and would not be fine for a real one.
+
+#### The two pre-deploy checks, and what each one is for
+
+Both take a dump and both refuse to touch production. Neither is in the always-on suite,
+because each needs an artefact nobody can commit. Run **both** before a 006 window:
+
+```sh
+ssh schimmer-glanz.exe.xyz 'sudo -n cat /var/backups/nfc/nfc-<newest>.sql.gz' > /tmp/nfc.sql.gz
+node server/db/check-prod-restore.mjs /tmp/nfc.sql.gz   # the SCHEMA: 006 on the client's own rows
+node server/db/check-field-wire.mjs   /tmp/nfc.sql.gz   # the WIRE: what the phone in Vienna sends
+sh   server/db/check-field-wire-mutants.sh /tmp/nfc.sql.gz   # and the negative case, 8 mutants
+rm -f /tmp/nfc.sql.gz                                   # it is a copy of the payroll database
+```
+
+`check-prod-restore` proves 006 applies, refuses first, invents no rows, keeps every pin,
+and that the API boots on the result. `check-field-wire` proves the five things that leaves
+open — the close body the APK really sends (three keys, `auto_closed` among them, read out
+of the **dex** and not out of the Kotlin), `auto_closed` monotonicity against the row rather
+than against a regex, the wall card tapped while its building already has a zone, a replayed
+open, and what HEAD's server does on the 005 schema (`/health` 200 while every clock-in
+500s). Findings behind both: `backlog/docs/PROBE-DATA.md`.
+
+**They need a local role called `nfc`**, because a production `pg_dump` carries
+`ALTER TABLE … OWNER TO nfc` 22 times. Both now say so and exit 1 with the fix
+(`createuser nfc`) instead of printing a stack trace.
 
 The rest of 006, one line each:
 
