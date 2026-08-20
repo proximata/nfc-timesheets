@@ -23,8 +23,36 @@
 // chip above it — both introduced this round — and a drawer that overflows is a drawer whose
 // close button is off screen. An audit that only ever measures the resting state measures
 // the state nobody has a problem with.
-import { mkdirSync } from 'node:fs'
+//
+// AND BOTH THEMES AT ALL ELEVEN WIDTHS. This file used to measure the light theme at 1024px
+// only, with the reasoning that „the light theme is the same layout with different paint" —
+// which is the same reasoning that produced „390 and 1680 are fine, so the range between
+// them is fine", i.e. R1. Paint is not free: a light-theme token can carry a different
+// border width or a different shadow spread, `.map-pin-flag.is-notag` paints a
+// repeating-linear-gradient, and a single extra pixel of border on a table that is already
+// at the edge of its column budget is an overflow at ONE width and nowhere else. Assuming a
+// theme away is exactly the shape of assumption this file exists to refuse.
+import { mkdirSync, readFileSync } from 'node:fs'
 import { attach, launchChrome, sleep } from './cdp.mjs'
+
+/**
+ * The localStorage key the app itself persists the theme under, READ OUT OF THE SOURCE.
+ *
+ * Not a literal, because a literal is what was here first and it was WRONG: `ts-theme`,
+ * while `web/lib/theme.ts` writes `nfcts.theme`. `THEME_INIT_SCRIPT` runs on every page load
+ * and reads the real key, so a wrong key means the theme reverts to dark on the next
+ * navigation — i.e. a „light" pass that measures the dark theme and agrees with itself. The
+ * same wrong literal is in demo/probe-zones-revenue.mjs, where it is masked because that
+ * probe re-applies `data-theme` after every goto.
+ *
+ * A FAILURE, never a fallback: a default here would restore exactly the silent-dark bug.
+ */
+const THEME_STORAGE_KEY = (() => {
+  const src = readFileSync(new URL('../web/lib/theme.ts', import.meta.url), 'utf8')
+  const hit = src.match(/THEME_STORAGE_KEY\s*=\s*'([^']+)'/)
+  if (!hit) throw new Error('audit-widths: cannot read THEME_STORAGE_KEY from web/lib/theme.ts')
+  return hit[1]
+})()
 
 const BASE = process.env.AUDIT_BASE ?? 'http://127.0.0.1:8080'
 const OUT = '/tmp/ts-audit/widths'
@@ -37,6 +65,9 @@ if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(new URL(BASE).hostname)
 
 /** Breakpoint edges AND the middles between them. See the header for why. */
 const WIDTHS = [767, 768, 800, 900, 1024, 1152, 1280, 1366, 1439, 1440, 1680]
+
+/** Both, at every width. See the header for why this is not one theme plus an assumption. */
+const THEMES = ['dark', 'light']
 
 const SCREENS = [
   '/',
@@ -141,15 +172,41 @@ async function login() {
   await page.waitFor(`location.pathname === '/'`, { timeout: 15000, label: 'the dashboard' })
 }
 
-async function measure(label, url, width) {
+/**
+ * Set the theme the way the app itself persists it, so it SURVIVES the next navigation.
+ * Setting `data-theme` on the element alone does not: `THEME_INIT_SCRIPT` runs on every
+ * page load and reads localStorage, so an attribute set after `goto` is wiped by the goto
+ * after it — and every measurement but the first would silently be a dark-theme one.
+ */
+async function setTheme(theme) {
+  await page.eval(`(() => {
+    try { localStorage.setItem(${JSON.stringify(THEME_STORAGE_KEY)}, ${JSON.stringify(theme)}) } catch {}
+    document.documentElement.setAttribute('data-theme', ${JSON.stringify(theme)})
+    return document.documentElement.getAttribute('data-theme')
+  })()`)
+}
+
+async function measure(label, url, width, theme) {
   await page.goto(`${BASE}${url}`, { settle: 1100 })
   await sleep(200)
+  // Read back rather than trust: a theme that did not stick turns the whole light pass into
+  // a second dark pass that agrees with the first, which is worse than not running it.
+  const applied = await page.eval(`document.documentElement.getAttribute('data-theme')`)
+  if (applied !== theme) {
+    record(false, `${width}px ${theme} ${label}`, `theme did not stick: data-theme=${applied}`)
+    return { by: 0, culprits: [] }
+  }
   const report = await page.eval(OVERFLOW)
   const ok = report.by <= 1
   if (!ok) {
-    await page.screenshot(`${OUT}/overflow-${width}-${label.replace(/[^a-z0-9]+/gi, '_')}.png`)
+    const slug = label.replace(/[^a-z0-9]+/gi, '_')
+    await page.screenshot(`${OUT}/overflow-${width}-${theme}-${slug}.png`)
   }
-  record(ok, `${width}px ${label}`, `+${report.by}px — ${report.culprits.join(' | ') || 'no element found wider than the viewport'}`)
+  record(
+    ok,
+    `${width}px ${theme} ${label}`,
+    `+${report.by}px — ${report.culprits.join(' | ') || 'no element found wider than the viewport'}`,
+  )
   return report
 }
 
@@ -164,26 +221,43 @@ const LOCATION = await page.eval(
 )
 if (!/^[0-9a-f-]{36}$/.test(LOCATION)) throw new Error(`no building uuid: ${LOCATION}`)
 
-for (const width of WIDTHS) {
-  console.log(`\n=== ${width}px ===`)
-  await viewport(width)
-  for (const path of SCREENS) await measure(path, path, width)
-  for (const [label, url] of OPEN_STATES) {
-    await measure(label, url.replace('%LOCATION%', LOCATION), width)
+for (const theme of THEMES) {
+  await setTheme(theme)
+  for (const width of WIDTHS) {
+    console.log(`\n=== ${width}px ${theme} ===`)
+    await viewport(width)
+    for (const path of SCREENS) await measure(path, path, width, theme)
+    for (const [label, url] of OPEN_STATES) {
+      await measure(label, url.replace('%LOCATION%', LOCATION), width, theme)
+    }
   }
 }
 
-// The light theme is the same layout with different paint — but „should be" is how R1 got
-// through, so it is measured at the width that broke before rather than assumed.
-console.log('\n=== 1024px, light theme ===')
-await viewport(1024)
-for (const path of SCREENS) {
-  await page.goto(`${BASE}${path}`, { settle: 1000 })
-  await page.eval(`document.documentElement.setAttribute('data-theme', 'light')`)
-  await sleep(250)
-  const report = await page.eval(OVERFLOW)
-  record(report.by <= 1, `1024px light ${path}`, `+${report.by}px — ${report.culprits.join(' | ')}`)
-}
+// The theme really is being switched, and the page really does repaint. Without this, every
+// „light" line above could be a dark measurement wearing a label — the exact failure the
+// read-back in `measure` guards against, stated once as an assertion of its own so that a
+// silent regression in `setTheme` is a FAILURE and not merely 209 duplicated numbers.
+console.log('\n=== the two themes are actually two different paints ===')
+const PAINT = `(() => {
+  const cs = getComputedStyle(document.body)
+  return { theme: document.documentElement.getAttribute('data-theme'), bg: cs.backgroundColor, fg: cs.color }
+})()`
+await viewport(1280)
+await setTheme('dark')
+await page.goto(`${BASE}/`, { settle: 900 })
+const darkPaint = await page.eval(PAINT)
+await setTheme('light')
+await page.goto(`${BASE}/`, { settle: 900 })
+const lightPaint = await page.eval(PAINT)
+record(
+  darkPaint.theme === 'dark' &&
+    lightPaint.theme === 'light' &&
+    darkPaint.bg !== lightPaint.bg &&
+    darkPaint.fg !== lightPaint.fg,
+  'the light pass is not a second dark pass',
+  `dark ${darkPaint.bg}/${darkPaint.fg} vs light ${lightPaint.bg}/${lightPaint.fg}`,
+)
+await setTheme('dark')
 
 // ---------------------------------------------------------------------------------------
 // THE PROBE MUST BE ABLE TO GO RED, and 222 green lines are exactly the shape of a check
@@ -211,8 +285,8 @@ record(
 
 const failed = results.filter((r) => !r.ok)
 console.log(
-  `\n${results.length - 1} measurements across ${WIDTHS.length} widths ` +
-    `× ${SCREENS.length + OPEN_STATES.length} states (+ a light pass).`,
+  `\n${results.length - 2} measurements across ${WIDTHS.length} widths ` +
+    `× ${SCREENS.length + OPEN_STATES.length} states × ${THEMES.length} themes.`,
 )
 console.log(`${results.length - failed.length}/${results.length} passed, ${failed.length} FAILED`)
 if (failed.length) console.log(`screenshots of every failure: ${OUT}`)

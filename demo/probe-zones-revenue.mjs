@@ -11,6 +11,7 @@
 //
 //   node demo/probe-zones-revenue.mjs            (server on 127.0.0.1:4319, DB nfc_demo)
 //   BASE=http://127.0.0.1:4319 node demo/probe-zones-revenue.mjs
+import { readFileSync } from 'node:fs'
 import { assertFreshBuild, assertFreshServer } from './build-guard.mjs'
 import { attach, launchChrome, sleep } from './cdp.mjs'
 
@@ -169,12 +170,29 @@ async function login(page) {
   await sleep(1000)
 }
 
+/**
+ * THE KEY IS READ OUT OF web/lib/theme.ts, not written here. The literal that used to be in
+ * this function was `ts-theme`; the app persists under `nfcts.theme`. Nothing went wrong
+ * because every block above re-applies `data-theme` immediately after its `goto` — but that
+ * made this line a no-op that LOOKED like the thing keeping the theme on, and the next file
+ * to copy it (demo/audit-widths.mjs) got 132 silent dark measurements labelled „light".
+ */
+const THEME_STORAGE_KEY = (() => {
+  const src = readFileSync(new URL('../web/lib/theme.ts', import.meta.url), 'utf8')
+  const hit = src.match(/THEME_STORAGE_KEY\s*=\s*'([^']+)'/)
+  if (!hit) throw new Error('probe-zones: cannot read THEME_STORAGE_KEY from web/lib/theme.ts')
+  return hit[1]
+})()
+
 async function setTheme(page, theme) {
-  await page.eval(`(() => {
+  const applied = await page.eval(`(() => {
     document.documentElement.dataset.theme = ${JSON.stringify(theme)}
-    try { localStorage.setItem('ts-theme', ${JSON.stringify(theme)}) } catch {}
+    try { localStorage.setItem(${JSON.stringify(THEME_STORAGE_KEY)}, ${JSON.stringify(theme)}) } catch {}
     return document.documentElement.dataset.theme
   })()`)
+  // Read back rather than assume. A theme that did not apply turns every „/light" line below
+  // into a second dark measurement that agrees with the first one.
+  if (applied !== theme) throw new Error(`probe-zones: theme did not apply (wanted ${theme}, got ${applied})`)
   await sleep(150)
 }
 
