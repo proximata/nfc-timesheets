@@ -3,6 +3,7 @@ package io.github.qwadratic.nfctimesheets
 import android.app.Application
 import io.github.qwadratic.nfctimesheets.core.SessionCookie
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.nfc.PendingTagReport
 import io.github.qwadratic.nfctimesheets.nfc.TagWriter
 import io.github.qwadratic.nfctimesheets.data.MaterialStore
 import io.github.qwadratic.nfctimesheets.data.MaterialSync
@@ -77,6 +78,12 @@ class TimeSheetsApplication : Application() {
 
     /** Encodes and verifies the bytes that go onto a physical card. See nfc/TagWriter.kt. */
     val tagWriter: TagWriter by lazy { TagWriter(tagLink) }
+
+    /**
+     * The one fact WriteTagActivity must not lose to a killed process: a card is written
+     * and the server does not know yet. See nfc/PendingTagReport.kt.
+     */
+    val pendingTagReport: PendingTagReport by lazy { PendingTagReport(this) }
 
     val sync: ShiftSync by lazy { ShiftSync(api, store) }
 

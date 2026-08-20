@@ -94,6 +94,17 @@ class WriteTagActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         adapter = NfcAdapter.getDefaultAdapter(this)
 
+        // RESTORE ACROSS A KILLED PROCESS. The card was already written and verified
+        // before this process existed — nfc/PendingTagReport.kt is the only thing that
+        // remembers that fact once the OS (or the operator) kills the app. Without this,
+        // `outcome` and `report` reset to nothing on every fresh process and the retry
+        // button this screen depends on never appears, even though the card is fine and
+        // the server still does not know about it.
+        app.pendingTagReport.pending()?.let { written ->
+            pendingId = written.locationId
+            outcome = written
+        }
+
         setContent {
             io.github.qwadratic.nfctimesheets.ui.TimeSheetsTheme {
                 Scaffold { padding ->
@@ -209,6 +220,10 @@ class WriteTagActivity : ComponentActivity() {
     private fun apply(result: TagWriter.Outcome) {
         outcome = result
         if (result is TagWriter.Outcome.Written) {
+            // Persisted BEFORE the report is even attempted — see nfc/PendingTagReport.kt.
+            // A process death between this line and a successful report must still leave
+            // the operator able to retry, not a screen that has forgotten the card exists.
+            app.pendingTagReport.save(result)
             sendReport(result.locationId)
         }
     }
@@ -225,6 +240,11 @@ class WriteTagActivity : ComponentActivity() {
         lifecycleScope.launch {
             report = try {
                 app.operatorApi.reportTag(locationId)
+                // The server now knows. Clear the persisted record FIRST: if the process
+                // died between these two lines, the worst case is a harmless duplicate
+                // report (POST /operator/tags is idempotent) — never a card the operator
+                // was never asked to retry.
+                app.pendingTagReport.clear()
                 // The id has now left this phone, so the NEXT card must not reuse it.
                 pendingId = UUID.randomUUID().toString()
                 ReportState.Sent
