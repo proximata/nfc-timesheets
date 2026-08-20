@@ -24,6 +24,7 @@
 //
 // mtime, not a content hash: the question is "did anybody touch a source file after the last
 // build", one stat per file, no dependency, and nothing to keep in step.
+import { execFileSync } from 'node:child_process'
 import { readdirSync, statSync } from 'node:fs'
 
 const SOURCE_DIRS = ['app', 'components', 'lib', 'messages']
@@ -81,4 +82,96 @@ export function assertFreshBuild(webDir = new URL('../web', import.meta.url).pat
         '  cd web && NEXT_PUBLIC_GOOGLE_MAPS_KEY=$(cd .. && psst get NEXT_PUBLIC_GOOGLE_MAPS_KEY) pnpm build',
     )
   }
+}
+
+/**
+ * ...AND IS THE SERVER ON THIS PORT RUNNING THIS TREE'S SERVER CODE?
+ *
+ * THE OTHER HALF, and it is the half that nearly put a false GREEN in a report. `assertFreshBuild`
+ * only covers the STATIC EXPORT. `server/lib/reporting.js` is loaded ONCE at boot, so a probe
+ * that mutates it, restarts "the" server and re-runs is measuring the mutant only if the restart
+ * actually took the port.
+ *
+ * WHAT HAPPENED. Two agents died mid-run and left `node server/server.js` orphaned on :8080,
+ * :4319 and :3000. Every later `node server/server.js &` hit EADDRINUSE and exited; the orphan
+ * kept answering. `/health` returned 200, the static files came off disk so every REBUILD was
+ * picked up correctly — and server-side mutations silently were not. A mutation test of the
+ * area-derivation drift therefore reported the mutant as GREEN. It is red, and it took a
+ * `lsof` to find out why.
+ *
+ * SO THE QUESTION IS ASKED OF THE PROCESS, NOT OF THE PROTOCOL. `/health` cannot answer it —
+ * a five-day-old build says `{"ok":true}` just as cheerfully. Two facts about the LISTENER:
+ *
+ *   1. it is running out of THIS working tree (argv/cwd), not some other checkout
+ *   2. it started AFTER the newest file under server/, so its module graph is this code
+ *
+ * Both come from `lsof` + `ps`, which demo/ already shells out to elsewhere. No dependency,
+ * no server change, and nothing to keep in step.
+ *
+ * IT WARNS RATHER THAN THROWS when it cannot tell (no lsof, a container, an unusual ps): a
+ * guard that cannot run must not become a reason not to run the check. It throws only when it
+ * has POSITIVELY established that the listener is stale.
+ */
+export function assertFreshServer(base, serverDir = new URL('../server', import.meta.url).pathname) {
+  const port = Number(new URL(base).port || 80)
+  let pids
+  try {
+    pids = execFileSync('lsof', ['-ti', `:${port}`], { encoding: 'utf8' })
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  } catch {
+    console.warn(`  note  build-guard: cannot ask who holds :${port} (no lsof) — not checked`)
+    return
+  }
+  if (pids.length === 0) throw new Error(`build-guard: nothing is listening on ${base}`)
+
+  const newest = newestUnderAny(serverDir)
+  for (const pid of pids) {
+    let started
+    let command
+    try {
+      const out = execFileSync('ps', ['-o', 'lstart=,command=', '-p', pid], { encoding: 'utf8' })
+      // `lstart` is a fixed 24-char ctime string; the command is whatever follows it.
+      started = Date.parse(out.slice(0, 24))
+      command = out.slice(24).trim()
+    } catch {
+      continue // the process went away between lsof and ps; not our business
+    }
+    if (Number.isNaN(started)) continue
+    if (newest.mtimeMs > started) {
+      throw new Error(
+        `build-guard: the server on :${port} (pid ${pid}) booted BEFORE ` +
+          `${newest.path.replace(`${serverDir}/`, 'server/')} was last written.\n` +
+          `  It is serving a module graph that is not this tree. Server-side edits — including\n` +
+          '  a mutant you are about to call GREEN — are NOT in it. This is usually an orphan\n' +
+          '  left by an earlier run: a second `node server/server.js` hits EADDRINUSE, exits,\n' +
+          '  and the orphan goes on answering /health with 200.\n' +
+          `  pkill -f 'node server/server.js'   then start it again.\n` +
+          `  holder: ${command}`,
+      )
+    }
+  }
+}
+
+/** Newest .js/.mjs/.sql under a directory, ignoring deps and build output. */
+function newestUnderAny(dir, best = { mtimeMs: 0, path: null }) {
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return best
+  }
+  for (const e of entries) {
+    if (IGNORE.test(e.name)) continue
+    const path = `${dir}/${e.name}`
+    if (e.isDirectory()) {
+      best = newestUnderAny(path, best)
+      continue
+    }
+    if (!/\.(m?js|sql)$/.test(e.name)) continue
+    const { mtimeMs } = statSync(path)
+    if (mtimeMs > best.mtimeMs) best = { mtimeMs, path }
+  }
+  return best
 }

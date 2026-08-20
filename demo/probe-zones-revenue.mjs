@@ -11,7 +11,7 @@
 //
 //   node demo/probe-zones-revenue.mjs            (server on 127.0.0.1:4319, DB nfc_demo)
 //   BASE=http://127.0.0.1:4319 node demo/probe-zones-revenue.mjs
-import { assertFreshBuild } from './build-guard.mjs'
+import { assertFreshBuild, assertFreshServer } from './build-guard.mjs'
 import { attach, launchChrome, sleep } from './cdp.mjs'
 
 const BASE = process.env.BASE ?? 'http://127.0.0.1:4319'
@@ -25,6 +25,11 @@ if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(BASE)) {
 // BEFORE Chrome is launched: every number below is about the bundle in web/out, and a
 // bundle older than the tree makes both a pass and a fail describe code nobody is reading.
 assertFreshBuild()
+// ...and the same question about the SERVER, because half the assertions below read
+// /admin/pl and /admin/data. An orphan server left on this port by an earlier run answers
+// /health with 200 and serves the rebuilt static files off disk, so only the SERVER-SIDE
+// half is stale — which is exactly the half that reports a mutant as green.
+assertFreshServer(BASE)
 
 const WIDTHS = [
   // decision-7's desktop case, at the width the owner named.
