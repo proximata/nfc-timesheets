@@ -121,6 +121,38 @@ const sql = (text) =>
     encoding: 'utf8',
   }).trim()
 
+/**
+ * A KILLED RUN SKIPS ITS `finally`, so the rows below survive into the NEXT run — and there
+ * the damage is not an honest failure, it is a CONFUSING one: the list assertion reports
+ * "4 row(s)" against a 3-row seed and reads like a product defect on a screen nobody touched.
+ * Observed for real: a run died at 16:09 and left `PROBE Operator` (id 24) plus its phone
+ * claim in nfc_demo. Same device check-ia-greyscale got — name the precondition, print the
+ * paste-able fix, exit before measuring anything.
+ */
+const TEARDOWN_SQL =
+  `psql -d ${DB} -c "DELETE FROM phone_identities WHERE operator_id IN\n` +
+  "     (SELECT id FROM operators WHERE name LIKE 'PROBE %');\n" +
+  "   DELETE FROM operators WHERE name LIKE 'PROBE %';\n" +
+  '   UPDATE operators SET enrolment_code_hash = NULL, enrolment_code_expires_at = NULL,\n' +
+  '     enrolment_code_issued_at = NULL, enrolment_code_issued_by = NULL,\n' +
+  '     enrolment_code_redeemed_at = NULL;"'
+
+function refuseResidue() {
+  const probes = sql("SELECT count(*) FROM operators WHERE name LIKE 'PROBE %'")
+  const claims = sql(
+    "SELECT count(*) FROM phone_identities WHERE phone_e164 IN ('+436649009001','+436649009002')",
+  )
+  if (probes === '0' && claims === '0') return
+  console.error(
+    `check-operators: PRECONDITION FAILED — ${DB} still holds a killed run's rows.\n` +
+      `  operators LIKE 'PROBE %': ${probes}   phone_identities for the probe numbers: ${claims}\n` +
+      '  This is residue, NOT a defect in /operators/. Left in place it makes the list\n' +
+      '  assertion below report the wrong row count and look like a product bug.\n' +
+      `  Take it back, then re-run:\n\n${TEARDOWN_SQL}\n`,
+  )
+  process.exit(1)
+}
+
 const WIDTHS = [767, 768, 800, 900, 1024, 1152, 1280, 1366, 1439, 1440, 1680]
 
 /** Where focus is, in words, for a failure line that has to be actionable. */
@@ -423,6 +455,7 @@ async function keyboardContract(page, label, openerJs, overlaySelector) {
 async function main() {
   mkdirSync(SHOTS, { recursive: true })
   assertFreshBuild()
+  refuseResidue()
 
   const before = {
     operators: sql('SELECT count(*) FROM operators'),
