@@ -295,6 +295,7 @@ async function adminData({ query }) {
     operators,
     locations,
     zones,
+    reportedTags,
     shifts,
     hours,
     clients,
@@ -339,6 +340,18 @@ async function adminData({ query }) {
          FROM zones z
          JOIN locations l ON l.id = z.location_id
         ORDER BY l.name, z.active DESC, z.name`,
+    ),
+    // Tags an operator has WRITTEN AND REPORTED but nobody has resolved yet (this
+    // iteration; server/db/migrations/008_reported_tags.sql). UNRESOLVED ONLY — the same
+    // "live rows only" posture GET /admin/revenue and portal_grants already take: a
+    // resolved report is history the database keeps, not a queue item the panel still has
+    // to act on. This is the ADMIN'S OWN worklist: "a tag exists, decide what it is."
+    all(
+      `SELECT rt.id, rt.reported_at, rt.reported_by_operator_id, o.name AS reported_by_operator_name
+         FROM reported_tags rt
+         LEFT JOIN operators o ON o.id = rt.reported_by_operator_id
+        WHERE rt.resolved_at IS NULL
+        ORDER BY rt.reported_at`,
     ),
     all(
       `SELECT s.id, s.worker_id, w.name AS worker_name,
@@ -419,6 +432,7 @@ async function adminData({ query }) {
       operators,
       locations,
       zones,
+      reported_tags: reportedTags,
       shifts,
       hours,
       clients,
@@ -1168,6 +1182,156 @@ async function deleteZone({ params }) {
   return { status: 200, body: { zone: row } };
 }
 
+// ---- reported tags: turning an UNBOUND tag into something (this iteration) --------
+//
+// server/db/migrations/008_reported_tags.sql. An operator's phone minted a uuid, wrote it
+// to a physical tag and told POST /operator/tags it exists. It landed with no zone and no
+// building. These three routes are the only way that changes, and they are the only
+// writers of `reported_tags.resolved_at` in this codebase.
+//
+// ALL THREE SHARE ONE RACE-SAFETY SHAPE: "stamp resolved_at THEN insert/link, in one
+// statement", via a CTE — the same reason POST /admin/operators uses one (this codebase
+// has no transaction helper; see that function's own comment). Two admins resolving the
+// SAME reported tag at once must not both succeed: the UPDATE inside the CTE only matches
+// a row where `resolved_at IS NULL`, so the second caller's CTE returns zero rows, the
+// INSERT/link below it selects from zero rows, and `one()` sees `null` — answered as 409
+// already_resolved, never as two locations or two aliases silently created for one tag.
+//
+// A resolve route is refused the same way whether the tag was NEVER reported (404) or was
+// reported and ALREADY resolved (409) — told apart by one extra read, because the admin
+// panel needs to render "this id isn't a tag we know of" differently from "someone already
+// decided this".
+async function resolvedOrUnknown(tagId) {
+  const reported = await one("SELECT resolved_at FROM reported_tags WHERE id = $1", [tagId]);
+  fail(reported ? 409 : 404, reported ? "already_resolved" : "unknown_reported_tag");
+}
+
+/**
+ * POST /admin/tags/:id/resolve-building {name, slug, address?, lat?, lng?, client_id?,
+ *                                        contact_id?} -> a NEW building, id = :id.
+ *
+ * DELIBERATELY MINIMAL, unlike POST /admin/locations: no contract sync, no geocode
+ * trigger. The building this call creates is a real, resolvable row from the moment it
+ * commits — a worker can tap the physical tag immediately — and everything else (address,
+ * contract, a pin on the map) is exactly one visit to the ordinary /admin/locations edit
+ * screen away, which is already built and already does all of that. Reimplementing it here
+ * would be a second, subtly different path to the same table.
+ *
+ * `id` is NOT generated. It is the reported tag's OWN id, so the physical bytes already
+ * written to the card never have to be rewritten (see the migration's header comment).
+ */
+async function resolveTagToBuilding({ params, body }) {
+  const tagId = v.uuid(params.id, "id");
+  const locationSlug = v.slug(body.slug);
+  const name = v.str(body.name, "name", { max: 160 });
+  const address = v.optionalStr(body.address, "address", { max: 300 });
+  const lat = v.coord(body.lat, "lat", 90);
+  const lng = v.coord(body.lng, "lng", 180);
+  const { clientId, contactId } = await resolveClientAndContact(body);
+
+  let row;
+  try {
+    row = await one(
+      `WITH stamp AS (
+         UPDATE reported_tags SET resolved_at = now() WHERE id = $1 AND resolved_at IS NULL
+         RETURNING id
+       )
+       INSERT INTO locations (id, slug, name, address, lat, lng, client_id, contact_id)
+         SELECT id, $2, $3, $4, $5, $6, $7, $8 FROM stamp
+       RETURNING ${LOCATION_COLS}`,
+      [tagId, locationSlug, name, address, lat, lng, clientId, contactId],
+    );
+  } catch (err) {
+    if (err?.code === "23505") {
+      // locations_slug_key from a genuine slug clash; locations_pkey only from a UUIDv4
+      // collision against this exact reported tag id, which report-time already checked
+      // for once (POST /operator/tags) and this checks for again under the transaction
+      // this CTE forms — belt and braces on an id that came off an unlocked tag.
+      fail(409, err?.constraint === "locations_pkey" ? "id_in_use" : "slug_taken");
+    }
+    throw err;
+  }
+  if (!row) await resolvedOrUnknown(tagId);
+  return { status: 201, body: { location: row } };
+}
+
+/**
+ * POST /admin/tags/:id/resolve-zone {location_id, name, note?, area_sqm?} -> a NEW zone
+ * in an EXISTING building, id = :id.
+ *
+ * `tag_deployed_at` is stamped from the REPORT, not from this admin action: the physical
+ * card was mounted (or at least written) when the operator's phone told the server it
+ * exists, which is usually days before an admin gets to a desk to resolve it. "the tag has
+ * been physically placed" is a fact about the field visit, not about the paperwork.
+ *
+ * location_id existence only, no `active` filter — the same posture POST /admin/zones
+ * already takes (a zone can be created under a building that is not currently active;
+ * whether it RESOLVES is `activePlace`'s call, made fresh on every tap).
+ */
+async function resolveTagToZone({ params, body }) {
+  const tagId = v.uuid(params.id, "id");
+  const locationId = v.uuid(body.location_id, "location_id");
+  if (!(await one("SELECT id FROM locations WHERE id = $1", [locationId]))) fail(422, "unknown_location");
+  const name = v.str(body.name, "name", { max: 120 });
+  const note = v.optionalStr(body.note, "note", { max: 500 });
+  const areaSqm = v.optionalArea(body.area_sqm, "area_sqm");
+
+  let row;
+  try {
+    row = await one(
+      `WITH stamp AS (
+         UPDATE reported_tags SET resolved_at = now() WHERE id = $1 AND resolved_at IS NULL
+         RETURNING id, reported_at
+       )
+       INSERT INTO zones (id, location_id, name, note, area_sqm, tag_deployed_at)
+         SELECT id, $2, $3, $4, $5, reported_at FROM stamp
+       RETURNING ${ZONE_COLS}`,
+      [tagId, locationId, name, note, areaSqm],
+    );
+  } catch (err) {
+    // Only two constraints can fire on this INSERT: a name clash within the building, or
+    // (vanishingly unlikely) a UUIDv4 collision on the id itself — tag_serial is never set
+    // here, so zones_tag_serial_idx cannot be the cause.
+    if (err?.code === "23505") fail(409, err?.constraint === "zones_pkey" ? "id_in_use" : "duplicate_zone_name");
+    throw err;
+  }
+  if (!row) await resolvedOrUnknown(tagId);
+  return { status: 201, body: { zone: row } };
+}
+
+/**
+ * POST /admin/tags/:id/resolve-existing-zone {zone_id} -> this physical tag now ALSO
+ * resolves to an already-existing zone, via `tag_aliases`.
+ *
+ * THE ONE CASE THAT CANNOT REUSE "this row's own id becomes the new PK": the target zone
+ * already has an id, and very possibly an already-printed tag of its own. Re-keying it to
+ * match this new physical card would strand whatever else was ever written with its
+ * original id. An alias is purely additive: the zone's own identity, and any OTHER tag
+ * that already resolves to it, is untouched.
+ *
+ * The target must be ACTIVE. Aliasing to a deactivated zone would create a row that can
+ * never resolve (`activePlace`'s alias branch requires `z.active`, same as the zone's own
+ * id would) — refused here with a clear reason instead of accepted and silently useless.
+ */
+async function resolveTagToExistingZone({ params, body }) {
+  const tagId = v.uuid(params.id, "id");
+  const zoneId = v.uuid(body.zone_id, "zone_id");
+  if (!(await one("SELECT id FROM zones WHERE id = $1 AND active", [zoneId]))) fail(422, "unknown_zone");
+
+  const row = await one(
+    `WITH stamp AS (
+       UPDATE reported_tags SET resolved_at = now() WHERE id = $1 AND resolved_at IS NULL
+       RETURNING id
+     )
+     INSERT INTO tag_aliases (id, zone_id)
+       SELECT id, $2 FROM stamp
+     RETURNING id, zone_id`,
+    [tagId, zoneId],
+  );
+  if (!row) await resolvedOrUnknown(tagId);
+  return { status: 200, body: { alias: row } };
+}
+
 // ---- clients, contacts, inventory -------------------------------------------------
 // Same upsert idiom as POST /admin/workers throughout: ONE route per thing, no id in the
 // body means create (201), an id means update (200). Deliberately not a second idiom with
@@ -1858,6 +2022,9 @@ export const adminRoutes = [
   { method: "DELETE", path: "/admin/contracts/:id", auth: "admin", handler: deleteContract },
   { method: "POST", path: "/admin/zones", auth: "admin", handler: upsertZone },
   { method: "DELETE", path: "/admin/zones/:id", auth: "admin", handler: deleteZone },
+  { method: "POST", path: "/admin/tags/:id/resolve-building", auth: "admin", handler: resolveTagToBuilding },
+  { method: "POST", path: "/admin/tags/:id/resolve-zone", auth: "admin", handler: resolveTagToZone },
+  { method: "POST", path: "/admin/tags/:id/resolve-existing-zone", auth: "admin", handler: resolveTagToExistingZone },
   { method: "GET", path: "/admin/revenue", auth: "admin", handler: listRevenue },
   { method: "POST", path: "/admin/locations/:id/revenue", auth: "admin", handler: putRevenue },
   { method: "DELETE", path: "/admin/locations/:id/revenue/:month", auth: "admin", handler: retractRevenue },
