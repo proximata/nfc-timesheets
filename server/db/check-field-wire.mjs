@@ -253,7 +253,7 @@ const iso = (ms) => new Date(ms).toISOString();
 //     Runs as a CHILD of the block below; see boot().
 // =================================================================================
 async function phasePre(db) {
-  assert.equal(q(db, "SELECT count(*) FROM schema_migrations"), "5", "the dump must be at migration 005");
+  assert.equal(q(db, "SELECT count(*) FROM schema_migrations"), "5", "a phase-A dump must be at migration 005");
   assert.equal(q(db, "SELECT to_regclass('public.zones') IS NULL"), "t", "...and must have no zones table");
 
   const pre = await fixtureSession(db);
@@ -287,12 +287,48 @@ if (process.env.WIRE_PHASE === "pre") {
 
 try {
   restore(PRE_DB);
-  // The child inherits nothing that matters except the two variables below; its stdout is
-  // this file's stdout, so its `ok` lines land in order.
-  execFileSync(process.execPath, [fileURLToPath(import.meta.url), dump], {
-    env: { ...process.env, WIRE_PHASE: "pre", WIRE_DB: PRE_DB },
-    stdio: ["ignore", "inherit", "inherit"],
-  });
+
+  // PHASE A ONLY EXISTS WHILE THE WINDOW DOES. Its whole subject is "HEAD's server running
+  // on the schema production has TODAY", and on 2026-08-20 production stopped being at 005:
+  // 006, 007 and 008 applied. A dump taken after that carries eight rows, and the phase-A
+  // premise is simply false — the check died on `'8' !== '5'` with a raw stack, which reads
+  // as "the tooling is broken" and is how a check gets ignored.
+  //
+  // So the dump decides, and only TWO shapes are allowed. Exactly 005: the window is open,
+  // run phase A. Exactly the full migrations/ listing: the window is CLOSED, and that fact
+  // is asserted here rather than assumed — zones must exist. Anything else (a half-applied
+  // schema, a dump from a box nobody recognises) is a hard failure, because a check that
+  // shrugs at an unknown input is a check that passes over anything.
+  const allMigrations = fs
+    .readdirSync(path.join(__dirname, "migrations"))
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
+  const dumpMigrations = q(PRE_DB, "SELECT filename FROM schema_migrations ORDER BY filename")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (dumpMigrations.length === 5) {
+    // The child inherits nothing that matters except the two variables below; its stdout is
+    // this file's stdout, so its `ok` lines land in order.
+    execFileSync(process.execPath, [fileURLToPath(import.meta.url), dump], {
+      env: { ...process.env, WIRE_PHASE: "pre", WIRE_DB: PRE_DB },
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+  } else {
+    assert.deepEqual(
+      dumpMigrations,
+      allMigrations,
+      `this dump is at neither 005 (phase A applies) nor the full set (phase A is moot): ${dumpMigrations.join(", ")}`,
+    );
+    assert.equal(
+      q(PRE_DB, "SELECT to_regclass('public.zones') IS NOT NULL"),
+      "t",
+      "a fully-migrated dump must actually carry the 006 schema, not just the bookkeeping rows",
+    );
+    ok(`phase A not applicable: this dump is already at ${dumpMigrations.at(-1)}, so the pre-006 window is CLOSED`);
+    ok("  (it is asserted closed, not assumed: schema_migrations matches migrations/ and zones exists)");
+  }
 
   // =================================================================================
   // B · THE MIGRATED DATABASE — the field APK's exact bytes.
