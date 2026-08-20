@@ -162,6 +162,27 @@ const AMOUNTS = `(() => {
       // a re-ordering would smear. The row header is the building or the person.
       const first = td.parentElement.cells[0]
       row = first ? (first.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 40) : ''
+    } else {
+      // NOT IN A TABLE, AND THAT WAS AN UNFALSIFIABLE HOLE. Everything off a table keyed
+      // as (route, '', '') — and /pl/ carries a STATIC EXPLAINER sentence containing the
+      // characters „0,00 €“, which is a zero present in BOTH passes with exactly that key.
+      // So it forgave every non-table zero the retraction added, and the answer band — the
+      // cell this file's own comment calls „the cell a director reads FIRST“ — lives off a
+      // table. Mutating the band's revenue cell to money(revenueCents ?? 0) was rendered,
+      // swept, counted (120 -> 123 amounts) and reported as „0 new“.
+      //
+      // The band is .cell > .k (the label) + .v (the amount), which is a header cell and a
+      // row header wearing different tags. dt/dd is the same shape again. Read the LABEL,
+      // not a word list: this places the amount, it does not judge it.
+      // (No backticks in this block — it lives inside a template literal.)
+      const band = el.closest('.cell')
+      const k = band ? band.querySelector('.k') : null
+      if (k !== null && k !== undefined) column = (k.textContent || '').trim()
+      else {
+        const dd = el.closest('dd')
+        const dt = dd ? dd.previousElementSibling : null
+        if (dt && dt.tagName === 'DT') column = (dt.textContent || '').trim()
+      }
     }
     out.push({
       amount: m[0].trim(),
@@ -204,8 +225,29 @@ const UNKNOWN_WORDS =
  * zeros appear in both passes and cancel. A screen that correctly says „Nicht eingetragen“
  * adds none. A screen that prints 0,00 € adds one, whatever its column is called, on a
  * route added next year, in either locale.
+ *
+ * ...AND IT COUNTS THEM RATHER THAN SETTING THEM. Membership forgives a whole key the
+ * moment ONE true zero lives there: two amounts under „Erhalten“ on the same building row,
+ * a band label reused by a sub-line, a static sentence that happens to spell „0,00 €“.
+ * Every one of those turns an entire key into a blind spot, and one of them WAS one — see
+ * the else-branch above. A count cannot be blinded that way: 1 true zero under a key and 2
+ * zeros there now is one new zero, whatever else shares the key. The price is that a
+ * re-ordering WITHIN one key looks like nothing, which is exactly right — it is nothing.
  */
 const zeroKey = (route, a) => `${route}\u0000${a.column}\u0000${a.row}`
+
+/** key -> how many zeros are at it. */
+function countZeros(pass) {
+  const counts = new Map()
+  for (const { route, amounts } of pass) {
+    for (const a of amounts) {
+      if (!a.zero) continue
+      const k = zeroKey(route, a)
+      counts.set(k, (counts.get(k) ?? 0) + 1)
+    }
+  }
+  return counts
+}
 
 /**
  * THE PANELS COUNT AS SURFACES, and on two routes they are the ONLY surface.
@@ -354,17 +396,23 @@ try {
 
   // ---- PASS B: nothing anywhere may print a revenue zero -------------------------------
   const without = await sweep(page)
-  // The zeros that were ALREADY true, keyed by where they were. Everything in pass B that
-  // is not in here appeared BECAUSE a fact became unknown.
-  const zerosBefore = new Set()
-  for (const { route, amounts } of withRows) {
-    for (const a of amounts) if (a.zero) zerosBefore.add(zeroKey(route, a))
-  }
+  // The zeros that were ALREADY true, COUNTED by where they were. Anything in pass B beyond
+  // that count appeared BECAUSE a fact became unknown.
+  const zerosBefore = countZeros(withRows)
+  const zerosAfter = countZeros(without)
   const wrong = []
   for (const { route, amounts } of without) {
+    const budget = new Map(zerosBefore)
     for (const a of amounts) {
       if (!a.zero) continue
-      if (zerosBefore.has(zeroKey(route, a))) continue // a true zero, unchanged by retraction
+      const k = zeroKey(route, a)
+      const left = budget.get(k) ?? 0
+      // A true zero, unchanged by retraction — spend it. Only ONCE per zero that was
+      // actually there before, which is the whole difference from the set.
+      if (left > 0) {
+        budget.set(k, left - 1)
+        continue
+      }
       wrong.push(`${route} [${a.column || '—'}] ${a.row ? `${a.row}: ` : ''}"${a.own}"`)
     }
   }
@@ -377,7 +425,9 @@ try {
   } else {
     ok(
       'retracting a figure never turns an amount into 0,00 € — on ANY money surface',
-      `${swept} amounts across ${ROUTES.length} routes, ${zerosBefore.size} zero(s) true before and after, 0 new`,
+      `${swept} amounts across ${ROUTES.length} routes, ` +
+        `${[...zerosBefore.values()].reduce((a, b) => a + b, 0)} zero(s) true before, ` +
+        `${[...zerosAfter.values()].reduce((a, b) => a + b, 0)} after, 0 new`,
     )
   }
   // ...and it must SAY so, or "no zero" is satisfied by printing nothing at all.
