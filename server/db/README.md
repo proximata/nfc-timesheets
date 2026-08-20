@@ -236,7 +236,28 @@ ssh schimmer-glanz.exe.xyz 'sudo -n cat /var/backups/nfc/nfc-<newest>.sql.gz' > 
 node server/db/check-prod-restore.mjs /tmp/nfc.sql.gz   # the SCHEMA: 006 on the client's own rows
 node server/db/check-field-wire.mjs   /tmp/nfc.sql.gz   # the WIRE: what the phone in Vienna sends
 sh   server/db/check-field-wire-mutants.sh /tmp/nfc.sql.gz   # and the negative case, 8 mutants
+
+# 007's half. Both take the same dump and both refuse to touch production.
+node server/check-phone-namespace.mjs      /tmp/nfc.sql.gz   # the REGISTRY: one phone, one person
+sh   server/check-phone-namespace-mutants.sh /tmp/nfc.sql.gz # its negative case, 6 mutants
+node ops/check-reset-w1.mjs               /tmp/nfc.sql.gz   # the W1 wipe, twice, over the real rows
+sh   ops/check-reset-w1-mutants.sh        /tmp/nfc.sql.gz   # its negative case, 3 mutants
+
 rm -f /tmp/nfc.sql.gz                                   # it is a copy of the payroll database
+```
+
+Without a dump the four dump-fed checks SKIP and exit 0, and **every assertion in them is
+then silent** — which is what they had done on every run on this laptop until 2026-08-20
+(`backlog/docs/VERDICT-W1-DB.md`). A SKIP is not a pass. Run them with the dump.
+
+And when you are done, check what you left behind. A restored dump is the client's payroll:
+
+```sh
+psql -d postgres -Atc "SELECT datname, datistemplate FROM pg_database"
+# a scratch copy flagged datistemplate = true is dropdb-PROOF and survives every teardown
+# in this tree. Clear it, then drop it (TASK-217):
+#   psql -d postgres -c "UPDATE pg_database SET datistemplate = false WHERE datname = '<db>'"
+#   dropdb --force <db>
 ```
 
 `check-prod-restore` proves 006 applies, refuses first, invents no rows, keeps every pin,
