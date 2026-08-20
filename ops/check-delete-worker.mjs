@@ -45,6 +45,28 @@ const WALL_TAG_UUID = "c3c37d4a-ca0a-42c5-b248-9704b9907ec7";
 // unredeemed enrolment code that expires 2026-08-22. Migration 006 refuses while it exists.
 const TARGET_WORKER_ID = 6;
 
+// ...AND THAT ROW IS GONE. It was deleted from production on 2026-08-20 by the very script
+// this file checks, so every dump taken since carries no rate-less worker and no id 6 — and
+// this check, which exists to prove a DELETION TOOL works, went red on four assertions whose
+// only complaint was that the thing had already been deleted.
+//
+// That is the failure this repo keeps writing down: a check whose subject was a specific
+// production row dies with the row, and "it used to pass" is all anybody remembers. The tool
+// is not one-use — the next leftover worker gets deleted with it — so the FIXTURE is what
+// must be reproducible, not the accident that it once existed live. When the dump has no
+// such row, one is seeded into the SCRATCH copy, matching the real one field for field
+// (rate 0, inactive, a live unredeemed enrolment code), and the run says which it used.
+const seedTargetIfMissing = (db) => {
+  if (q(db, `SELECT count(*) FROM workers WHERE id = ${TARGET_WORKER_ID}`) !== "0") return false;
+  exec(
+    db,
+    `INSERT INTO workers (id, name, hourly_rate_cents, active, enrolment_code_hash, enrolment_code_expires_at, enrolment_code_issued_at)
+       VALUES (${TARGET_WORKER_ID}, 'TTL Test', 0, false, repeat('c', 64), now() + interval '2 days', now());
+     SELECT setval('workers_id_seq', GREATEST(${TARGET_WORKER_ID}, (SELECT max(id) FROM workers)), true);`,
+  );
+  return true;
+};
+
 const sh = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...opts });
 
@@ -104,7 +126,7 @@ const url = (db) => `postgres:///${db}`;
 const q = (db, sql) => sh("psql", [url(db), "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A", "-c", sql]).trim();
 const exec = (db, sql) => sh("psql", [url(db), "-v", "ON_ERROR_STOP=1", "-q", "-f", "-"], { input: sql, stdio: ["pipe", "pipe", "pipe"] });
 
-const restoreDump = (db) => {
+const restoreDump = (db, { seedTarget = true } = {}) => {
   const sql = DUMP.endsWith(".gz") ? sh("gunzip", ["-c", DUMP]) : fs.readFileSync(DUMP, "utf8");
   try {
     exec(db, sql);
@@ -119,7 +141,9 @@ const restoreDump = (db) => {
     }
     process.exit(1);
   }
+  if (seedTarget && seedTargetIfMissing(db)) seededTarget = true;
 };
+let seededTarget = false;
 
 const migrate = (db) => sh("node", [MIGRATE], { env: { ...process.env, DATABASE_URL: url(db) } });
 
@@ -195,8 +219,18 @@ console.log(`ops/check-delete-worker — dump: ${DUMP}`);
   const db = createDb();
   restoreDump(db);
 
+  console.log(
+    seededTarget
+      ? `  … the dump carries no worker ${TARGET_WORKER_ID} (it was deleted on 2026-08-20), so the SCRATCH copy was seeded with the fixture`
+      : `  … the dump still carries the real worker ${TARGET_WORKER_ID}`,
+  );
+
   await test("the dump is production's shape: 5 migrations, HOIV active with its pin, one rate-less worker", () => {
-    assert.equal(q(db, "SELECT count(*) FROM schema_migrations"), "5");
+    assert.equal(
+      q(db, "SELECT count(*) FROM schema_migrations"),
+      "5",
+      "this block rehearses the PRE-006 window; production reached 008 on 2026-08-20, so it needs a dump from before that deploy",
+    );
     assert.equal(q(db, `SELECT active FROM locations WHERE id = '${WALL_TAG_UUID}'`), "t");
     assert.match(q(db, `SELECT lat || '/' || lng FROM locations WHERE id = '${WALL_TAG_UUID}'`), /^\d+\.\d+\/\d+\.\d+$/);
     assert.equal(q(db, `SELECT count(*) FROM workers WHERE id = ${TARGET_WORKER_ID} AND hourly_rate_cents = 0`), "1");
