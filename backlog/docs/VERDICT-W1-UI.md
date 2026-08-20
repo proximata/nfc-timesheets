@@ -141,7 +141,71 @@ findings this project has already chased once.
 
 ---
 
-## 5 · Mutation: 22 counted, all fire, plus one honest ceiling
+## 4a · Independently re-run, and two ceilings closed
+
+Everything in §1, §3, §5 and §7 was re-measured from a cold start on a second pass — fresh
+keyed build, fresh server on `:8080`, `nfc_demo` reseeded — rather than carried over. Numbers
+reproduced exactly (50 ok + 1 gap; 9/9; 442/442; 28/28; 10/10; 17/17; 105/105; 25/25; 14/14).
+Three things changed.
+
+### A · `nfc_demo` was NOT clean when this pass started — a killed run's residue
+
+The previous pass died at 16:09 and skipped its `finally`. Found on disk at the start of this
+one:
+
+```
+operators             4 rows  — id 24 „PROBE Operator", active=false
+phone_identities      5 rows  — +436649009001 claiming operator 24
+```
+
+§8's *"every `PROBE %` row deleted"* was therefore **false at the moment it was written**.
+The teardown's own comment predicts what that does next: *"a probe that leaves a PROBE operator
+behind makes the NEXT run's list assertion fail for a reason that has nothing to do with the
+code"* — i.e. a fake product defect on a screen nobody touched, which is the shape this project
+has already chased three times (§4).
+
+Fixed at `5f7c2f2`: `refuseResidue()` runs before `launchChrome`, names the residue, prints the
+paste-able teardown and exits 1. **Shown RED by seeding the exact rows that were found**, the
+printed SQL pasted back verbatim, GREEN after.
+
+### B · `by-label`'s ceiling is closed — focus restoration is proven by IDENTITY
+
+§5 reported `by-label` as an honest ceiling: the check stays green, because nothing on this
+screen replaces the opener node. That ceiling is now measured rather than conceded, with a
+mutant that supplies the missing half — the **same** `by-label` restoration **plus** a React
+`key` on „Operator anlegen" that throws the button away while the drawer is open:
+
+```
+=== MUTANT remount-opener · by-label restoration AND a remounted opener ===
+  FAIL keyboard[create-drawer]: focus returns to the EXACT node that opened it
+       focus on MAIN :: Operatoren… · sameNode=false marked=false openerConnected=false
+```
+
+`openerConnected=false` is the exact lie `useOverlay.ts`'s own comment is about, and focus
+landed on `MAIN` — which a check asking only *"is focus somewhere sensible"* would have
+shrugged at. `by-label` alone still runs and still reports itself green; both are kept, because
+the pair is the evidence. `a2da5a1`.
+
+### C · `audit-contrast`'s own mutation recipe, executed
+
+`VERIFY-FINAL §3` lists it as unobserved: *"its numbers are reported as read; its own mutation
+recipe was not executed this round."* Executed here. `--text-muted` lightened toward its
+background in **both** theme blocks of `globals.css` (dark `#868c95→#6d737c`, light
+`#686e75→#8d939b`), rebuilt:
+
+```
+6 unexpected contrast failure(s)   — 3 dark + 3 light, exit 1
+  FAIL 4.09:1 need 4.5:1  --text-muted on --bg-base     .cell-muted, .tag-uuid, .empty-state
+  FAIL 3.82:1 need 4.5:1  --text-muted on --bg-raised   .cell-muted inside a table in a .list
+  FAIL  3.5:1 need 4.5:1  --text-muted on --bg-overlay  .step above a drawer title
+  … and the same three in light
+```
+
+Restored, rebuilt, back to `0 unexpected`. `git status web/app/globals.css` clean.
+
+---
+
+## 5 · Mutation: 24 counted, all fire, plus one honest ceiling
 
 `sh demo/operator-mutants.sh` — each mutant reverts ONE true thing, rebuilds, and the check
 must produce a failure **that mentions the property removed**. A non-zero exit with no FAIL
@@ -151,10 +215,17 @@ line is INCONCLUSIVE, never „caught".
 hide-inactive   unmarked        generic-409     raw-token      no-phone-col
 no-preview      no-notice       code-no-focus   code-no-once   revoke-direct
 soft-consequence no-trap        no-restore      wide-table     dim-muted
-dot-not-word    gap-closed      phone-drawer-wide
+dot-not-word    gap-closed      phone-drawer-wide  remount-opener
 w-rate-optional w-rate-nohint   w-rate-passes   w-generic-error w-no-link
                                                              → every negative case fires
 ```
+
+**Independently re-run on the second pass, 11 of them, chosen as the ones the brief names:**
+`generic-409` `raw-token` `no-trap` `no-restore` `remount-opener` `by-label` `dim-muted`
+`wide-table` `phone-drawer-wide` `gap-closed` `w-rate-optional`. Every one went RED and named
+the property it removed; `by-label` reported its ceiling; `gap-closed` printed `STALE-GAP`.
+`wide-table` is the middle-band one — an `1100px` floor on `.data-table`, which 767 and 1680
+both survive and 800…1024 do not.
 
 Four of them earned their keep immediately:
 
@@ -172,7 +243,7 @@ Four of them earned their keep immediately:
   *"GREEN with the truth reverted — nothing tests it"*, which is the harness working. The
   mutant now removes the override.
 
-**The ceiling, printed every run and not counted:** `by-label` makes `useOverlay` restore focus
+**The ceiling, printed every run and not counted — and now bounded by §4a B:** `by-label` makes `useOverlay` restore focus
 by re-finding the opener by tag+label (its own `again()` fallback) instead of using the node.
 The check **stays green**, because React does not replace that button on this screen — so
 *„focus returns to the EXACT node"* is, here, as strong as the re-render is. The marker
@@ -186,7 +257,7 @@ property would catch a replaced node; nothing on `/operators/` replaces one.
 |---|---|
 | **the operator's own phone** | redeeming the code is Android (W2/W3), out of scope by brief. No device, no tap |
 | **a real screen reader** | live regions, roles and names are asserted in the DOM; nothing was heard |
-| **`opener` identity under a re-render** | §5's ceiling. Nothing on this screen replaces the opener node |
+| ~~**`opener` identity under a re-render**~~ | closed by `remount-opener` — §4a B |
 | **13 of 25 overlay traps elsewhere** | `audit-overlays` census, named ceilings, unchanged by this run (`TASK-207`) |
 | **decisions 41–44** | still PROPOSED. `check-worker-form` measures the screen AS BUILT and rules on nothing; if the owner rules against 41, that file is the list of sentences that come back out |
 
