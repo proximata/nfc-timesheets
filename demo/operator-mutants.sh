@@ -430,6 +430,43 @@ PY
 note by-label
 fi
 
+# --- remount-opener --------------------------------------------------------------------
+# by-label's CEILING, closed. On its own by-label stays green, because nothing on this screen
+# replaces the opener node, so re-finding it by tag+label lands on the same DOM element and
+# „returns to the EXACT node" cannot tell the two apart. This mutant supplies the missing
+# half: the SAME by-label restoration, plus a `key` on „Operator anlegen" that makes React
+# throw the button away and build a new one whenever the drawer is open. Now the label still
+# matches, the focus still looks sensible, and the node is a DIFFERENT node — which is exactly
+# the defect useOverlay.ts's own comment about `opener.isConnected` was written for.
+if selected remount-opener; then
+echo ""
+echo "=== MUTANT remount-opener · by-label restoration AND a remounted opener (identity, not looks) ==="
+apply "$OVERLAY" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p, encoding='utf-8').read()
+old = "    const target = opener?.isConnected === true ? opener : again()"
+new = "    const target = again()"
+assert old in s, 'remount-opener: useOverlay site not found'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
+[ $? -eq 0 ] || exit 1
+apply "$PAGE" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p, encoding='utf-8').read()
+old = '          <button type="button" className="btn btn-primary" onClick={openCreate}>'
+new = ('          <button\n'
+       '            key={draft === null ? \'opener-idle\' : \'opener-open\'}\n'
+       '            type="button"\n'
+       '            className="btn btn-primary"\n'
+       '            onClick={openCreate}\n'
+       '          >')
+assert old in s, 'remount-opener: page site not found'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
+[ $? -eq 0 ] || exit 1
+run remount-opener "returns to the EXACT node"
+fi
+
 # --- wide-table ------------------------------------------------------------------------
 if selected wide-table; then
 echo ""
