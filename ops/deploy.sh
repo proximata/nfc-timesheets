@@ -174,8 +174,34 @@ ssh "$HOST" 'sudo bash -euc "
   node '"$DEST"'/db/migrate.js
 "'
 
+echo "==> 5b/8 install the systemd units (they were a DOCUMENT until 2026-08-20)"
+# Nothing in this script had ever installed ops/systemd/*.service, so the repo's copy and the
+# box's copy were free to disagree, and they did — for months. The deployed nfc-api.service
+# ran `node server.js` with no --import (so instrument.mjs was never loaded and the Sentry SDK
+# was not in the process AT ALL: setting SENTRY_DSN would have done nothing) and `User=exedev`,
+# a sudo-group account with a shell, instead of the nologin `app` account step 5's own comment
+# above insists on.
+#
+# Installed with `install -C`: it compares content and only writes when it differs, so an
+# unchanged unit does not touch the mtime and `daemon-reload` stays cheap. The reload is
+# unconditional and harmless; the restart in step 6 is what actually picks up a change.
+rsync -az ./ops/systemd/ "$HOST:/tmp/nfc-units/"
+ssh "$HOST" 'sudo bash -euc "
+  for u in /tmp/nfc-units/*.service /tmp/nfc-units/*.timer; do
+    install -C -m 0644 -o root -g root \"\$u\" /etc/systemd/system/\$(basename \"\$u\")
+  done
+  rm -rf /tmp/nfc-units
+  systemctl daemon-reload
+  systemctl enable nfc-api nfc-autoclose.timer nfc-backup.timer >/dev/null
+"'
+
 echo "==> 6/8 restart"
 ssh "$HOST" 'sudo systemctl restart nfc-api && sleep 2 && systemctl is-active nfc-api'
+
+# AND ASSERT THE BOX IS RUNNING WHAT THIS REPO SAYS. `systemctl cat` (what systemd LOADED,
+# not what is on disk) plus /proc/<pid>/cmdline of the process that is actually serving — a
+# unit edited without a daemon-reload passes a file comparison and is still not running.
+./ops/check-unit-drift.sh "$HOST"
 
 echo "==> 7/8 verify association files (an NFC tag is worthless if these regress)"
 # The API host serves the association files too, and it must keep serving the SAME BYTES:

@@ -2,16 +2,31 @@
 # systemd, not PM2: already installed, survives reboot without a `pm2 startup` dance,
 # journald rotates logs, adds zero runtime deps. See backlog/docs/runbook-vm-provisioning.md §5.
 #
-# Install: /etc/systemd/system/nfc-api.service
+# Install: ops/deploy.sh step 5b installs THIS FILE and reloads systemd. It is an artefact,
+# not a document — it was a document until 2026-08-20, and in that time the box drifted to
+# `ExecStart=/usr/bin/node /srv/nfc/server.js` with `User=exedev`: no --import (so the Sentry
+# SDK was never loaded, and setting SENTRY_DSN would have changed nothing) and the API running
+# as a sudo-group user with a shell instead of the nologin service account this file names.
+# ops/check-unit-drift.sh is what stops that happening again.
 
 [Unit]
 Description=NFC TimeSheets API (REST + AASA + /t + static admin)
 Documentation=file:///srv/nfc/ops/README.md
-After=network-online.target postgresql.service
-Wants=network-online.target postgresql.service
+# network.target and NOT network-online.target, deliberately. systemd-networkd-wait-online is
+# `disabled` on this VM, so pulling the online target in buys nothing and risks the 120s
+# wait-online timeout at boot. Measured: cold reboot to `GET /health` 200 is ~24s as written
+# (ops/break-infra.sh section 4). The API tolerates a database that is not up yet anyway —
+# pg.Pool re-dials, proven in section 2 with the same PID before and after.
+After=network.target postgresql.service
+Wants=network.target postgresql.service
 
 [Service]
 Type=simple
+# app is a --system account: no shell, no sudo, primary group `app`, and /srv/nfc is
+# exedev:app 0750 so it can READ its code and never write it. ops/deploy.sh's own comment at
+# step 5 says this is the point ("if the API is ever popped, it cannot rewrite its own code,
+# and it cannot escalate the way the sudo-group exedev could") — and the box was running as
+# exedev regardless, because nothing installed this file.
 User=app
 Group=app
 WorkingDirectory=/srv/nfc
