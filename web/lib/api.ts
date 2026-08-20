@@ -374,6 +374,90 @@ export function deactivateZone(id: string, signal?: AbortSignal): Promise<void> 
   }).then(() => undefined)
 }
 
+/* --- Reported tags: onboarding an UNBOUND tag (migration 008) ------------------------
+ *
+ * An operator's phone writes a fresh NDEF URI tag in the field and mints the uuid itself
+ * (server/db/migrations/008_reported_tags.sql). It lands here, UNBOUND, until an admin
+ * turns it into a building, a new zone, or an alias onto an existing zone. THIS SCREEN IS
+ * DELIBERATELY PLAIN: it is the whole extent of iteration 3A's onboarding UI, built to
+ * unblock the flow end to end, not styled to match the rest of the panel.
+ */
+
+export type ReportedTag = {
+  id: string
+  reported_at: string
+  reported_by_operator_id: number | null
+  reported_by_operator_name: string | null
+}
+
+/**
+ * `/admin/data` already returns `reported_tags` alongside everything else (adminData's own
+ * SELECT); `locations` and `zones` ride along in the SAME response so the resolve forms
+ * have something to pick from without a second request.
+ */
+export type TagsSnapshot = {
+  reported_tags: ReportedTag[]
+  locations: Location[]
+  zones: Zone[]
+}
+
+export function fetchTagsSnapshot(signal?: AbortSignal): Promise<TagsSnapshot> {
+  return apiFetch<TagsSnapshot>('/admin/data', { signal })
+}
+
+export type ResolveBuildingInput = {
+  name: string
+  slug: string
+  address?: string
+  client_id?: number | null
+  contact_id?: number | null
+}
+
+/** `POST /admin/tags/:id/resolve-building` — a NEW building, id = the tag's own id. */
+export function resolveTagToBuilding(
+  tagId: string,
+  input: ResolveBuildingInput,
+  signal?: AbortSignal,
+): Promise<Location> {
+  return apiFetch<{ location: Location }>(
+    `/admin/tags/${encodeURIComponent(tagId)}/resolve-building`,
+    { method: 'POST', body: input, signal },
+  ).then((data) => data.location)
+}
+
+export type ResolveZoneInput = {
+  location_id: string
+  name: string
+  note?: string
+}
+
+/** `POST /admin/tags/:id/resolve-zone` — a NEW zone in an EXISTING building. */
+export function resolveTagToZone(
+  tagId: string,
+  input: ResolveZoneInput,
+  signal?: AbortSignal,
+): Promise<Zone> {
+  return apiFetch<{ zone: Zone }>(`/admin/tags/${encodeURIComponent(tagId)}/resolve-zone`, {
+    method: 'POST',
+    body: input,
+    signal,
+  }).then((data) => data.zone)
+}
+
+export type TagAlias = { id: string; zone_id: string }
+
+/** `POST /admin/tags/:id/resolve-existing-zone` — this physical tag ALSO names that zone. */
+export function resolveTagToExistingZone(
+  tagId: string,
+  zoneId: string,
+  signal?: AbortSignal,
+): Promise<TagAlias> {
+  return apiFetch<{ alias: TagAlias }>(
+    `/admin/tags/${encodeURIComponent(tagId)}/resolve-existing-zone`,
+    { method: 'POST', body: { zone_id: zoneId }, signal },
+  ).then((data) => data.alias)
+}
+
 /** Create (no `id`) or update (`id`, the UUID). Same route either way. */
 export type LocationInput = {
   id?: string

@@ -1,0 +1,308 @@
+'use client'
+
+import { useRouter } from 'next/navigation'
+import { useCallback, useEffect, useState } from 'react'
+import {
+  ApiError,
+  fetchTagsSnapshot,
+  type ReportedTag,
+  resolveTagToBuilding,
+  resolveTagToExistingZone,
+  resolveTagToZone,
+  type TagsSnapshot,
+} from '@/lib/api'
+import { LOGIN_PATH } from '@/lib/nav'
+
+/**
+ * Unzugeordnete Tags (unbound tags) — the admin's worklist for
+ * server/db/migrations/008_reported_tags.sql: a tag an operator's phone WROTE AND REPORTED
+ * that nobody has turned into a building or a zone yet.
+ *
+ * DELIBERATELY THE PLAINEST POSSIBLE SCREEN, not the house style used everywhere else in
+ * this bundle (no PageHeader, no ListPanel, no Drawer, no next-intl — see the file's own
+ * short iteration note). It exists to prove the WRITE -> REPORT -> RESOLVE flow end to end
+ * on a real admin session, not to be a finished screen. `/workers/`, `/operators/` and
+ * `/locations/` are the reference for the polished version this becomes later.
+ *
+ * Not in the sidebar. Reached by URL (`/tags/`) until it earns a place in lib/nav.ts.
+ */
+
+type Action = 'building' | 'zone' | 'existing'
+
+type Drafts = Record<
+  string,
+  { action: Action; name: string; slug: string; locationId: string; zoneId: string }
+>
+
+function slugify(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+export default function TagsPage() {
+  const router = useRouter()
+  const [snapshot, setSnapshot] = useState<TagsSnapshot | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [drafts, setDrafts] = useState<Drafts>({})
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [rowError, setRowError] = useState<Record<string, string>>({})
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const handleAuthLoss = useCallback(
+    (cause: unknown): boolean => {
+      if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
+        router.replace(LOGIN_PATH)
+        return true
+      }
+      return false
+    },
+    [router],
+  )
+
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        setSnapshot(await fetchTagsSnapshot(signal))
+        setLoadError(null)
+      } catch (cause) {
+        if (cause instanceof DOMException && cause.name === 'AbortError') return
+        if (handleAuthLoss(cause)) return
+        setLoadError('Konnte die Liste nicht laden.')
+      }
+    },
+    [handleAuthLoss],
+  )
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void load(controller.signal)
+    return () => controller.abort()
+  }, [load])
+
+  const EMPTY_DRAFT: Drafts[string] = {
+    action: 'building',
+    name: '',
+    slug: '',
+    locationId: '',
+    zoneId: '',
+  }
+
+  function draftOf(tag: ReportedTag): Drafts[string] {
+    return drafts[tag.id] ?? EMPTY_DRAFT
+  }
+
+  function setDraft(id: string, patch: Partial<Drafts[string]>) {
+    setDrafts((prev) => ({ ...prev, [id]: { ...(prev[id] ?? EMPTY_DRAFT), ...patch } }))
+  }
+
+  async function resolve(tag: ReportedTag) {
+    const draft = draftOf(tag)
+    setRowError((prev) => ({ ...prev, [tag.id]: '' }))
+    setBusyId(tag.id)
+    setNotice(null)
+    try {
+      if (draft.action === 'building') {
+        const name = draft.name.trim()
+        const slug = draft.slug.trim() || slugify(name)
+        if (name === '' || slug === '') {
+          setRowError((prev) => ({ ...prev, [tag.id]: 'Name und Slug sind erforderlich.' }))
+          return
+        }
+        await resolveTagToBuilding(tag.id, { name, slug })
+        setNotice(`Tag ${tag.id} ist jetzt das Gebäude „${name}".`)
+      } else if (draft.action === 'zone') {
+        const name = draft.name.trim()
+        if (draft.locationId === '' || name === '') {
+          setRowError((prev) => ({ ...prev, [tag.id]: 'Gebäude und Name sind erforderlich.' }))
+          return
+        }
+        await resolveTagToZone(tag.id, { location_id: draft.locationId, name })
+        setNotice(`Tag ${tag.id} ist jetzt eine neue Zone „${name}".`)
+      } else {
+        if (draft.zoneId === '') {
+          setRowError((prev) => ({ ...prev, [tag.id]: 'Zone ist erforderlich.' }))
+          return
+        }
+        await resolveTagToExistingZone(tag.id, draft.zoneId)
+        setNotice(`Tag ${tag.id} zeigt jetzt zusätzlich auf die gewählte Zone.`)
+      }
+      setDrafts((prev) => {
+        const next = { ...prev }
+        delete next[tag.id]
+        return next
+      })
+      await load()
+    } catch (cause) {
+      if (handleAuthLoss(cause)) return
+      const code = cause instanceof ApiError ? cause.code : null
+      setRowError((prev) => ({
+        ...prev,
+        [tag.id]: code ? `Abgelehnt: ${code}` : 'Abgelehnt vom Server.',
+      }))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <>
+      <h1>Unzugeordnete Tags</h1>
+      <p>
+        Tags, die ein Betreiber-Handy geschrieben und gemeldet hat, aber die noch keinem Gebäude
+        oder keiner Zone zugeordnet sind.
+      </p>
+
+      <p role="alert">{loadError ?? ''}</p>
+      <p role="status">{notice ?? ''}</p>
+
+      {snapshot === null ? (
+        <p>Lädt…</p>
+      ) : snapshot.reported_tags.length === 0 ? (
+        <p>Keine unzugeordneten Tags.</p>
+      ) : (
+        <table border={1} cellPadding={4}>
+          <thead>
+            <tr>
+              <th>Tag-ID</th>
+              <th>Gemeldet am</th>
+              <th>Gemeldet von</th>
+              <th>Aktion</th>
+            </tr>
+          </thead>
+          <tbody>
+            {snapshot.reported_tags.map((tag) => {
+              const draft = draftOf(tag)
+              const busy = busyId === tag.id
+              return (
+                <tr key={tag.id}>
+                  <td>
+                    <code>{tag.id}</code>
+                  </td>
+                  <td>{tag.reported_at}</td>
+                  <td>{tag.reported_by_operator_name ?? '(unbekannt)'}</td>
+                  <td>
+                    <div>
+                      <label>
+                        <input
+                          type="radio"
+                          name={`action-${tag.id}`}
+                          checked={draft.action === 'building'}
+                          onChange={() => setDraft(tag.id, { action: 'building' })}
+                          disabled={busy}
+                        />
+                        Neues Gebäude
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name={`action-${tag.id}`}
+                          checked={draft.action === 'zone'}
+                          onChange={() => setDraft(tag.id, { action: 'zone' })}
+                          disabled={busy}
+                        />
+                        Neue Zone in bestehendem Gebäude
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name={`action-${tag.id}`}
+                          checked={draft.action === 'existing'}
+                          onChange={() => setDraft(tag.id, { action: 'existing' })}
+                          disabled={busy}
+                        />
+                        Bestehende Zone (zweiter Tag)
+                      </label>
+                    </div>
+
+                    {draft.action === 'building' ? (
+                      <div>
+                        <label>
+                          Name{' '}
+                          <input
+                            value={draft.name}
+                            onChange={(e) =>
+                              setDraft(tag.id, {
+                                name: e.target.value,
+                                slug: draft.slug === '' ? slugify(e.target.value) : draft.slug,
+                              })
+                            }
+                            disabled={busy}
+                          />
+                        </label>
+                        <label>
+                          Slug{' '}
+                          <input
+                            value={draft.slug}
+                            onChange={(e) => setDraft(tag.id, { slug: e.target.value })}
+                            disabled={busy}
+                          />
+                        </label>
+                      </div>
+                    ) : draft.action === 'zone' ? (
+                      <div>
+                        <label>
+                          Gebäude{' '}
+                          <select
+                            value={draft.locationId}
+                            onChange={(e) => setDraft(tag.id, { locationId: e.target.value })}
+                            disabled={busy}
+                          >
+                            <option value="">– wählen –</option>
+                            {snapshot.locations
+                              .filter((l) => l.active)
+                              .map((l) => (
+                                <option key={l.id} value={l.id}>
+                                  {l.name}
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+                        <label>
+                          Name{' '}
+                          <input
+                            value={draft.name}
+                            onChange={(e) => setDraft(tag.id, { name: e.target.value })}
+                            disabled={busy}
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                      <div>
+                        <label>
+                          Zone{' '}
+                          <select
+                            value={draft.zoneId}
+                            onChange={(e) => setDraft(tag.id, { zoneId: e.target.value })}
+                            disabled={busy}
+                          >
+                            <option value="">– wählen –</option>
+                            {snapshot.zones
+                              .filter((z) => z.active)
+                              .map((z) => (
+                                <option key={z.id} value={z.id}>
+                                  {z.name}
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+                      </div>
+                    )}
+
+                    <p role="alert">{rowError[tag.id] ?? ''}</p>
+
+                    <button type="button" disabled={busy} onClick={() => resolve(tag)}>
+                      {busy ? 'Wird gespeichert…' : 'Zuordnen'}
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
+    </>
+  )
+}
