@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-20 07:28'
-updated_date: '2026-08-20 08:12'
+updated_date: '2026-08-20 13:04'
 labels:
   - server
   - operators
@@ -42,7 +42,7 @@ THE API HALF of decision-45. requireOperatorSession in lib/auth.js, mirroring re
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Built at commit feed38a. requireOperatorSession mirrors requireWorkerSession (ts_operator, JOIN operators, AND o.active) — AC1's deactivation-lockout proven directly against the exported function with a before/after pair (session works pre-deactivation, 401s post-deactivation via raw SQL UPDATE, not via the session-nuking DELETE /admin/operators/:id route, so the assertion is specifically about the AND o.active predicate). POST /auth/operator-code mirrors /auth/code exactly incl. own per-IP bucket (enrolop:) proven not to spill onto /auth/code, and the shared global ceiling proven by driving both endpoints past 429 together (AC2). AC3 (no route under /shifts/* reachable) shown RED twice: the project's own inline route-mutation idiom, AND for real — routes/app.js's /shifts/open auth literally changed to "operator" outside the test harness reproduced the exact FAIL (400 != 401), confirmed then reverted before committing. AC4: expired vs revoked compared byte-for-byte against an expired ts_worker session hitting /roster. AC5: the blocking comment is in place at routes/admin.js, referencing OPERATOR-MODEL.md §8 and this task by name — POST /operator/workers remains correctly unbuilt. node server/check-api.js: PASS (14 new operator cases).
+VERIFIED INDEPENDENTLY, 2026-08-20, on the migrated production restore (VERDICT-W1-DB.md section 2.4). An operator session opens no shift: empty body 401, a fully-formed clock-in naming a REAL worker_id 401, one naming the operator's own id 401, and the operator token replayed in the ts_worker cookie 401 - zero shifts written. Falsifiable: the check mutates the live route object's auth from 'worker' to 'operator', asserts the SAME cookie then gets past auth, restores it, and re-asserts the 401. Mutating server/routes/app.js's POST /shifts/open to auth: 'operator' turns the check RED. POST /operator/workers is still absent (404), correctly - see TASK-216 for the consequence: the phone namespace is closed over phone_identities only, and no worker row enters it through any route, so the owner's 'may never collide' is half enforced until decision-41 is ruled on. CAVEAT worth carrying: exactly ONE auth:'operator' route exists (/auth/operator-logout), so 'an operator cannot clock in' is currently true the way 'an operator cannot do anything' is true. Re-prove it the day an operator route that WRITES is added.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

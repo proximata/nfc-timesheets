@@ -4,7 +4,7 @@ title: 'W1 schema: operators, phone_identities, operator_sessions'
 status: Done
 assignee: []
 created_date: '2026-08-20 07:27'
-updated_date: '2026-08-20 08:12'
+updated_date: '2026-08-20 13:04'
 labels:
   - migration
   - server
@@ -38,7 +38,7 @@ THE SCHEMA HALF of decision-45. New migration file (007, additive only, no BEGIN
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Built at 007_operator_identity.sql (commit 5d7f565), literal transcription of OPERATOR-MODEL.md §6. check-migrate.js extended: AC1 schema-diff (information_schema.columns snapshot immediately before/after apply("007...") in the LIVE_DB_NAME section) proves workers/admins byte-identical; AC2 malformed E.164 shown RED (retargeted CHECK to (true), assertion failed as designed, reverted); AC3 concurrent race via two real pg.Client connections (not psql -c, which cannot hold a row lock open), B proven BLOCKED via Promise.race before A commits, then loses on 23505; AC4 both-set accepted / neither-set refused; AC5 fresh-DB run applies 007 automatically. Unprompted, load-bearing finding: ON DELETE SET NULL on phone_identities.worker_id drives a worker-only row to (NULL,NULL) mid-DELETE-FROM-workers, violating phone_identities_claims — asserted RED-then-GREEN at the schema level here, worked around in ops/reset-w1.sql (TASK-213).
+VERIFIED INDEPENDENTLY, 2026-08-20, against a database restored from the production backup nfc-20260820T000158Z (backlog/docs/VERDICT-W1-DB.md section 2.2). 007 applies after 006, applied_at(006) < applied_at(007) asserted rather than assumed, re-run is 'up to date', and 006+007 together invent ZERO rows (zones 0, location_revenue 0, operators 0, phone_identities 0, operator_sessions 0). HOIV survives at 48.1761151/16.3953038, active. 007 also applies ALONE on a 005 schema - it has no functional dependency on 006, which is decision-45 section 2.1's table boundary working as drawn. Mutation: sh server/check-phone-namespace-mutants.sh <dump> -> 6 red, 0 alive, incl. losing the PK, losing operator_id UNIQUE, and removing phone_identities_claims. That last one was ALIVE on the first run and the missing assertion has been added (ceb6f2b).
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

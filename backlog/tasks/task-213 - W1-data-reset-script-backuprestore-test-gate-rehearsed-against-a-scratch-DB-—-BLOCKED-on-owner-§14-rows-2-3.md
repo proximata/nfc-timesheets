@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-20 07:28'
-updated_date: '2026-08-20 08:12'
+updated_date: '2026-08-20 13:04'
 labels:
   - ops
   - operators
@@ -43,7 +43,7 @@ Implements decision-46. ops/reset-w1.sql from the sketch in OPERATOR-MODEL.md §
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Built at ops/reset-w1.sql + ops/check-reset-w1.mjs (commit ee196e9). One divergence from the inherited OPERATOR-MODEL.md §10 sketch, found walking the FK graph 007 introduces and verified live before fixing: phone_identities.worker_id ON DELETE SET NULL drives a worker-only row to (NULL,NULL) mid-DELETE-FROM-workers, violating phone_identities_claims — fixed by detaching (DELETE, never an UPDATE...SET NULL first, which hits the identical CHECK one statement earlier — also caught live before landing the final order). Added beyond the inherited design per this task's own brief: a hard refusal to run against any database not named via -v confirm_database=<name>, checked server-side against current_database() (this psql build's \quit has no exit-code argument, checked, so refusals are real RAISE EXCEPTIONs). All 7 ACs rehearsed against seeded scratch databases, RED-then-GREEN on both guards (live-code guard neutralised to IF false; admins-assertion block deleted outright + a mistake elsewhere), never against production. node ops/check-reset-w1.mjs: OK, 8/8. Flagged, not guessed: the brief's phrase "recreates the operator" is read as keeping the one admins row intact, not as inserting a fresh operators row (decision-46 keeps operators out of this reset's scope; fabricating one would need a name/phone nobody supplied) — recorded in the script's own comment for the owner to correct if that reading is wrong.
+VERIFIED INDEPENDENTLY, 2026-08-20, against a database restored from the production backup nfc-20260820T000158Z - AC#8 had SKIPPED on every previous run on this laptop for want of a dump. node ops/check-reset-w1.mjs /tmp/nfc-prod.sql.gz -> OK. Run 0 REFUSED (worker 6 holds a live enrolment code expiring 2026-08-22); run 1 with -v allow_live_code_loss=1 OK; run 2 with no flag OK and no longer needing it. workers/locations/shifts/worker_sessions/material_requests/location_contracts/portal_grants all 0; admins/sessions/clients/contacts/inventory_items/app_settings all unchanged; then 006+007 apply. TWO ASSERTIONS ADDED because the brief asked for login and for orphans and the file proved neither (872f824): (1) a REAL login round-trip - a control admin with a known password seated BEFORE the wipe logs in after it, its ts_session opens GET /admin/data 200, the wrong password is still 401; the owner's own row is separately proven byte-identical by md5 over id|email|password_hash|created_at, and his actual password is not in this repo and was not typed. (2) a whole-schema orphan sweep walking every FK column, because NOT convalidated cannot see an orphan seated behind a still-VALID key. Ordering changed so the fingerprint runs AFTER the login, otherwise the login assertion is masked in every mutant that could kill it. New: sh ops/check-reset-w1-mutants.sh <dump> -> 3 red, 0 alive.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
