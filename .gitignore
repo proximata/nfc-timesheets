@@ -40,3 +40,8 @@ docs/media/ia/
 docs/media/redesign/
 docs/media/redesign-demo/
 docs/media/states/
+# the LOOK run's phone evidence: 86 MB of full-page PNGs, regenerable with
+# `node demo/look-phone.mjs`. Ignored BEFORE the first one was written, because the
+# rewrite above was paid for by media that reached a commit first and a .gitignore second.
+docs/media/look/
+docs/media/look-phone/
