@@ -507,9 +507,15 @@ export async function activeLocation(value, field = "location_uuid") {
  */
 export async function activePlace(value, field = "location_uuid") {
   const placeId = uuid(value, field);
-  // ONE round trip over both tables. UNION ALL and not UNION: an id cannot be both, and
-  // making the impossible case collapse silently is exactly what the length check below
-  // exists to prevent.
+  // ONE round trip over every table an id can name. UNION ALL and not UNION: an id cannot
+  // be more than one of these, and making the impossible case collapse silently is exactly
+  // what the length check below exists to prevent.
+  //
+  // THE FOURTH BRANCH is new (server/db/migrations/008_reported_tags.sql): a tag_aliases
+  // row is how an ALREADY-EXISTING zone adopts a second physical tag without re-keying its
+  // own id (see that migration's own comment for why re-keying was rejected). Purely
+  // additive — the first three branches, and every id that only ever matched one of them,
+  // are unchanged.
   const rows = await all(
     `SELECT l.id AS location_id, NULL::uuid AS zone_id, l.slug, l.name, NULL::text AS zone_name
        FROM locations l
@@ -518,16 +524,39 @@ export async function activePlace(value, field = "location_uuid") {
      SELECT z.location_id, z.id AS zone_id, l.slug, l.name, z.name AS zone_name
        FROM zones z
        JOIN locations l ON l.id = z.location_id
-      WHERE z.id = $1 AND z.active AND l.active`,
+      WHERE z.id = $1 AND z.active AND l.active
+     UNION ALL
+     SELECT z.location_id, z.id AS zone_id, l.slug, l.name, z.name AS zone_name
+       FROM tag_aliases ta
+       JOIN zones z ON z.id = ta.zone_id
+       JOIN locations l ON l.id = z.location_id
+      WHERE ta.id = $1 AND z.active AND l.active`,
     [placeId],
   );
-  // Only reachable by a UUIDv4 collision across two tables, i.e. never. One line, and it is
-  // the difference between a refusal and silently picking a building. ponytail: it refuses
-  // with the SAME code rather than a new one, so the field build renders a message it has.
-  // CEILING: a collision is indistinguishable from a miss in the log. UPGRADE PATH: a
-  // distinct code once both clients understand new ones.
-  if (rows.length !== 1) fail(422, "unknown_location");
-  return rows[0];
+  // Only reachable by a UUIDv4 collision across these tables, i.e. never. One line, and it
+  // is the difference between a refusal and silently picking a building. ponytail: it
+  // refuses with the SAME code rather than a new one, so the field build renders a message
+  // it has. CEILING: a collision is indistinguishable from a miss in the log. UPGRADE PATH:
+  // a distinct code once both clients understand new ones.
+  if (rows.length > 1) fail(422, "unknown_location");
+  if (rows.length === 1) return rows[0];
+
+  // ZERO rows: this iteration's own distinction (server/db/migrations/008_reported_tags.sql).
+  // "Not ours at all" (a stranger's tag, a typo, a torn-off sticker) and "ours, but nobody
+  // has resolved it yet" (an operator wrote and reported this id, an admin has not decided
+  // what it is) are DIFFERENT facts, and tapping the second one WILL happen — tags get
+  // mounted before anyone resolves them. It must not read as a generic refusal: the app
+  // needs to tell the worker something specific and true in German ("dieser Tag ist noch
+  // nicht zugewiesen"), not the same message a garbage tag gets.
+  //
+  // THE CODE `unknown_location` STAYS UNCHANGED for every case that already used it — the
+  // APK in the field maps exactly that string. `tag_unbound` is a NEW code an old build has
+  // never seen; per the established fallback (see the comment two lines below), it renders
+  // as "unknown status from a newer server", which is a safe degrade, not a crash — it must
+  // not open a shift against nothing and must not 500, and it does neither.
+  const reported = await one("SELECT resolved_at FROM reported_tags WHERE id = $1", [placeId]);
+  if (reported && reported.resolved_at === null) fail(422, "tag_unbound");
+  fail(422, "unknown_location");
 }
 
 export async function activeWorkerById(value) {
