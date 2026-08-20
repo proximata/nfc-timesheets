@@ -1365,6 +1365,124 @@ check('lib/objects.ts: an unzoned building is drawn, and its state is a WORD (de
   assert.equal(noZoneArg[0].zoneState, 'unzoned')
 })
 
+// --- 8d. grey is the SECOND signal, and the pin has room for the first ------------------
+//
+// `components/HomeMap.tsx` caps a pin at TWO chips — three overflows the label — and the
+// zone chip is pushed LAST:
+//
+//     if (unresolved > 0)                     flags.push(„prufen")
+//     if (flags.length < 2 && noTag)          flags.push(„kein Tag")
+//     if (flags.length < 2 && unzoned)        flags.push(„ohne Zone")   <- dropped at 2
+//
+// while the GREY is applied unconditionally from `data-zone="unzoned"`. So a building that
+// earns both earlier chips is drawn grey with NO WORD, and decision-43 section 3 — grey is
+// never the only signal — fails on that pin and only on that pin.
+//
+// It cannot happen TODAY, and not because anyone arranged the priority carefully: in
+// `lib/objects.ts` the two earlier chips are mutually exclusive by definition.
+// `noTag: here.length === 0` and `unresolved` counts members of `here`, so no shifts means
+// no unresolved shifts. At most one chip is ever pushed before the zone chip is considered.
+//
+// THAT COUPLING IS INVISIBLE FROM HomeMap.tsx AND IS ONE EDIT FROM GONE. decision-44 makes
+// the edit likely rather than hypothetical: the moment `noTag` means "no zone of this
+// building carries a tag serial" instead of "this building has never been tapped", it
+// stops excluding `unresolved` — a building can then have unconfirmed shifts AND no serial
+// on file — both earlier chips fire, and the grey pin goes silent. Nothing else in the tree
+// would notice: `demo/probe-zones-revenue.mjs` asserts every grey pin carries the word, but
+// over the demo seed that is ONE building, and it is one that never earns two chips.
+//
+// So the invariant is asserted here, at the derivation, where a change to `noTag` has to
+// walk past it.
+check('lib/objects.ts: no building earns two pin chips, so the grey pin keeps its WORD', () => {
+  const building = (over) => ({
+    id: over.id,
+    name: over.name ?? over.id,
+    lat: 48.17,
+    lng: 16.39,
+    geocoded_at: null,
+    geocode_status: null,
+    active: true,
+    ...over,
+  })
+  const shift = (over) => ({
+    worker_name: `W${over.worker_id}`,
+    end_time: null,
+    auto_closed: false,
+    corrected_at: null,
+    client_uuid: 'x',
+    ...over,
+  })
+
+  /** Exactly components/HomeMap.tsx's flag list, in its order and under its cap of two. */
+  const chipsOf = (s) => {
+    const flags = []
+    if (s.unresolved > 0) flags.push('prüfen')
+    if (flags.length < 2 && s.noTag) flags.push('kein Tag')
+    if (flags.length < 2 && s.zoneState === 'unzoned') flags.push('ohne Zone')
+    return flags
+  }
+
+  // Everything that could plausibly crowd a pin, all at once and on ONE unzoned building:
+  // an auto-closed shift nobody confirmed, a second unconfirmed shift, an open shift, and
+  // no zones at all. If two earlier chips are reachable, this is the fixture that reaches
+  // them.
+  const crowded = summariseBuildings(
+    [
+      building({ id: 'crowded', name: 'Arsenalstrasse 11' }),
+      // ...and the other half of the space: an unzoned building with NO shift, which is the
+      // `noTag` branch, so both branches are represented rather than one.
+      building({ id: 'silent', name: 'Wagramer Strasse' }),
+    ],
+    [
+      shift({
+        id: 1,
+        worker_id: 1,
+        location_id: 'crowded',
+        start_time: '2026-03-01T05:00:00Z',
+        end_time: '2026-03-01T13:00:00Z',
+        auto_closed: true,
+      }),
+      shift({
+        id: 2,
+        worker_id: 2,
+        location_id: 'crowded',
+        start_time: '2026-03-02T05:00:00Z',
+        end_time: '2026-03-02T13:00:00Z',
+        auto_closed: true,
+      }),
+      shift({ id: 3, worker_id: 3, location_id: 'crowded', start_time: '2026-08-03T06:00:00Z' }),
+    ],
+    [],
+  )
+
+  for (const s of crowded) {
+    assert.equal(s.zoneState, 'unzoned', `${s.id} is the grey case, or this fixture proves nothing`)
+    assert.ok(
+      !(s.unresolved > 0 && s.noTag),
+      `${s.id}: „prüfen" and „kein Tag" both fire (unresolved=${s.unresolved}, noTag=${s.noTag}).\n` +
+        'They are mutually exclusive in summariseBuildings today, and the pin depends on it.\n' +
+        'If noTag no longer implies "no shifts", REORDER the chips in components/HomeMap.tsx\n' +
+        'so the zone chip cannot be the one dropped - grey may never be the only signal\n' +
+        '(decision-43 section 3).',
+    )
+    const chips = chipsOf(s)
+    assert.ok(
+      chips.includes('ohne Zone'),
+      `${s.id}: the pin is drawn GREY (data-zone="unzoned") and its chips are ` +
+        `[${chips.join(', ')}] - the word was crowded out and colour is now the only signal.`,
+    )
+  }
+
+  // The negative half: the cap itself is real. Hand `chipsOf` a shape summariseBuildings
+  // cannot currently produce and it MUST drop the zone word - that is what makes the
+  // assertion above a constraint on the data rather than a restatement of the code.
+  assert.deepEqual(
+    chipsOf({ unresolved: 2, noTag: true, zoneState: 'unzoned' }),
+    ['prüfen', 'kein Tag'],
+    'the two-chip cap really does drop the zone word when both earlier chips fire',
+  )
+})
+
 // --- 9. the payroll CSV's number format (lib/payroll.ts) --------------------------------
 //
 // The accountant's copy of the payroll, checked as BYTES and as what an Austrian Excel
