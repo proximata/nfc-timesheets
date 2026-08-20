@@ -576,6 +576,14 @@ async function main() {
       preview.includes('+436649009001'),
       `hint: "${preview.trim()}"`,
     )
+    // NON-VACUITY for "nothing was written" above: the SAME query, on a screen that DID
+    // write, has to move. Without this, a count that is broken in a way that always returns
+    // the starting number would report the collision as harmless forever.
+    assert(
+      'create: the row-count oracle moves when something IS written',
+      Number(sql('SELECT count(*) FROM operators')) === Number(before.operators) + 1,
+      `${before.operators} before → ${sql('SELECT count(*) FROM operators')} after one create`,
+    )
     assert(
       'create: the page announces it in a live region that outlives the drawer',
       (await page.eval(`(document.querySelector('[role="status"]')?.textContent || '').trim()`)) !==
@@ -810,6 +818,16 @@ async function main() {
       )
       await page.eval(`document.documentElement.style.filter = ''`)
     }
+  } catch (cause) {
+    // A CRASH IS NOT A VERDICT — but it must not be silence either. demo/fix-mutants.sh only
+    // counts a mutant as caught when the log carries a FAIL line, and half these assertions
+    // live behind a `waitFor` that THROWS when the overlay it is waiting for never opens. So
+    // the throw is recorded as a named failure, with the sections after it visibly missing.
+    assert(
+      'the probe reached the end of the run',
+      false,
+      `${String(cause?.message ?? cause).slice(0, 300)}\n         everything after this point was NOT measured`,
+    )
   } finally {
     clearTimeout(timer)
     try {
