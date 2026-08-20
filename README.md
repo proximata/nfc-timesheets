@@ -274,6 +274,17 @@ allowlist contains. On any other port Google answers `RefererNotAllowedMapError`
 drawn, and every map assertion silently SKIPs. Two runs read those skips as "the key rejects
 loopback" and wrote it down as a measured fact; it is not true.
 
+The **build** must carry the key too, and `pnpm verify` rebuilds `web/out` WITHOUT it — it is
+the type/lint gate and has no business knowing about Google. So verifying after building leaves
+a keyless bundle and the next browser check goes quietly blind. `demo/build-guard.mjs`'s
+`assertMapKeyInBuild()` throws on that; anything that asserts about pins calls it.
+
+**ORDER MATTERS, and it is not alphabetical.** `audit-keyboard.mjs` and `audit-overlays.mjs`
+WRITE to `nfc_demo` — they drive the correction drawer for real, which RESOLVES the seed's two
+auto-closed shifts. `check-ia-greyscale.mjs` needs one of those unresolved, so it runs FIRST or
+after a reseed. It says so in its own failure text rather than reporting a missing word as a
+defect.
+
 ```bash
 cd web && NEXT_PUBLIC_GOOGLE_MAPS_KEY=$(cd .. && psst get NEXT_PUBLIC_GOOGLE_MAPS_KEY) pnpm build
 DATABASE_URL=postgres:///nfc_demo APP_KEY=demo-app-key-local-only-0123456789 \
@@ -293,7 +304,29 @@ node demo/check-map-key.mjs           # is the Maps key authorised for the host 
                                       # the admin? Not greppable - a key restriction is not
                                       # in this repo - so it asks, under the real hostname.
 node demo/check-map-home.mjs          # the map surface itself
-AUDIT_BASE=http://127.0.0.1:8080 node demo/audit-widths.mjs   # 11 widths x 19 states
+
+# READ-ONLY, so these come before the two that write.
+DEMO_BASE=http://127.0.0.1:8080 node demo/check-ia-greyscale.mjs
+                                      # colour is the SECOND signal: every domain state and
+                                      # every pin state - including the GREY unzoned pin -
+                                      # still readable with colour removed (decision-43 s3)
+AUDIT_BASE=http://127.0.0.1:8080 node demo/audit-contrast.mjs
+                                      # WCAG ratios COMPUTED from the shipped tokens through
+                                      # Chrome, both themes, only pairs that exist on screen
+AUDIT_BASE=http://127.0.0.1:8080 node demo/audit-widths.mjs
+                                      # overflow: 11 widths x 19 states x 2 themes = 418
+                                      # measurements, plus a self-test that sabotages the page
+
+# THESE WRITE to nfc_demo. Reseed before re-running check-ia-greyscale.
+AUDIT_BASE=http://127.0.0.1:8080 node demo/audit-overlays.mjs
+                                      # the full overlay contract - focus in, dialog
+                                      # semantics, scroll lock, Tab AND Shift+Tab trapped,
+                                      # Escape, focus back on the opener - plus a CENSUS:
+                                      # every <Drawer>/<Modal> in web/ is audited or a
+                                      # stated ceiling, so a new drawer breaks this run
+AUDIT_BASE=http://127.0.0.1:8080 node demo/audit-overlays2.mjs
+AUDIT_BASE=http://127.0.0.1:8080 node demo/audit-keyboard.mjs
+                                      # keyboard-ONLY write journeys: no mouse, no .click()
 ```
 
 Against a running server:
