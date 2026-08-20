@@ -570,7 +570,10 @@ export function issueOperatorEnrolmentCode(
   })
 }
 
-export function revokeOperatorEnrolmentCode(operatorId: number, signal?: AbortSignal): Promise<void> {
+export function revokeOperatorEnrolmentCode(
+  operatorId: number,
+  signal?: AbortSignal,
+): Promise<void> {
   return apiFetch<void>(`/admin/operators/${operatorId}/enrolment-code`, {
     method: 'DELETE',
     signal,
