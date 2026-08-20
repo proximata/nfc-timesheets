@@ -110,8 +110,61 @@ async function login() {
   await sleep(800);
 }
 
+/**
+ * THE STATES THIS FILE IS ABOUT HAVE TO EXIST IN THE DATABASE BEFORE IT CAN LOOK AT THEM,
+ * and two of them are the ones the OTHER audits destroy.
+ *
+ * demo/seed.sql creates two auto-closed, unresolved shifts — the „8-Stunden-Timer" state and
+ * the only reason any pin says „prüfen". demo/audit-keyboard.mjs and demo/audit-overlays.mjs
+ * drive the correction drawer for real, against the same nfc_demo database, and a correction
+ * RESOLVES the shift. So running the audits in the order the README lists them leaves this
+ * file with zero unresolved shifts, and it then reported
+ *
+ *     FAIL  state AUTO-CLOSED names the timer in words
+ *     FAIL  a pin that needs attention says so in a word
+ *
+ * which reads as "the screens stopped saying it" and is nothing of the kind. Measured: the
+ * seed's two unresolved shifts carried `corrected_at` timestamps from earlier the same
+ * session.
+ *
+ * A PRECONDITION FAILURE IS STILL A FAILURE — never a skip, because a skip is how twelve map
+ * assertions read as passes for a whole run. But it must not be REPORTED as a defect in the
+ * thing it was going to measure. So the state of the fixture is established first, from the
+ * same admin API the screens read, and named in the failure.
+ */
+async function fixtureState() {
+  return page.eval(`(async () => {
+    const r = await fetch('/admin/data?limit=2000', { credentials: 'include' })
+    if (!r.ok) return { error: 'GET /admin/data ' + r.status }
+    const d = await r.json()
+    const shifts = d.shifts || []
+    return {
+      shifts: shifts.length,
+      unresolved: shifts.filter((s) => s.auto_closed && !s.corrected_at).length,
+      corrected: shifts.filter((s) => s.corrected_at).length,
+      open: shifts.filter((s) => !s.end_time).length,
+    }
+  })()`);
+}
+
+const RESEED =
+  'psql -d nfc_demo -v ON_ERROR_STOP=1 -f demo/seed.sql   ' +
+  '(demo/audit-keyboard.mjs and demo/audit-overlays.mjs write to this database and RESOLVE ' +
+  'the seed\u2019s unresolved shifts, so this check must run before them or after a reseed)';
+
 try {
   await login();
+
+  const fixture = await fixtureState();
+  console.log(`\n  fixture: ${JSON.stringify(fixture)}`);
+  // Asserted, not merely printed: without it the two assertions below are being run against
+  // a database that cannot satisfy them, and a green run of THIS file would mean the seed
+  // happened to be intact rather than that anything was proven.
+  assert(
+    "fixture: the demo database still has an UNRESOLVED auto-closed shift to look at",
+    fixture.unresolved > 0,
+    `${JSON.stringify(fixture)} \u2014 reseed: ${RESEED}`,
+  );
 
   // ==== the five domain states, on /shifts/ and /workers/ and /payroll/ ==================
   await page.goto(`${BASE}/shifts/?period=all`, { settle: 1500 });
@@ -177,7 +230,13 @@ try {
 
   // 2 · AUTO-CLOSED, UNRESOLVED
   const unres = await shootAt("state-unresolved", "8-Stunden-Timer", { selector: "td, div, p, span" });
-  assert("state AUTO-CLOSED names the timer in words", unres.found === true, unres.rowText ?? JSON.stringify(unres));
+  assert(
+    "state AUTO-CLOSED names the timer in words",
+    unres.found === true,
+    fixture.unresolved === 0
+      ? `NOT A DEFECT: 0 unresolved shifts in the fixture. ${RESEED}`
+      : (unres.rowText ?? JSON.stringify(unres)),
+  );
 
   // 3 · CORRECTED — one row in 351. Not visible at rest, which is the point.
   const corrected = await shootAt("state-corrected", "Korrigiert", { selector: "td, .pill, span" });
@@ -229,7 +288,27 @@ try {
   assert(
     "a pin that needs attention says so in a word",
     pins.some((p) => /prüfen|bestätig/.test(p.text)),
-    pins.map((p) => p.text).join(" | "),
+    fixture.unresolved === 0
+      ? `NOT A DEFECT: 0 unresolved shifts in the fixture, so no pin CAN say „prüfen". ${RESEED}`
+      : pins.map((p) => p.text).join(" | "),
+  );
+  // The grey pin (decision-43 section 3) belongs in a file about colour being the second
+  // signal, and was not in it: the pin block asserted occupancy and attention and said
+  // nothing about „ohne Zone". An unzoned building drawn ONLY in grey would have passed
+  // every line above.
+  const unzonedPins = pins.filter((p) => /ohne Zone|no zone/i.test(p.text));
+  const greyPins = await page.eval(
+    `document.querySelectorAll('.map-pin[data-zone="unzoned"]').length`,
+  );
+  assert(
+    "the map HAS an unzoned building drawn, or this proves nothing about grey",
+    greyPins > 0,
+    `${pins.length} pin(s), ${greyPins} carrying data-zone=unzoned`,
+  );
+  assert(
+    "greyscale: every grey pin SAYS its state in a word (decision-43)",
+    greyPins > 0 && unzonedPins.length === greyPins,
+    `${greyPins} grey pin(s), ${unzonedPins.length} carrying the word — ${pins.map((p) => p.text).join(" | ")}`,
   );
   assert(
     "occupied and empty pins are not the same glyph",
