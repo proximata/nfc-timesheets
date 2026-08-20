@@ -235,11 +235,19 @@ resolving the same reported tag at once cannot both succeed. `404 unknown_report
 
 **A tap on a still-unbound tag must not open a shift against nothing, and must not 500.**
 `v.activePlace()` gained a distinct refusal for it: `422 tag_unbound`, told apart from the
-generic `422 unknown_location` a stranger's garbage tag gets, so the app can say something
-specific and true in German ("dieser Tag ist noch nicht zugewiesen") instead of a generic
-refusal. **The existing `unknown_location` code is unchanged for every case that already used
-it** — `tag_unbound` is new and an old build renders it as "unknown status from a newer
-server", the same safe degrade every other new code already gets.
+generic `422 unknown_location` a stranger's garbage tag gets. The ANDROID client does not (yet)
+carry a dedicated string for the new code — `core/ApiFailure.kt`'s `messageKey` falls to its
+`else` branch, `err_rejected`, which is still German ("Vom Server abgelehnt. Diese Schicht bitte
+der Verwaltung melden.") and still names no shift, just not the more specific sentence this
+file's own comment once described. **The existing `unknown_location` code is unchanged for
+every case that already used it** — `tag_unbound` is new and an old build renders it as
+"unknown status from a newer server", the same safe degrade every other new code already gets.
+
+**The admin half of this — turning an UNBOUND tag into a building or a zone from a browser —
+now exists**: `web/app/tags/page.tsx`. Deliberately the plainest screen in the bundle (no
+`PageHeader`, no `Drawer`, no next-intl), built to close the gap between these three routes
+existing and nobody being able to reach them, not to be a second polished screen. Not yet in
+`web/lib/nav.ts` — reached by URL until it earns one.
 
 ## Admin write routes (003)
 
