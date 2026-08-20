@@ -54,6 +54,10 @@ const SCREENS = [
   '/analytics/',
   '/account/',
   '/reinigung/',
+  // Off-nav (decision-39 §6), and therefore missed by a list written before it existed.
+  // /operators/ has a six-column table with a leading <th scope=row>, which is exactly the
+  // shape check 1 exists for: every card caption here is positional.
+  '/operators/',
 ]
 
 const results = []
