@@ -1,0 +1,541 @@
+#!/usr/bin/env bash
+#
+# DRIVE THE WHOLE PRODUCT AGAINST PRODUCTION, END TO END, AND LEAVE THE BOX AS IT WAS FOUND.
+#
+#     ./ops/prove-live.sh [host]        # host defaults to ops/branding.json apiHost
+#
+# WHAT IS DIFFERENT FROM ops/smoke-live.sh, WHICH ALREADY TALKS TO THE LIVE BOX.
+#
+# smoke-live proves every ROUTE answers on production. It mints its tag ids with
+# crypto.randomUUID() and posts them, which is a fine test of the server and no test at all
+# of the thing the server exists for: the id in that test never went near the code that
+# writes a card, so a phone that writes the wrong bytes, refuses every card, or overwrites a
+# mounted one would leave every one of those assertions green.
+#
+# This one starts one step earlier — at the CARD. android/checks/live-flow.sh runs the real
+# nfc/TagWriter (and the debug simulator that stands in for NFC hardware on an emulator)
+# against fake cards, and the ids it emits are the ids reported here. The chain is unbroken
+# from "the operator holds a blank NTAG213" to "a cleaner's tap closes a shift", and it runs
+# against the row the cleaners actually tap rather than a fixture.
+#
+# EVIDENCE AT EVERY STEP, three kinds, because each one alone lies:
+#   the ROW     — psql on the box. What is true.
+#   the LOG     — journalctl -u nfc-api. That the box, not a cache, answered.
+#   the SCREEN  — the German the phone renders (android/checks/.../screen-*.txt) and a real
+#                 headless-Chrome screenshot of the live admin panel, logged in.
+#
+# IT WRITES. Every one of the four shipped features is a write; a read-only test proves the
+# process is up and nothing else. The cleanup is built the way ops/delete-worker.sql and
+# ops/smoke-live.sh are: a marker on everything created, every DELETE scoped by it, a trap
+# so a failed assertion still cleans up, and a count afterwards that FAILS if a single row
+# survives. The director's admin row, the HOIV location and the published APK are never
+# touched.
+set -uo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+HOST="${1:-$(node -e 'process.stdout.write(require("./ops/branding.json").apiHost)')}"
+TAG_HOST="$(node -e 'process.stdout.write(require("./ops/branding.json").tagHost)')"
+BASE="https://$HOST"
+MARK="PROVE-DELETE-ME"
+PROVE_SLUG="prove-delete-me-$(node -e 'process.stdout.write(require("node:crypto").randomBytes(4).toString("hex"))')"
+
+APP_KEY="${APP_KEY:-$(psst get APP_KEY 2>/dev/null || true)}"
+[ -n "$APP_KEY" ] || { echo "FATAL: APP_KEY not in env or psst" >&2; exit 1; }
+
+# Same posture as ops/smoke-live.sh: the live admin row belongs to the DIRECTOR and his
+# password is not in the vault. This test brings its own admin, uses it for a few minutes,
+# and the cleanup trap deletes it. ops/smoke-admin.mjs refuses any email without the marker.
+# The prefix is not a style choice: ops/smoke-admin.mjs refuses outright any email that does
+# not start with `smoke-delete-me`, which is what makes it impossible for this script to
+# reach the director's row however wrong the rest of it goes.
+ADMIN_EMAIL="smoke-delete-me-prove@localhost.invalid"
+ADMIN_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
+
+TMP="$(mktemp -d)"
+ADMIN_JAR="$TMP/admin.cookies"
+WORKER_JAR="$TMP/worker.cookies"
+OP_JAR="$TMP/operator.cookies"
+SHOTS="$REPO/docs/media/prove-live"
+PHONE="$TMP/phone"
+
+FAILED=0
+ok()      { printf '  ok:   %s\n' "$1"; }
+bad()     { printf '  FAIL: %s\n' "$1"; FAILED=1; }
+section() { printf '\n== %s\n' "$1"; }
+
+psql_box() { ssh "$HOST" "sudo -u postgres psql -d nfc -v ON_ERROR_STOP=1 -Atc \"$1\""; }
+
+# ---- the cleanup, defined before anything can create a row -------------------------------
+#
+# ORDER IS THE WHOLE THING. shifts before workers and before locations; phone_identities
+# before its operator (007's FKs are ON DELETE SET NULL under a CHECK that one of the two
+# is non-null, so deleting the operator first makes Postgres try to write (NULL, NULL) and
+# aborts the transaction); tag_aliases and zones before the location that owns them.
+#
+# The location this run CREATES is found by its marked slug, never by "the newest row" and
+# never by an id captured in a variable that a mid-run failure might have left empty.
+# WHAT IS ALLOWED TO POINT AT THE THINGS THIS RUN CREATES, read from the catalogue rather
+# than from memory — the same posture ops/delete-worker.sql takes. A migration that adds a
+# child table nobody updated this script for would otherwise leave rows behind AND still let
+# the closing count pass, because the count only looks at the tables it already knows about.
+KNOWN_CHILDREN="location_contracts.location_id location_revenue.location_id material_requests.location_id portal_grants.location_id shifts.location_id shifts.start_zone_id shifts.end_zone_id zones.location_id tag_aliases.zone_id tag_aliases.id material_requests.worker_id shifts.worker_id worker_sessions.worker_id phone_identities.worker_id phone_identities.operator_id operator_sessions.operator_id reported_tags.reported_by_operator_id"
+
+cleanup() {
+  local rc=$?
+  section "cleanup — every row this run created, scoped by the marker"
+
+  local unknown
+  unknown=$(psql_box "
+    SELECT string_agg(child, ' ') FROM (
+      SELECT DISTINCT c.conrelid::regclass::text || '.' || a.attname AS child
+        FROM pg_constraint c
+        JOIN unnest(c.conkey) k(attnum) ON true
+        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+       WHERE c.contype = 'f'
+         AND c.confrelid IN ('locations'::regclass,'zones'::regclass,'reported_tags'::regclass,
+                             'workers'::regclass,'operators'::regclass)
+    ) s WHERE child <> ALL (string_to_array('$KNOWN_CHILDREN', ' '))")
+  if [ -n "$unknown" ]; then
+    bad "the schema has grown children this cleanup has never heard of: $unknown"
+    rc=1
+  else
+    ok "every foreign key into workers/operators/locations/zones/reported_tags is one this cleanup handles"
+  fi
+
+  psql_box "
+    BEGIN;
+    DELETE FROM shifts WHERE worker_id IN (SELECT id FROM workers WHERE name LIKE '${MARK}%')
+                          OR location_id IN (SELECT id FROM locations WHERE slug LIKE 'prove-delete-me-%');
+    DELETE FROM material_requests WHERE worker_id IN (SELECT id FROM workers WHERE name LIKE '${MARK}%');
+    DELETE FROM worker_sessions   WHERE worker_id IN (SELECT id FROM workers WHERE name LIKE '${MARK}%');
+    DELETE FROM operator_sessions WHERE operator_id IN (SELECT id FROM operators WHERE name LIKE '${MARK}%');
+    DELETE FROM phone_identities  WHERE worker_id IN (SELECT id FROM workers WHERE name LIKE '${MARK}%')
+                                     OR operator_id IN (SELECT id FROM operators WHERE name LIKE '${MARK}%');
+    DELETE FROM tag_aliases WHERE zone_id IN (SELECT id FROM zones WHERE name LIKE '${MARK}%'
+                                                 OR location_id IN (SELECT id FROM locations WHERE slug LIKE 'prove-delete-me-%'));
+    DELETE FROM zones WHERE name LIKE '${MARK}%'
+                         OR location_id IN (SELECT id FROM locations WHERE slug LIKE 'prove-delete-me-%');
+    DELETE FROM reported_tags WHERE reported_by_operator_id IN (SELECT id FROM operators WHERE name LIKE '${MARK}%')
+                                 OR id IN (SELECT id FROM locations WHERE slug LIKE 'prove-delete-me-%');
+    DELETE FROM location_contracts WHERE location_id IN (SELECT id FROM locations WHERE slug LIKE 'prove-delete-me-%');
+    DELETE FROM location_revenue   WHERE location_id IN (SELECT id FROM locations WHERE slug LIKE 'prove-delete-me-%');
+    DELETE FROM material_requests  WHERE location_id IN (SELECT id FROM locations WHERE slug LIKE 'prove-delete-me-%');
+    DELETE FROM portal_grants      WHERE location_id IN (SELECT id FROM locations WHERE slug LIKE 'prove-delete-me-%');
+    DELETE FROM locations WHERE slug LIKE 'prove-delete-me-%';
+    DELETE FROM workers   WHERE name LIKE '${MARK}%';
+    DELETE FROM operators WHERE name LIKE '${MARK}%';
+    COMMIT;" >/dev/null || { echo "  FAIL: cleanup TRANSACTION FAILED — rows may survive" >&2; rc=1; FAILED=1; }
+
+  local gone
+  gone=$(ssh "$HOST" "sudo bash -c 'set -a; . /etc/nfc/env; set +a; node /srv/nfc/ops/smoke-admin.mjs delete $ADMIN_EMAIL'" 2>&1 | tail -1)
+  [ "$gone" = "deleted 1" ] && ok "the throwaway admin is gone ($gone)" || bad "throwaway admin: $gone"
+
+  # Not "the deletes ran" — "nothing is left", counted from the database afterwards.
+  local left
+  left=$(psql_box "SELECT
+      (SELECT count(*) FROM workers)   || ' workers, ' ||
+      (SELECT count(*) FROM operators) || ' operators, ' ||
+      (SELECT count(*) FROM shifts)    || ' shifts, ' ||
+      (SELECT count(*) FROM zones)     || ' zones, ' ||
+      (SELECT count(*) FROM reported_tags) || ' reported_tags, ' ||
+      (SELECT count(*) FROM tag_aliases)   || ' tag_aliases, ' ||
+      (SELECT count(*) FROM phone_identities) || ' phone_identities, ' ||
+      (SELECT count(*) FROM locations) || ' locations, ' ||
+      (SELECT count(*) FROM admins)    || ' admins'")
+  echo "  after: $left"
+  case "$left" in
+    "0 workers, 0 operators, 0 shifts, 0 zones, 0 reported_tags, 0 tag_aliases, 0 phone_identities, 1 locations, 1 admins")
+      ok "production is exactly as it was found" ;;
+    *) bad "production is NOT as it was found — see the counts above"; rc=1 ;;
+  esac
+
+  local hoiv
+  hoiv=$(psql_box "SELECT slug || '|' || active || '|' || coalesce(lat::text,'NULL') || '|' || coalesce(lng::text,'NULL') FROM locations")
+  [ "$hoiv" = "$BASELINE_HOIV" ] \
+    && ok "HOIV is the row this run started with: $hoiv" \
+    || { bad "HOIV row changed: '$hoiv' was '$BASELINE_HOIV'"; rc=1; }
+
+  # The APK on the box is not this test's to touch, and a cleanup that quietly broke the
+  # self-update it just proved would be the worst possible outcome of running it.
+  local apk
+  apk=$(ssh "$HOST" "sha256sum /srv/nfc/releases/*.apk | cut -d' ' -f1")
+  [ "$apk" = "$BASELINE_APK" ] && ok "the published APK is untouched ($apk)" || bad "published APK changed"
+
+  rm -rf "$TMP"
+  if [ "$FAILED" -ne 0 ]; then echo; echo "PROVE-LIVE FAILED"; exit 1; fi
+  echo; echo "PROVE-LIVE OK — $BASE"
+  exit "$rc"
+}
+
+# ---- tiny HTTP helpers, same shape as ops/smoke-live.sh ----------------------------------
+req() {
+  local method="$1" path="$2"; shift 2
+  local args=(-sS --max-time 40 -o "$TMP/body" -w '%{http_code}' -X "$method" "$BASE$path")
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --jar)  args+=(-b "$2" -c "$2"); shift 2 ;;
+      --key)  args+=(-H "X-App-Key: $APP_KEY"); shift ;;
+      --data) args+=(-H "Content-Type: application/json" --data "$2"); shift 2 ;;
+    esac
+  done
+  curl "${args[@]}"
+}
+body() { cat "$TMP/body"; }
+jget() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let v;try{v=JSON.parse(s)}catch{v={}};for(const k of process.argv[1].split("."))v=v?.[k];process.stdout.write(String(v??""))})' "$1" < "$TMP/body"; }
+json() { node -e 'process.stdout.write(JSON.stringify(JSON.parse(process.argv[1])))' "$1"; }
+now()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# A SHIFT WITH ZERO DURATION IS REFUSED (`end_before_start`), and rightly — so the tap that
+# opens one is stamped in the past, the way a real morning is. Two calls to now() land in
+# the same second often enough that using it for both ends is a flaky test, not a real one.
+ago()  { date -u -v-"$1"M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "$1 minutes ago" +%Y-%m-%dT%H:%M:%SZ; }
+uuid() { node -e 'process.stdout.write(require("node:crypto").randomUUID())'; }
+
+# A ROW, PRINTED AS EVIDENCE — and an EMPTY result is a failure, not a blank line. Printing
+# whatever psql returned is how "ok: row:" came to be logged for a shift that did not exist.
+row() {
+  local label="$1" sql="$2"
+  local out; out=$(psql_box "$sql")
+  [ -n "$out" ] && printf '  row:  %s: %s\n' "$label" "$out" || bad "$label: the database returned NO ROW"
+}
+
+expect() {
+  local want="$1" method="$2" path="$3"; shift 3
+  local got; got=$(req "$method" "$path" "$@")
+  if [ "$got" = "$want" ]; then ok "$method $path -> $got"
+  else bad "$method $path -> $got (want $want)  body: $(body | cut -c1-200)"; fi
+}
+
+# THE ACCESS LOG, read off the box. `--since @<epoch>` so nothing depends on agreeing with
+# the VM about a timezone. An empty match is a FAILURE, not a shrug: it means the answer
+# above came from something other than this process — a cache, a proxy, an old build.
+logline() {
+  local pattern="$1" label="${2:-$1}"
+  local hit
+  hit=$(ssh "$HOST" "sudo journalctl -u nfc-api --since '@$SINCE' --no-pager -o cat" 2>/dev/null \
+          | /usr/bin/grep -E "$pattern" | tail -1)
+  if [ -n "$hit" ]; then printf '  log:  %s\n' "$hit"
+  else bad "nothing in the access log matched: $label"; fi
+}
+
+# A screenshot of the LIVE admin, logged in with the throwaway session. Never fatal on its
+# own — a missing Chrome must not turn a production proof into a red — but a screenshot that
+# rendered the WRONG THING is, because that is the failure it exists to catch.
+shot() {
+  local page="$1" file="$2" wait_for="$3"
+  local token
+  token=$(/usr/bin/grep -E '\bts_session\b' "$ADMIN_JAR" | awk '{print $NF}')
+  [ -n "$token" ] || { bad "no ts_session cookie to screenshot with"; return; }
+  mkdir -p "$SHOTS"
+  if node ops/screenshot.mjs "$BASE$page" "$SHOTS/$file" --cookie "ts_session=$token" \
+        --wait-text "$wait_for" --height 1400 >/dev/null 2>"$TMP/shot.err"; then
+    ok "screen: $page rendered '$wait_for' -> docs/media/prove-live/$file"
+  else
+    bad "screen: $page never rendered '$wait_for' — $(tail -2 "$TMP/shot.err" | tr '\n' ' ')"
+  fi
+}
+
+echo "proving $BASE end to end   (marker: $MARK, slug: $PROVE_SLUG)"
+
+# =========================================================================================
+section "0 · the box, before anything"
+SINCE=$(ssh "$HOST" 'date +%s')
+MIGRATIONS=$(psql_box "SELECT count(*) FROM schema_migrations")
+[ "$MIGRATIONS" = "8" ] && ok "8 migrations applied" || bad "$MIGRATIONS migrations (want 8)"
+BASELINE_HOIV=$(psql_box "SELECT slug || '|' || active || '|' || coalesce(lat::text,'NULL') || '|' || coalesce(lng::text,'NULL') FROM locations")
+BASELINE_APK=$(ssh "$HOST" "sha256sum /srv/nfc/releases/*.apk | cut -d' ' -f1")
+ok "the building on the wall: $BASELINE_HOIV"
+
+# THE UUID THE CLEANERS ACTUALLY TAP. Everything below that says "the live card" means this.
+WALL_ID=$(psql_box "SELECT id FROM locations WHERE slug NOT LIKE 'prove-delete-me-%'")
+case "$WALL_ID" in
+  *-*-*-*-*) ok "the live building id is $WALL_ID" ;;
+  *) bad "could not read a single live building id (got '$WALL_ID')"; exit 1 ;;
+esac
+
+# A run that starts on a dirty box cannot make the closing claim, so it does not start.
+START_COUNTS=$(psql_box "SELECT (SELECT count(*) FROM workers) || '/' || (SELECT count(*) FROM operators) || '/' || (SELECT count(*) FROM shifts) || '/' || (SELECT count(*) FROM zones) || '/' || (SELECT count(*) FROM reported_tags) || '/' || (SELECT count(*) FROM locations)")
+[ "$START_COUNTS" = "0/0/0/0/0/1" ] \
+  && ok "starting from a clean box (workers/operators/shifts/zones/reported_tags/locations = $START_COUNTS)" \
+  || { bad "the box is NOT clean at the start: $START_COUNTS — refusing to run, because the closing count would be a lie"; exit 1; }
+
+trap cleanup EXIT
+
+# =========================================================================================
+section "1 · the phone — the operator writes two cards, NFC mocked"
+# android/checks/live-flow.sh runs the REAL nfc/TagWriter against fake cards AND replays the
+# debug simulator (the emulator's stand-in for a card) through it, so a mock that has drifted
+# from the shipping build is caught here rather than in a stairwell. It is handed the uuid
+# just read off the live database.
+if (cd android && LIVE_HOIV_ID="$WALL_ID" ./checks/live-flow.sh "$PHONE" > "$TMP/phone.log" 2>&1); then
+  ok "the phone half ran green ($(/usr/bin/grep -c '  ok:' "$TMP/phone.log") assertions)"
+else
+  bad "the phone half FAILED — transcript follows"
+  cat "$TMP/phone.log"
+  exit 1
+fi
+fact() { /usr/bin/awk -F'\t' -v k="$1" '$1==k{print $2}' "$PHONE/facts.tsv"; }
+
+TAG_BUILDING=$(fact tag_building)
+TAG_ZONE=$(fact tag_zone)
+[ -n "$TAG_BUILDING" ] && [ -n "$TAG_ZONE" ] && ok "two cards written: $TAG_BUILDING / $TAG_ZONE" \
+  || { bad "the phone did not emit two written tag ids"; exit 1; }
+echo "  screen (Karte 1):"; /usr/bin/sed 's/^/    | /' "$PHONE/screen-write-building.txt"; echo
+
+# =========================================================================================
+section "2 · the guard, against the row the cleaners tap"
+# Proven in full by the phone half; re-stated here because it is the claim, and because the
+# token has to be the last six of the LIVE id and not of a constant in a source file.
+GUARD_TOKEN=$(fact guard_token)
+[ "$GUARD_TOKEN" = "$(node -e 'process.stdout.write(process.argv[1].slice(-6).toLowerCase())' "$WALL_ID")" ] \
+  && ok "the override token is the last six of the LIVE building id ($GUARD_TOKEN)" \
+  || bad "token '$GUARD_TOKEN' is not the last six of $WALL_ID"
+/usr/bin/grep -q "$WALL_ID" "$PHONE/screen-guard-refused.txt" \
+  && ok "the refusal screen names the live building id" || bad "the refusal screen does not name it"
+echo "  screen (montierte Karte):"; /usr/bin/sed 's/^/    | /' "$PHONE/screen-guard-refused.txt"; echo
+
+# =========================================================================================
+section "3 · the office is told — POST /operator/tags, twice for one card"
+expect 401 POST /operator/tags --key --data "{\"id\":\"$TAG_BUILDING\"}"
+ok "…and a phone with no operator session cannot report at all"
+
+CREATED=$(printf '%s' "$ADMIN_PASSWORD" | ssh "$HOST" \
+  "sudo bash -c 'set -a; . /etc/nfc/env; set +a; node /srv/nfc/ops/smoke-admin.mjs create $ADMIN_EMAIL'" 2>&1 | tail -1)
+case "$CREATED" in created\ *) ok "throwaway admin $CREATED" ;; *) bad "could not create the throwaway admin: $CREATED"; exit 1 ;; esac
+expect 200 POST /admin/login --jar "$ADMIN_JAR" \
+  --data "$(node -e 'process.stdout.write(JSON.stringify({email:process.argv[1],password:process.argv[2]}))' "$ADMIN_EMAIL" "$ADMIN_PASSWORD")"
+[ "$FAILED" = "0" ] || { echo "  (admin login failed — stopping here)"; exit 1; }
+
+expect 201 POST /admin/operators --jar "$ADMIN_JAR" --data "{\"name\":\"$MARK operator\",\"phone\":\"+436811111111\"}"
+OPERATOR_ID=$(jget operator.id)
+expect 201 POST "/admin/operators/$OPERATOR_ID/enrolment-code" --jar "$ADMIN_JAR" --data '{}'
+OP_CODE=$(jget code)
+expect 200 POST /auth/operator-code --key --jar "$OP_JAR" --data "$(node -e 'process.stdout.write(JSON.stringify({code:process.argv[1]}))' "$OP_CODE")"
+/usr/bin/grep -q ts_operator "$OP_JAR" && ok "the phone now holds an operator session" || bad "no ts_operator cookie"
+
+expect 201 POST /operator/tags --key --jar "$OP_JAR" --data "{\"id\":\"$TAG_BUILDING\"}"
+expect 201 POST /operator/tags --key --jar "$OP_JAR" --data "{\"id\":\"$TAG_ZONE\"}"
+logline "POST /operator/tags 201" "the 201s for the two reports"
+
+# THE SAME PHYSICAL CARD, REPORTED TWICE. The operator taps `Meldung erneut senden`, or the
+# app retries after a dropped connection: one row, answered 200, never a second tag.
+expect 200 POST /operator/tags --key --jar "$OP_JAR" --data "{\"id\":\"$TAG_BUILDING\"}"
+ROWS=$(psql_box "SELECT count(*) FROM reported_tags WHERE id = '$TAG_BUILDING'")
+[ "$ROWS" = "1" ] && ok "two reports of one card, one row" || bad "reported_tags rows for that card: $ROWS"
+logline "POST /operator/tags 200" "the idempotent second report"
+
+UNBOUND=$(psql_box "SELECT count(*) FROM reported_tags WHERE id IN ('$TAG_BUILDING','$TAG_ZONE') AND resolved_at IS NULL AND reported_by_operator_id = $OPERATOR_ID")
+[ "$UNBOUND" = "2" ] && ok "both rows are UNBOUND and carry the operator who reported them" || bad "unbound rows: $UNBOUND (want 2)"
+row "the unbound tag" "SELECT id || ' reported_at=' || reported_at || ' resolved_at=' || coalesce(resolved_at::text,'NULL') FROM reported_tags WHERE id = '$TAG_BUILDING'"
+
+# =========================================================================================
+section "4 · it appears in the admin — the payload AND the screen"
+expect 200 GET /admin/data --jar "$ADMIN_JAR"
+IN_PAYLOAD=$(node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const d=JSON.parse(s);const ids=(d.reported_tags||[]).map(t=>t.id);process.stdout.write(String(process.argv.slice(1).every(i=>ids.includes(i))))})' "$TAG_BUILDING" "$TAG_ZONE" < "$TMP/body")
+[ "$IN_PAYLOAD" = "true" ] && ok "both cards are in GET /admin/data reported_tags" || bad "the admin payload does not carry both cards"
+NAMED=$(node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const t=(JSON.parse(s).reported_tags||[]).find(t=>t.id===process.argv[1]);process.stdout.write(String(t?.reported_by_operator_name??""))})' "$TAG_BUILDING" < "$TMP/body")
+[ "$NAMED" = "$MARK operator" ] && ok "the panel says who reported it: $NAMED" || bad "reported_by_operator_name = '$NAMED'"
+
+# THE SCREEN ITSELF. Headless Chrome against the live host, with the throwaway admin's
+# cookie, waiting for the tag id to actually be in the rendered text.
+shot "/tags/" "01-tags-unbound.png" "$TAG_BUILDING"
+
+# =========================================================================================
+section "5 · the admin decides what the cards ARE — a building, and a zone in it"
+expect 201 POST "/admin/tags/$TAG_BUILDING/resolve-building" --jar "$ADMIN_JAR" \
+  --data "{\"name\":\"$MARK Haus\",\"slug\":\"$PROVE_SLUG\",\"address\":\"Arsenalstrasse 11, 1030 Wien\",\"lat\":48.1761151,\"lng\":16.3953038}"
+NEW_LOCATION=$(jget location.id)
+[ "$NEW_LOCATION" = "$TAG_BUILDING" ] \
+  && ok "the building IS the card — no second id space, the bytes never change (decision-21/44)" \
+  || bad "the new building got id $NEW_LOCATION, not the card's $TAG_BUILDING"
+logline "POST /admin/tags/$TAG_BUILDING/resolve-building 201"
+
+expect 201 POST "/admin/tags/$TAG_ZONE/resolve-zone" --jar "$ADMIN_JAR" \
+  --data "{\"location_id\":\"$NEW_LOCATION\",\"name\":\"$MARK Stiege A\",\"area_sqm\":120}"
+NEW_ZONE=$(jget zone.id)
+[ "$NEW_ZONE" = "$TAG_ZONE" ] && ok "the zone IS the second card ($NEW_ZONE)" || bad "zone id $NEW_ZONE != card $TAG_ZONE"
+
+# Resolved once, and only once: a second admin clicking the same row is refused, not
+# silently given a second building.
+expect 409 POST "/admin/tags/$TAG_BUILDING/resolve-building" --jar "$ADMIN_JAR" \
+  --data "{\"name\":\"$MARK zweites Haus\",\"slug\":\"$PROVE_SLUG-again\"}"
+LEFT=$(psql_box "SELECT count(*) FROM reported_tags WHERE resolved_at IS NULL")
+[ "$LEFT" = "0" ] && ok "the admin's worklist is empty again — both cards resolved" || bad "$LEFT tags still unresolved"
+row "the new zone" "SELECT l.slug || ' | zone ' || z.name || ' | ' || coalesce(z.area_sqm::text,'-') || ' m2 | tag_deployed_at=' || coalesce(z.tag_deployed_at::text,'NULL') FROM zones z JOIN locations l ON l.id = z.location_id WHERE z.id = '$NEW_ZONE'"
+shot "/locations/" "02-building-created.png" "$MARK Haus"
+
+# =========================================================================================
+section "6 · a cleaner taps — the card opens a shift, and a second tap closes it"
+expect 201 POST /admin/workers --jar "$ADMIN_JAR" --data "{\"name\":\"$MARK worker\",\"hourly_rate_cents\":1450,\"active\":true}"
+WORKER_ID=$(jget worker.id)
+expect 201 POST "/admin/workers/$WORKER_ID/enrolment-code" --jar "$ADMIN_JAR" --data '{}'
+W_CODE=$(jget code)
+expect 200 POST /auth/code --key --jar "$WORKER_JAR" --data "$(node -e 'process.stdout.write(JSON.stringify({code:process.argv[1]}))' "$W_CODE")"
+/usr/bin/grep -q ts_worker "$WORKER_JAR" && ok "the cleaner's phone holds a worker session" || bad "no ts_worker cookie"
+
+# THE TAP. The body is the OLD SHAPE the APK in the field sends — client_uuid, location_uuid,
+# start_time, and no zone field anywhere — posted at the ZONE card, which the server resolves
+# to its building. § 9 proves that shape is the one the field APK actually carries.
+TAP1=$(uuid)
+expect 201 POST /shifts/open --key --jar "$WORKER_JAR" \
+  --data "{\"client_uuid\":\"$TAP1\",\"location_uuid\":\"$TAG_ZONE\",\"start_time\":\"$(ago 45)\"}"
+SHIFT_ID=$(jget shift.id)
+[ "$(jget shift.start_zone_id)" = "$TAG_ZONE" ] && ok "the shift carries the ZONE the cleaner tapped" || bad "start_zone_id = $(jget shift.start_zone_id)"
+[ "$(jget shift.location_id)" = "$NEW_LOCATION" ] && ok "…and resolves to the building that zone is in" || bad "location_id = $(jget shift.location_id)"
+logline "POST /shifts/open 201 .* w=$WORKER_ID" "the clock-in, w=$WORKER_ID"
+row "the open shift" "SELECT id || ' | worker ' || worker_id || ' | zone ' || coalesce(start_zone_id::text,'NULL') || ' | end_time ' || coalesce(end_time::text,'OPEN') FROM shifts WHERE id = $SHIFT_ID"
+
+# THE SECOND TAP. There is no in-app button that closes a shift — tapping the same card
+# again is the only way out, and it is what the cleaner does at the door on the way home.
+expect 200 POST /shifts/close --key --jar "$WORKER_JAR" \
+  --data "{\"client_uuid\":\"$TAP1\",\"location_uuid\":\"$TAG_ZONE\",\"end_time\":\"$(now)\"}"
+CLOSED=$(psql_box "SELECT end_time IS NOT NULL FROM shifts WHERE id = $SHIFT_ID")
+[ "$CLOSED" = "t" ] && ok "the second tap closed it" || bad "the shift is still open"
+logline "POST /shifts/close 200 .* w=$WORKER_ID" "the clock-out"
+row "the closed shift" "SELECT 'end_zone=' || coalesce(end_zone_id::text,'NULL') || ' auto_closed=' || auto_closed || ' minutes=' || round(extract(epoch from (end_time - start_time))/60) FROM shifts WHERE id = $SHIFT_ID"
+shot "/shifts/" "03-shift-closed.png" "$MARK worker"
+
+# =========================================================================================
+section "7 · the OLD card on the wall still clocks in"
+# Nothing in 006/007/008 may have changed what the card already screwed to the wall at HOIV
+# does. Same old-shape body, the live building uuid, no zone: 201, and start_zone_id NULL
+# because that building has no zones (decision-43 — grey, not dead).
+TAP2=$(uuid)
+WALL_START=$(ago 20)
+expect 201 POST /shifts/open --key --jar "$WORKER_JAR" \
+  --data "{\"client_uuid\":\"$TAP2\",\"location_uuid\":\"$WALL_ID\",\"start_time\":\"$WALL_START\"}"
+[ -z "$(jget shift.start_zone_id)" ] && ok "start_zone_id is NULL — an unzoned building invents no zone" || bad "start_zone_id=$(jget shift.start_zone_id)"
+expect 200 POST /shifts/open --key --jar "$WORKER_JAR" \
+  --data "{\"client_uuid\":\"$TAP2\",\"location_uuid\":\"$WALL_ID\",\"start_time\":\"$WALL_START\"}"
+COUNT=$(psql_box "SELECT count(*) FROM shifts WHERE client_uuid = '$TAP2'")
+[ "$COUNT" = "1" ] && ok "one tap, one shift, even retried on flaky wifi" || bad "shifts for that tap: $COUNT"
+expect 200 POST /shifts/close --key --jar "$WORKER_JAR" --data "{\"client_uuid\":\"$TAP2\",\"location_uuid\":\"$WALL_ID\",\"end_time\":\"$(now)\"}"
+logline "POST /shifts/open 201 .* w=$WORKER_ID" "the wall tap"
+
+# =========================================================================================
+section "8 · a tap on an UNBOUND card is harmless, and says so in German"
+ORPHAN=$(uuid)
+expect 201 POST /operator/tags --key --jar "$OP_JAR" --data "{\"id\":\"$ORPHAN\"}"
+BEFORE=$(psql_box "SELECT count(*) FROM shifts")
+expect 422 POST /shifts/open --key --jar "$WORKER_JAR" \
+  --data "{\"client_uuid\":\"$(uuid)\",\"location_uuid\":\"$ORPHAN\",\"start_time\":\"$(now)\"}"
+[ "$(jget error)" = "tag_unbound" ] && ok "refused as tag_unbound" || bad "refused as '$(jget error)'"
+AFTER=$(psql_box "SELECT count(*) FROM shifts")
+[ "$BEFORE" = "$AFTER" ] && ok "NO shift row was created ($BEFORE = $AFTER)" || bad "shift count moved $BEFORE -> $AFTER"
+logline "POST /shifts/open 422 .* err=tag_unbound" "the refusal, in the log"
+# The sentence the cleaner reads, rendered from res/values/strings.xml by the phone half.
+UNBOUND_DE=$(fact unbound_de)
+[ -n "$UNBOUND_DE" ] && ok "the phone says: „$UNBOUND_DE\"" || bad "no German sentence for an unbound tap"
+case "$UNBOUND_DE" in *[Vv]erwaltung*) ok "…and it tells the cleaner what to DO about it" ;; *) bad "the sentence does not say who to tell" ;; esac
+# A card nobody ever reported is refused the same way — the tag, not the report, is what
+# fails to resolve, so an unreported uuid must not answer differently.
+expect 422 POST /shifts/open --key --jar "$WORKER_JAR" \
+  --data "{\"client_uuid\":\"$(uuid)\",\"location_uuid\":\"$(uuid)\",\"start_time\":\"$(now)\"}"
+ok "a card the office has never heard of: $(jget error)"
+
+# =========================================================================================
+section "9 · self-update, from the field phone's point of view"
+FIELD_APK=android/dist/nfc-timesheets-0.4.0-5-release.apk
+[ -f "$FIELD_APK" ] || bad "the field build $FIELD_APK is missing — § 9 cannot compare against it"
+if [ -f "$FIELD_APK" ]; then
+  # THE FIELD BUILD'S OWN NUMBER, out of its binary manifest — never a filename, which is
+  # what lied the last time this was measured (ops/publish-apk.sh's header).
+  export JAVA_HOME="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
+  FIELD_CODE=$(apkanalyzer manifest version-code "$FIELD_APK" 2>/dev/null)
+  case "$FIELD_CODE" in
+    ''|*[!0-9]*) bad "could not read the field APK's versionCode (JAVA_HOME=$JAVA_HOME)"; FIELD_CODE=0 ;;
+    *) ok "the phone in the field runs versionCode $FIELD_CODE" ;;
+  esac
+
+  # AND ITS CLOCK-IN SHAPE, out of its own DEX. § 6 and § 7 post client_uuid/location_uuid/
+  # start_time and claim that is "what the APK in the field sends". This is where that stops
+  # being a claim: the three keys are in the shipped bytes of the build on the phone.
+  # NOT `unzip | strings | grep -q`. `grep -q` exits on its first match, `strings` takes
+  # SIGPIPE, and `set -o pipefail` turns the whole success into a 141 — the exact inversion
+  # that made release-artefact.sh unable to fail (CORE-FLOW § 3). Materialise, then count.
+  unzip -p "$FIELD_APK" 'classes*.dex' > "$TMP/field.dex" 2>/dev/null
+  strings "$TMP/field.dex" > "$TMP/field.strings"
+  DEX_KEYS=0
+  for k in client_uuid location_uuid start_time end_time; do
+    [ "$(/usr/bin/grep -cx "$k" "$TMP/field.strings")" -gt 0 ] && DEX_KEYS=$((DEX_KEYS + 1))
+  done
+  [ "$DEX_KEYS" = "4" ] && ok "the field APK's own DEX carries client_uuid, location_uuid, start_time, end_time" \
+                        || bad "only $DEX_KEYS of the 4 clock-in keys are in the field APK"
+
+  expect 200 GET /app/version --key
+  PUB=$(jget published); VC=$(jget version_code); VN=$(jget version_name); SHA=$(jget sha256)
+  [ "$PUB" = "true" ] && ok "published: $VN ($VC)" || bad "published=$PUB"
+  [ "$VC" -gt "$FIELD_CODE" ] 2>/dev/null \
+    && ok "$VC > $FIELD_CODE ∴ UpdateCheck.isNewer offers it to the field phone" \
+    || bad "version_code $VC does not beat the field build's $FIELD_CODE"
+  logline "GET /app/version 200"
+
+  curl -sS --max-time 90 -H "X-App-Key: $APP_KEY" -o "$TMP/update.apk" "$BASE/app/download"
+  GOT=$(shasum -a 256 "$TMP/update.apk" | cut -d' ' -f1)
+  [ "$GOT" = "$SHA" ] && ok "the bytes match the manifest's sha256 ∴ UpdateManager.verify() accepts them" \
+                      || bad "downloaded sha $GOT != published $SHA"
+  logline "GET /app/download 200"
+
+  # SIGNATURES. Android refuses an update signed with a different key than the installed
+  # build — that is the property, and it is checked here the only way it can be off a
+  # device: the certificate digests. Same digest = `adb install -r` lands. Different = the
+  # OS refuses with INSTALL_FAILED_UPDATE_INCOMPATIBLE, and no amount of sha256 matching
+  # helps, which is exactly why UpdateManager's own hash check is not the security boundary.
+  APKSIGNER="${APKSIGNER:-$(/bin/ls -d /opt/homebrew/share/android-commandlinetools/build-tools/*/apksigner 2>/dev/null | tail -1)}"
+  certof() { "$APKSIGNER" verify --print-certs "$1" 2>/dev/null | /usr/bin/awk '/SHA-256 digest/ {print $NF; exit}'; }
+  if [ -x "$APKSIGNER" ]; then
+    FIELD_CERT=$(certof "$FIELD_APK")
+    NEW_CERT=$(certof "$TMP/update.apk")
+    [ -n "$NEW_CERT" ] && [ "$NEW_CERT" = "$FIELD_CERT" ] \
+      && ok "the published APK is signed with the SAME key as the field build ($NEW_CERT) ∴ it installs over it" \
+      || bad "published cert $NEW_CERT != field cert $FIELD_CERT — the update would be REFUSED by the OS"
+
+    # The tag host publishes that fingerprint too, which is what makes a passive tap open
+    # the app instead of Chrome. A differently-signed build fails App Link verification as
+    # well as installation, so this is the same key doing two jobs.
+    ASSET=$(curl -sS "https://$TAG_HOST/.well-known/assetlinks.json" \
+      | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s)[0].target.sha256_cert_fingerprints[0].replace(/:/g,"").toLowerCase()))')
+    [ "$ASSET" = "$NEW_CERT" ] && ok "the TAG host publishes that same fingerprint ∴ a tap opens the app" \
+                              || bad "assetlinks fingerprint $ASSET != the published APK's $NEW_CERT"
+
+    # THE NEGATIVE CASE, MADE REAL. A copy of the very same APK, re-signed with a key that
+    # is not ours. Same bytes of code, same version code, same everything the manifest says
+    # — and a certificate the phone has never seen.
+    keytool -genkeypair -keystore "$TMP/rogue.jks" -storepass rogue123 -keypass rogue123 \
+      -alias rogue -keyalg RSA -keysize 2048 -validity 30 \
+      -dname "CN=Not Us, O=Rogue, C=AT" >/dev/null 2>&1
+    cp "$TMP/update.apk" "$TMP/rogue.apk"
+    if "$APKSIGNER" sign --ks "$TMP/rogue.jks" --ks-pass pass:rogue123 --key-pass pass:rogue123 \
+         --ks-key-alias rogue "$TMP/rogue.apk" >/dev/null 2>&1; then
+      ROGUE_CERT=$(certof "$TMP/rogue.apk")
+      [ -n "$ROGUE_CERT" ] && [ "$ROGUE_CERT" != "$NEW_CERT" ] \
+        && ok "a build signed with another key carries cert $ROGUE_CERT ∴ the OS refuses it over ours" \
+        || bad "re-signing produced cert '$ROGUE_CERT' — the negative case did not separate"
+      [ "$ROGUE_CERT" != "$ASSET" ] && ok "…and the tag host does not vouch for it either" || bad "assetlinks vouches for the rogue key"
+      # And it is still a VALID apk — the refusal is about identity, not corruption, which
+      # is the distinction UpdateManager's sha256 check cannot make.
+      "$APKSIGNER" verify "$TMP/rogue.apk" >/dev/null 2>&1 \
+        && ok "the rogue build is perfectly well-formed and signed — only by the wrong hand" \
+        || bad "the rogue apk does not verify at all, so it proves nothing about key identity"
+    else
+      bad "could not re-sign a copy — the different-key case was not exercised"
+    fi
+  else
+    bad "apksigner not found — the signing key claims were NOT checked"
+  fi
+fi
+
+# =========================================================================================
+section "10 · the director's own screens, with this run's data on them"
+RANGE="from=$(date -u -v-30d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '30 days ago' +%Y-%m-%dT00:00:00Z)&to=$(date -u +%Y-%m-%dT23:59:59Z)"
+expect 200 GET "/admin/analytics?$RANGE" --jar "$ADMIN_JAR"
+# `location_id`, not `id` — lib/reporting.js names it that, and a lookup on the wrong key
+# silently returns undefined for EVERY building, which reads as "missing" and not as a bug
+# in the check.
+building_field() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const b=JSON.parse(s).buildings||[];const f=b.find(x=>x.location_id===process.argv[1]);if(!f){process.stdout.write("missing");return}process.stdout.write(process.argv.slice(2).map(k=>String(f[k])).join("/"))})' "$@" < "$TMP/body"; }
+ZONED=$(building_field "$WALL_ID" zone_state active)
+[ "$ZONED" = "unzoned/true" ] && ok "HOIV is still unzoned AND active on the director's dashboard (decision-43)" || bad "HOIV reads $ZONED"
+NEWSTATE=$(building_field "$NEW_LOCATION" zone_state)
+[ "$NEWSTATE" = "zoned" ] && ok "the building this run created reads 'zoned' — the two states are told apart" || bad "the new building reads '$NEWSTATE'"
+shot "/analytics/" "04-analytics.png" "$MARK Haus"
