@@ -136,6 +136,39 @@ function hasBareCount(value) {
   return bare
 }
 
+/**
+ * Every PLURAL node in a message, as its set of branch keywords.
+ *
+ * WHY THIS IS NOT COVERED BY THE TWO CHECKS ABOVE. `argumentsOf` compares the ARGUMENTS of
+ * en and de and is blind to branches: `{count, plural, other {# Schichten}}` and
+ * `{count, plural, one {# Schicht} other {# Schichten}}` have the identical argument set
+ * `{count}`. `hasBareCount` is blind to it too — the `#` is a pound node, not an argument, so
+ * a plural with only an `other` branch is a plural and passes. Between them they accept a
+ * German message that prints
+ *
+ *     „1 Schichten"      instead of  „1 Schicht"
+ *     "1 buildings"      instead of  "1 building"
+ *
+ * which is precisely the payroll-screen wording the file header says this check exists for —
+ * it was fixed by WRAPPING the sentence in a plural, and nothing then asserted the wrapping
+ * was complete. German and English are both CLDR two-form languages: `one` and `other`, both
+ * REQUIRED. (`=0` and friends are exact-value branches; they are extra, never a substitute —
+ * `=1` does not make `one` optional, because ICU only consults exact matches for that exact
+ * value and German still inflects at every other 1-like input the runtime may hand it.)
+ */
+function pluralBranchesOf(value) {
+  const found = []
+  const walk = (nodes) => {
+    for (const node of nodes) {
+      if (node.type === TYPE.plural) found.push(Object.keys(node.options))
+      if (node.options) for (const option of Object.values(node.options)) walk(option.value)
+      if (node.type === TYPE.tag && node.children) walk(node.children)
+    }
+  }
+  walk(parse(value))
+  return found
+}
+
 /** {a: {b: 'x'}} -> {'a.b': 'x'}. Non-string leaves are kept so they can be reported. */
 function flatten(value, prefix = '', out = {}) {
   for (const [key, child] of Object.entries(value)) {
@@ -169,6 +202,25 @@ assert.deepEqual(
 assert.equal(hasBareCount('{count} von ihnen zählen nicht.'), true)
 assert.equal(hasBareCount('{count, plural, one {# zählt} other {# zählen}}'), false)
 assert.equal(hasBareCount('{count, plural, one {# von {count} Tagen} other {#}}'), true)
+
+assert.deepEqual(
+  pluralBranchesOf('{count, plural, one {# Schicht} other {# Schichten}}'),
+  [['one', 'other']],
+  'both branches of a plural must be seen',
+)
+assert.deepEqual(
+  pluralBranchesOf('{count, plural, other {# Schichten}}'),
+  [['other']],
+  'a plural MISSING its one branch must be seen as missing it',
+)
+assert.deepEqual(
+  pluralBranchesOf('{a, plural, one {x} other {{b, plural, other {y}}}}'),
+  [
+    ['one', 'other'],
+    ['other'],
+  ],
+  'a plural nested inside a plural branch is still a plural',
+)
 
 // --- 1. exact version pins (decision-9) ------------------------------------------------
 
@@ -267,6 +319,41 @@ for (const locale of LOCALES) {
       `these say "1 shifts" (or "zählen 1"):\n- ${bare.join('\n- ')}\n` +
         'Wrap the sentence in {count, plural, one {...} other {...}} and use # for the number,\n' +
         `or add the key to FIXED_COUNT_KEYS if the number is a hard-coded cap.`,
+    )
+  })
+}
+
+/**
+ * The two CLDR plural categories German and English both have, and both inflect on.
+ * Austrian German is `de` for pluralisation purposes — the AT differences are vocabulary
+ * (Jänner, Erdäpfel) and formatting, not plural rules.
+ */
+const REQUIRED_PLURAL_BRANCHES = ['one', 'other']
+
+for (const locale of LOCALES) {
+  check(`messages/${locale}.json: every plural has a one AND an other branch`, () => {
+    const broken = []
+    for (const [key, value] of Object.entries(dictionaries[locale])) {
+      if (typeof value !== 'string') continue
+      let branchSets
+      try {
+        branchSets = pluralBranchesOf(value)
+      } catch {
+        continue // reported as unparseable by the argument check above
+      }
+      for (const branches of branchSets) {
+        const missing = REQUIRED_PLURAL_BRANCHES.filter((name) => !branches.includes(name))
+        if (missing.length > 0) {
+          broken.push(`${key} (has: ${branches.join(',')} — missing: ${missing.join(',')})`)
+        }
+      }
+    }
+    assert.deepEqual(
+      broken,
+      [],
+      `these print "1 Schichten" for count=1:\n- ${broken.join('\n- ')}\n` +
+        'German and English are both two-form CLDR languages: `one` and `other` are BOTH\n' +
+        'required. An `=0` or `=1` branch is additional, never a replacement.',
     )
   })
 }
