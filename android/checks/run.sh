@@ -51,7 +51,7 @@ CORE=app/src/main/kotlin/io/github/qwadratic/nfctimesheets/core
 "$KOTLINC" -nowarn -cp "$JSON_JAR" -d "$OUT" \
   "$CORE"/TagLink.kt "$CORE"/ApiFailure.kt "$CORE"/TapInbox.kt "$CORE"/Wire.kt "$CORE"/SyncPlan.kt \
   "$CORE"/EnrolmentCode.kt "$CORE"/SessionCookie.kt "$CORE"/MaterialQueue.kt "$CORE"/ShiftSignal.kt \
-  "$CORE"/Zones.kt \
+  "$CORE"/Zones.kt "$CORE"/UpdateCheck.kt \
   checks/core-check.kt
 
 KOTLIN_HOME="$(dirname "$(dirname "$(command -v "$KOTLINC")")")"
@@ -69,6 +69,7 @@ NFC=app/src/main/kotlin/io/github/qwadratic/nfctimesheets/nfc
 # main CoreCheck build above, even though this check calls none of that surface.
 "$KOTLINC" -nowarn -cp "$JSON_JAR" -d "$OUT" \
   "$CORE"/TagLink.kt "$CORE"/ApiFailure.kt "$CORE"/MaterialQueue.kt "$CORE"/Wire.kt "$CORE"/Zones.kt \
+  "$CORE"/UpdateCheck.kt \
   "$NFC"/KnownTags.kt checks/known-tags-check.kt
 
 "$JAVA_BIN" -cp "$OUT:$JSON_JAR:$STDLIB" io.github.qwadratic.nfctimesheets.checks.KnownTagsCheck

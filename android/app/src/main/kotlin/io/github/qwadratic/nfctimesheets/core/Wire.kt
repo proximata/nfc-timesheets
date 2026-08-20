@@ -107,6 +107,23 @@ object Wire {
         return WireRoster(locationList, zoneList)
     }
 
+    /**
+     * GET /app/version (this iteration, routes/release.js). `{published:false}` decodes
+     * to `null` — there is nothing to offer, and "nothing published" and "offline" are
+     * deliberately indistinguishable to UpdateManager.checkForUpdate() past this point;
+     * both mean "no update to show".
+     */
+    fun release(o: JSONObject): RemoteRelease? {
+        if (!o.optBoolean("published", false)) return null
+        return RemoteRelease(
+            versionCode = o.getInt("version_code"),
+            versionName = o.stringOrNull("version_name"),
+            sha256 = o.stringOrNull("sha256"),
+            notes = o.stringOrNull("notes"),
+            url = o.getString("url"),
+        )
+    }
+
     fun shift(o: JSONObject) = WireShift(
         id = o.getInt("id"),
         workerId = o.getInt("worker_id"),

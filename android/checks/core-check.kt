@@ -28,10 +28,12 @@ import io.github.qwadratic.nfctimesheets.core.MaterialStatus
 import io.github.qwadratic.nfctimesheets.core.QueuedMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
+import io.github.qwadratic.nfctimesheets.core.RemoteRelease
 import io.github.qwadratic.nfctimesheets.core.RunningShift
 import io.github.qwadratic.nfctimesheets.core.SessionCookie
 import io.github.qwadratic.nfctimesheets.core.ShiftSignal
 import io.github.qwadratic.nfctimesheets.core.SyncPlan
+import io.github.qwadratic.nfctimesheets.core.UpdateCheck
 import io.github.qwadratic.nfctimesheets.core.SyncPlan.QueuedShift
 import io.github.qwadratic.nfctimesheets.core.TagLink
 import io.github.qwadratic.nfctimesheets.core.TapInbox
@@ -94,6 +96,7 @@ fun main() {
     sessionPersistence()
     materialRequests()
     shiftSignal()
+    updateCheck()
 
     if (failed) exitProcess(1)
     println("core-check: OK")
@@ -1607,5 +1610,107 @@ private fun shiftSignal() {
     check(
         swift.contains("shiftRunning ? [.log, .materials, .settings] : AppTab.allCases"),
         "iOS hides the same one tab and keeps the same two escapes",
+    )
+}
+
+// ---------------------------------------------------------------------------------
+// 14. SELF-UPDATE (this iteration): version comparison, DownloadManager status
+//     classification, and the {published:false} wire shape. update/UpdateManager.kt
+//     itself needs a real DownloadManager and so is UNPROVABLE off-device — the same
+//     ceiling core-check already accepts for NFC dispatch — but every decision it makes
+//     is pure Kotlin and lives in core/UpdateCheck.kt precisely so it can be proven here.
+// ---------------------------------------------------------------------------------
+private fun updateCheck() {
+    val release = RemoteRelease(
+        versionCode = 6,
+        versionName = "0.5.0",
+        sha256 = null,
+        notes = null,
+        url = "/app/download",
+    )
+
+    check(UpdateCheck.isNewer(release, currentVersionCode = 5), "a strictly higher version_code is newer")
+    // THE RED CASE, shown RED before it was fixed: `>=` in place of `>` would call the
+    // phone's OWN running build "an update", offering it to install itself for ever.
+    // Verified by writing isNewer as `remote.versionCode >= currentVersionCode` first:
+    // this assertion FAILED (returned true for equal version codes). `>` fixes it.
+    check(
+        !UpdateCheck.isNewer(release.copy(versionCode = 5), currentVersionCode = 5),
+        "the SAME version_code is never \"newer\"",
+    )
+    check(
+        !UpdateCheck.isNewer(release.copy(versionCode = 4), currentVersionCode = 5),
+        "an OLDER version_code is never \"newer\" either",
+    )
+
+    // ---- android.app.DownloadManager status/reason classification -----------------
+    check(
+        UpdateCheck.classify(UpdateCheck.DM_STATUS_SUCCESSFUL, 0) == UpdateCheck.DownloadOutcome.SUCCESS,
+        "a successful status classifies as SUCCESS",
+    )
+    check(
+        UpdateCheck.classify(UpdateCheck.DM_STATUS_RUNNING, 0) == UpdateCheck.DownloadOutcome.RUNNING,
+        "a running status classifies as RUNNING",
+    )
+    check(
+        UpdateCheck.classify(UpdateCheck.DM_STATUS_PENDING, 0) == UpdateCheck.DownloadOutcome.RUNNING,
+        "a pending status classifies as RUNNING too — not yet started is not a failure",
+    )
+    check(
+        UpdateCheck.classify(UpdateCheck.DM_STATUS_PAUSED, UpdateCheck.DM_PAUSED_WAITING_FOR_NETWORK) ==
+            UpdateCheck.DownloadOutcome.WAITING_FOR_NETWORK,
+        "paused-for-network classifies as WAITING_FOR_NETWORK, not FAILED",
+    )
+    check(
+        UpdateCheck.classify(UpdateCheck.DM_STATUS_PAUSED, UpdateCheck.DM_PAUSED_QUEUED_FOR_WIFI) ==
+            UpdateCheck.DownloadOutcome.WAITING_FOR_NETWORK,
+        "queued-for-wifi classifies as WAITING_FOR_NETWORK too",
+    )
+    check(
+        UpdateCheck.classify(UpdateCheck.DM_STATUS_PAUSED, UpdateCheck.DM_PAUSED_UNKNOWN) ==
+            UpdateCheck.DownloadOutcome.RUNNING,
+        "an unrecognised pause reason reads as still RUNNING, never a silent failure",
+    )
+    // THE RED CASE, shown RED before it was fixed: a `when (status)` with no inner
+    // `when (reason)` branch classifies EVERY failure the same way, including a full
+    // disk — the worker would be told "try again" and retry into the same wall forever,
+    // when the real instruction is "delete something first". Verified by writing
+    // classify() with the STORAGE_FULL arm removed: this assertion failed (returned
+    // FAILED, not STORAGE_FULL). The reason-code branch fixes it.
+    check(
+        UpdateCheck.classify(UpdateCheck.DM_STATUS_FAILED, UpdateCheck.DM_ERROR_INSUFFICIENT_SPACE) ==
+            UpdateCheck.DownloadOutcome.STORAGE_FULL,
+        "insufficient-space failure classifies as STORAGE_FULL, not a generic FAILED",
+    )
+    check(
+        UpdateCheck.classify(UpdateCheck.DM_STATUS_FAILED, 1008 /* ERROR_CANNOT_RESUME */) ==
+            UpdateCheck.DownloadOutcome.FAILED,
+        "any OTHER failure reason still classifies as the generic FAILED",
+    )
+    check(
+        UpdateCheck.classify(status = 99, reason = 0) == UpdateCheck.DownloadOutcome.FAILED,
+        "an unrecognised status is read as FAILED, never silently ignored",
+    )
+
+    // ---- Wire.release(): the GET /app/version envelope ----------------------------
+    val notPublished = JSONObject("""{"published":false}""")
+    check(Wire.release(notPublished) == null, "an unpublished manifest decodes to null, never a throw")
+
+    val published = JSONObject(
+        """{"published":true,"version_code":9,"version_name":"9.9.9",
+            "sha256":"deadbeef","notes":"x","url":"/app/download"}""",
+    )
+    val decoded = Wire.release(published)
+    check(decoded != null, "a published manifest decodes")
+    check(decoded?.versionCode == 9 && decoded.versionName == "9.9.9", "version_code and version_name ride along")
+    check(decoded?.sha256 == "deadbeef" && decoded?.url == "/app/download", "sha256 and url ride along too")
+
+    // A manifest missing the optional fields must still decode — sha256/version_name/
+    // notes are all optional server-side (routes/release.js).
+    val minimal = JSONObject("""{"published":true,"version_code":9,"url":"/app/download"}""")
+    val decodedMinimal = Wire.release(minimal)
+    check(
+        decodedMinimal != null && decodedMinimal.versionName == null && decodedMinimal.sha256 == null,
+        "a minimal published manifest still decodes, with the optional fields null",
     )
 }

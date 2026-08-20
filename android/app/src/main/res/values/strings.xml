@@ -111,6 +111,29 @@
     <string name="settings_admin_note">Stunden, Objekte und Lohnabrechnung verwaltet Ihre Verwaltung im Web.</string>
     <string name="settings_sign_out_note">Bereits gesendete Schichten bleiben auf dem Server. Was noch nicht gesendet wurde, bleibt liegen, bis Sie sich wieder anmelden. Zum erneuten Anmelden brauchen Sie einen neuen Anmeldecode von Ihrer Verwaltung – der alte gilt nicht mehr.</string>
 
+    <!-- Selbst-Update (dieses Kapitel). Läuft ausschließlich über einen Knopfdruck in
+         Einstellungen – nichts hier unterbricht jemals eine laufende Schicht. -->
+    <string name="update_title">App-Version</string>
+    <!-- %1$s = Versionsname, %2$d = Versionsnummer -->
+    <string name="update_current_version">Installiert: %1$s (%2$d)</string>
+    <string name="update_check_button">Nach Updates suchen</string>
+    <string name="update_checking">Suche nach Updates …</string>
+    <string name="update_up_to_date">Sie haben die aktuelle Version.</string>
+    <!-- %1$s = Versionsname der verfügbaren Version -->
+    <string name="update_available">Version %1$s ist verfügbar.</string>
+    <string name="update_unknown_version">unbekannt</string>
+    <string name="update_download_button">Herunterladen</string>
+    <!-- %1$d = Prozent -->
+    <string name="update_downloading">Wird heruntergeladen … %1$d %%</string>
+    <string name="update_downloading_unknown">Wird heruntergeladen …</string>
+    <string name="update_waiting_network">Warte auf Internetverbindung …</string>
+    <string name="update_ready">Bereit zur Installation.</string>
+    <string name="update_install_button">Installieren</string>
+    <string name="update_install_blocked_note">Diese App darf noch keine Updates installieren. Das ist eine einmalige Freigabe pro Telefon.</string>
+    <string name="update_install_blocked_button">Einstellungen öffnen</string>
+    <string name="update_retry_button">Erneut versuchen</string>
+    <string name="update_running_shift_note">Die Installation startet die App neu. Ihre laufende Schicht bleibt davon unberührt und wird nicht beendet.</string>
+
     <!-- NFC. Jede dieser Meldungen steht für einen Weg, auf dem das Stempeln
          still aufhört zu funktionieren. -->
     <string name="nfc_missing_title">Dieses Telefon hat kein NFC</string>
@@ -145,6 +168,12 @@
     <string name="err_missing_location">Zu dieser Schicht fehlt das Objekt, sie kann nicht gesendet werden.</string>
     <string name="err_wrong_account">Diese Schicht wurde mit einem anderen Konto erfasst und kann nicht gesendet werden.</string>
     <string name="err_server">Serverproblem – wird erneut versucht.</string>
+    <!-- Selbst-Update: die vier Arten, wie ein Download oder eine Installation plain
+         scheitern kann (kein Netz wird bereits von err_network abgedeckt). -->
+    <string name="err_update_failed">Der Download ist fehlgeschlagen. Bitte erneut versuchen.</string>
+    <string name="err_update_storage_full">Nicht genug Speicherplatz für das Update. Bitte Speicher freimachen und erneut versuchen.</string>
+    <string name="err_update_corrupt">Die heruntergeladene Datei ist beschädigt. Bitte erneut versuchen.</string>
+    <string name="err_update_not_installed">Die Installation wurde nicht durchgeführt – entweder abgebrochen oder von Android abgelehnt (meist wegen einer anderen Signatur oder zu wenig Speicher). Bei wiederholten Problemen bitte bei der Verwaltung melden.</string>
     <string name="err_rejected">Vom Server abgelehnt. Diese Schicht bitte der Verwaltung melden.</string>
     <string name="err_unknown_request">Diese Anfrage kennt der Server nicht mehr. Bitte bei der Verwaltung melden.</string>
     <!-- Wie err_rejected / err_wrong_account, aber für eine Materialanfrage: "Schicht"

@@ -94,6 +94,17 @@ class Api(
     suspend fun roster(): WireRoster = Wire.roster(get("/roster"))
 
     /**
+     * GET /app/version — auth: "app" only, no session (server/routes/release.js). This
+     * is the ONE call in this class that must survive an expired or missing worker
+     * session: a phone whose session just died is exactly the phone that most needs to
+     * know a fix is already out. `sessionBearing = false`: a 401 here means a bad or
+     * missing X-App-Key, never an expired session, and firing [onSessionRejected] over
+     * it would wrongly sign a worker out of a route their session was never checked
+     * against.
+     */
+    suspend fun appVersion(): JSONObject = get("/app/version", sessionBearing = false)
+
+    /**
      * POST /shifts/open — decision-19: the shift is posted at clock-IN, end_time NULL.
      * 201 new · 200 duplicate (same client_uuid) · 409 shift_already_open.
      */
@@ -170,7 +181,8 @@ class Api(
 
     // ---- transport ----------------------------------------------------------------
 
-    private suspend fun get(path: String): JSONObject = send("GET", path, null)
+    private suspend fun get(path: String, sessionBearing: Boolean = true): JSONObject =
+        send("GET", path, null, sessionBearing)
 
     private suspend fun post(path: String, body: String, sessionBearing: Boolean = true): JSONObject =
         send("POST", path, body, sessionBearing)

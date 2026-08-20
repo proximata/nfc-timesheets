@@ -74,6 +74,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
+import io.github.qwadratic.nfctimesheets.BuildConfig
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
 import io.github.qwadratic.nfctimesheets.core.MaterialEntry
@@ -87,6 +88,8 @@ import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.data.LocalShift
 import io.github.qwadratic.nfctimesheets.nfc.NfcReadiness
 import io.github.qwadratic.nfctimesheets.nfc.ScanActivity
+import io.github.qwadratic.nfctimesheets.update.UpdateReadiness
+import io.github.qwadratic.nfctimesheets.update.UpdateState
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -318,7 +321,7 @@ private fun SignedInScaffold(
                 ShiftSignal.Tab.LOG -> LogScreen(model, nfcReadiness, openIntent)
                 ShiftSignal.Tab.MATERIALS -> MaterialScreen(model)
                 ShiftSignal.Tab.HISTORY -> HistoryScreen(model)
-                ShiftSignal.Tab.SETTINGS -> SettingsScreen(model)
+                ShiftSignal.Tab.SETTINGS -> SettingsScreen(model, openIntent)
             }
         }
     }
@@ -1333,8 +1336,9 @@ private fun HistoryScreen(model: TimeSheetViewModel) {
 }
 
 @Composable
-private fun SettingsScreen(model: TimeSheetViewModel) {
+private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Unit) {
     val worker = (model.session.collectAsStateWithLifecycle().value as? SessionState.SignedIn)?.worker
+    val shiftRunning = model.log.collectAsStateWithLifecycle().value.open != null
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1367,6 +1371,126 @@ private fun SettingsScreen(model: TimeSheetViewModel) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        HorizontalDivider()
+        UpdateSection(model, shiftRunning, openIntent)
+    }
+}
+
+// -------------------------------------------------------------------------------------
+// Self-update (this iteration). Lives ONLY here — Settings, worker-initiated, never on
+// the tap or clock-out path. See update/UpdateManager.kt's own header for the whole
+// design; this composable is purely a rendering of [model.update].
+// -------------------------------------------------------------------------------------
+@Composable
+private fun UpdateSection(model: TimeSheetViewModel, shiftRunning: Boolean, openIntent: (Intent) -> Unit) {
+    val state by model.update.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // Checked once when Settings first appears and nothing has asked yet — covers the
+    // rare case where the silent launch-time check (TimeSheetViewModel.restoreSession)
+    // has not landed by the time the worker opens this tab.
+    LaunchedEffect(Unit) {
+        if (state is UpdateState.Idle) model.checkForUpdate()
+    }
+
+    // A RESULT CALLBACK, not the fire-and-forget openIntent used everywhere else in this
+    // file: this is the ONE navigation in the app whose OUTCOME the screen needs to read
+    // back (see TimeSheetViewModel.onReturnedFromInstallAttempt for why that is possible
+    // at all, and what it does and does not prove).
+    val installLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { model.onReturnedFromInstallAttempt() }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            stringResource(R.string.update_title),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.semantics { heading() },
+        )
+        Text(
+            stringResource(R.string.update_current_version, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        when (val s = state) {
+            UpdateState.Idle, UpdateState.Checking ->
+                Text(stringResource(R.string.update_checking))
+
+            UpdateState.UpToDate -> {
+                Text(stringResource(R.string.update_up_to_date))
+                OutlinedButton(
+                    onClick = model::checkForUpdate,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.update_check_button)) }
+            }
+
+            is UpdateState.Available -> {
+                Text(
+                    stringResource(
+                        R.string.update_available,
+                        s.release.versionName ?: stringResource(R.string.update_unknown_version),
+                    ),
+                )
+                Button(
+                    onClick = { model.startUpdateDownload(s.release) },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.update_download_button)) }
+            }
+
+            is UpdateState.Downloading -> Text(
+                when {
+                    s.waitingForNetwork -> stringResource(R.string.update_waiting_network)
+                    s.percent != null -> stringResource(R.string.update_downloading, s.percent)
+                    else -> stringResource(R.string.update_downloading_unknown)
+                },
+            )
+
+            is UpdateState.ReadyToInstall -> {
+                Text(stringResource(R.string.update_ready))
+                // NEVER an interruption: a running shift is stated as unaffected, never
+                // gated on or blocked by any of this.
+                if (shiftRunning) {
+                    Text(
+                        stringResource(R.string.update_running_shift_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                when (UpdateReadiness.of(context)) {
+                    UpdateReadiness.ALLOWED -> Button(
+                        onClick = { installLauncher.launch(model.installIntentFor(s.uri)) },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) { Text(stringResource(R.string.update_install_button)) }
+
+                    UpdateReadiness.BLOCKED -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            stringResource(R.string.update_install_blocked_note),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        OutlinedButton(
+                            onClick = { openIntent(UpdateReadiness.settingsIntent(context)) },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) { Text(stringResource(R.string.update_install_blocked_button)) }
+                    }
+                }
+            }
+
+            is UpdateState.Failed -> {
+                Text(
+                    stringResource(stringIdFor(s.reasonKey)),
+                    color = MaterialTheme.colorScheme.error,
+                )
+                OutlinedButton(
+                    onClick = {
+                        val release = s.release
+                        if (release != null) model.startUpdateDownload(release) else model.checkForUpdate()
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.update_retry_button)) }
+            }
+        }
     }
 }
 

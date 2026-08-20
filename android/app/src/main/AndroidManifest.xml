@@ -5,6 +5,19 @@
     <uses-permission android:name="android.permission.NFC" />
 
     <!--
+      Self-update (this iteration). A normal, install-time permission below Android 8;
+      on 8+ it also requires the per-app "install unknown apps" toggle the worker (or
+      whoever set the phone up) must grant once in Settings — update/UpdateReadiness.kt
+      checks that BEFORE ever handing the downloaded APK to the installer, and sends the
+      worker straight to that one setting rather than letting the install silently do
+      nothing. THE TRUST BOUNDARY IS THE SIGNING KEY, NOT THIS PERMISSION: this only lets
+      the app OFFER an install; Android's own PackageInstaller still refuses any APK not
+      signed with this app's own upload key (keystore.properties, gitignored) — that
+      refusal is the desired behaviour, not a bug to route around.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
       The ongoing "you are clocked in" notification and the reminder ladder.
 
       Runtime-requested on API 33+ ONLY, AFTER the first successful clock-in, from the
