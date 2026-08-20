@@ -201,11 +201,17 @@ so it can never reach production by accident.
 
 ### 006 — and the one thing to do on the box BEFORE applying it
 
+> **DONE ON PRODUCTION 2026-08-20.** `workers` id 6 'TTL Test' was deleted with
+> `ops/delete-worker.sql`, backup `nfc-20260820T210658Z.sql.gz` taken and restore-tested
+> first. `workers` is now empty, HOIV is untouched with its pin, the one admin still logs in,
+> and the box reports `006 rate guard: 0 rate-less workers remain`. The section below is kept
+> because it is the procedure for the NEXT one, not because it is still pending.
+
 **006 REFUSES to apply while any worker has `hourly_rate_cents <= 0`.** It raises with a
 count and a hint, `psql -1` aborts the whole file, `migrate.js` records nothing, and the
 database is left exactly as it was. Re-running after the rates are set applies it.
 
-A restored production dump (2026-08-19) carries exactly one such row:
+The row that made this real, from the production dump of 2026-08-19:
 
 ```
 id 6 · 'TTL Test' · hourly_rate_cents 0 · active false · 0 shifts · 0 requests · 0 sessions
@@ -218,16 +224,39 @@ figure, or remove the row if it is the leftover test record it looks like:
 
 ```sh
 psql "$DATABASE_URL" -c "SELECT id, name, hourly_rate_cents, active FROM workers WHERE hourly_rate_cents <= 0"
-# then ONE of:
-psql "$DATABASE_URL" -c "UPDATE workers SET hourly_rate_cents = 1500 WHERE id = 6"  # a figure a HUMAN chose
-psql "$DATABASE_URL" -c "DELETE FROM workers WHERE id = 6"                           # only while it has no history
+
+# EITHER a figure a HUMAN chose:
+psql "$DATABASE_URL" -c "UPDATE workers SET hourly_rate_cents = 1500 WHERE id = 6"
+
+# OR remove the row — NOT with a bare DELETE. ops/delete-worker.sql names the database and
+# refuses any other, stats the backup you claim to have taken, reads the FK graph out of the
+# catalogue and refuses any child table it has not heard of, deletes in FK order inside ONE
+# transaction, and asserts afterwards that exactly one worker went and that locations and
+# admins are untouched — rolling back if not.
+ssh schimmer-glanz.exe.xyz
+sudo -u postgres /srv/nfc/ops/backup/pg-backup.sh          # 1 · take it
+sudo -u postgres /srv/nfc/ops/backup/restore-test.sh       # 2 · prove it restores
+sudo -u postgres psql -d nfc -v ON_ERROR_STOP=1 \          # 3 · run it
+     -v confirm_database=nfc -v worker_id=6 \
+     -v verified_backup=/var/backups/nfc/nfc-<the one from step 1>.sql.gz \
+     -f /tmp/delete-worker.sql
 ```
 
-`DELETE` is only safe while that worker has **no** shifts, material requests or sessions —
-check first, because the FKs are not `ON DELETE CASCADE` and a row with history will
-(correctly) refuse. Note that it also destroys any **live enrolment code** on the row: the
-`TTL Test` record above carries an unredeemed one. That is fine for a leftover test worker
-and would not be fine for a real one.
+Rehearse it first — `node ops/check-delete-worker.mjs /tmp/nfc.sql.gz` restores the dump into
+a scratch database and drives the real script over it, including every refusal and three
+mutants. That harness is what has to pass; a reading of the file is not a rehearsal.
+
+A deletion is only *possible* while that worker has no shifts, material requests or sessions
+that you are willing to lose **with** them: the FKs are not `ON DELETE CASCADE`, so the
+script removes those rows explicitly, deepest first. There is no orphan reading of either
+column, so "keep the history, drop the person" is not expressible in this schema — for a real
+cleaner who has been paid for work, deactivate instead. It also destroys any **live enrolment
+code** on the row (the `TTL Test` record carried one, expiring 2026-08-22; the owner
+authorised losing it). Fine for a leftover test worker, never fine for a real one.
+
+> **Note the paths.** `ops/` is rsynced to `/srv/nfc/ops` by `ops/deploy.sh`, but that
+> directory is `drwxr-x--- exedev:app` and the `postgres` role cannot traverse it. Copy the
+> file to `/tmp` and run it from there, as above.
 
 #### The two pre-deploy checks, and what each one is for
 
@@ -236,9 +265,12 @@ because each needs an artefact nobody can commit. Run **both** before a 006 wind
 
 ```sh
 ssh schimmer-glanz.exe.xyz 'sudo -n cat /var/backups/nfc/nfc-<newest>.sql.gz' > /tmp/nfc.sql.gz
-node server/db/check-prod-restore.mjs /tmp/nfc.sql.gz   # the SCHEMA: 006 on the client's own rows
+node server/db/check-prod-restore.mjs /tmp/nfc.sql.gz   # the SCHEMA: 006->007->008 on the client's own rows
+sh   server/db/check-prod-restore-mutants.sh /tmp/nfc.sql.gz # its negative case, 3 mutants
 node server/db/check-field-wire.mjs   /tmp/nfc.sql.gz   # the WIRE: what the phone in Vienna sends
 sh   server/db/check-field-wire-mutants.sh /tmp/nfc.sql.gz   # and the negative case, 8 mutants
+node ops/check-hoiv-survives-006.mjs  /tmp/nfc.sql.gz   # HOIV: unzoned, grey, and still TAPPABLE (3 mutants)
+node ops/check-delete-worker.mjs      /tmp/nfc.sql.gz   # the leftover-worker deletion, if one is pending
 
 # 007's half. Both take the same dump and both refuse to touch production.
 node server/check-phone-namespace.mjs      /tmp/nfc.sql.gz   # the REGISTRY: one phone, one person
@@ -263,8 +295,10 @@ psql -d postgres -Atc "SELECT datname, datistemplate FROM pg_database"
 #   dropdb --force <db>
 ```
 
-`check-prod-restore` proves 006 applies, refuses first, invents no rows, keeps every pin,
-and that the API boots on the result. `check-field-wire` proves the five things that leaves
+`check-prod-restore` proves 006 → 007 → 008 apply in that order and twice, that 006 refuses
+first, that none of the three invents a row, that every pin survives, that one phone number
+cannot be both a worker's and an operator's, that an unbound reported tag answers
+`422 tag_unbound` with no shift, and that the API boots on the result. `check-field-wire` proves the five things that leaves
 open — the close body the APK really sends (three keys, `auto_closed` among them, read out
 of the **dex** and not out of the Kotlin), `auto_closed` monotonicity against the row rather
 than against a regex, the wall card tapped while its building already has a zone, a replayed
