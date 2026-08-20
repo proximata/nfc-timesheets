@@ -269,4 +269,26 @@
     <string name="scan_open">Tag manuell scannen</string>
     <string name="scan_close">Fertig</string>
     <string name="scan_accepted_serial">Tag über Seriennummer erkannt. Schicht wird gebucht …</string>
+
+    <!-- Tag schreiben (Betreiber). Der einzige Bildschirm, der einen physischen Gegenstand veraendert. -->
+    <string name="write_title">Tag beschreiben</string>
+    <string name="write_hint">Halte einen leeren NTAG213 an das Telefon. Der Tag wird beschrieben, danach sofort zurueckgelesen und Byte fuer Byte verglichen. Erst wenn das stimmt, gilt er als fertig.</string>
+    <string name="write_pending_id">Neue Tag-ID: %1$s</string>
+    <string name="write_waiting">Warte auf Tag …</string>
+    <string name="write_ok">Geschrieben und geprueft.\n\nID: %1$s\n%2$d von %3$d Byte belegt\nSeriennummer: %4$s</string>
+    <string name="write_too_small">NICHT beschrieben. Dieser Tag fasst nur %1$d Byte, gebraucht werden %2$d. Bitte einen NTAG213 verwenden. Der Tag wurde nicht veraendert.</string>
+    <string name="write_read_only">NICHT beschrieben. Dieser Tag ist gesperrt und kann nicht mehr beschrieben werden. Der Tag wurde nicht veraendert.</string>
+    <string name="write_no_capacity">NICHT beschrieben. Dieser Tag meldet keine nutzbare Groesse. Der Tag wurde nicht veraendert.</string>
+    <string name="write_not_formatted">NICHT beschrieben. Dieser Tag ist nicht NDEF-formatiert, deshalb ist seine Groesse vorher nicht pruefbar. Einmal mit einem Tag-Tool formatieren und erneut anhalten.\n\nTechnologien: %1$s</string>
+    <string name="write_bad_id">NICHT beschrieben. Die App konnte fuer diese ID keine gueltige Adresse erzeugen. Bitte melden — das ist ein Fehler in der App.</string>
+    <string name="write_unverified">ACHTUNG: Der Tag wurde beschrieben, aber die Kontrolle beim Zurueklesen hat NICHT gestimmt (%1$s). Dieser Tag ist unbrauchbar, bis er erneut erfolgreich beschrieben wurde. Nochmal anhalten oder wegwerfen — nicht montieren.</string>
+    <string name="write_lost">Der Tag war zu kurz am Telefon. Es wurde nichts geschrieben. Bitte ruhig halten und erneut anhalten.</string>
+    <string name="write_report_sending">Wird an das Buero gemeldet …</string>
+    <string name="write_report_sent">An das Buero gemeldet. Der Tag kann jetzt montiert werden.</string>
+    <string name="write_report_failed">Der Tag ist fertig, aber die Meldung an das Buero ist fehlgeschlagen (%1$s). Der Tag ist in Ordnung — spaeter erneut senden.</string>
+    <string name="write_report_needs_operator">Der Tag ist fertig, aber dieses Telefon ist nicht als Betreiber angemeldet. Code eingeben, dann wird die Meldung nachgeholt.</string>
+    <string name="write_operator_code">Betreiber-Code</string>
+    <string name="write_operator_enrol">Anmelden</string>
+    <string name="write_report_retry">Meldung erneut senden</string>
+    <string name="write_open">Tag beschreiben</string>
 </resources>

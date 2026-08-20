@@ -40,29 +40,37 @@ interface CookieJar {
     fun clear()
 }
 
-class PrefsCookieJar(context: Context) : CookieJar {
+/**
+ * @param name which cookie this jar holds — `ts_worker` (a cleaner) or `ts_operator` (the
+ *        person who mounts tags). SEPARATE JARS, SEPARATE FILES, on purpose: an operator's
+ *        phone must not be able to send a worker cookie on the same request, and the
+ *        cheapest way to guarantee that is for the two never to meet in one store.
+ * @param file the SharedPreferences file. Distinct per cookie, so signing out of one does
+ *        not touch the other and a corrupted one cannot take both down.
+ */
+class PrefsCookieJar(
+    context: Context,
+    private val name: String = SessionCookie.NAME,
+    file: String = "session",
+) : CookieJar {
     private val prefs = context.applicationContext
-        .getSharedPreferences("session", Context.MODE_PRIVATE)
+        .getSharedPreferences(file, Context.MODE_PRIVATE)
 
-    override fun header(): String? = SessionCookie.header(prefs.getString(KEY, null))
+    override fun header(): String? = SessionCookie.header(prefs.getString(name, null), name)
 
     override fun absorb(setCookieHeaders: List<String>) {
-        when (val update = SessionCookie.read(setCookieHeaders)) {
+        when (val update = SessionCookie.read(setCookieHeaders, name)) {
             // commit(), not apply(): a session that only exists in an in-flight async
             // write is lost if the process dies before it lands, and the next launch
             // asks the worker for a code they no longer have. This runs on the IO
             // dispatcher inside Api.send() and writes one short string.
-            is SessionCookie.Update.Store -> prefs.edit().putString(KEY, update.value).commit()
+            is SessionCookie.Update.Store -> prefs.edit().putString(name, update.value).commit()
             SessionCookie.Update.Clear -> clear()
             SessionCookie.Update.Ignore -> Unit
         }
     }
 
     override fun clear() {
-        prefs.edit().remove(KEY).commit()
-    }
-
-    private companion object {
-        const val KEY = SessionCookie.NAME
+        prefs.edit().remove(name).commit()
     }
 }

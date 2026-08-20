@@ -88,6 +88,7 @@ import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.data.LocalShift
 import io.github.qwadratic.nfctimesheets.nfc.NfcReadiness
 import io.github.qwadratic.nfctimesheets.nfc.ScanActivity
+import io.github.qwadratic.nfctimesheets.nfc.WriteTagActivity
 import io.github.qwadratic.nfctimesheets.update.UpdateReadiness
 import io.github.qwadratic.nfctimesheets.update.UpdateState
 import java.time.Instant
@@ -429,6 +430,19 @@ private fun LogScreen(
                         .fillMaxWidth()
                         .heightIn(min = 48.dp),
                 ) { Text(stringResource(R.string.scan_open)) }
+            }
+            // WRITE A TAG. Deliberately here, on the log screen, and NOT on the idle screen
+            // or anywhere a worker lands by accident: the operator opens the app on purpose
+            // to mount tags, and a cleaner holding a phone to a wall must never be one
+            // mis-tap away from a screen that OVERWRITES the tag they are standing at.
+            // Nothing behind this button can open or close a shift (decision-45).
+            item {
+                OutlinedButton(
+                    onClick = { openIntent(Intent(logContext, WriteTagActivity::class.java)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.write_open)) }
             }
         }
 

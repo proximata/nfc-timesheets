@@ -17,11 +17,22 @@ package io.github.qwadratic.nfctimesheets.core
  * The distinction that matters is [Ignore] vs [Clear]. A response that says nothing about
  * our cookie must leave it ALONE — treating silence as a logout would sign a worker out
  * on every ordinary 200 and cost them the shift they are standing in.
+ *
+ * TWO COOKIES NOW, AND THEY ARE NOT INTERCHANGEABLE. `ts_worker` is a cleaner: it opens and
+ * closes shifts. `ts_operator` is the person who mounts tags: server-side, no route reachable
+ * with it opens or closes anything (server/routes/operator.js, decision-45). They are kept in
+ * SEPARATE stores and sent on SEPARATE requests, so "the operator's phone accidentally clocked
+ * somebody in" is not a bug that can be written — there is no request that carries both. The
+ * cookie NAME is therefore a parameter here rather than a constant: one name, one meaning, and
+ * a response that sets the other one must read as [Ignore] and not as a session change.
  */
 object SessionCookie {
 
-    /** The one cookie this app has. HttpOnly, so only the transport ever sees it. */
+    /** The cleaner's session. HttpOnly, so only the transport ever sees it. */
     const val NAME = "ts_worker"
+
+    /** The tag-mounter's session. Never opens or closes a shift, by absence of a route. */
+    const val OPERATOR_NAME = "ts_operator"
 
     private val MAX_AGE_ZERO = Regex("""(?i)max-age=0\b""")
 
@@ -40,12 +51,12 @@ object SessionCookie {
      * @param setCookieHeaders every `Set-Cookie` line on one response, in order.
      * Last one that mentions our cookie wins, which is what a browser would do.
      */
-    fun read(setCookieHeaders: List<String>): Update {
+    fun read(setCookieHeaders: List<String>, name: String = NAME): Update {
         var update: Update = Update.Ignore
         for (raw in setCookieHeaders) {
             val pair = raw.substringBefore(';').trim()
-            if (!pair.startsWith("$NAME=")) continue
-            val value = pair.removePrefix("$NAME=")
+            if (!pair.startsWith("$name=")) continue
+            val value = pair.removePrefix("$name=")
             // Max-Age is looked for in the ATTRIBUTES only, never in the whole header:
             // the token is opaque and searching it would let its own bytes decide
             // whether we stay signed in.
@@ -60,6 +71,6 @@ object SessionCookie {
     }
 
     /** Value for the `Cookie:` request header, or null when there is no session. */
-    fun header(stored: String?): String? =
-        stored?.takeIf { it.isNotEmpty() }?.let { "$NAME=$it" }
+    fun header(stored: String?, name: String = NAME): String? =
+        stored?.takeIf { it.isNotEmpty() }?.let { "$name=$it" }
 }

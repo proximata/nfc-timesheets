@@ -1,7 +1,9 @@
 package io.github.qwadratic.nfctimesheets
 
 import android.app.Application
+import io.github.qwadratic.nfctimesheets.core.SessionCookie
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.nfc.TagWriter
 import io.github.qwadratic.nfctimesheets.data.MaterialStore
 import io.github.qwadratic.nfctimesheets.data.MaterialSync
 import io.github.qwadratic.nfctimesheets.data.ShiftStore
@@ -50,6 +52,31 @@ class TimeSheetsApplication : Application() {
     val sessionRejected = MutableStateFlow(false)
 
     val api: Api by lazy { Api(cookies) { sessionRejected.value = true } }
+
+    /**
+     * THE OPERATOR SIDE, DELIBERATELY A SECOND EVERYTHING.
+     *
+     * A second cookie jar (`ts_operator`, its own SharedPreferences file) behind a second
+     * [Api]. Not a second cookie in the same jar, and not a role flag on the first one: an
+     * operator does not clock in (decision-45), and the way to make that true is for no
+     * request the operator's screen makes to be capable of carrying a worker cookie. There
+     * is no request in this app that sends both.
+     *
+     * `onSessionRejected` is a no-op rather than [sessionRejected]: a 401 from the tag-write
+     * screen means the OPERATOR session died. Latching the worker flag over it would sign a
+     * cleaner out of a running shift because somebody wrote a tag — the two identities must
+     * not be able to knock each other over.
+     *
+     * `by lazy`: a cleaner's phone never constructs any of it.
+     */
+    val operatorCookies: CookieJar by lazy {
+        PrefsCookieJar(this, SessionCookie.OPERATOR_NAME, file = "operator-session")
+    }
+
+    val operatorApi: Api by lazy { Api(operatorCookies) { /* not the worker's session */ } }
+
+    /** Encodes and verifies the bytes that go onto a physical card. See nfc/TagWriter.kt. */
+    val tagWriter: TagWriter by lazy { TagWriter(tagLink) }
 
     val sync: ShiftSync by lazy { ShiftSync(api, store) }
 

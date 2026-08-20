@@ -200,4 +200,26 @@
     <string name="scan_open">Scan a tag manually</string>
     <string name="scan_close">Done</string>
     <string name="scan_accepted_serial">Tag recognised by serial number. Recording the shift …</string>
+
+    <!-- Write a tag (operator). The only screen that changes a physical object. -->
+    <string name="write_title">Write a tag</string>
+    <string name="write_hint">Hold a blank NTAG213 to the phone. The tag is written, read straight back and compared byte for byte. Only then does it count as done.</string>
+    <string name="write_pending_id">New tag id: %1$s</string>
+    <string name="write_waiting">Waiting for a tag …</string>
+    <string name="write_ok">Written and verified.\n\nId: %1$s\n%2$d of %3$d bytes used\nSerial: %4$s</string>
+    <string name="write_too_small">NOT written. This tag holds only %1$d bytes and %2$d are needed. Use an NTAG213. The tag was not changed.</string>
+    <string name="write_read_only">NOT written. This tag is locked and can no longer be written. The tag was not changed.</string>
+    <string name="write_no_capacity">NOT written. This tag reports no usable size. The tag was not changed.</string>
+    <string name="write_not_formatted">NOT written. This tag is not NDEF formatted, so its size cannot be checked beforehand. Format it once with a tag tool and present it again.\n\nTechnologies: %1$s</string>
+    <string name="write_bad_id">NOT written. The app could not build a valid address for this id. Please report this — it is an app bug.</string>
+    <string name="write_unverified">WARNING: the tag was written but the read-back check did NOT match (%1$s). This tag is unusable until it has been written successfully. Present it again or discard it — do not mount it.</string>
+    <string name="write_lost">The tag left the phone too soon. Nothing was written. Hold it still and present it again.</string>
+    <string name="write_report_sending">Reporting to the office …</string>
+    <string name="write_report_sent">Reported to the office. The tag can be mounted now.</string>
+    <string name="write_report_failed">The tag is done, but reporting it to the office failed (%1$s). The tag is fine — send it again later.</string>
+    <string name="write_report_needs_operator">The tag is done, but this phone is not signed in as an operator. Enter a code and the report is retried.</string>
+    <string name="write_operator_code">Operator code</string>
+    <string name="write_operator_enrol">Sign in</string>
+    <string name="write_report_retry">Send the report again</string>
+    <string name="write_open">Write a tag</string>
 </resources>

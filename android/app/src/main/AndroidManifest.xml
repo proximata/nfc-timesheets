@@ -205,5 +205,24 @@
             android:exported="false"
             android:label="@string/scan_title" />
 
+        <!--
+          WRITE A TAG. exported="false", no intent filter, no NFC filter of any kind: this
+          activity is reached only from a button inside the app, and it takes tags through
+          reader mode while it is in the foreground.
+
+          IT MUST NEVER GET AN NDEF_DISCOVERED FILTER. A tag lying on a desk would then be
+          able to launch the screen that OVERWRITES tags, and a tap intended as a clock-in
+          would land on a writer. Reader mode is foreground-only and torn down in onPause,
+          which is exactly the property wanted here.
+
+          singleTop: presenting a second tag must reuse the running screen rather than stack
+          a second writer holding a second minted id.
+        -->
+        <activity
+            android:name=".nfc.WriteTagActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:label="@string/write_title" />
+
     </application>
 </manifest>

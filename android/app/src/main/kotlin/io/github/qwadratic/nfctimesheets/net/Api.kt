@@ -104,6 +104,37 @@ class Api(
      */
     suspend fun appVersion(): JSONObject = get("/app/version", sessionBearing = false)
 
+    // ---- operator: the person who mounts tags --------------------------------------
+    //
+    // These two are reached through a SEPARATE Api instance holding a SEPARATE cookie jar
+    // (`ts_operator`, TimeSheetsApplication.operatorApi). Nothing below opens or closes a
+    // shift, and server-side nothing reachable with an operator session can — there is no
+    // route under /shifts/* with auth: "operator" (server/routes/operator.js, decision-45).
+
+    /**
+     * POST /auth/operator-code — redeem an admin-issued operator enrolment code. auth: "app",
+     * so `sessionBearing = false` for the same reason as /auth/code: its 401 means "that is
+     * not a valid code", never "your session died", and firing [onSessionRejected] over it
+     * would sign someone out of a session this route never looked at.
+     */
+    suspend fun operatorEnrol(code: String) {
+        post("/auth/operator-code", EnrolmentRequest(code).toJson(), sessionBearing = false)
+    }
+
+    /**
+     * POST /operator/tags {id} — "a tag carrying this id now physically exists".
+     *
+     * CALLED ONLY AFTER A VERIFIED WRITE. The id is on a card, in a building, before this
+     * request is made; the request is how the office finds out. That ordering is why the
+     * failure of this call is survivable and must be retried rather than treated as a failed
+     * write — the card is fine, the office just does not know yet.
+     *
+     * Idempotent server-side (ON CONFLICT DO NOTHING + read-back), so a retry over field wifi
+     * lands exactly one row. 201 new · 200 already reported · 409 id_in_use.
+     */
+    suspend fun reportTag(locationId: String): JSONObject =
+        post("/operator/tags", JSONObject().put("id", locationId).toString()).getJSONObject("tag")
+
     /**
      * POST /shifts/open — decision-19: the shift is posted at clock-IN, end_time NULL.
      * 201 new · 200 duplicate (same client_uuid) · 409 shift_already_open.
