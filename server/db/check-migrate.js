@@ -17,6 +17,11 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+// Already-installed dependency (the API's own client, `pg` + `@sentry/node` is the whole
+// budget) — needed for exactly one thing below: proving a concurrent-write race is
+// actually BLOCKED on a row lock, which `psql -c` (autocommit, one statement per process)
+// cannot hold open long enough to demonstrate.
+import pg from "pg";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -518,6 +523,122 @@ try {
   );
   query("DELETE FROM shifts; DELETE FROM zones;");
 
+  // --- 007 spot-checks: operator identity, and the registry that makes a phone unique
+  // across two kinds of person (decision-45) — TASK-211 AC#1-4 ------------------------
+  //
+  // AC#1 (table existence half; the workers/admins byte-identical half is proven properly
+  // in the LIVE_DB_NAME section below, where migrations apply one at a time and a real
+  // before/after schema snapshot is possible).
+  for (const table of ["operators", "phone_identities", "operator_sessions"]) {
+    assert.equal(
+      query(`SELECT to_regclass('public.${table}') IS NOT NULL;`),
+      "t",
+      `${table} table missing (decision-45)`,
+    );
+  }
+  assert.equal(query("SELECT count(*) FROM operators;"), "0", "007 must invent no operator — same convention as 006's zones");
+
+  // AC#2 · phone_identities.phone_e164 CHECK enforces E.164 shape AT THE DATABASE, not
+  // merely the API — paired with a PASSING insert so this cannot pass by the column
+  // simply not existing.
+  query("INSERT INTO operators (name) VALUES ('Feldleiter Eins');");
+  const feldleiterId = query("SELECT id FROM operators WHERE name = 'Feldleiter Eins';");
+  query(`INSERT INTO phone_identities (phone_e164, operator_id) VALUES ('+436641234567', ${feldleiterId});`);
+  assert.throws(
+    () =>
+      query(
+        "INSERT INTO phone_identities (phone_e164, worker_id) VALUES ('+0664123456', (SELECT id FROM workers ORDER BY id LIMIT 1));",
+      ),
+    /phone_identities_phone_e164_check/,
+    "a leading 0 immediately after '+' must be refused by the CHECK, not merely by the API",
+  );
+
+  // AC#4 · a row with BOTH worker_id and operator_id set is the owner-cleans-a-building
+  // case (§3) and must be ACCEPTED; a row with NEITHER set must be REFUSED by the CHECK.
+  const secondWorkerId = query("SELECT id FROM workers ORDER BY id LIMIT 1;");
+  query(`UPDATE phone_identities SET worker_id = ${secondWorkerId} WHERE phone_e164 = '+436641234567';`);
+  assert.equal(
+    query(
+      "SELECT (worker_id IS NOT NULL AND operator_id IS NOT NULL) FROM phone_identities WHERE phone_e164 = '+436641234567';",
+    ),
+    "t",
+    "a phone_identities row must accept BOTH worker_id and operator_id set (§3, one person, two capabilities)",
+  );
+  assert.throws(
+    () => query("INSERT INTO phone_identities (phone_e164) VALUES ('+436649999999');"),
+    /phone_identities_claims/,
+    "a phone_identities row with NEITHER worker_id nor operator_id set must be refused",
+  );
+  query("DELETE FROM phone_identities WHERE phone_e164 = '+436641234567';");
+  query("DELETE FROM operators WHERE name = 'Feldleiter Eins';");
+
+  // UNPROMPTED BUT LOAD-BEARING (found walking the FK graph 007 introduces, and the same
+  // fact ops/reset-w1.sql's own comment names before its pre-DELETE UPDATE): ON DELETE SET
+  // NULL on phone_identities.worker_id, applied to a row that carries ONLY a worker_id,
+  // drives that row to (NULL, NULL) MID-STATEMENT — which phone_identities_claims forbids.
+  // DELETE FROM workers therefore ABORTS the instant one such row exists. RED case: this
+  // assertion is what would have caught the reset-script bug if written first; asserted
+  // here, at the schema level, before the reset script has to work around it.
+  const workerOnlyId = query("SELECT id FROM workers ORDER BY id LIMIT 1;");
+  query(`INSERT INTO phone_identities (phone_e164, worker_id) VALUES ('+436645550001', ${workerOnlyId});`);
+  assert.throws(
+    () => query(`DELETE FROM workers WHERE id = ${workerOnlyId};`),
+    /phone_identities_claims/,
+    "DELETE FROM workers must be blocked by ON DELETE SET NULL driving a worker-only phone_identities row to (NULL, NULL) — the exact fact ops/reset-w1.sql detaches BEFORE deleting workers",
+  );
+  query("DELETE FROM phone_identities WHERE phone_e164 = '+436645550001';");
+
+  // AC#3 · the collision is impossible under CONCURRENT writers, not merely checked
+  // read-then-write. Two REAL connections, not two `psql -c` subprocesses: proving
+  // "blocked on an uncommitted row lock" needs a lock actually held mid-transaction, and
+  // `psql -c` (autocommit, one statement, disconnects) cannot hold one open.
+  await (async () => {
+    const connA = new pg.Client({ connectionString: DATABASE_URL });
+    const connB = new pg.Client({ connectionString: DATABASE_URL });
+    await connA.connect();
+    await connB.connect();
+    const BLOCKED = Symbol("still blocked");
+    try {
+      const raceWorkerId = (await connA.query("SELECT id FROM workers ORDER BY id LIMIT 1")).rows[0].id;
+
+      await connA.query("BEGIN");
+      // Uncommitted on purpose — B's insert of the SAME phone must block on THIS row's
+      // lock, not race past it after the fact.
+      await connA.query("INSERT INTO phone_identities (phone_e164, worker_id) VALUES ('+436647778888', $1)", [
+        raceWorkerId,
+      ]);
+
+      await connB.query("BEGIN");
+      const bOperator = await connB.query("INSERT INTO operators (name) VALUES ('Race Operator') RETURNING id");
+      const bPromise = connB
+        .query("INSERT INTO phone_identities (phone_e164, operator_id) VALUES ('+436647778888', $1)", [
+          bOperator.rows[0].id,
+        ])
+        .then(
+          () => ({ blocked: false }),
+          (err) => ({ blocked: true, err }),
+        );
+
+      const early = await Promise.race([bPromise, new Promise((r) => setTimeout(() => r(BLOCKED), 200))]);
+      assert.equal(early, BLOCKED, "B must be BLOCKED on A's uncommitted row lock, not racing past it");
+
+      await connA.query("COMMIT");
+      const bResult = await bPromise;
+      assert.equal(bResult.blocked, true, "exactly ONE of the two racing inserts may commit — B must lose once A commits");
+      assert.match(
+        String(bResult.err.message),
+        /duplicate key|phone_identities_pkey/,
+        "B's failure must be the PRIMARY KEY, not something else",
+      );
+
+      await connA.query("DELETE FROM phone_identities WHERE phone_e164 = '+436647778888'");
+      await connA.query("DELETE FROM operators WHERE name = 'Race Operator'");
+    } finally {
+      await connA.end();
+      await connB.end();
+    }
+  })();
+
   // --- 003 + 004 on top of an ALREADY MIGRATED database that holds real rows -
   try {
     run("createdb", [LIVE_DB_NAME]);
@@ -765,10 +886,46 @@ try {
     "006 must invent no revenue row, even for the building that HAS a contract figure",
   );
 
+  // --- 007 on top of live data: composes with 006, invents nothing, workers/admins
+  // byte-identical (TASK-211 AC#1) ----------------------------------------------------
+  //
+  // COMPOSITION WITH 006, PROVEN RATHER THAN STATED: 007 has no functional dependency on
+  // 006's content (no FK into zones/location_revenue), but migrate.js applies
+  // migrations/*.sql in strict LEXICAL FILENAME ORDER and stops on the first failure — so
+  // while 006 refuses (the rateless leftover, above), 007 is unreachable purely by
+  // filename ordering, which is already proven above: schema_migrations read "5" and
+  // to_regclass('public.zones') was NULL during the refusal, i.e. NEITHER 006 NOR 007 had
+  // landed. Reaching this line at all is the positive half of that same proof.
+  const colSnapshot = (table) =>
+    liveQuery(
+      `SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable, ',' ORDER BY column_name) ` +
+        `FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '${table}';`,
+    );
+  // Snapshotted HERE, immediately before 007 — not at the top of the file — so this is a
+  // schema-diff assertion (would catch a stray ALTER TABLE workers that got added,
+  // mistyped, and rolled back) and not merely "the file doesn't mention ALTER TABLE".
+  const workersBefore007 = colSnapshot("workers");
+  const adminsBefore007 = colSnapshot("admins");
+
+  apply("007_operator_identity.sql");
+
+  assert.equal(
+    liveQuery(
+      "SELECT to_regclass('public.operators') IS NOT NULL AND to_regclass('public.phone_identities') IS NOT NULL " +
+        "AND to_regclass('public.operator_sessions') IS NOT NULL;",
+    ),
+    "t",
+    "007 must create operators, phone_identities and operator_sessions",
+  );
+  assert.equal(colSnapshot("workers"), workersBefore007, "workers must be BYTE-IDENTICAL after 007 — decision-45 touches it not at all");
+  assert.equal(colSnapshot("admins"), adminsBefore007, "admins must be BYTE-IDENTICAL after 007 — decision-45 §5, the admin login is untouched");
+  assert.equal(liveQuery("SELECT count(*) FROM operators;"), "0", "007 must invent no operator, same convention 006 states for zones");
+
   console.log(
     "OK check-migrate: migrations apply once, re-run is a no-op, seed is idempotent, " +
       "003+004+005 apply on top of 001+002 with live data, 005's contract backfill is idempotent, " +
-      "and 006 refuses a rate-less worker before applying cleanly over live rows",
+      "006 refuses a rate-less worker before applying cleanly over live rows, and 007 composes " +
+      "with 006 (blocked transitively by filename order while 006 refuses) leaving workers/admins untouched",
   );
 } finally {
   for (const db of [DB_NAME, LIVE_DB_NAME]) {
