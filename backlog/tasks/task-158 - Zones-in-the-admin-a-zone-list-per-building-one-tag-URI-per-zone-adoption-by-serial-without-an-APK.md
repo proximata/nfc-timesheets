@@ -3,9 +3,10 @@ id: TASK-158
 title: >-
   Zones in the admin: a zone list per building, one tag URI per zone, adoption
   by serial without an APK
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 03:06'
+updated_date: '2026-08-20 04:03'
 labels:
   - web
   - ux
@@ -46,3 +47,10 @@ Lands on whatever surface owns a building after TASK-155 (the map building panel
 - [ ] #8 Works at 390px (decision-28); the zone list is a list to a screen reader; colour is the second signal and every state is carried by a word
 - [ ] #9 pnpm verify green, no new npm dependency
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+CLOSED AS A DUPLICATE at 8702615, not as work this run did. TASK-198 carries the same scope, shipped, and is verified in backlog/docs/VERIFY-FINAL.md. Read TASK-198 for the evidence.
+This task's body still carried '(PROPOSED - do not build until the owner accepts it)' about decision-37, which is ACCEPTED. Note also that decision-43 SUPERSEDES decision-37 and is still 'proposed' - that contradiction is the owner's to resolve and is not resolved here.
+<!-- SECTION:NOTES:END -->

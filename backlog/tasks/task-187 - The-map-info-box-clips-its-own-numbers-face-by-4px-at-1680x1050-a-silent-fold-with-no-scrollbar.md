@@ -3,9 +3,10 @@ id: TASK-187
 title: >-
   The map info box clips its own numbers face by 4px at 1680x1050: a silent fold
   with no scrollbar
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 21:16'
+updated_date: '2026-08-20 04:02'
 labels:
   - a11y
 dependencies: []
@@ -38,3 +39,13 @@ PRE-EXISTING: reproduced identically at c41d33f, before the reach commit and bef
 - [ ] #4 The box still fits inside the map rectangle, collapsed and expanded, and all ten cross-links still land inside it when expanded
 - [ ] #5 The negative case is exercised: shrinking the face's clamp by a few pixels puts the check back to red
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md), keyed build, real pins drawn.
+node demo/check-map-home.mjs -> PASS.
+demo/probe-zones-revenue.mjs, 1680: 'EVERY pin's box: a fold is drawn or there is no fold' - Ordination Gumpendorf, Aerztezentrum Landstrasse, Wohnhaus Wagramer Strasse, Buerozentrum Handelskai, Wohnhausanlage Donaufeld: no fold (+0px) on all five. And '...and if it DOES fold, the fold is drawn, not silent' - no fold (+0px).
+AC#4: '...and its links face carries the first-zone route, inside the box' - found=true inside=true.
+AC#3: nothing was deleted to make it fit; the info box still carries the numbers face and the on-site line.
+<!-- SECTION:NOTES:END -->

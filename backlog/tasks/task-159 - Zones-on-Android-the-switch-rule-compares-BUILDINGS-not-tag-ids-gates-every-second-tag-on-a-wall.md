@@ -3,9 +3,10 @@ id: TASK-159
 title: >-
   Zones on Android: the switch rule compares BUILDINGS, not tag ids (gates every
   second tag on a wall)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 03:06'
+updated_date: '2026-08-20 04:03'
 labels:
   - android
   - zones
@@ -52,3 +53,10 @@ Ships as a Play release on the internal track (decision-27). There is no way to 
 - [ ] #8 Manual clock-out from the running screen (the Scan button, INCIDENT 1) is still reachable
 - [ ] #9 Rollout is confirmed per phone before any building gets a second physical tag, and that confirmation is recorded on this task
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+CLOSED AS A DUPLICATE at 8702615, not as work this run did. TASK-201 carries the same scope, shipped, and is verified in backlog/docs/VERIFY-FINAL.md. Read TASK-201 for the evidence.
+This task's body still carried '(PROPOSED - do not build until the owner accepts it)' about decision-37, which is ACCEPTED. Note also that decision-43 SUPERSEDES decision-37 and is still 'proposed' - that contradiction is the owner's to resolve and is not resolved here.
+<!-- SECTION:NOTES:END -->

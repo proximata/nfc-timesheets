@@ -3,9 +3,10 @@ id: TASK-156
 title: >-
   Zones: migration 006_zones.sql (zones table + two nullable tap-fact columns on
   shifts)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 03:05'
+updated_date: '2026-08-20 04:03'
 labels:
   - db
   - zones
@@ -42,3 +43,10 @@ House rules: additive only, 001-005 are applied on the live box and not editable
 - [ ] #6 The file contains no BEGIN/COMMIT and does not edit 001-005
 - [ ] #7 Payroll, P&L, analytics, portal and ops/sql/autoclose.sql produce byte-identical output before and after the migration on the same seeded database
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+CLOSED AS A DUPLICATE at 8702615, not as work this run did. TASK-190 carries the same scope, shipped, and is verified in backlog/docs/VERIFY-FINAL.md. Read TASK-190 for the evidence.
+This task's body still carried '(PROPOSED - do not build until the owner accepts it)' about decision-37, which is ACCEPTED. Note also that decision-43 SUPERSEDES decision-37 and is still 'proposed' - that contradiction is the owner's to resolve and is not resolved here.
+<!-- SECTION:NOTES:END -->

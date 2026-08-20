@@ -3,9 +3,10 @@ id: TASK-157
 title: >-
   Zones: server resolves a tapped PLACE (zone or building) and serves zones on
   the roster + admin CRUD
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 03:06'
+updated_date: '2026-08-20 04:03'
 labels:
   - server
   - api
@@ -46,3 +47,10 @@ Wire compatibility with the build already on the workers' phones is the constrai
 - [ ] #10 Regression: payroll, /admin/data, the P&L, the analytics trend and ops/sql/autoclose.sql are unchanged and produce identical numbers on the seeded database
 - [ ] #11 Server dependencies are still exactly pg + @sentry/node (decision-23)
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+CLOSED AS A DUPLICATE at 8702615, not as work this run did. TASK-196 carries the same scope, shipped, and is verified in backlog/docs/VERIFY-FINAL.md. Read TASK-196 for the evidence.
+This task's body still carried '(PROPOSED - do not build until the owner accepts it)' about decision-37, which is ACCEPTED. Note also that decision-43 SUPERSEDES decision-37 and is still 'proposed' - that contradiction is the owner's to resolve and is not resolved here.
+<!-- SECTION:NOTES:END -->

@@ -1,10 +1,10 @@
 ---
 id: TASK-192
 title: Delete the no-rate exclusion machinery -- and NOT the CSV Hinweis column
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-08-19 13:55'
-updated_date: '2026-08-19 16:10'
+updated_date: '2026-08-20 04:03'
 labels:
   - server
   - web
@@ -75,3 +75,17 @@ AC#7       -> D4 (daily check) and D7 at 390px (decision-28): a deleted column m
 - [ ] #6 web/scripts/check.mjs passes: de.json and en.json have EXACT key parity after the deletions
 - [ ] #7 /payroll/, /pl/ and /workers/ render at 1680 and at 390 with no orphaned column, empty cell or dangling caveat bullet
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+PARTIAL at 8702615, and it is AC#4 that is not met (backlog/docs/VERIFY-FINAL.md).
+DONE and verified: the deletion list is applied; the CSV Hinweis column SURVIVES (check-reports: 'the CSV still has its Hinweis column' - 7 columns, Hinweis last, and 'the CSV total row explains an exclusion, or has nothing to explain'); labour.rate_basis is still 'current' and /pl/ still renders the rate-history notice (check-money, check-reports); no test asserts 'Nicht bewertet'; pnpm check 1173 keys exact parity; audit-widths 420/420 at 11 widths x 2 themes including 390 with worst overflow +0px.
+NOT DONE - AC#4 is FALSE, measured this session, not inferred:
+  scratch copy of nfc_demo, one shift of exactly 1 second at Wohnhaus Wagramer Strasse
+  GET /admin/pl?from=2026-08-20T01:39:00Z&to=2026-08-20T01:40:00Z
+  -> labour_seconds = 1, labour_cents = 0
+The invariant server/lib/reporting.js:308-310 states in its own comment, and that check-api.js:3126 asserts, is violated. check-api passes only because no fixture ever totals one second - a check whose negative case is absent from its own data. Scratch DB dropped.
+The cause is ROUND(), not a missing rate: decision-41's ORIGINAL cause is genuinely unrepresentable (TASK-191). Deleting the 'Kein Stundensatz' copy was right and it stays deleted. The broader sentence it backed is what is still falsifiable.
+REMAINDER: TASK-204, whose first acceptance criterion is seeding this condition so the existing assertion can go red.
+<!-- SECTION:NOTES:END -->

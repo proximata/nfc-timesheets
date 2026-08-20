@@ -3,10 +3,10 @@ id: TASK-201
 title: >-
   Android: any zone of the same building closes the shift, and KnownTags is
   deleted
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-08-19 14:09'
-updated_date: '2026-08-19 16:10'
+updated_date: '2026-08-20 04:03'
 labels:
   - android
   - zones
@@ -84,3 +84,17 @@ AC#7,#8  -> P1 (Play/APK): same key, versionCode 4, and installation is TASK-202
 - [ ] #7 APK builds signed with the same key as versionCode 3; versionCode 4; manifest still autoVerifies ONLY the permanent tag host
 - [ ] #8 NOT installed on the field phone in this task -- that is TASK-202
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+PARTIAL at 8702615 (backlog/docs/VERIFY-FINAL.md). RECON N1 said 'Android beyond the Host phase: NOT STARTED'. That is STALE - eight commits landed after it was written: 20a5d6e e950f7f 66d1445 ad2cd35 e2feae2 c0cac05 4ea9187 7d4d2fc 71df8b3.
+DONE and verified off-device:
+  AC#2/#3 cd android && ./checks/run.sh -> core-check: OK (311 assertions), known-tags-check: OK (27). By name: 'two zones of the SAME building compare equal once resolved (the fix TimeSheetViewModel.sameBuilding relies on)', 'zones of DIFFERENT buildings still compare unequal', 'a missing "zones" key degrades to an empty list, never a throw'.
+  AC#7 android/app/build/outputs/apk/release/app-release.apk - aapt2: versionCode 4, versionName 0.3.0, package io.github.qwadratic.NFCTimeSheets. apksigner: CN=NFC TimeSheets, OU=HOIV, SHA-256 6c78...996c = the single fingerprint in ops/branding.json. Every android:host under the autoVerify filter is timesheets.exe.xyz - the PERMANENT tag host, four times, and the renameable API host appears only as a dex string (decision-40).
+NOT DONE:
+  AC#5 KnownTags.kt, checks/known-tags-check.kt and its run.sh block are STILL PRESENT - correctly. decision-44 deletes them only after a zone carries the serial, and no zone exists in production because 006 is not applied. The gate has not fired.
+  AC#1 the GATE itself is unrun: production's GET /roster cannot return 04:A1:A8:52:AE:5C:80 mapped to a zone until 006 is applied there.
+  AC#6 'Unbekannter Tag' with a copyable serial: not measured on any device.
+NOT INSTALLED on the field phone - that is TASK-202, and it is the highest-cost open item on this board.
+<!-- SECTION:NOTES:END -->

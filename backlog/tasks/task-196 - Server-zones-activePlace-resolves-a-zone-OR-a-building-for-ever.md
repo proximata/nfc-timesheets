@@ -1,10 +1,10 @@
 ---
 id: TASK-196
 title: 'Server zones: activePlace resolves a zone OR a building, for ever'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-19 14:00'
-updated_date: '2026-08-19 16:10'
+updated_date: '2026-08-20 04:02'
 labels:
   - server
   - zones
@@ -80,3 +80,14 @@ AC#7     -> C2 (client checks a building): the portal payload does not move.
 - [ ] #6 GET /roster still parses in the SHIPPED APK shape: the locations array is byte-compatible and zones is purely additive
 - [ ] #7 check-api.js: no assertion regressed; the portal payload assertions still pass
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
+node server/check-api.js -> PASS; node server/db/check-prod-restore.mjs -> OK.
+AC#2, the one that matters, measured on the real dump with 006 applied: POST /shifts/open with HOIV's own building uuid (zero active zones) -> 201, start_zone_id NULL.
+AND the ordering nothing had covered (PROBE-DATA §4): a live zone 'Stiege 1' under HOIV, then the BUILDING uuid tapped -> 201, start_zone_id still NULL, not silently widened. The wall card outlives its own building's zoning.
+Both mutants are in server/db/check-field-wire-mutants.sh and both go RED: 'the building branch of activePlace demands a zone', 'a building tag is widened to its first zone'. 8 mutants, 8 red, 0 alive, tree byte-identical after.
+AC#6: /roster's locations array is byte-compatible and zones[] purely additive - and the Kotlin proves the other half, android/checks/core-check.kt 'a missing "zones" key degrades to an empty list, never a throw' (311 assertions OK).
+<!-- SECTION:NOTES:END -->

@@ -1,10 +1,10 @@
 ---
 id: TASK-190
 title: 'Migration 006: zones, location_revenue, and a worker rate that cannot be zero'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-19 13:54'
-updated_date: '2026-08-19 16:09'
+updated_date: '2026-08-20 04:01'
 labels:
   - migration
   - server
@@ -80,3 +80,12 @@ AC#7,#8 -> S3 (nightly backup / restore): a migration that cannot be re-run agai
 - [ ] #7 server/db/check-migrate.js passes; server/db/README.md lists 006
 - [ ] #8 NOT applied to production in this task
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED at 8702615 by the verdict probe (backlog/docs/VERIFY-FINAL.md). Production NOT touched, 006 NOT applied there.
+node server/db/check-migrate.js -> OK, and its line names 006 explicitly: "006 refuses a rate-less worker before applying cleanly over live rows".
+node server/db/check-prod-restore.mjs -> OK against the real 2026-08-20 dump (PROBE-DATA §2): REFUSES on TTL Test, applies after the ops step, re-applies as a no-op, invents 0 rows, HOIV's pin 48.1761151/16.3953038 byte-identical after.
+AC#8 satisfied by construction: production is still on schema_migrations = 5.
+<!-- SECTION:NOTES:END -->

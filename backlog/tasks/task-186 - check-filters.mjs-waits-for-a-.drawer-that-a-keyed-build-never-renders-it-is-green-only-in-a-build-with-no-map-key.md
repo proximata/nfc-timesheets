@@ -3,9 +3,10 @@ id: TASK-186
 title: >-
   check-filters.mjs waits for a .drawer that a keyed build never renders: it is
   green only in a build with no map key
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 21:15'
+updated_date: '2026-08-20 04:02'
 labels:
   - ux
 dependencies: []
@@ -42,3 +43,11 @@ Also PRE-EXISTING: reproduced identically at c41d33f, before the reach commit an
 - [ ] #3 The assertions after it (panel cross-links, chips, worker panel, EN) run and are measured in the keyed configuration, not skipped
 - [ ] #4 The negative case is exercised: with the panel's links removed the run still goes red
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
+DEMO_BASE=http://127.0.0.1:8080 node demo/check-filters.mjs -> PASS against a build made WITH the browser maps key (2 chunks carry AIzaSy, demo/build-guard.mjs assertMapKeyInBuild passes) on seeded nfc_demo. AC#1 and AC#3 are exactly that configuration.
+The root cause behind this task is now a guard rather than a note: pnpm verify rebuilds web/out WITHOUT the key, and assertMapKeyInBuild() THROWS on a keyless bundle instead of letting map assertions SKIP quietly (fc145e2).
+<!-- SECTION:NOTES:END -->

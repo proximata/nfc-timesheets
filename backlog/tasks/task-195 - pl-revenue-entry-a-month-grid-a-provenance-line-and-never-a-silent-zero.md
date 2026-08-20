@@ -1,10 +1,10 @@
 ---
 id: TASK-195
 title: '/pl/ revenue entry: a month grid, a provenance line, and never a silent zero'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-19 13:58'
-updated_date: '2026-08-19 16:10'
+updated_date: '2026-08-20 04:02'
 labels:
   - web
   - revenue
@@ -75,3 +75,18 @@ AC#7,#8     -> D4/D8 on a phone in a stairwell (decision-28) and IA-A11Y: focus 
 - [ ] #7 Renders at 1680 and at 390: the drawer is stacked month blocks, the revenue cell wraps to two lines rather than truncating its provenance
 - [ ] #8 Keyboard + focus: the drawer traps focus, Escape closes it, and the save result is announced in the PAGE live region (Escape can close the drawer that reported it)
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md), re-run against a bundle built WITH the maps key, server on :8080.
+BASE=http://127.0.0.1:8080 node demo/probe-zones-revenue.mjs -> all geometry probes passed at 1680 / 1440x900 / 390, dark+light:
+  'an unentered month says so and is never 0,00' - 6 rows: 1 unentered, 1 typed zero, 0 confusions
+  'a typed 0 renders as an amount, not as the unknown' - 1 genuine zero
+  '/pl/ says when a figure was entered, changed, and what it replaced' - {entered,changed,previous} all true
+  'the contract value is NOT pre-filled into the amount' - value="" true, suggestion offered true (AC#5)
+  'revenue drawer opens and takes focus' / 'Escape closes ... and restores focus' -> probe-rev-opener (AC#8)
+  '/pl/ fits 390px - worst +0px' (AC#7)
+AUDIT_BASE=... node demo/audit-overlays.mjs -> 88/88, pl:revenue trapped both ways.
+The RED case for AC#1 is on the shelf and fires: mutating the answer band to money(0) FAILs on all 3 /pl/ routes.
+<!-- SECTION:NOTES:END -->

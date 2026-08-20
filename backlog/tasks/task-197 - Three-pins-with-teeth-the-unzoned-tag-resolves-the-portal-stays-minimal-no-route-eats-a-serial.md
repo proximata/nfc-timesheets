@@ -3,10 +3,10 @@ id: TASK-197
 title: >-
   Three pins with teeth: the unzoned tag resolves, the portal stays minimal, no
   route eats a serial
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-19 14:00'
-updated_date: '2026-08-19 16:10'
+updated_date: '2026-08-20 04:02'
 labels:
   - server
   - zones
@@ -72,3 +72,12 @@ AC#4       -> D2 (get a working tag onto a wall) and W10: a serial must never be
 - [ ] #5 The mutations are reverted; the working tree is clean afterwards
 - [ ] #6 Each pin's comment names the decision and the cost of its failure, not just the assertion
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
+node server/check-api.js -> PASS, including by name 'no route anywhere accepts a tag serial as INPUT' and 'no zone name and no area ever reaches the client portal'.
+Pin 1's mutation is now permanent tooling rather than a one-off: server/db/check-field-wire-mutants.sh, 8 mutants, all RED, git diff --quiet after.
+Raw serial posted as a place -> 400 (PROBE-DATA §4): a serial is not a credential (decision-44 §3).
+<!-- SECTION:NOTES:END -->

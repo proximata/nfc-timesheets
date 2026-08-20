@@ -1,10 +1,10 @@
 ---
 id: TASK-198
 title: 'Admin zones: building creation stops writing tags, zone creation starts'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-19 14:02'
-updated_date: '2026-08-19 16:10'
+updated_date: '2026-08-20 04:02'
 labels:
   - web
   - zones
@@ -83,3 +83,13 @@ AC#7,#8  -> D1/D2 at 390px (decision-28) and IA-A11Y.
 - [ ] #7 de/en exact key parity (web/scripts/check.mjs); Austrian business German; every plural through ICU
 - [ ] #8 Renders at 1680 and at 390; the zone list is stacked blocks on narrow; focus trap and Escape behave as in the existing Drawer
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md), keyed bundle, server :8080.
+demo/probe-zones-revenue.mjs: 'zone drawer opens, is modal, takes focus' / 'fits 390px - worst +0px' / 'zone drawer controls reachable - 7' / 'Escape closes the zone drawer and restores focus' -> probe-zone-opener. At 1680, 1440x900 and 390, dark and light (AC#8).
+demo/audit-overlays.mjs 88/88: locations:zone, 7 focusables, trapped BOTH ways, focus back on 'Zone anlegen'.
+node server/check-api.js -> PASS covers the serial normalisation and the 409 (AC#5).
+cd web && pnpm check -> 1173 keys exact parity (AC#7).
+<!-- SECTION:NOTES:END -->

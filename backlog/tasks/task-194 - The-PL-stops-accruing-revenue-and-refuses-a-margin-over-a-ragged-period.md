@@ -1,10 +1,10 @@
 ---
 id: TASK-194
 title: The P&L stops accruing revenue and refuses a margin over a ragged period
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-19 13:57'
-updated_date: '2026-08-19 16:10'
+updated_date: '2026-08-20 04:01'
 labels:
   - server
   - revenue
@@ -75,3 +75,13 @@ AC#6,#7     -> D7: integer cents, and decision-10's exclusions still asserted af
 - [ ] #6 Integer cents throughout; the only division is numeric in SQL and is rounded once
 - [ ] #7 check-api.js's P&L tests updated, not deleted; every existing decision-10 exclusion assertion still passes
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
+node server/check-api.js -> PASS, including the Vienna DST pins ('23:30 on 31 October is October').
+DEMO_BASE=http://127.0.0.1:8080 node demo/check-money.mjs -> all green: thisYear/thisQuarter/thisMonth each name the days that have not happened (133/41/11), say the cost is only partly recorded, put the warning on the margin CELL and not only in the block, and refuse to style it calm; lastMonth (closed) carries no future-days sentence at all.
+Integer cents throughout, the only division is numeric in SQL and rounded once: SUM(ROUND(secs * hourly_rate_cents / 3600.0)) (server/lib/reporting.js:328).
+CAVEAT, filed not hidden: that same ROUND makes labour_cents 0 for a one-second total. TASK-204.
+<!-- SECTION:NOTES:END -->

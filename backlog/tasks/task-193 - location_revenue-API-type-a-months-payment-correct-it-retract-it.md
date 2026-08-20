@@ -1,10 +1,10 @@
 ---
 id: TASK-193
 title: 'location_revenue API: type a month''s payment, correct it, retract it'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-19 13:56'
-updated_date: '2026-08-19 16:10'
+updated_date: '2026-08-20 04:01'
 labels:
   - server
   - revenue
@@ -68,3 +68,12 @@ AC#5,#6       -> D8: „not entered" and „zero received" are two different ans
 - [ ] #7 entered_by is the session admin; a body-supplied entered_by is ignored
 - [ ] #8 No new npm dependency; server deps stay pg + @sentry/node
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
+node server/check-api.js -> PASS (append-only history, superseded_at, the partial unique index, isoMonth rejection, entered_by from the session).
+DATABASE_URL=postgres:///nfc_demo node demo/check-revenue-unknown.mjs -> OK, incl. 'a TYPED zero still renders as 0,00 EUR - it is an answer, not the unknown' (1 in the database, 28 on screen) and 'every revenue figure retracted ... 7 live -> 0 live'. AC#5 and AC#6 are that pair.
+No new npm dependency: server deps are still {"@sentry/node":"10.68.0","pg":"8.21.0"} and pnpm-lock.yaml is unchanged since f6f7448.
+<!-- SECTION:NOTES:END -->

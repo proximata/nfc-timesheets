@@ -3,9 +3,10 @@ id: TASK-185
 title: >-
   check-reports.mjs has been red since the payroll disclosure shipped closed:
   two caveats are in the DOM and not on the screen
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-18 19:34'
+updated_date: '2026-08-20 04:02'
 labels:
   - money
 dependencies: []
@@ -51,3 +52,14 @@ argument for the first option.
 - [ ] #2 Either both caveats are visible without a click, or the check states in a comment exactly which two lines are exempt from the visibility rule and why
 - [ ] #3 The rate-history limitation is not deleted and is not hover-only in either outcome
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md). The check is GREEN again, in a KEYED build on seeded nfc_demo.
+DEMO_BASE=http://127.0.0.1:8080 node demo/check-reports.mjs -> 'all checks green', incl. by name:
+  'payroll: the rate-HISTORY caveat is still there (it is a different limitation)'  (AC#3)
+  'payroll: the CSV total row explains an exclusion, or has nothing to explain'
+  'payroll: no CSV row claims a worker has no rate - the state is unrepresentable'
+The filename assertion was also strengthened while this was red: it used to be a shape regex that could not tell July from June, and now pins an independent Vienna-Intl oracle - 'the CSV filename is the VIENNA business date of the period start', got payroll-2026-07-01.csv.
+<!-- SECTION:NOTES:END -->

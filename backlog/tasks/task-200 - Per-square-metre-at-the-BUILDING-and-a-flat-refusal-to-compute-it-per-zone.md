@@ -1,10 +1,10 @@
 ---
 id: TASK-200
 title: Per square metre at the BUILDING -- and a flat refusal to compute it per zone
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-19 14:09'
-updated_date: '2026-08-19 16:10'
+updated_date: '2026-08-20 04:02'
 labels:
   - server
   - web
@@ -71,3 +71,13 @@ AC#7    -> D8 in Austrian business German, de/en exact key parity.
 - [ ] #6 GREP PIN: no query anywhere divides labour or material cost by a zone's area share. Add one -> the check goes red
 - [ ] #7 de/en exact key parity; every null renders as a reason in words, never a dash
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
+node demo/check-reports.mjs -> all checks green, incl. 'pl: an unassessable building is not reported as a pass'.
+node server/check-api.js -> PASS. cd web && pnpm check -> ok 'lib/area.ts: a building area is summed as integers and never invented' and 'lib/area.ts: the tag question cannot even SEE a zone count (decision-43 §3)'.
+AC#6, the grep pin, is enforced at the derivation: server/lib/reporting.js:517-523 refuses per-zone cost in prose AND demo/probe-zones-revenue.mjs now compares /pl/'s area against /locations/'s - the mutant that deletes sumArea's incomplete branch makes /locations/ print '980 m2 gesamt' while /pl/ says area_incomplete, and goes RED 6x (3 widths x 2 themes).
+Per-m2 arithmetic re-derived by hand this session: cost 46408 c over 980 m2 -> Math.round(46408*100/980)/100 = 47.36 c/m2 -> Intl '0,47 EUR'. No float multiply; the only float is the display divide, after the rounding.
+<!-- SECTION:NOTES:END -->

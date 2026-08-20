@@ -1,10 +1,10 @@
 ---
 id: TASK-191
 title: A worker's hourly rate becomes REQUIRED on every write path
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-19 13:54'
-updated_date: '2026-08-19 16:10'
+updated_date: '2026-08-20 04:01'
 labels:
   - server
   - payroll
@@ -77,3 +77,12 @@ AC#6,#7   -> D3 on a phone (decision-28): the refusal must arrive before the sub
 - [ ] #6 web /workers/ rate field is marked required and refuses an empty submit client-side; message key exists in de.json AND en.json
 - [ ] #7 web/scripts/check.mjs passes (de/en exact key parity)
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
+node server/check-api.js -> PASS. Every write path re-measured on a scratch restore (PROBE-DATA §5): INSERT omitting the column 23502 (006 drops the DEFAULT), explicit NULL 23502, 0/-1 23514 workers_rate_positive, UPDATE-to-0 23514, POST /admin/workers with rate absent/null/''/0 -> 422 rate_required naming the field, -5/'zwanzig'/1.5 -> 400 invalid_field, edit-to-empty 422 with the old wage intact. Constraint is convalidated = t, pg_attrdef for hourly_rate_cents = 0 rows.
+cd web && pnpm check -> 1173 keys, exact de/en parity.
+demo/probe-zones-revenue.mjs -> ok 'the hourly rate is marked required on the label AND the control' {marker:true, optionalWord:false, required:true} at 1680/1440x900/390, dark+light.
+<!-- SECTION:NOTES:END -->
