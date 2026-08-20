@@ -110,6 +110,18 @@ INSERT INTO phone_identities (phone_e164, worker_id, operator_id) VALUES
    (SELECT id FROM workers   WHERE name = 'Nikola Petrovic'),
    (SELECT id FROM operators WHERE name = 'Nikola Petrovic'));
 
+-- A WORKER-ONLY claim: worker_id set, operator_id NULL. Invisible on /operators/ by
+-- definition — it is here because it is the ONE registry shape that changes what a DELETE
+-- does. ON DELETE SET NULL drives such a row to (NULL, NULL) mid-statement and
+-- phone_identities_claims aborts, so `DELETE FROM workers` fails outright unless the row
+-- is detached FIRST (ops/reset-w1.sql §4, demo/check-reach.mjs's EMPTIED order). Without a
+-- row of this shape in the seed, both of those orderings are assertions nothing can
+-- falsify: the order mutant on check-reach's list was green until this row existed.
+-- No route in this tree creates one yet (POST /operator/workers is blocked on
+-- OPERATOR-MODEL.md §8), which is exactly why the fixture has to be explicit.
+INSERT INTO phone_identities (phone_e164, worker_id) VALUES
+  ('+436600000004', (SELECT id FROM workers WHERE name = 'Marta Nowak'));
+
 -- ---------------------------------------------------------------------------
 -- Clients and their contact people. Invented companies.
 -- contacts.email is NOT a credential (there is no contact login) — the client portal

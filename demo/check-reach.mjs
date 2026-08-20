@@ -47,8 +47,19 @@
 // No new dependency: demo/cdp.mjs, Node, psql, and the Chrome already on the machine.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { assertMapKeyInBuild } from "./build-guard.mjs";
 import { attach, launchChrome, sleep } from "./cdp.mjs";
 import { REACH } from "./probe-panel-reach.mjs";
+
+// THE MAP ASSERTIONS BELOW ARE ABOUT COPY, AND A KEYLESS BUNDLE REWRITES THAT COPY.
+// `day zero: the zero-building case has its own sentence` reads the map region's note. With
+// no NEXT_PUBLIC_GOOGLE_MAPS_KEY in the build, HomeMap renders its `noKey` note instead — a
+// TRUE sentence about a build nobody meant to make — and this file fails four times naming
+// the wrong thing. demo/check-foundation.mjs rebuilds web/out and passes the key through
+// only if the CALLER had one, so running it without the key in the environment silently
+// disarms every map assertion in this directory. Fail here, with the fix, rather than
+// reporting a copy defect that is really a build defect (VERIFY-FINAL §1.1's whole lesson).
+assertMapKeyInBuild();
 
 const BASE = process.env.DEMO_BASE ?? "http://127.0.0.1:8080";
 const DB = process.env.DEMO_DB ?? "nfc_demo";
@@ -789,6 +800,15 @@ async function main() {
     // guard below found it on its first run, unseeded. Emptying it logs out a WORKER, not
     // the admin browser: `sessions` (which points at `admins`) is deliberately kept.
     "worker_sessions",
+    // 007. Points at `workers` with ON DELETE SET NULL, and phone_identities_claims forbids
+    // a row that claims nobody -- so `DELETE FROM workers` does not merely violate an FK
+    // here, it drives the surviving row to (NULL, NULL) MID-STATEMENT and aborts. It must
+    // therefore be emptied BEFORE `workers`, not merely be present in this list, which is
+    // why position here is load-bearing and not alphabetical. Same fact ops/reset-w1.sql
+    // §4 works around; found here by the guard below, on its second migration running.
+    // `operators` is deliberately NOT emptied — it points at nothing this pass touches, and
+    // day zero is about the director's screens, not about wiping an identity table.
+    "phone_identities",
     "workers",
     "app_settings",
   ];
