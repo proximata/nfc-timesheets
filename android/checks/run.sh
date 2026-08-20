@@ -73,3 +73,22 @@ NFC=app/src/main/kotlin/io/github/qwadratic/nfctimesheets/nfc
   "$NFC"/KnownTags.kt checks/known-tags-check.kt
 
 "$JAVA_BIN" -cp "$OUT:$JSON_JAR:$STDLIB" io.github.qwadratic.nfctimesheets.checks.KnownTagsCheck
+
+# THE WRITE LOOP. nfc/TagWriter.kt is the one class here that modifies a physical object,
+# and until this ran it was the one class nothing had loaded: it imports android.nfc, so no
+# JVM check could compile it, and NFC hardware does not exist on an emulator, so no emulator
+# run could reach it either. checks/fake/ stubs exactly the android.nfc surface it touches —
+# recording every call in order, and THROWING on makeReadOnly() and cachedNdefMessage — so
+# "capacity is checked before any write" becomes an assertion about an observed call log.
+#
+# The stub is compiled into a SEPARATE output dir. android.nfc.* classes must never end up
+# on a classpath the other checks share, and must obviously never reach the app build.
+OUT_NFC=checks/.out-nfc
+mkdir -p "$OUT_NFC"
+"$KOTLINC" -nowarn -cp "$JSON_JAR" -d "$OUT_NFC" \
+  "$CORE"/TagLink.kt "$CORE"/ApiFailure.kt "$CORE"/MaterialQueue.kt "$CORE"/Wire.kt "$CORE"/Zones.kt \
+  "$CORE"/UpdateCheck.kt "$CORE"/NdefTag.kt \
+  checks/fake/FakeCard.kt checks/fake/android-nfc.kt checks/fake/android-nfc-tech.kt \
+  "$NFC"/TagWriter.kt checks/tag-writer-check.kt
+
+"$JAVA_BIN" -cp "$OUT_NFC:$JSON_JAR:$STDLIB" io.github.qwadratic.nfctimesheets.checks.Tag_writer_checkKt

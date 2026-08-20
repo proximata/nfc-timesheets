@@ -25,6 +25,9 @@ app/google-services.json
 # Check runner scratch: third-party jars fetched on demand, never vendored
 checks/.lib/
 checks/.out/
+# The android.nfc stubs compile here, deliberately apart from checks/.out: stub classes
+# named android.nfc.* must never share a classpath with anything else.
+checks/.out-nfc/
 
 # Android Studio per-user state
 .idea/
