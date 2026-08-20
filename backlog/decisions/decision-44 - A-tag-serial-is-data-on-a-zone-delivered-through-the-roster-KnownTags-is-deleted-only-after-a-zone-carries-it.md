@@ -4,9 +4,12 @@ title: >-
   A tag serial is data on a zone, delivered through the roster; KnownTags is
   deleted only after a zone carries it
 date: '2026-08-19 13:48'
-status: proposed
+status: accepted
 ---
-**PROPOSED. Not accepted. The owner accepts decisions.**
+**ACCEPTED 2026-08-19 by the owner.** The column (`zones.tag_serial`, with its format CHECK and
+its partial unique index) lands in `006_zones_revenue_rates.sql` §3. `KnownTags.kt` is deleted
+only after a zone row carries the HOIV serial — that sequencing is the decision, and it has
+not happened yet.
 
 Full design and sequencing: `backlog/docs/ZONES-MODEL.md` §4.
 

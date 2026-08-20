@@ -11,7 +11,7 @@ status: proposed
 Full design: `backlog/docs/OPERATOR-MODEL.md` §2-§7. Relates to decision-20 (admin
 email+password, untouched by this record — §5), decision-22 (worker identity from the
 session, never the body — the same rule now covers `operator_sessions`), decision-26
-(enrolment codes — reused verbatim, not reimplemented, §6/§7), decision-41 (PROPOSED, and
+(enrolment codes — reused verbatim, not reimplemented, §6/§7), decision-41 (ACCEPTED 2026-08-19, and
 in direct, unresolved tension with this record — see the Conflict section below and
 `OPERATOR-MODEL.md` §8). **Supersedes nothing.**
 

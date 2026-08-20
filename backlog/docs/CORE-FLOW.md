@@ -268,5 +268,8 @@ Anything else on this list is a card you can mount or a feature that is simply n
 - Tag pulled mid-write, NFC toggled off mid-write, screen locked, app force-stopped mid-write.
 - Android 9 vs 16. Only one phone has been used.
 - Anything in production: **nothing was deployed and nothing on the VM was changed.**
-- Decisions 41–44 are still PROPOSED (43 supersedes the accepted 37). Nothing here rules on
-  them and nothing here changed today's behaviour.
+- ~~Decisions 41–44 are still PROPOSED~~ — **RULED 2026-08-19: 41, 42, 43, 44 ACCEPTED;
+  decision-37 marked `superseded` with the four contradictions written into its own file.**
+  The consequence 43 was written to prevent was then checked against the real production row,
+  not against a fixture: `ops/check-hoiv-survives-006.mjs`. HOIV stays active, keeps its pin
+  and still answers 201 to `POST /shifts/open` after 006 — it is merely grey on the map.

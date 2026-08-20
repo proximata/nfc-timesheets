@@ -4,9 +4,18 @@ title: >-
   Zones carry an area, the building's area is derived, an unzoned building is
   grey but never unresolvable
 date: '2026-08-19 13:48'
-status: proposed
+status: accepted
 ---
-**PROPOSED. Not accepted. The owner accepts decisions.**
+**ACCEPTED 2026-08-19 by the owner.** Implemented by `006_zones_revenue_rates.sql` §3.
+
+decision-37 now carries `status: superseded` and a banner at the top of its own file naming
+the four contradictions, so a reader who opens it first is not misled.
+
+§3 — the one with teeth — is proved against the REAL production row, not against a fixture:
+`ops/check-hoiv-survives-006.mjs` restores the production dump into a scratch database, applies
+006, and asserts that HOIV (active, 0 zones, its pin intact) still answers 201 to
+`POST /shifts/open` and reports `zone_state = 'unzoned'` with `active = true`. Its RED case is
+seeded: adding `AND EXISTS (SELECT 1 FROM zones …)` to the resolver turns it red.
 
 ## **SUPERSEDES decision-37** (accepted 2026-08-18, IA-PLAN §9.1)
 

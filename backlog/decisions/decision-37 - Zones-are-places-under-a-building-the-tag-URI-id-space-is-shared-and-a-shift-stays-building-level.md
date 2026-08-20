@@ -4,9 +4,36 @@ title: >-
   Zones are places under a building; the tag URI id space is shared and a shift
   stays building-level
 date: '2026-08-18 03:04'
-status: accepted
+status: superseded
 ---
-**PROPOSED. Not accepted. The owner accepts decisions.**
+## ⚠ SUPERSEDED by decision-43 (accepted 2026-08-19). READ THAT ONE.
+
+This record was accepted on 2026-08-18 and superseded the next day, before any of it was
+built. **Nothing here shipped.** What shipped is decision-43, and `006_zones_revenue_rates.sql`
+implements decision-43, not this. The design document this record points at,
+`backlog/docs/ZONES-DESIGN.md`, is replaced by `backlog/docs/ZONES-MODEL.md` §3.
+
+What decision-43 CONTRADICTS here — the only four things — so nobody has to diff two long
+records:
+
+| this record said | decision-43 says |
+|---|---|
+| **no `square_metres`** on a zone, explicitly rejected | `zones.area_sqm NUMERIC(8,2)`, NULLable; the building's area is `SUM()` at read time |
+| tag writing lives in the **building** creation walkthrough | it moves onto the **zone**; the building keeps a collapsed read-only „Gebäude-Tag (Bestand)" |
+| landmine #1: a second zone before the zone-aware APK is on every phone, **unfixable** (Play internal track) | the APK left Play — one `adb install -r` on one phone (decision-27 is no longer the delivery path) |
+| „a building with no zones is **inactive**" (as later worded by the owner against this model) | **`zone_state` is PRESENTATION ONLY.** Grey pin, never `locations.active`, never tap resolution. An unzoned building clocks workers in exactly as before. |
+
+That last row is the dangerous one, and it is why this banner is at the TOP of the file: read
+naively, this record's rule kills the one card physically mounted on a wall at HOIV, which
+carries a **building** UUID and has zero zones. Under decision-43 that card resolves for ever.
+Pinned by `server/check-api.js` „zone_state is a GREY PIN, and locations.active is the tag —
+they never merge" and by `ops/check-hoiv-survives-006.mjs`, both of which are seeded RED.
+
+Everything else below — the `zones` child table itself, no `tags` table, no self-referencing
+`locations` tree, the unchanged `/t?l=<uuid>` URI, the building-level shift, the tap rule, no
+backfill — is **retained by decision-43 unchanged**.
+
+---
 
 Full design, migration sketch, API surface and failure analysis: `backlog/docs/ZONES-DESIGN.md`.
 Journey map it falls out of: `backlog/docs/JOURNEYS.md`.

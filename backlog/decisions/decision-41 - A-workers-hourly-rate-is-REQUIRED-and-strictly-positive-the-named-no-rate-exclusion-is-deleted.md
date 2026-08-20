@@ -4,9 +4,13 @@ title: >-
   A worker's hourly rate is REQUIRED and strictly positive; the named no-rate
   exclusion is deleted
 date: '2026-08-19 13:48'
-status: proposed
+status: accepted
 ---
-**PROPOSED. Not accepted. The owner accepts decisions.**
+**ACCEPTED 2026-08-19 by the owner.** Implemented by `006_zones_revenue_rates.sql` §1.
+
+The one row this refuses in production — `workers` id 6, 'TTL Test', rate 0 — was removed by
+`ops/delete-worker.mjs` before 006 was applied. The migration was left to refuse rather than
+softened; refusing is the decision.
 
 Full design, migration sketch, deletion list and failure analysis: `backlog/docs/ZONES-MODEL.md` §1.
 

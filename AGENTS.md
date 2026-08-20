@@ -92,6 +92,19 @@ Decision checklist (keep updated as decisions are added):
   files are generated (`ops/gen-wellknown.mjs`) and committed, the AASA appID list is
   append-only, the iOS entitlement stays a checked literal, and `ops/check-branding.mjs` +
   `server/wellknown/verify.sh` are the gates (decision-24)
+- A worker's `hourly_rate_cents` is REQUIRED and `> 0`. No DEFAULT, no inactive-row exemption,
+  and the `Kein Stundensatz` / `Nicht bewertet` machinery is deleted (decision-41)
+- Revenue is a typed, append-only monthly fact per building (`location_revenue`); the contract
+  is a SUGGESTION and is never accrued into the P&L (decision-42, amends decision-28)
+- ZONES are a child of `locations` and carry `area_sqm` (NULLable). The building's area is
+  `SUM()`, never stored. **`zone_state` ('zoned'/'unzoned') is PRESENTATION ONLY** — a grey pin
+  and a sentence. It must never touch `locations.active`, tap resolution, payroll, the P&L or
+  the portal: an unzoned building clocks workers in exactly as before, and a BUILDING UUID on a
+  card resolves to the BUILDING for ever (decision-43, SUPERSEDES decision-37)
+- A tag serial is a column on a zone delivered through the roster; `KnownTags.kt` is deleted
+  only AFTER a zone row carries the serial (decision-44)
+
+~~decision-37~~ (zones, no area) is SUPERSEDED by decision-43 and nothing from it shipped.
 
 Decisions can only be changed by creating a new decision record that supersedes the old one.
 

@@ -4,9 +4,11 @@ title: >-
   Revenue is a typed, append-only monthly fact per building; the contract
   becomes a suggestion, never an accrual
 date: '2026-08-19 13:48'
-status: proposed
+status: accepted
 ---
-**PROPOSED. Not accepted. The owner accepts decisions.**
+**ACCEPTED 2026-08-19 by the owner.** Implemented by `006_zones_revenue_rates.sql` §2
+(`location_revenue`). decision-28 is AMENDED, not superseded: `location_contracts` keeps its
+history and its `target_minutes_per_month`.
 
 Full design, table sketch, API surface and UI shape: `backlog/docs/ZONES-MODEL.md` §2.
 

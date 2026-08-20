@@ -9,7 +9,7 @@ status: proposed
 **PROPOSED. Not accepted. The owner accepts decisions.**
 
 Full design: `backlog/docs/OPERATOR-MODEL.md` §9-§11. Relates to decision-45 (this reset is
-what W1 clears the way for), decision-41 (PROPOSED — §2 is the sequencing argument),
+what W1 clears the way for), decision-41 (ACCEPTED 2026-08-19 — §2 is the sequencing argument),
 decision-26 (the live enrolment code §3 accounts for is one of its codes). **Supersedes
 nothing.**
 
