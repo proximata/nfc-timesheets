@@ -136,6 +136,22 @@ export const REACH = `(() => {
           Node.DOCUMENT_POSITION_FOLLOWING) !== 0
       : null,
     historyRows: panel.querySelectorAll('table.data-table tbody tr').length,
+    // DOES THE FOLD ANNOUNCE ITSELF. Same two-layer test as probe-zones-revenue.mjs's
+    // FOLD_CUE, applied to the panel's own scroller instead of the info box's face: a
+    // shadow at the bottom of the SCROLLPORT plus a cover at the bottom of the CONTENT,
+    // so it draws if and only if something is below the cut. Read off the COMPUTED style,
+    // so a stylesheet that loses the rule fails here with the DOM unchanged.
+    // Why it matters here: macOS paints overlay scrollbars only during a gesture, so an
+    // uncued fold reads as the end of the list — which is defect V1 exactly.
+    folds: Math.round(scroller.scrollHeight - scroller.clientHeight),
+    foldCued: (() => {
+      const over = scroller.scrollHeight - scroller.clientHeight
+      if (over <= 2) return true
+      const st = getComputedStyle(scroller)
+      const layers = st.backgroundAttachment.split(',').map((x) => x.trim())
+      return /gradient/.test(st.backgroundImage) &&
+        layers.includes('local') && layers.includes('scroll')
+    })(),
   }
 })()`;
 

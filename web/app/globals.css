@@ -1314,6 +1314,32 @@ a {
   padding: var(--s4);
   overflow: auto;
   flex: 1;
+  /* THE SAME FOLD CUE `.map-info-face` CARRIES, and for the same reason — see the long
+     note there for how the two layers work and why `color-mix()` must not appear in it.
+
+     The info box got this cue because it folds by 6px. The DRAWER folds by 135px at
+     390x844 on the building panel (5 of 7 cross-links below the cut) and by 145px on
+     /analytics/ at 1680, and it had no cue at all: macOS paints overlay scrollbars only
+     during a gesture, so the cut row reads as the end of the list. That is defect V1's
+     exact shape — a fact hidden with no affordance — on the panel BuildingFacts.tsx's own
+     header refuses it on ("A FOLD HIDES FACTS").
+
+     WHY A CUE AND NOT MORE ROOM. There is no room to give. At 390x844 the body's
+     scrollport is 767px and the panel's own irreducible content — five fact rows (366px),
+     the as-of caveat (36px), the heading (19px) and SEVEN 44px cross-links (308px) — is
+     729px before a single margin, and reaches 817px on a building that also has an open
+     material request and a client (nine links). Fitting it would mean deleting a true
+     fact or shrinking a 44px touch target, and it would still not fit the next building.
+     So the panel scrolls, and the scroll announces itself. */
+  background-image:
+    linear-gradient(to top, var(--bg-raised), transparent),
+    linear-gradient(to top, var(--border-strong), transparent);
+  background-position:
+    bottom center,
+    bottom center;
+  background-repeat: no-repeat;
+  background-size: 100% 14px;
+  background-attachment: local, scroll;
 }
 
 .drawer > footer,

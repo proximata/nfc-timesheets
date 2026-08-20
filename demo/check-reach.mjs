@@ -258,6 +258,18 @@ async function panel(page, tag, url, { open = null, settle = 2600 } = {}) {
     r.linkListFound === true && r.linksAfterHeading > 0,
     `${r.linksAfterHeading} cross-links found`,
   );
+  // EVERY PANEL, EVERY WIDTH: if it folds, the fold is drawn. Asserted HERE rather than at
+  // each call site because it is the one rule that holds for all four surfaces, and because
+  // the surface that was worst is not the one anybody was looking at — /analytics/ hides
+  // 145px at 1680 and the worker panel hides 1289px at 390, both in silence, while the
+  // measured failure everyone was chasing was the building drawer's 135px.
+  // A panel that FITS passes vacuously (`folds <= 2`), so this never asks a short panel to
+  // paint a cue for a fold it does not have.
+  assert(
+    `${tag}: if it folds, the fold is DRAWN, not silent`,
+    r.foldCued === true,
+    `folds ${r.folds}px, cue ${r.foldCued ? "drawn" : "MISSING"}`,
+  );
   return r;
 }
 
@@ -338,14 +350,49 @@ async function seededPass(cfg, page) {
   const drawer = await panel(page, `${tag} building drawer`, "/", { open: OPEN_UNPINNED });
   if (drawer !== null) {
     console.log(
-      `  · building drawer: ${drawer.crossLinksVisibleNow}/${drawer.linksAfterHeading} cross-links on screen`,
+      `  · building drawer: ${drawer.crossLinksVisibleNow}/${drawer.linksAfterHeading} cross-links on screen` +
+        `, folds ${drawer.folds}px (cue ${drawer.foldCued ? "drawn" : "MISSING"})`,
     );
-    // THE NO-REGRESSION TWIN. This surface was already right; the fix must not cost it.
+    // THE LIST IS THERE AND IT IS FOUND FIRST, at every width. This half is the part of
+    // TASK-177 that is about DISCOVERY rather than about pixels: a cross-link list whose
+    // heading and first entry are below the cut is a list nobody knows exists.
     assert(
-      `${tag} building drawer: ALL of its cross-links are still reachable without scrolling`,
-      drawer.crossLinksVisibleNow === drawer.linksAfterHeading && drawer.linksAfterHeading >= 6,
-      `${drawer.crossLinksVisibleNow}/${drawer.linksAfterHeading}`,
+      `${tag} building drawer: the link list ANNOUNCES itself — heading and first link above the cut`,
+      drawer.headingTop !== null &&
+        drawer.firstCrossLinkShown === true &&
+        drawer.firstCrossLinkTop !== null &&
+        drawer.firstCrossLinkTop + TOUCH_MIN <= drawer.clientHeight &&
+        drawer.linksAfterHeading >= 6,
+      `heading y=${drawer.headingTop}, first link y=${drawer.firstCrossLinkTop} of ${drawer.clientHeight}px, ${drawer.linksAfterHeading} links`,
     );
+    if (cfg.w >= 1024) {
+      // THE NO-REGRESSION TWIN, on the width where it is achievable. A 1000px-tall drawer
+      // holds the whole list with room to spare (measured: 7/7, content 902px), so
+      // anything less here is a real regression and stays a hard failure.
+      assert(
+        `${tag} building drawer: ALL of its cross-links are still reachable without scrolling`,
+        drawer.crossLinksVisibleNow === drawer.linksAfterHeading && drawer.linksAfterHeading >= 6,
+        `${drawer.crossLinksVisibleNow}/${drawer.linksAfterHeading}`,
+      );
+    } else {
+      // AT 390px "all of them without scrolling" IS NOT ACHIEVABLE, and asserting it was
+      // asserting that the panel must delete a fact. The arithmetic, measured on this
+      // seed: the body's scrollport is 767px, and the panel's irreducible content is five
+      // fact rows (366px) + the as-of caveat (36px) + the heading (19px) + seven 44px
+      // cross-links (308px) = 729px BEFORE a single margin — and 817px on a building that
+      // also has an open material request and a client, which is nine links and is the
+      // ordinary case, not the corner. The only ways to satisfy it are to drop a true
+      // sentence or to shrink a 44px touch target below TOUCH_MIN.
+      //
+      // So the panel scrolls on a phone, and what is asserted is that the scroll is
+      // VISIBLE. An uncued fold is defect V1 — macOS draws no overlay scrollbar until a
+      // gesture starts, so the cut row reads as the end of the list.
+      assert(
+        `${tag} building drawer: it folds on a phone, and the fold is DRAWN, not silent`,
+        drawer.foldCued === true,
+        `folds ${drawer.folds}px, cue ${drawer.foldCued ? "drawn" : "MISSING"}`,
+      );
+    }
   }
 
   // The info box lives on a PIN, and a pin needs a drawn map, which needs a desktop: on a
