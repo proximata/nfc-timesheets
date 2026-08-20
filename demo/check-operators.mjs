@@ -62,6 +62,9 @@ const DEADLINE_MS = 12 * 60 * 1000
 //        enrolment_code_redeemed_at = NULL;"
 const PROBE_NAME = 'PROBE Operator'
 const PROBE_PHONE = '0664 900 90 01' // → +436649009001, claimed by nobody in demo/seed.sql
+/** The 390px journey needs its own person: §5's is already deactivated by §9. */
+const PHONE_PROBE_NAME = 'PROBE Handy'
+const PHONE_PROBE_PHONE = '0664 900 90 02'
 // demo/seed.sql claims this one for WORKER 'Anna Berger' with operator_id NULL. Typing it
 // into this screen is the collision the whole phone_identities design exists to make
 // impossible, arriving at the one door a director actually uses.
@@ -854,6 +857,104 @@ async function main() {
       )
       await page.eval(`document.documentElement.style.filter = ''`)
     }
+
+    // ---- 13 · THE SAME WRITE JOURNEY ON A PHONE --------------------------------------
+    //
+    // Not a duplicate of §1's screenshots. Everything above that WRITES was driven at 1680,
+    // and „it renders at 390" is a different claim from „it can be operated at 390": below
+    // 768 the table is a stack of cards, the drawer is full-width, and the row actions sit
+    // under their own captions. decision-28 says this admin is opened from a phone, and an
+    // operator screen is the likeliest of the lot to be.
+    await setViewport(page, 390, 844)
+    await setTheme(page, 'dark')
+    await openOperators(page)
+    await openDrawer(page)
+    assert(
+      'phone[390]: the drawer fits the screen and its first control is focused',
+      (await page.eval(`(() => {
+        const r = document.querySelector('.drawer').getBoundingClientRect()
+        return Math.round(r.left) >= -1 && Math.round(r.right) <= window.innerWidth + 1
+      })()`)) &&
+        (await page.eval(`document.querySelector('.drawer').contains(document.activeElement)`)),
+      await page.eval(
+        `(() => { const r = document.querySelector('.drawer').getBoundingClientRect()
+           return Math.round(r.left) + '…' + Math.round(r.right) + ' of ' + window.innerWidth })()`,
+      ),
+    )
+    await page.type('.drawer input[type="text"]', PHONE_PROBE_NAME, { perChar: 0 })
+    await page.type('.drawer input[type="tel"]', PHONE_PROBE_PHONE, { perChar: 0 })
+    await page.screenshot(`${SHOTS}/390-drawer.png`)
+    await page.clickText('Operator anlegen', { selector: '.drawer footer button[type="submit"]' })
+    await sleep(2000)
+    const phoneRow = await page.eval(rowText(PHONE_PROBE_NAME))
+    assert(
+      'phone[390]: an operator can be created from a phone, and lands in the list',
+      phoneRow !== null && phoneRow.includes('+436649009002'),
+      `row: ${phoneRow}`,
+    )
+
+    await page.eval(`(${rowButton(PHONE_PROBE_NAME, 'Zugangscode erstellen')}).click()`)
+    const phoneCode = (await appears(page, '.share-panel'))
+      ? await page.eval(`(() => {
+          const panel = document.querySelector('.share-panel')
+          const r = panel.getBoundingClientRect()
+          return {
+            code: (panel.querySelector('code.code')?.textContent || '').trim(),
+            fits: Math.round(r.right) <= window.innerWidth + 1 && Math.round(r.left) >= -1,
+            scroll: document.documentElement.scrollWidth,
+          }
+        })()`)
+      : null
+    await page.screenshot(`${SHOTS}/390-code.png`)
+    assert(
+      'phone[390]: the code is readable on a 390px screen without scrolling sideways',
+      phoneCode !== null &&
+        /^[A-Z0-9-]{6,}$/.test(phoneCode.code) &&
+        phoneCode.fits &&
+        phoneCode.scroll <= 390,
+      phoneCode === null ? 'no code panel appeared' : JSON.stringify(phoneCode),
+    )
+
+    await page.eval(`(${rowButton(PHONE_PROBE_NAME, 'Zugangscode sperren')}).click()`)
+    const phoneRevokeAsked = await appears(page, '.modal')
+    if (phoneRevokeAsked)
+      await page.clickText('Zugangscode sperren', { selector: '.modal footer button.btn-danger' })
+    await sleep(1500)
+    assert(
+      'phone[390]: revoking still asks first, and the modal fits the screen',
+      phoneRevokeAsked &&
+        (await page.eval(rowText(PHONE_PROBE_NAME))).includes('Kein Zugangscode'),
+      phoneRevokeAsked ? '' : 'NOTHING ASKED at 390px',
+    )
+
+    await page.eval(`(${rowButton(PHONE_PROBE_NAME, 'Deaktivieren')}).click()`)
+    const phoneConfirm = (await appears(page, '.modal'))
+      ? await page.eval(`(() => {
+          const m = document.querySelector('.modal')
+          const r = m.getBoundingClientRect()
+          return {
+            text: m.innerText.replace(/\\s+/g, ' '),
+            fits: Math.round(r.right) <= window.innerWidth + 1 && Math.round(r.left) >= -1,
+          }
+        })()`)
+      : null
+    await page.screenshot(`${SHOTS}/390-confirm.png`)
+    assert(
+      'phone[390]: the deactivate confirmation is on screen, whole, and names the person',
+      phoneConfirm !== null &&
+        phoneConfirm.fits &&
+        phoneConfirm.text.includes(PHONE_PROBE_NAME) &&
+        /nicht rückgängig/.test(phoneConfirm.text),
+      phoneConfirm === null ? 'no confirmation appeared at 390px' : JSON.stringify(phoneConfirm),
+    )
+    if (phoneConfirm !== null)
+      await page.clickText('Deaktivieren', { selector: '.modal footer button.btn-danger' })
+    await sleep(1500)
+    assert(
+      'phone[390]: the row ends up Inaktiv, in words, on a phone too',
+      (await page.eval(rowText(PHONE_PROBE_NAME))).includes('Inaktiv'),
+      await page.eval(rowText(PHONE_PROBE_NAME)),
+    )
   } catch (cause) {
     // A CRASH IS NOT A VERDICT — but it must not be silence either. demo/fix-mutants.sh only
     // counts a mutant as caught when the log carries a FAIL line, and half these assertions

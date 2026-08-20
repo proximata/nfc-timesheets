@@ -58,6 +58,9 @@
 #                  monitor, 1.5:1 on the panel. audit-contrast's own recipe.
 #   dot-not-word   Status becomes a coloured dot instead of „Aktiv"/„Inaktiv". Colour is then
 #                  the ONLY signal, which decision-43 forbids and greyscale exposes.
+#   phone-drawer-wide  .drawer loses its `min(…, 100vw)` and stays 440px. Every width from 767
+#                  up is unaffected, so only the 390px journey can catch it — and at 390 the
+#                  form is still usable, it just hangs 50px off the right edge.
 #   gap-closed     the OPPOSITE direction: TASK-215's sentence is added to the hint, and the
 #                  KNOWN_GAPS entry must go STALE and exit 1. A named gap that cannot detect
 #                  its own fix is an excuse with no expiry date. THIS MUTANT ALREADY EARNED
@@ -505,6 +508,30 @@ open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
 PY
 [ $? -eq 0 ] || exit 1
 run gap-closed "STALE-GAP"
+fi
+
+# --- phone-drawer-wide ------------------------------------------------------------------
+if selected phone-drawer-wide; then
+echo ""
+echo "=== MUTANT phone-drawer-wide · the drawer stops shrinking to the phone ==="
+# THE PHONE WIDTH IS SET IN THE MEDIA QUERY, not in the base rule. Mutating
+# `width: min(440px, 100vw)` leaves 390px untouched, the check stays green, and the harness
+# correctly reports „nothing tests it" — which is the harness working, not a hole. This one
+# takes the @media (max-width: 767px) override away instead.
+apply "$CSS" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p, encoding='utf-8').read()
+old = """  .drawer {
+    width: 100vw;
+  }"""
+new = """  .drawer {
+    width: 440px;
+  }"""
+assert old in s, 'phone-drawer-wide site not found — the <=767px .drawer rule moved'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
+[ $? -eq 0 ] || exit 1
+run phone-drawer-wide "390"
 fi
 
 # --- w-rate-optional --------------------------------------------------------------------
