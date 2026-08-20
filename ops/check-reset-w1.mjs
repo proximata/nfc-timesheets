@@ -505,9 +505,15 @@ try {
       const untouchedBefore = {};
       for (const t of UNTOUCHED_TABLES) untouchedBefore[t] = countOf(db, `SELECT count(*) FROM ${t}`);
 
-      // 006 REFUSES this dump today. Proven here so the sequencing argument in
-      // decision-46 §2 ("reset BEFORE 006, and the rate-0 leftover dissolves for free")
-      // is a measured fact about the client's rows, not a prediction.
+      // Whether 006 refuses depends on the DUMP, and it changed under this check on
+      // 2026-08-20: the rate-0 leftover ('TTL Test') was deleted on the box with
+      // ops/delete-worker.sql, so a dump taken after that date migrates cleanly. Both
+      // branches are asserted rather than one being assumed — decision-46 §2's sequencing
+      // argument is about what happens when the leftover IS there, and it still holds.
+      //
+      // THE EXPECTED COUNT IS DERIVED FROM THE DIRECTORY, never a literal: it was written as
+      // `7` when there were seven migration files, and 008 landing turned a real green into a
+      // false red that had nothing to do with the reset.
       let migrateRefused = false;
       try {
         sh("node", [MIGRATE], { env: { ...process.env, DATABASE_URL: `postgres:///${db}` } });
@@ -515,7 +521,12 @@ try {
         migrateRefused = true;
         assert.match(String(e.stderr || e.message), /have no hourly rate; refusing to invent one/, "if 006 fails on the dump it must be the RATE GUARD, not something else");
       }
-      assert.equal(countOf(db, "SELECT count(*) FROM schema_migrations"), migrateRefused ? 5 : 7, "a refused migration must record nothing");
+      const migrationFileCount = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).length;
+      assert.equal(
+        countOf(db, "SELECT count(*) FROM schema_migrations"),
+        migrateRefused ? 5 : migrationFileCount,
+        migrateRefused ? "a refused migration must record nothing" : "a clean dump must record every migration file, and no more",
+      );
 
       // A live enrolment code in the dump is a HARD STOP by default. Whether the client's
       // dump still holds one depends on the day this runs, so both branches are asserted.
@@ -541,7 +552,9 @@ try {
       for (const t of UNTOUCHED_TABLES) {
         assert.equal(countOf(db, `SELECT count(*) FROM ${t}`), untouchedBefore[t], `${t} must be UNCHANGED across both runs`);
       }
-      // NOW 006 + 007 apply, because the row that blocked 006 was a worker.
+      // NOW EVERY MIGRATION applies, because the row that blocked 006 was a worker — which
+      // is decision-46 §2's whole argument, and it is asserted below whether or not the dump
+      // still carried that row when this run started.
       sh("node", [MIGRATE], { env: { ...process.env, DATABASE_URL: `postgres:///${db}` } });
       const wantMigrations = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
       const haveMigrations = psql(db, "SELECT filename FROM schema_migrations ORDER BY filename").split("\n").map((s) => s.trim()).filter(Boolean);
