@@ -15,6 +15,9 @@ migrations/005_v2_features.sql   material_requests, location_contracts, app_sett
 migrations/006_zones_revenue_rates.sql   zones (+ area, tag_serial), location_revenue,
                           shifts.start_zone_id / end_zone_id, a worker rate that cannot be
                           zero (decisions 41, 42, 43, 44)
+migrations/007_operator_identity.sql   operators, phone_identities (the cross-table phone
+                          uniqueness registry), operator_sessions — workers/admins
+                          untouched (decision-45)
 migrate.js                runner: applies migrations/*.sql once each, in lexical order
 seed.sql                  DEV ONLY sample data
 check-migrate.js          runnable check (see bottom)
@@ -178,6 +181,20 @@ so it can never reach production by accident.
   "try again later") and `street_view_status` (whether a photo exists; the static image
   endpoint answers 200 with a grey "no imagery" tile, so this is the only honest signal).
   All NULLable, because geocoding **fails soft** and must never block saving a building.
+- **007 adds `operators` / `phone_identities` / `operator_sessions`, and touches `workers`
+  and `admins` NOT AT ALL** (decision-45). `phone_identities (phone_e164 PRIMARY KEY,
+  worker_id UNIQUE NULL, operator_id UNIQUE NULL, CHECK at least one set)` is the ONLY place
+  a phone number is checked for uniqueness across the two person kinds — a `PRIMARY KEY`,
+  not an app-level check, is what makes the collision the owner described impossible rather
+  than merely unlikely under concurrent writers. A row with BOTH set is not a bug: it is one
+  person (the owner, cleaning a building himself) holding both capabilities on one phone.
+  `ON DELETE SET NULL` on both FKs (never CASCADE) is why `ops/reset-w1.sql` has to detach a
+  worker-only `phone_identities` row BEFORE `DELETE FROM workers` — see that file's own
+  comment for the CHECK-constraint interaction that forces the order. `operators` carries no
+  `hourly_rate_cents` and never should: a rate is a wage for cleaning, and an operator who
+  never cleans has none to record. `operator_sessions` mirrors `worker_sessions` byte for
+  byte, cookie `ts_operator`, own table, no shared failure mode with either worker or admin
+  sessions.
 
 ### 006 — and the one thing to do on the box BEFORE applying it
 
