@@ -50,7 +50,14 @@ $$;
 
 TRUNCATE material_requests, location_contracts, portal_grants, shifts,
          locations, contacts, clients, inventory_items, worker_sessions,
-         workers, app_settings
+         workers, app_settings,
+         -- decision-45 (007). Named explicitly rather than left to CASCADE from `workers`:
+         -- TRUNCATE workers CASCADE sweeps phone_identities (a child of workers) but NOT
+         -- operators (phone_identities' OTHER parent) or operator_sessions (a child of
+         -- operators) — without naming operators here, a second run of this file would
+         -- accumulate duplicate operator rows forever instead of giving the same screen
+         -- twice, exactly the bug this TRUNCATE-first design exists to prevent.
+         operators, phone_identities, operator_sessions
   RESTART IDENTITY CASCADE;
 
 -- ---------------------------------------------------------------------------
@@ -67,6 +74,41 @@ INSERT INTO workers (name, email, hourly_rate_cents, active) VALUES
   ('Nikola Petrovic',  'nikola@example.test',  1390, true),
   ('Elif Demir',       'elif@example.test',    1450, true),
   ('Tomasz Wojcik',    'tomasz@example.test',  1400, false);
+
+-- ---------------------------------------------------------------------------
+-- Operators (decision-45, migration 007). Invented people, same as the workers above.
+--
+-- UNLIKE workers.phone, an operator's phone cannot be left NULL: identityPhone() has no
+-- optional case (OPERATOR-MODEL.md §4), so this table cannot demonstrate a screen without
+-- a real-looking value in every row. The same risk the workers comment above names (an
+-- invented Austrian mobile number in a public repo is somebody's real number) is handled
+-- here by making the numbers OBVIOUSLY synthetic — sequential trailing zeros no real
+-- subscriber range would issue — rather than by omitting them.
+--
+-- Three rows, three states this screen has to render distinguishably without colour:
+--   Karin Bauer       active, no linked worker              → "Auch Mitarbeiter": Nein
+--   Nikola Petrovic    active, SAME PERSON as the worker      → "Auch Mitarbeiter": a link
+--                       of the same name (decision-45 §3: one phone, one phone_identities
+--                       row, two person-rows) — also the longest name in the seed, on
+--                       purpose, to stress the 390px "Auch Mitarbeiter" cross-link cell
+--                       against the actions column the way no other row here can.
+--   Petra Illek       INACTIVE, no linked worker             → "Status": Inaktiv, in words
+-- ---------------------------------------------------------------------------
+INSERT INTO operators (name, active) VALUES
+  ('Karin Bauer',      true),
+  ('Nikola Petrovic',  true),
+  ('Petra Illek',      false);
+
+INSERT INTO phone_identities (phone_e164, operator_id) VALUES
+  ('+436600000001', (SELECT id FROM operators WHERE name = 'Karin Bauer')),
+  ('+436600000003', (SELECT id FROM operators WHERE name = 'Petra Illek'));
+
+-- Nikola Petrovic: the SAME real person as the worker of that name (decision-45 §3) —
+-- one phone_identities row, worker_id AND operator_id both set.
+INSERT INTO phone_identities (phone_e164, worker_id, operator_id) VALUES
+  ('+436600000002',
+   (SELECT id FROM workers   WHERE name = 'Nikola Petrovic'),
+   (SELECT id FROM operators WHERE name = 'Nikola Petrovic'));
 
 -- ---------------------------------------------------------------------------
 -- Clients and their contact people. Invented companies.
@@ -562,6 +604,9 @@ COMMIT;
 -- landed, without opening the panel.
 -- ---------------------------------------------------------------------------
 SELECT 'workers'            AS what, count(*)::text AS n FROM workers
+UNION ALL SELECT 'operators',           count(*)::text FROM operators
+UNION ALL SELECT 'operators also worker', count(*)::text FROM phone_identities
+                                        WHERE worker_id IS NOT NULL AND operator_id IS NOT NULL
 UNION ALL SELECT 'locations',           count(*)::text FROM locations
 UNION ALL SELECT 'clients',             count(*)::text FROM clients
 UNION ALL SELECT 'contacts',            count(*)::text FROM contacts
