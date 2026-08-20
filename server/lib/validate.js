@@ -113,6 +113,79 @@ export function optionalPhone(value, field = "phone") {
   return s;
 }
 
+/**
+ * A phone number becoming an IDENTITY (decision-45 §4) — an operator's own number, or
+ * one typed by an operator to create a worker. NOT `optionalPhone` above: that column
+ * (`workers.phone`) is free text, decorative, and never normalised on purpose. This one
+ * feeds `phone_identities.phone_e164`, the ONLY place a phone number is checked for
+ * uniqueness across workers and operators, so it has to produce one canonical spelling
+ * for every equivalent input or the uniqueness constraint catches nothing.
+ *
+ * Ladder: needed at all — yes, `"0664..."`, `"+43 664..."` and `"0043 664..."` are the
+ * SAME identity and a PRIMARY KEY only catches a collision if they normalise to the same
+ * string. stdlib — none; Node has no phone parser. Already-installed dependency — none;
+ * `libphonenumber-js` would be the first npm dependency beyond `pg` + `@sentry/node`,
+ * forbidden outright. One line — no, this is validation at a trust boundary.
+ *
+ * ponytail: hand-rolled, AUSTRIA-DEFAULT E.164 normaliser, not a general phone parser.
+ * CEILING: a number typed with neither a leading 0 nor a + is REJECTED, not guessed at —
+ * this will never silently assume a foreign country's trunk convention (a German mobile
+ * typed "0176 12345678" normalises as if Austrian, which is wrong and is caught only if
+ * the resulting shape is implausible). UPGRADE PATH: `libphonenumber-js`, the day a
+ * non-Austrian operator phone is a real requirement — its own decision record, because it
+ * would be the first dependency this server carries beyond `pg` + Sentry.
+ *
+ *   1. required — undefined/null/""/whitespace-only          -> 422 required_field
+ *   2. strip COSMETIC characters only: space, "-", "/", "(", ")"
+ *      anything else non-digit / non-leading-"+" is refused    -> 422 invalid_phone
+ *   3. leading "00" -> replace with "+"                        (0043... == +43...)
+ *   4. no "+" prefix:
+ *        leading "0" -> drop it, prepend "+43"                 (0664...  -> +43664...)
+ *        otherwise   -> REFUSED, 422 invalid_phone — a bare "664 1234567" is never
+ *                       silently assumed Austrian; the ambiguity is the caller's to
+ *                       resolve by typing a 0 or a +, not this function's to guess
+ *   5. final shape, E.164: /^\+[1-9]\d{7,14}$/ — leading digit after "+" is never 0 (no
+ *      country code starts with 0), 8-15 digits total after "+" (ITU ceiling 15; 8 is a
+ *      lower sanity floor)                                     -> 422 invalid_phone
+ *
+ * Worked examples (decision-45 §4 — the pair below normalising to the SAME string is the
+ * whole reason this function exists):
+ *   "0664 123 45 67"     -> "+436641234567"
+ *   "+43 664/1234567"    -> "+436641234567"   (same identity as the line above)
+ *   "0043 664 1234567"   -> "+436641234567"
+ *   "01 5055904"         -> "+4315055904"     (Vienna landline; still an identity)
+ *   "664 1234567"        -> REJECTED (no leading 0 or + — ambiguous, not Austrian)
+ *   "Anna"                -> REJECTED (fails step 2)
+ *   "+43664"              -> REJECTED (5 digits after +43, below the 8-digit floor)
+ *   ""                    -> REJECTED (required_field)
+ */
+export function identityPhone(raw, field) {
+  if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+    fail(422, "required_field", field);
+  }
+  if (typeof raw !== "string") fail(422, "invalid_phone", field);
+
+  const stripped = raw.replace(/[\s\-/()]/g, "");
+  // Only digits, with at most one leading "+", may survive the strip — a name pasted in,
+  // or any other symbol, is refused rather than silently dropped.
+  if (!/^\+?[0-9]+$/.test(stripped)) fail(422, "invalid_phone", field);
+
+  let digits = stripped.startsWith("00") ? `+${stripped.slice(2)}` : stripped;
+
+  if (!digits.startsWith("+")) {
+    if (digits.startsWith("0")) {
+      digits = `+43${digits.slice(1)}`;
+    } else {
+      // A bare national number with neither a leading 0 nor a +. Guessing the country
+      // would be the exact silent reformat decision-45 §4 refuses to do.
+      fail(422, "invalid_phone", field);
+    }
+  }
+
+  if (!/^\+[1-9][0-9]{7,14}$/.test(digits)) fail(422, "invalid_phone", field);
+  return digits;
+}
+
 export function cents(value, field = "hourly_rate_cents") {
   const n = typeof value === "string" ? Number(value) : (value ?? 0);
   if (!Number.isSafeInteger(n) || n < 0 || n > 100_000_000) fail(400, "invalid_field", field);
