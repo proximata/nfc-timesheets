@@ -345,3 +345,28 @@ and **zero leftover databases**; `createuser nfc` → both green.
 - **A leftover scratch database from an earlier run was found on this laptop**
   (`portal_smoke_69166`). It was NOT dropped — it is not this run's, and dropping another
   run's database is the same mistake as reverting its mutant. Somebody should.
+
+---
+
+## 12 · Provenance — this file was committed by somebody else's commit
+
+This document, TASK-204 and TASK-205 were `git add`ed by this probe and then committed by a
+**concurrent agent** as part of `6757082 "Nothing asserted that the payroll screen and the
+server aggregate agree"`, alongside `demo/check-money.mjs`, which is not this run's work.
+Nothing was lost; the message is simply not about most of what the commit contains.
+
+Recorded rather than repaired. Rewriting that commit means rebasing under other runs that
+are committing into the same branch right now, which trades a wrong commit message for lost
+work — the exact failure `AGENTS.md` describes.
+
+The hazard it names was observed **twice in one hour** on this tree:
+
+```
+03:58  web/app/pl/page.tsx held another run's live mutant
+       t('revenueUnknown') -> money(0)   = decision-42's exact violation, uncommitted
+04:2x  three files staged by this run were swept into another run's commit
+```
+
+Staging explicit paths is necessary and **is not sufficient**: the index is shared. Two
+agents cannot both hold a staged index in one working tree. If runs are to overlap, they
+need separate worktrees, not discipline about `git add`.
