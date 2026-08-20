@@ -4,9 +4,14 @@
 //   ssh schimmer-glanz.exe.xyz 'sudo -n cat /var/backups/nfc/nfc-<newest>.sql.gz' > /tmp/nfc.sql.gz
 //   node server/db/check-prod-restore.mjs /tmp/nfc.sql.gz
 //
-// check-migrate.js proves 006 applies to a database WE built. This proves it applies to
-// the database the CLIENT actually has, and that the API then boots on it and the card
-// physically on the wall still clocks a worker in.
+// check-migrate.js proves the migrations apply to a database WE built. This proves 006, 007
+// and 008 apply IN ORDER to the database the CLIENT actually has, that the API then boots on
+// it, and that the card physically on the wall still clocks a worker in.
+//
+// THE WHOLE DEPLOY, REHEARSED: the rate guard refusing and then passing, three migrations in
+// order and idempotent, zero rows invented by any of them, every building surviving with its
+// coordinates, the API booting, the SHIPPED APK's request shape still opening and closing a
+// shift, an unbound reported tag refusing to, and the mounted EV1 serial resolving end to end.
 //
 // WHY IT IS A SEPARATE FILE. It needs an artefact nobody can commit — a dump of a live
 // payroll database — so it cannot join the always-on suite. Without a dump it SKIPS and
@@ -133,8 +138,21 @@ try {
   )}, 5 migrations`);
 
   // ---- 2 · the rate guard, against real rows ---------------------------------------
-  const rateless = Number(psql("SELECT count(*) FROM workers WHERE hourly_rate_cents <= 0"));
-  if (rateless > 0) {
+  //
+  // THE NEGATIVE CASE MUST NOT BE ALLOWED TO DIE WITH THE ROW THAT MADE IT. Production's
+  // 'TTL Test' leftover was deleted on 2026-08-20 (ops/delete-worker.sql), so from that day
+  // on the `rateless > 0` arm below would never run again and 006's refusal would be a
+  // promise nobody watches fail. So when the dump is clean, ONE is seeded into the scratch
+  // copy and the refusal is exercised anyway, then removed. A check whose negative case
+  // cannot fail is not a check.
+  let rateless = Number(psql("SELECT count(*) FROM workers WHERE hourly_rate_cents <= 0"));
+  let seededRateless = false;
+  if (rateless === 0) {
+    psql("INSERT INTO workers (name, hourly_rate_cents, active) VALUES ('Rate Guard Fixture', 0, false)");
+    rateless = 1;
+    seededRateless = true;
+  }
+  {
     // THE REFUSAL IS THE FEATURE. `psql -1` aborts the file, migrate.js records nothing,
     // and the database is left byte-identical. It must never invent a wage.
     let refused = false;
@@ -149,14 +167,17 @@ try {
     assert.ok(refused, `${rateless} worker(s) have no rate, so 006 MUST refuse — it did not`);
     assert.equal(psql("SELECT to_regclass('public.zones') IS NULL"), "t", "a refused 006 must leave NOTHING behind");
     assert.equal(psql("SELECT count(*) FROM schema_migrations"), "5", "...and must record nothing");
-    ok(`006 REFUSES: ${rateless} worker(s) have no rate, and the database is untouched`);
+    ok(
+      seededRateless
+        ? "006 REFUSES: the dump is clean, so a rate-less worker was SEEDED to watch the guard fire"
+        : `006 REFUSES: ${rateless} worker(s) have no rate, and the database is untouched`,
+    );
     console.log(psql("SELECT '       -> id ' || id || ' · ' || name || ' · rate ' || hourly_rate_cents || ' · active ' || active FROM workers WHERE hourly_rate_cents <= 0"));
-    console.log("       Deal with these on the box FIRST (server/db/README.md §006), then deploy.");
-    // Reproduce the ops step here so the rest of the check can run.
+    if (!seededRateless) {
+      console.log("       These are REAL rows on the box. Clear them there FIRST — ops/delete-worker.sql —");
+      console.log("       then deploy. Reproduced on the SCRATCH copy below so the rest of this check runs.");
+    }
     psql("DELETE FROM workers WHERE hourly_rate_cents <= 0");
-    ok("(the ops step applied to the SCRATCH copy so the rest of this check can run)");
-  } else {
-    ok("no rate-less worker on the box: 006's guard will pass");
   }
 
   // ---- 3 · apply, and re-apply ------------------------------------------------------
@@ -169,8 +190,29 @@ try {
     "SELECT string_agg(id || '|' || name || '|' || active || '|' || coalesce(lat::text,'-') || '|' || coalesce(lng::text,'-'), E'\n' ORDER BY id) FROM locations",
   );
 
-  assert.match(migrate(), /applied 006_zones_revenue_rates\.sql/, "006 must apply");
+  // ALL THREE PENDING MIGRATIONS, AND THE ORDER IS PART OF THE CLAIM. 007 references
+  // `workers` as 006 leaves it and 008 references `zones`, which 006 creates — out of order
+  // they do not apply at all, and the runner's lexical ordering is the only thing enforcing
+  // it. Asserted as POSITIONS in the transcript, not as three independent matches.
+  const applyOutput = migrate();
+  const order = ["006_zones_revenue_rates.sql", "007_operator_identity.sql", "008_reported_tags.sql"].map((f) => {
+    const at = applyOutput.indexOf(`applied ${f}`);
+    assert.notEqual(at, -1, `${f} must apply — transcript: ${applyOutput.trim().split("\n").join(" / ")}`);
+    return at;
+  });
+  assert.ok(order[0] < order[1] && order[1] < order[2], "006 -> 007 -> 008, in that order");
   assert.match(migrate(), /up to date/, "and re-running must be a no-op");
+  assert.equal(psql("SELECT count(*) FROM schema_migrations"), "8", "exactly 8 migrations recorded, none twice");
+  assert.equal(
+    psql("SELECT string_agg(filename, ',' ORDER BY applied_at, filename) FROM schema_migrations WHERE filename >= '006'"),
+    "006_zones_revenue_rates.sql,007_operator_identity.sql,008_reported_tags.sql",
+    "...and the RECORDED order matches the applied order",
+  );
+  // 007 and 008 must also create nothing. An operator, a phone identity or a reported tag
+  // invented by a migration is an identity nobody issued (006's own rate-guard reasoning).
+  for (const t of ["operators", "phone_identities", "operator_sessions", "reported_tags", "tag_aliases"]) {
+    assert.equal(psql(`SELECT count(*) FROM ${t}`), "0", `${t} must be created EMPTY`);
+  }
   assert.equal(psql("SELECT count(*) FROM zones"), "0", "006 must invent no zone");
   assert.equal(psql("SELECT count(*) FROM location_revenue"), "0", "006 must invent no revenue row");
   assert.equal(
@@ -178,7 +220,47 @@ try {
     "0",
     "006 must backfill no zone onto any existing shift",
   );
-  ok("006 applies to the real database, twice, creating ZERO rows");
+  ok("006 -> 007 -> 008 apply to the real database, in order, twice, creating ZERO rows");
+
+  // ---- 3a · 007's whole point: a worker's phone and an operator's phone CANNOT COLLIDE.
+  //
+  // decision-45 makes that structural rather than a rule somebody remembers to check, and
+  // `phone_identities` is the structure. Proved against the real database by trying it: one
+  // phone number, claimed by a worker, then handed to an operator as a SECOND row. The
+  // primary key refuses. This is the assertion that would silently disappear if the table
+  // were ever replaced by a nullable column on `workers`.
+  psql("INSERT INTO workers (name, hourly_rate_cents) VALUES ('Kollision Arbeiter', 1500)");
+  psql("INSERT INTO operators (name) VALUES ('Kollision Betreiber')");
+  psql(
+    "INSERT INTO phone_identities (phone_e164, worker_id) SELECT '+436640000123', id FROM workers WHERE name = 'Kollision Arbeiter'",
+  );
+  let collided = false;
+  try {
+    psql(
+      "INSERT INTO phone_identities (phone_e164, operator_id) SELECT '+436640000123', id FROM operators WHERE name = 'Kollision Betreiber'",
+    );
+  } catch (e) {
+    collided = true;
+    assert.match(String(e.stderr || e.message), /duplicate key value|phone_identities_pkey/, "it must be the KEY that refuses");
+  }
+  assert.ok(collided, "a phone claimed by a worker was ALSO claimed by an operator — the registry is not a registry");
+  psql("DELETE FROM phone_identities WHERE phone_e164 = '+436640000123'");
+  psql("DELETE FROM operators WHERE name = 'Kollision Betreiber'");
+  psql("DELETE FROM workers WHERE name = 'Kollision Arbeiter'");
+  ok("007: one phone number cannot be both a worker's and an operator's — the key refuses it");
+
+  // ---- 3b · 008: a reported tag starts UNBOUND, and an UNBOUND tag is not a place.
+  //
+  // This is the state the stairwell actually produces: an operator writes a card and reports
+  // it before anybody has decided what it is. It must resolve to NOTHING — no shift, ever —
+  // and it must be DISTINGUISHABLE from a stranger's tag, which is why 008 exists at all.
+  // UNBOUND is `resolved_at IS NULL` and not a status string — one predicate, no third flag
+  // (001's rule). The row is left in place for the tap below.
+  const REPORTED_TAG = "11111111-2222-4333-8444-5555555508aa";
+  psql(`INSERT INTO reported_tags (id) VALUES ('${REPORTED_TAG}')`);
+  assert.equal(psql(`SELECT resolved_at IS NULL FROM reported_tags WHERE id = '${REPORTED_TAG}'`), "t", "a fresh report is UNBOUND");
+  assert.equal(psql(`SELECT count(*) FROM tag_aliases WHERE id = '${REPORTED_TAG}'`), "0", "...and points at no zone");
+  ok("008: a reported tag exists UNBOUND — written and reported, resolved by nobody yet");
 
   // EVERY BUILDING SURVIVES, BYTE FOR BYTE — id, name, active flag AND both coordinates.
   // HOIV is pinned at 48.1761151/16.3953038 and that pin is the whole map screen.
@@ -275,6 +357,21 @@ try {
   assert.equal(closed.status, 200, "the shipped build's close shape must still work");
   ok("POST /shifts/close in the SHIPPED build's shape -> 200");
 
+  // A TAP ON THE UNBOUND TAG SEEDED ABOVE IS HARMLESS, AND SPECIFIC. This is the stairwell's
+  // real order of events — a card is written and mounted before anyone in the office decides
+  // what it is — and the one outcome that must never happen is a shift opening against a
+  // place nobody has claimed. The code is NEW (`tag_unbound`), which the build in the field
+  // renders as "unknown status from a newer server": a safe degrade, not a crash.
+  const shiftsBeforeUnbound = psql("SELECT count(*) FROM shifts");
+  const unbound = await call("/shifts/open", {
+    method: "POST",
+    body: { client_uuid: "11111111-2222-4333-8444-555555559004", location_uuid: REPORTED_TAG, start_time: new Date().toISOString() },
+  });
+  assert.equal(unbound.status, 422, "an UNBOUND reported tag must never open a shift");
+  assert.equal((await unbound.json()).error, "tag_unbound", "...and must say so specifically, not as a generic refusal");
+  assert.equal(psql("SELECT count(*) FROM shifts"), shiftsBeforeUnbound, "...and must create no row");
+  ok("a tap on an UNBOUND reported tag -> 422 tag_unbound, and NO shift");
+
   // ---- 5 · THE MOUNTED EV1 SERIAL, END TO END ON THE REAL DATABASE ------------------
   //
   // Everything above proves the BUILDING uuid still resolves. This proves the OTHER tag on
@@ -347,8 +444,8 @@ try {
   assert.equal(psql("SELECT count(*) FROM zones"), "0", "the scratch zone must not outlive this check");
 
   console.log(
-    "\nOK check-prod-restore: 006 applies to the real database, the API boots on it, and the\n" +
-      "card on the wall at HOIV still clocks a worker in.",
+    "\nOK check-prod-restore: 006 -> 007 -> 008 apply to the real database in order and twice,\n" +
+      "the API boots on it, and the card on the wall at HOIV still clocks a worker in.",
   );
 } finally {
   if (server) await new Promise((r) => server.close(r));
