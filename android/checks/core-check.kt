@@ -99,6 +99,7 @@ fun main() {
     shiftSignal()
     updateCheck()
     ndefTag()
+    theWriteSurface()
 
     if (failed) exitProcess(1)
     println("core-check: OK")
@@ -1906,4 +1907,78 @@ private fun ndefTag() {
     )
     // A literal space, which is what a '+' would become if anyone "fixed" the decoder.
     check(NdefTag.message("https://$host/t?l= $HOIV_LOCATION") == null, "a space cannot be encoded onto a card")
+}
+
+// ---------------------------------------------------------------------------------
+// 16b. THE WRITE SURFACE IS EXACTLY ONE FUNCTION, AND IT NEVER LOCKS A CARD.
+//
+//      checks/tag-writer-check.kt drives TagWriter and proves what it does. That only
+//      settles the paths it drives. This settles the paths it cannot: the operator screen,
+//      the scan screen, anything a later iteration adds. Two claims, both about the SOURCE
+//      of every variant, and both about code rather than about prose:
+//
+//        1. `writeNdefMessage` is called from ONE file. A second write path is a second
+//           capacity gate to get right, and the one that gets it wrong ruins a card.
+//        2. `makeReadOnly` / `canMakeReadOnly` appear nowhere. Tags stay UNLOCKED
+//           (decision-15) — irreversible, and it protects nothing anyway, since a serial
+//           and a URL are both public and neither authenticates anybody.
+//
+//      COMMENTS ARE STRIPPED FIRST. TagWriter.kt's KDoc says "WHAT IS NEVER DONE HERE:
+//      makeReadOnly()", and a guard that a prose mention satisfies is a guard that a prose
+//      mention can also defeat. The question is whether the CALL is there.
+//
+//      The dex half of the same claim — which covers what the compiler and R8 actually
+//      emitted, not what the source says — is checks/release-artefact.sh.
+// ---------------------------------------------------------------------------------
+private fun theWriteSurface() {
+    val kotlin = File("app/src").walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
+    check(kotlin.size > 20, "the source sweep found ${kotlin.size} files — too few to be reading the tree")
+
+    val writers = mutableListOf<String>()
+    for (file in kotlin) {
+        val code = strippedOfComments(file.readText())
+        for (forbidden in listOf("makeReadOnly", "canMakeReadOnly")) {
+            check(
+                !code.contains(forbidden),
+                "$forbidden is CALLED in ${file.path} — tags stay unlocked (decision-15) and locking a card cannot be undone",
+            )
+        }
+        if (code.contains("writeNdefMessage")) writers += file.path
+    }
+
+    // The control. If the sweep or the comment stripper ever stops seeing code, this is the
+    // line that notices — otherwise "makeReadOnly appears nowhere" would also be satisfied
+    // by a sweep that reads nothing at all.
+    check(
+        writers == listOf("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/nfc/TagWriter.kt"),
+        "writeNdefMessage is called from exactly one file, and it is TagWriter: $writers",
+    )
+}
+
+/**
+ * Kotlin source with `//` lines, KDoc/`/* */` blocks and continuation `*` lines removed.
+ *
+ * Deliberately crude, and deliberately crude in the SAFE direction: it strips only lines
+ * whose first non-space characters open or continue a comment, so a trailing `// ...` on a
+ * line of code survives and can still trip a guard. Over-reporting a guard violation costs
+ * a minute; under-reporting one costs a client's card.
+ */
+private fun strippedOfComments(source: String): String {
+    val out = StringBuilder()
+    var inBlock = false
+    for (raw in source.lineSequence()) {
+        val line = raw.trim()
+        if (inBlock) {
+            if (line.contains("*/")) inBlock = false
+            continue
+        }
+        if (line.startsWith("//")) continue
+        if (line.startsWith("/*")) {
+            if (!line.contains("*/")) inBlock = true
+            continue
+        }
+        if (line.startsWith("*")) continue
+        out.append(raw).append('\n')
+    }
+    return out.toString()
 }
