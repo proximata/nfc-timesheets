@@ -78,6 +78,7 @@ const SCREENS = [
   '/clients/',
   '/contracts/',
   '/inventory/',
+  '/operators/',
   '/payroll/',
   '/pl/',
   '/analytics/',

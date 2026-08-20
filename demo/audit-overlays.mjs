@@ -260,6 +260,15 @@ await page.waitFor(`document.querySelectorAll('table.data-table tbody tr').lengt
 await auditOverlay('workers:edit', 'Mitarbeiter anlegen')
 await auditOverlay('workers:deactivate-confirm', 'Deaktivieren', { kind: 'modal' })
 
+console.log('\n--- /operators/ create drawer + deactivate confirm (decision-45, TASK-214) ---')
+await page.goto(`${BASE}/operators/`, { settle: 1200 })
+await page.waitFor(`document.querySelectorAll('table.data-table tbody tr').length > 0`, {
+  timeout: 12000,
+  label: 'operator rows',
+})
+await auditOverlay('operators:create', 'Operator anlegen')
+await auditOverlay('operators:deactivate-confirm', 'Deaktivieren', { kind: 'modal' })
+
 console.log('\n--- /locations/ two-step drawer ---')
 await page.goto(`${BASE}/locations/`, { settle: 1400 })
 await page.waitFor(`document.querySelectorAll('table.data-table tbody tr').length > 0`, {
@@ -437,6 +446,7 @@ const SCREENS = [
   '/clients/',
   '/contracts/',
   '/inventory/',
+  '/operators/',
   '/payroll/',
   '/pl/',
   '/analytics/',
@@ -555,6 +565,7 @@ console.log('\n--- census: is every overlay in web/ accounted for? ---')
 const OVERLAY_CENSUS = {
   'app/shifts/page.tsx': { audited: 2, deferred: 0, why: '' },
   'app/workers/page.tsx': { audited: 2, deferred: 0, why: '' },
+  'app/operators/page.tsx': { audited: 2, deferred: 0, why: '' },
   'app/locations/page.tsx': { audited: 2, deferred: 2, why: 'NOT COVERED: the two ConfirmModals on /locations/ (delete building, delete zone) have never had the trap measured' },
   'app/pl/page.tsx': { audited: 1, deferred: 2, why: 'NOT COVERED: the percent editor drawer and the /pl/ confirm have never had the trap measured' },
   'app/clients/page.tsx': { audited: 0, deferred: 3, why: 'NOT COVERED: two drawers and a confirm on /clients/ have never had the trap measured' },
