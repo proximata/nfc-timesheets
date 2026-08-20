@@ -2090,6 +2090,23 @@ private fun theOverwriteGuard() {
         "the confirm button is enabled by WriteGuard, not by a local string comparison",
     )
 
+    // ---- the writer ASKS the guard, and asks it before writing ---------------------
+    // The drive in checks/tag-writer-check.kt § 1b is the real proof of this and goes red
+    // in nine places if the call is deleted. This line is the cheap one that names the
+    // deletion instead of describing its symptoms.
+    val writer = strippedOfComments(
+        File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/nfc/TagWriter.kt").readText(),
+    )
+    check(writer.contains("WriteGuard.decide("), "TagWriter asks the overwrite guard at all")
+    check(
+        writer.indexOf("WriteGuard.decide(") < writer.indexOf("ndef.writeNdefMessage"),
+        "...and asks it BEFORE the write, where the answer can still change the card's fate",
+    )
+    check(
+        !writer.contains("cachedNdefMessage"),
+        "the guard reads the card LIVE — the dispatch cache may not be the card in the field",
+    )
+
     // ---- and none of it is anywhere near a clock-in --------------------------------
     // The tap path, named file by file. A cleaner's tap must not touch the writer, the
     // guard, or the operator session: not for correctness reasons — for a cleaner who is
