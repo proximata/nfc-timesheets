@@ -134,44 +134,54 @@ cleanup() {
   # key that is REFERRER-LOCKED to this host, so it can only be seen from here. The
   # screenshot has to happen while the throwaway session still exists, hence the ordering.
   if [ -f "$ADMIN_JAR" ]; then
-    # "Karte wird geladen" is de.json's `home.mapLoading`. Waiting for it to GO is what makes
-    # the state below a measurement instead of a race — the first version of this shot fired
-    # the moment the building list appeared and reported the map as fine, seconds before
-    # Google rejected the key.
-    shot "/" "05-map-after-cleanup.png" "HOIV" "Karte wird geladen"
-    if [ -f "$SHOTS/05-map-after-cleanup.txt" ]; then
-      /usr/bin/grep -q "$MARK" "$SHOTS/05-map-after-cleanup.txt" \
+    # THE MAP IS SAMPLED, NOT OBSERVED ONCE, AND THAT IS THE FINDING.
+    #
+    # "Karte wird geladen" is de.json's `home.mapLoading`; waiting for it to GO is what turns
+    # this from a race into a measurement — the first version fired the moment the building
+    # list appeared and called the map fine seconds before Google rejected the key.
+    #
+    # But a SETTLED single sample is still not the answer, because the answer is not stable:
+    # an identical page load, same host, same key, same minute, comes back drawn about two
+    # times in three and `RefererNotAllowedMapError` the rest. An unauthorised key would fail
+    # every time; a key that is authorised and works would fail none. So both directions are
+    # asserted and the ratio is printed:
+    #
+    #   drawn == 0  -> the referrer is genuinely not on the key. RED.
+    #   drawn == N  -> it is now solid; the note below is stale. RED, so the docs get fixed.
+    #
+    # An unauthorised key does not fail the script LOAD, which is why the console is read
+    # rather than the network: Google serves the file, `new Map()` succeeds, and what renders
+    # is a grey box indistinguishable from "still loading" (web/lib/map.ts says exactly this).
+    local samples="${MAP_SAMPLES:-5}" drawn=0 blocked=0 i
+    for i in $(seq 1 "$samples"); do
+      shot "/" "05-map-$i.png" "HOIV" "Karte wird geladen" >/dev/null 2>&1
+      if /usr/bin/grep -q 'Auf der Karte:' "$SHOTS/05-map-$i.txt" 2>/dev/null; then
+        drawn=$((drawn + 1)); cp "$SHOTS/05-map-$i.png" "$SHOTS/05-map-drawn.png"; cp "$SHOTS/05-map-$i.txt" "$SHOTS/05-map-drawn.txt"
+      elif /usr/bin/grep -q 'RefererNotAllowedMapError' "$SHOTS/05-map-$i.console.txt" 2>/dev/null; then
+        blocked=$((blocked + 1)); cp "$SHOTS/05-map-$i.png" "$SHOTS/05-map-blocked.png"; cp "$SHOTS/05-map-$i.console.txt" "$SHOTS/05-map-blocked.console.txt"
+      fi
+      rm -f "$SHOTS/05-map-$i.png" "$SHOTS/05-map-$i.txt" "$SHOTS/05-map-$i.console.txt"
+    done
+
+    if [ -f "$SHOTS/05-map-drawn.txt" ]; then
+      /usr/bin/grep -q "$MARK" "$SHOTS/05-map-drawn.txt" \
         && bad "the director's home screen still shows this run's test data" \
         || ok "the home screen lists HOIV and nothing this run created"
+      /usr/bin/grep -q 'Auf der Karte: 1\. Ohne Koordinaten: 0\.' "$SHOTS/05-map-drawn.txt" \
+        && ok "one building on the map, none without coordinates — HOIV has its pin" \
+        || bad "the map's own count is '$(/usr/bin/grep -o 'Auf der Karte:.*' "$SHOTS/05-map-drawn.txt" | head -1)'"
+    fi
 
-      # AND THE MAP ITSELF, WHICH IS NOT THE SAME CLAIM. An unauthorised browser key does
-      # not fail the script load: Google serves the file, `new Map()` succeeds, and what
-      # renders is a grey box that is indistinguishable from "still loading" (web/lib/map.ts
-      # says exactly this). The only witness is the console, so it is read.
-      #
-      # TWO-WAY ON PURPOSE. EXPECT_MAP records the state this repo believes production is
-      # in. Today that is `blocked` (TASK-206). The day somebody adds the referrer in the
-      # Cloud Console this goes RED — which is the point: the fix has to reach the docs that
-      # currently tell the director his map is broken.
-      # Classified from THE SENTENCE THE DIRECTOR READS (de.json home.mapBlocked /
-      # home.mapReady), with Google's own console error as corroboration. The console alone
-      # would be a check on a log line; the sentence is the product.
-      local seen_map="unknown"
-      /usr/bin/grep -q 'Auf der Karte:' "$SHOTS/05-map-after-cleanup.txt" && seen_map="drawn"
-      /usr/bin/grep -q 'Kartenschluessel\|Kartenschlüssel wird für diese Adresse abgelehnt' "$SHOTS/05-map-after-cleanup.txt" && seen_map="blocked"
-      if [ "$seen_map" = "blocked" ]; then
-        /usr/bin/grep -q 'RefererNotAllowedMapError' "$SHOTS/05-map-after-cleanup.console.txt" 2>/dev/null \
-          && ok "Google's own words for it: $(/usr/bin/grep -o 'RefererNotAllowedMapError' "$SHOTS/05-map-after-cleanup.console.txt" | head -1)" \
-          || bad "the screen says the key is refused but the console does not — it may be the QUOTA, not the referrer"
-      fi
-      if [ "$seen_map" = "${EXPECT_MAP:-blocked}" ]; then
-        ok "the map is '$seen_map', as recorded (EXPECT_MAP=${EXPECT_MAP:-blocked})"
-        [ "$seen_map" = "blocked" ] && printf '  note: %s\n' \
-          "HOIV has coordinates and is on the list, but NO PIN IS DRAWN: Google answers RefererNotAllowedMapError for $BASE/ (TASK-206). Authorise that referrer on the browser key, then re-run with EXPECT_MAP=drawn."
-      else
-        bad "the map is now '$seen_map' and this repo still says '${EXPECT_MAP:-blocked}' — update TASK-206 and CORE-FLOW, then re-run with EXPECT_MAP=$seen_map"
-        rc=1
-      fi
+    if [ "$drawn" -eq 0 ]; then
+      bad "the map NEVER drew in $samples loads — the browser key is not authorised for $BASE (TASK-206)"
+      rc=1
+    elif [ "$drawn" -eq "$samples" ]; then
+      bad "the map drew $drawn/$samples — it is solid now, so the 'intermittent' note in CORE-FLOW § 5 is stale and must be removed"
+      rc=1
+    else
+      ok "the map drew $drawn/$samples — the key IS authorised for this host"
+      printf '  note: %s\n' \
+        "but $blocked of $samples identical loads came back RefererNotAllowedMapError for $BASE/ . Measured through headless Chrome with a cold profile; whether a warm human browser sees the same is UNPROVEN. TASK-206."
     fi
   fi
 
@@ -304,9 +314,14 @@ case "$WALL_ID" in
 esac
 
 # A run that starts on a dirty box cannot make the closing claim, so it does not start.
-START_COUNTS=$(psql_box "SELECT (SELECT count(*) FROM workers) || '/' || (SELECT count(*) FROM operators) || '/' || (SELECT count(*) FROM shifts) || '/' || (SELECT count(*) FROM zones) || '/' || (SELECT count(*) FROM reported_tags) || '/' || (SELECT count(*) FROM locations)")
-[ "$START_COUNTS" = "0/0/0/0/0/1" ] \
-  && ok "starting from a clean box (workers/operators/shifts/zones/reported_tags/locations = $START_COUNTS)" \
+# ADMINS ARE IN THIS COUNT, and they were not at first. A leftover throwaway admin from an
+# earlier debugging session survived into a run, and the only thing that noticed was the
+# CLOSING count — which reported "production is NOT as it was found" and blamed this run for
+# a row it never created. A start guard that does not cover a table the end guard covers just
+# moves the failure to the wrong place.
+START_COUNTS=$(psql_box "SELECT (SELECT count(*) FROM workers) || '/' || (SELECT count(*) FROM operators) || '/' || (SELECT count(*) FROM shifts) || '/' || (SELECT count(*) FROM zones) || '/' || (SELECT count(*) FROM reported_tags) || '/' || (SELECT count(*) FROM locations) || '/' || (SELECT count(*) FROM admins)")
+[ "$START_COUNTS" = "0/0/0/0/0/1/1" ] \
+  && ok "starting from a clean box (workers/operators/shifts/zones/reported_tags/locations/admins = $START_COUNTS)" \
   || { bad "the box is NOT clean at the start: $START_COUNTS — refusing to run, because the closing count would be a lie"; exit 1; }
 
 trap cleanup EXIT
