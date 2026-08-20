@@ -41,7 +41,11 @@ let good = "https://schimmer-glanz.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3
 check(TagLink.locationId(from: URL(string: good)!) == "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "canonical link")
 check(TagLink.locationId(from: URL(string: "https://schimmer-glanz.exe.xyz/t/?l=3F2504E0-4F89-11D3-9A0C-0305E82C3301")!)
         == "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "trailing slash + uppercase uuid -> lowercased")
-check(TagLink.locationId(from: URL(string: "https://TIMESHEETS.EXE.XYZ/t?x=1&l=3f2504e0-4f89-11d3-9a0c-0305e82c3301")!)
+// The host is INTERPOLATED from TagLink.host, uppercased — not typed out. This line used
+// to carry a literal `TIMESHEETS.EXE.XYZ`, which stopped being this app's host the day the
+// VM was renamed, so the check went red for a reason that had nothing to do with case
+// folding. A check whose failure means "the host moved" is not a check about case.
+check(TagLink.locationId(from: URL(string: "https://\(TagLink.host.uppercased())/t?x=1&l=3f2504e0-4f89-11d3-9a0c-0305e82c3301")!)
         != nil, "host case-insensitive, extra query params ignored")
 
 // Rejected shapes. Everything here would otherwise reach the server off an unlocked tag.
@@ -54,6 +58,24 @@ let bad = [
     "https://evil.example.com/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",      // wrong host
     "http://schimmer-glanz.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",     // not https
     "https://schimmer-glanz.exe.xyz/admin?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301", // wrong path
+    "https://schimmer-glanz.exe.xyz/tag?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",   // path PREFIX is not the path
+    // URI userinfo trick: the string STARTS with our host but the authority is not ours.
+    "https://schimmer-glanz.exe.xyz@evil.example.com/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+    // java.util.UUID.fromString ACCEPTS this; Foundation's UUID(uuidString:) does not, and
+    // the server's regex does not. Pinned on BOTH sides so the platforms cannot drift into
+    // Android queueing rows the server answers 400 to while iOS refuses the same tag.
+    "https://schimmer-glanz.exe.xyz/t?l=1-1-1-1-1",
+    // THE '+' TRAP, and the reason it is HERE and not only in the Kotlin corpus.
+    // Android decodes the query with java.net.URLDecoder, which implements
+    // application/x-www-form-urlencoded, where `+` MEANS space — so "?l=+<uuid>" would
+    // decode to " <uuid>", trim clean, and be ACCEPTED on Android. Swift's URLComponents
+    // leaves `+` alone, so iOS rejects it. That asymmetry is a tag one phone in a stairwell
+    // clocks in from and the phone in the next stairwell refuses. TagLink.kt escapes `+` to
+    // %2B before decoding to close it, and core-check.kt pins the Kotlin half with a comment
+    // that says "verified against Swift" — a claim nothing on this side had ever RUN. It runs
+    // now: these two lines are the other half of that sentence.
+    "https://schimmer-glanz.exe.xyz/t?l=+3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+    "https://schimmer-glanz.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301+",
 ]
 for s in bad {
     check(TagLink.locationId(from: URL(string: s)!) == nil, "must reject \(s)")
