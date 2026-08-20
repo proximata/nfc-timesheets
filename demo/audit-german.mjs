@@ -45,6 +45,9 @@ const SCREENS = [
   { path: '/analytics/', words: ['Auswertung'] },
   { path: '/pl/', words: ['Gewinn'] },
   { path: '/clients/', words: ['Kunde'] },
+  // Off-nav (decision-39 §6) and therefore easy to leave out of a screen list. It was:
+  // /operators/ shipped in TASK-214 and no German audit had ever loaded it.
+  { path: '/operators/', words: ['Zugangscode', 'Deaktivieren'] },
 ]
 
 const results = []
@@ -98,11 +101,26 @@ for (const { path, words } of SCREENS) {
       el.clientHeight <= 1 ||
       cs.clipPath === 'inset(50%)' ||
       el.classList.contains('visually-hidden')
+    // THE WORD SCAN READS AN ELEMENT'S OWN TEXT NODES, not only leaves.
+    //
+    // Leaf-only was wrong and it produced a false alarm the day /operators/ was added: every
+    // row action in this admin is <button>Deaktivieren<span class="visually-hidden"> von
+    // Karin Bauer</span></button>, so the button HAS a child, is skipped, and its own word
+    // is never seen. The screen said „Deaktivieren" in 105px of button at 390px while this
+    // audit reported the word absent. The clipping scan below stays leaf-only, which is
+    // correct for it — a box that clips is the box, not its parent.
     for (const el of document.querySelectorAll('body *')) {
-      if (el.children.length > 0) continue          // leaf text only
+      if (!el.classList.contains('visually-hidden')) {
+        const own = [...el.childNodes]
+          .filter((n) => n.nodeType === 3)
+          .map((n) => n.nodeValue)
+          .join(' ')
+          .replace(/\\s+/g, ' ')
+        if (own.trim() !== '') for (const w of words) if (own.includes(w)) seen.add(w)
+      }
+      if (el.children.length > 0) continue          // leaf text only, for the clipping scan
       const text = (el.textContent || '').replace(/\\s+/g, ' ').trim()
       if (text === '') continue
-      for (const w of words) if (text.includes(w)) seen.add(w)
       const cs = getComputedStyle(el)
       if (hiddenOnPurpose(el, cs)) continue
       if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue
