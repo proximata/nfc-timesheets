@@ -67,6 +67,15 @@ const test = async (name, fn) => {
 
 const RESET_SQL = fs.readFileSync(RESET_SQL_PATH, "utf8");
 
+// Optional: a production dump. AC#8 below is the only assertion in this file that is about
+// the client's actual rows rather than rows this file invented, and it SKIPS loudly
+// without one rather than quietly reporting a green suite that never saw real data.
+const DUMP = process.argv[2];
+if (DUMP && !fs.existsSync(DUMP)) {
+  console.error(`FAIL check-reset-w1: ${DUMP} does not exist`);
+  process.exit(1);
+}
+
 // The two RED-case generators. Both operate on the REAL file's text — never a hand-typed
 // stand-in — via a substring that only exists once, so a future edit to reset-w1.sql that
 // moves or rewords the guard makes this throw LOUDLY (a stale check silently proving
@@ -92,6 +101,20 @@ function withAdminsGuardRemoved() {
   const start = onceOnly(RESET_SQL, startMarker, "AC#3 assertion block start");
   const end = onceOnly(RESET_SQL, endMarker, "AC#3 assertion block end");
   assert.ok(start < end, "AC#3: assertion block markers are out of order — this check is stale");
+  return RESET_SQL.slice(0, start) + RESET_SQL.slice(end);
+}
+
+/** AC#5 RED: section 4's phone_identities detach removed — the ONE piece of this script
+ * that is not in decision-46's sketch, because it was found by walking the FK graph 007
+ * introduces. Without it, `DELETE FROM workers` drives a worker-only registry row to
+ * (NULL, NULL) mid-statement and phone_identities_claims aborts the whole transaction.
+ * A fix nobody has watched fail is a fix nobody knows is load-bearing. */
+function withPhoneDetachRemoved() {
+  const startMarker = "DO $$ BEGIN\n  IF to_regclass('public.phone_identities') IS NOT NULL THEN";
+  const endMarker = "DELETE FROM workers;";
+  const start = onceOnly(RESET_SQL, startMarker, "AC#5 RED detach block start");
+  const end = onceOnly(RESET_SQL, endMarker, "AC#5 RED detach block end");
+  assert.ok(start < end, "AC#5 RED: detach block markers are out of order — this check is stale");
   return RESET_SQL.slice(0, start) + RESET_SQL.slice(end);
 }
 
@@ -144,12 +167,14 @@ function runReset(dbName, sqlText, extraArgs = []) {
   }
 }
 
-/** A fully migrated (001-007) scratch DB, one admin, optionally seeded further by `seed`. */
-function freshDb(tag, { migrate = true } = {}) {
+/** A fully migrated (001-007) scratch DB, one admin, optionally seeded further by `seed`.
+ * `admin: false` is for AC#8, where the admin row arrives with the dump and inventing a
+ * second one would make "the owner survived" pass on a row this file wrote. */
+function freshDb(tag, { migrate = true, admin = true } = {}) {
   const name = newDbName(tag);
   sh("createdb", [name]);
   if (migrate) sh("node", [MIGRATE], { env: { ...process.env, DATABASE_URL: `postgres:///${name}` } });
-  psql(name, "INSERT INTO admins (email, password_hash) VALUES ('reset-check@example.test', 'x')");
+  if (admin) psql(name, "INSERT INTO admins (email, password_hash) VALUES ('reset-check@example.test', 'x')");
   return name;
 }
 
@@ -309,6 +334,24 @@ try {
     assert.equal(countOf(db, "SELECT count(*) FROM operators"), 1, "operators itself must be completely untouched");
   });
 
+  // ---- AC#5 RED · the section-4 detach, shown load-bearing --------------------------
+  await test("AC#5 RED: without section 4's detach, DELETE FROM workers ABORTS on phone_identities_claims", () => {
+    const db = freshDb("ac5red");
+    const workerId = countOf(db, "INSERT INTO workers (name, hourly_rate_cents) VALUES ('AC5 RED Worker', 1500) RETURNING id");
+    psql(db, `INSERT INTO phone_identities (phone_e164, worker_id) VALUES ('+436645551234', ${workerId})`);
+
+    const red = runReset(db, withPhoneDetachRemoved());
+    assert.equal(red.ok, false, "RED: with the detach removed the script MUST fail — if it succeeds, section 4 is decorative");
+    assert.match(red.stderr, /phone_identities_claims/, "RED: and it must fail on the CHECK section 4 exists to dodge, not on something incidental");
+    assert.equal(countOf(db, "SELECT count(*) FROM workers"), 1, "RED: the aborted transaction must roll back — nothing deleted");
+
+    // GREEN, on the SAME database and the SAME seeded row: the real script clears it.
+    const green = runReset(db, RESET_SQL);
+    assert.equal(green.ok, true, `GREEN: the real script must clear the same row: ${green.stderr}`);
+    assert.equal(countOf(db, "SELECT count(*) FROM workers"), 0);
+    assert.equal(countOf(db, "SELECT count(*) FROM phone_identities"), 0);
+  });
+
   // ---- AC#6 · after a clean run, the exact "must be 0" / "must be unchanged" tables -
   await test("AC#6: a clean run zeroes exactly the named tables and leaves everything else untouched", () => {
     const db = freshDb("ac6");
@@ -384,6 +427,103 @@ try {
     assert.equal(wrongFlagFailed, true, "a MISMATCHED -v confirm_database must refuse");
     assert.equal(countOf(db, "SELECT count(*) FROM admins"), 1, "a refused run must touch nothing");
   });
+
+  // ---- AC#8 · THE REAL THING: a RESTORED PRODUCTION DUMP, reset TWICE, then migrated.
+  //
+  //      Everything above rehearses the script against databases this file seeded itself,
+  //      which means every one of them holds exactly the rows the author thought to write.
+  //      A production dump holds the rows nobody expected — `workers id 6, TTL Test, rate
+  //      0` with a LIVE enrolment code is in the client's database precisely because
+  //      nobody planned it. This runs the whole sequence over those rows.
+  //
+  //      SKIPS, loudly, with no dump. Taking one is a read-only `pg_dump` and is step 1 of
+  //      the deploy runbook:
+  //        ssh schimmer-glanz.exe.xyz 'sudo -n -u postgres pg_dump --no-owner --no-acl nfc' \
+  //          | gzip > /tmp/nfc-prod.sql.gz
+  //        node ops/check-reset-w1.mjs /tmp/nfc-prod.sql.gz
+  //      ...and the dump is a copy of the client's payroll: delete it when you are done.
+  // ---------------------------------------------------------------------------------
+  if (!DUMP) {
+    console.log("  --   AC#8 SKIPPED: no production dump given. Every assertion below it is silent,");
+    console.log("  --     and a seeded database cannot stand in for one nobody designed.");
+    console.log("  --     usage: node ops/check-reset-w1.mjs /tmp/nfc-prod.sql.gz");
+  } else {
+    await test(`AC#8: a RESTORED PRODUCTION DUMP (${path.basename(DUMP)}) resets twice, keeps the owner, then takes 006+007`, () => {
+      const db = freshDb("ac8", { migrate: false, admin: false });
+      const sql = DUMP.endsWith(".gz") ? sh("gunzip", ["-c", DUMP]) : fs.readFileSync(DUMP, "utf8");
+      try {
+        sh("psql", [`postgres:///${db}`, "-v", "ON_ERROR_STOP=1", "-q", "-f", "-"], { input: sql, stdio: ["pipe", "pipe", "pipe"] });
+      } catch (e) {
+        const message = String(e.stderr || e.message);
+        const missingRole = message.match(/role "([^"]+)" does not exist/);
+        assert.fail(
+          missingRole
+            ? `the dump needs a local role "${missingRole[1]}" and this machine has none — fix: createuser ${missingRole[1]}`
+            : `the dump did not restore: ${message.trim().split("\n").slice(0, 3).join(" / ")}`,
+        );
+      }
+
+      // The client's actual shape, asserted rather than assumed — if the box has moved on,
+      // the numbers below are about a database that no longer exists and should say so.
+      const adminsBefore = countOf(db, "SELECT count(*) FROM admins");
+      assert.ok(adminsBefore >= 1, "the dump must carry at least one admin, or this reset is a lockout by definition");
+      const ownerFingerprint = psql(db, "SELECT md5(string_agg(id || '|' || email || '|' || password_hash || '|' || created_at, ',' ORDER BY id)) FROM admins");
+      const untouchedBefore = {};
+      for (const t of UNTOUCHED_TABLES) untouchedBefore[t] = countOf(db, `SELECT count(*) FROM ${t}`);
+
+      // 006 REFUSES this dump today. Proven here so the sequencing argument in
+      // decision-46 §2 ("reset BEFORE 006, and the rate-0 leftover dissolves for free")
+      // is a measured fact about the client's rows, not a prediction.
+      let migrateRefused = false;
+      try {
+        sh("node", [MIGRATE], { env: { ...process.env, DATABASE_URL: `postgres:///${db}` } });
+      } catch (e) {
+        migrateRefused = true;
+        assert.match(String(e.stderr || e.message), /have no hourly rate; refusing to invent one/, "if 006 fails on the dump it must be the RATE GUARD, not something else");
+      }
+      assert.equal(countOf(db, "SELECT count(*) FROM schema_migrations"), migrateRefused ? 5 : 7, "a refused migration must record nothing");
+
+      // A live enrolment code in the dump is a HARD STOP by default. Whether the client's
+      // dump still holds one depends on the day this runs, so both branches are asserted.
+      const liveCodes = countOf(db, "SELECT count(*) FROM workers WHERE enrolment_code_hash IS NOT NULL AND enrolment_code_expires_at > now()");
+      const noFlag = runReset(db, RESET_SQL);
+      if (liveCodes > 0) {
+        assert.equal(noFlag.ok, false, `${liveCodes} live code(s) in the dump: the script MUST refuse without -v allow_live_code_loss=1`);
+        assert.match(noFlag.stderr, /LIVE, unredeemed enrolment code/);
+        assert.equal(countOf(db, "SELECT count(*) FROM workers"), countOf(db, "SELECT count(*) FROM workers"), "a refusal touches nothing");
+      } else {
+        assert.equal(noFlag.ok, true, `no live code in the dump, so the plain run must succeed: ${noFlag.stderr}`);
+      }
+
+      // TWICE, per the brief. The second run finds everything already empty.
+      const first = liveCodes > 0 ? runReset(db, RESET_SQL, ["-v", "allow_live_code_loss=1"]) : noFlag;
+      assert.equal(first.ok, true, `run 1 against real rows must succeed: ${first.stderr}`);
+      const second = runReset(db, RESET_SQL);
+      assert.equal(second.ok, true, `run 2 must be a clean no-op — and must no longer need the live-code flag: ${second.stderr}`);
+
+      for (const t of ["workers", "locations", "shifts", "worker_sessions", "material_requests", "location_contracts", "portal_grants"]) {
+        assert.equal(countOf(db, `SELECT count(*) FROM ${t}`), 0, `${t} must read 0 after two runs over real rows`);
+      }
+      for (const t of UNTOUCHED_TABLES) {
+        assert.equal(countOf(db, `SELECT count(*) FROM ${t}`), untouchedBefore[t], `${t} must be UNCHANGED across both runs`);
+      }
+      // THE OWNER'S ROW, BYTE FOR BYTE. "admins is still 1" would pass if the reset had
+      // deleted his row and something else had inserted another; the hash is the claim.
+      assert.equal(
+        psql(db, "SELECT md5(string_agg(id || '|' || email || '|' || password_hash || '|' || created_at, ',' ORDER BY id)) FROM admins"),
+        ownerFingerprint,
+        "the admins table must be BYTE-IDENTICAL after two resets — same id, same email, same password hash",
+      );
+
+      // ...and NOW 006 + 007 apply, because the row that blocked 006 was a worker.
+      sh("node", [MIGRATE], { env: { ...process.env, DATABASE_URL: `postgres:///${db}` } });
+      const wantMigrations = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
+      const haveMigrations = psql(db, "SELECT filename FROM schema_migrations ORDER BY filename").split("\n").map((s) => s.trim()).filter(Boolean);
+      assert.deepEqual(haveMigrations, wantMigrations, "after the reset every migration must apply — that is decision-46 §2's whole argument");
+      assert.equal(countOf(db, "SELECT count(*) FROM phone_identities WHERE worker_id IS NULL AND operator_id IS NULL"), 0, "no registry row may claim nobody");
+      assert.equal(countOf(db, "SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND connamespace = 'public'::regnamespace AND NOT convalidated"), 0, "every foreign key must still be VALIDATED — an unvalidated one is where an orphan hides");
+    });
+  }
 
   // ---- AC#7 · the mandatory pre-flight is DOCUMENTED, checked as text --------------
   await test("AC#7: pg-backup.sh + restore-test.sh are documented as the mandatory step before a real run", () => {
