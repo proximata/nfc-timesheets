@@ -317,7 +317,27 @@ AUDIT_BASE=http://127.0.0.1:8080 node demo/audit-widths.mjs
                                       # overflow: 11 widths x 19 states x 2 themes = 418
                                       # measurements, plus a self-test that sabotages the page
 
+AUDIT_BASE=http://127.0.0.1:8080 node demo/audit-phone.mjs
+                                      # 390 and 360, both themes, EVERY screen: no sideways
+                                      # scroll, and each card caption compared against the
+                                      # heading in its own column
+AUDIT_BASE=http://127.0.0.1:8080 node demo/audit-german.mjs
+                                      # the German screens at 390, and no clipped box
+DEMO_BASE=http://127.0.0.1:8080 node demo/check-worker-form.mjs
+                                      # required vs optional on the worker form, and the wage:
+                                      # marked, explained, and refused when empty. Read-only.
+
 # THESE WRITE to nfc_demo. Reseed before re-running check-ia-greyscale.
+DEMO_BASE=http://127.0.0.1:8080 node demo/check-operators.mjs
+                                      # /operators/ as a director uses it: create, the phone
+                                      # COLLISION, a code shown once, revoke, deactivate,
+                                      # keyboard on both overlays, 11 widths WITH the drawer
+                                      # open, contrast + greyscale on the real DOM. It takes
+                                      # its own rows back and asserts the counts.
+sh demo/operator-mutants.sh           # ...and the negative case for every one of those
+                                      # claims: 22 mutants, each of which the check must NAME.
+                                      # Rebuilds web/out 22 times; needs the maps key so it
+                                      # does not leave a keyless bundle behind.
 AUDIT_BASE=http://127.0.0.1:8080 node demo/audit-overlays.mjs
                                       # the full overlay contract - focus in, dialog
                                       # semantics, scroll lock, Tab AND Shift+Tab trapped,
