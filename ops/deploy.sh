@@ -40,6 +40,29 @@ echo "==> 0/8 operator identity (ops/branding.json is the source of truth)"
 node ops/gen-wellknown.mjs
 node ops/check-branding.mjs
 
+echo "==> 0a/8 stage the migration runner and files (inert — nothing runs them yet)"
+# WITHOUT THIS THE GATE BELOW CANNOT SEE THE MIGRATION IT EXISTS FOR, and it reported
+# "up to date" against the real production dump while 006 was sitting in this tree.
+#
+# migrate.js resolves its files as `path.join(__dirname, "migrations")` — the directory it
+# is IN. Step 0b runs `$DEST/db/migrate.js`, i.e. the copy ON THE BOX, and the box's copy is
+# whatever the LAST deploy left there. 006 does not arrive until step 3. So the dry run was
+# asking "do the migrations already applied still apply", the answer was yes, exit 0, and
+# the deploy walked straight into the window step 0b was written to close: step 3 and 4 ship
+# the new bundle, step 5 runs the REAL 006, it refuses, and the box is left serving
+# /workers/ and /payroll/ — which deleted their "no hourly rate" copy because 006 makes that
+# state unrepresentable (decision-41) — on a schema that still holds a rate-less row.
+# Measured, not reasoned: restored dump, 5 migrations, 1 rate-less worker; the box's 001-005
+# tree dry-runs "up to date" exit 0, and the real 006 then exits 1.
+#
+# SAFE TO DO BEFORE THE GATE. These are .sql files and a runner; putting them on disk runs
+# nothing and changes nothing the API serves. NO --delete: this is additive staging, and
+# pruning here would delete the running server's own files before anything has been proven.
+# seed.sql and the check-* harnesses are excluded for the same reason step 3 excludes them —
+# a stray `node check-api.js` beside a payroll database is a very bad afternoon.
+rsync -az --exclude 'seed.sql' --exclude 'check-*.js' --exclude 'check-*.mjs' \
+  ./server/db/ "$HOST:$DEST/db/"
+
 echo "==> 0b/8 will the pending migrations even apply? (nothing has moved yet)"
 # A MIGRATION IS ALLOWED TO REFUSE. 006 raises rather than inventing an hourly wage for a
 # rate-less worker (decision-41) and production carries exactly such a row, so this deploy

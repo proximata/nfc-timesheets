@@ -694,6 +694,56 @@ try {
     "...and must record nothing in schema_migrations either",
   );
 
+  // --- ...AND THE GATE MUST BE LOOKING AT THIS TREE'S MIGRATIONS ---------------------
+  //
+  // Everything above proves --dry-run REFUSES when it can see 006. It cannot prove the
+  // deploy lets it see 006, and for a while the deploy did not: migrate.js resolves its
+  // files as `path.join(__dirname, "migrations")`, step 0b runs the copy ON THE BOX, and
+  // 006 did not reach the box until step 3. Against a restored production dump the gate
+  // therefore printed "up to date" and exited 0 — a check whose negative case could not
+  // fire — and the deploy walked into the exact window step 0b exists to close.
+  //
+  // So the ORDER is asserted, out of ops/deploy.sh itself. Read as text because that is
+  // what the failure was: every command was correct and only their sequence was wrong, and
+  // no amount of running migrate.js here can see that. Positions, not mere presence —
+  // "the file mentions rsync somewhere" is what let this through the first time.
+  const deploySh = fs.readFileSync(path.join(__dirname, "..", "..", "ops", "deploy.sh"), "utf8");
+  const at = (re, what) => {
+    const i = deploySh.search(re);
+    assert.notEqual(i, -1, `ops/deploy.sh no longer contains ${what} — this ordering check is stale`);
+    return i;
+  };
+  // `[\s\S]{0,240}?` and not `[^\n]*`: the staging rsync wraps onto a second line with a
+  // backslash continuation, and a single-line pattern silently found nothing and reported
+  // the check as stale rather than reporting the order.
+  const stageDb = at(
+    /rsync[\s\S]{0,240}?\.\/server\/db\/\s+"\$HOST:\$DEST\/db\/"/,
+    "the step 0a staging rsync of server/db/",
+  );
+  const gate = at(/migrate\.js --dry-run/, "the step 0b --dry-run gate");
+  const shipBundle = at(/rsync[^\n]*\.\/web\/out\//, "the step 4 rsync of web/out");
+  const realMigrate = at(/node '"\$DEST"'\/db\/migrate\.js\n/, "the step 5 real migrate");
+  assert.ok(
+    stageDb < gate,
+    "ops/deploy.sh must put THIS TREE's migrations on the box BEFORE the --dry-run gate, or " +
+      "the gate dry-runs the migrations that are already applied and passes vacuously",
+  );
+  assert.ok(
+    gate < shipBundle,
+    "the --dry-run gate must run BEFORE web/out is rsynced: the running API serves a static " +
+      "export the instant it lands, so a refusal after this point leaves new screens on an old schema",
+  );
+  assert.ok(
+    shipBundle < realMigrate,
+    "the real migrate still runs after the bundle ships — if this ever flips, re-derive the window above",
+  );
+  // The staging rsync must not prune the running server's files before anything is proven.
+  assert.doesNotMatch(
+    deploySh.slice(stageDb, gate),
+    /--delete/,
+    "the step 0a staging rsync must be ADDITIVE (no --delete) — it runs before any gate has passed",
+  );
+
   apply("006_zones_revenue_rates.sql");
   assert.equal(
     liveQuery("SELECT to_regclass('public.zones') IS NOT NULL AND to_regclass('public.location_revenue') IS NOT NULL;"),
