@@ -25,7 +25,7 @@
 // mtime, not a content hash: the question is "did anybody touch a source file after the last
 // build", one stat per file, no dependency, and nothing to keep in step.
 import { execFileSync } from 'node:child_process'
-import { readdirSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 
 const SOURCE_DIRS = ['app', 'components', 'lib', 'messages']
 /** Not source: build output, deps, and the editor/OS droppings that are never compiled. */
@@ -80,6 +80,47 @@ export function assertFreshBuild(webDir = new URL('../web', import.meta.url).pat
         '  The browser would be reading a bundle that is not this tree, and every result\n' +
         '  below — pass or fail — would be about code nobody is looking at.\n' +
         '  cd web && NEXT_PUBLIC_GOOGLE_MAPS_KEY=$(cd .. && psst get NEXT_PUBLIC_GOOGLE_MAPS_KEY) pnpm build',
+    )
+  }
+}
+
+/**
+ * ...AND WAS THAT BUILD MADE WITH THE MAPS KEY IN IT?
+ *
+ * THE FRESHNESS GUARD ABOVE PASSES ON A KEYLESS BUILD, and a keyless build is not a broken
+ * run — it is a QUIET one. Without `NEXT_PUBLIC_GOOGLE_MAPS_KEY` at build time the map never
+ * loads, `.map-pin` never exists, and every pin assertion in demo/probe-zones-revenue.mjs
+ * and demo/check-ia-greyscale.mjs SKIPS or reports zero pins. That is how RECON came to
+ * record "the grey pin has NEVER been observed, the key rejects loopback" as a measured
+ * fact. It is observable, it always was, and the missing ingredient was the key.
+ *
+ * IT IS ONE COMMAND AWAY AT ALL TIMES. `pnpm verify` runs `pnpm build` with no key — it is
+ * the type/lint gate and has no business knowing about Google — so ANY run that verifies
+ * after building overwrites `web/out` with a keyless bundle, and the next browser check goes
+ * quietly blind. Measured this session: exactly that happened, mid-probe.
+ *
+ * So a check that depends on pins asks for this explicitly. It throws rather than warns: a
+ * warning in a 600-line log is a skip with extra steps.
+ */
+export function assertMapKeyInBuild(webDir = new URL('../web', import.meta.url).pathname) {
+  const chunks = `${webDir}/out/_next/static/chunks`
+  let names
+  try {
+    names = readdirSync(chunks).filter((n) => n.endsWith('.js'))
+  } catch {
+    throw new Error(`build-guard: ${chunks} does not exist — build web/out first.`)
+  }
+  // The literal Google browser-key prefix. Looking for the ENV VAR NAME would not work:
+  // Next inlines the value and the name is gone from the output.
+  const found = names.some((n) => readFileSync(`${chunks}/${n}`, 'utf8').includes('AIzaSy'))
+  if (!found) {
+    throw new Error(
+      'build-guard: web/out was built WITHOUT NEXT_PUBLIC_GOOGLE_MAPS_KEY.\n' +
+        `  ${names.length} chunk(s) scanned, no AIzaSy… in any of them. The map will not load,\n` +
+        '  no .map-pin will exist, and every pin assertion below would SKIP or read zero pins\n' +
+        '  — which is not a pass. `pnpm verify` rebuilds without the key; rebuild with it:\n' +
+        '  cd web && NEXT_PUBLIC_GOOGLE_MAPS_KEY=$(cd .. && psst get NEXT_PUBLIC_GOOGLE_MAPS_KEY) pnpm build\n' +
+        '  and run the API on :8080 — the ONLY loopback origin the key’s referrer allowlist has.',
     )
   }
 }

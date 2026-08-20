@@ -12,7 +12,7 @@
 //   node demo/probe-zones-revenue.mjs            (server on 127.0.0.1:4319, DB nfc_demo)
 //   BASE=http://127.0.0.1:4319 node demo/probe-zones-revenue.mjs
 import { readFileSync } from 'node:fs'
-import { assertFreshBuild, assertFreshServer } from './build-guard.mjs'
+import { assertFreshBuild, assertFreshServer, assertMapKeyInBuild } from './build-guard.mjs'
 import { attach, launchChrome, sleep } from './cdp.mjs'
 
 const BASE = process.env.BASE ?? 'http://127.0.0.1:4319'
@@ -26,6 +26,9 @@ if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(BASE)) {
 // BEFORE Chrome is launched: every number below is about the bundle in web/out, and a
 // bundle older than the tree makes both a pass and a fail describe code nobody is reading.
 assertFreshBuild()
+// The map assertions below are the only proof decision-43's grey pin exists. Without the
+// key they SKIP, and a skip in a 230-line log reads as a pass - see backlog/docs/RECON.md H2.
+assertMapKeyInBuild()
 // ...and the same question about the SERVER, because half the assertions below read
 // /admin/pl and /admin/data. An orphan server left on this port by an earlier run answers
 // /health with 200 and serves the rebuilt static files off disk, so only the SERVER-SIDE

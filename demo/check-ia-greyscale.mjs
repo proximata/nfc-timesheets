@@ -24,6 +24,7 @@
 // Every wait is bounded and the run has a deadline. Exits 1 on a failure.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { assertMapKeyInBuild } from "./build-guard.mjs";
 import { attach, launchChrome, sleep } from "./cdp.mjs";
 
 const BASE = process.env.DEMO_BASE ?? "http://127.0.0.1:8080";
@@ -32,6 +33,10 @@ if (!["127.0.0.1", "localhost", "[::1]", "::1"].includes(host)) {
   console.error(`check-ia-greyscale: refusing to drive "${host}" — loopback only.`);
   process.exit(1);
 }
+// The pin block below cannot run on a keyless bundle: no key, no .map-pin, and the
+// grey-pin assertion would pass over zero pins.
+assertMapKeyInBuild();
+
 const OUT = process.env.IA_STATES_OUT ?? "/tmp/ts-demo/ia-states/";
 mkdirSync(OUT, { recursive: true });
 const ADMIN = { email: "demo@example.test", password: "demo-nur-lokal-2026" };
