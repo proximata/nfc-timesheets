@@ -190,7 +190,11 @@ class TagWriter(private val tagLink: TagLink) {
                     tagLink,
                     onCard?.toByteArray(),
                     // The platform's own reading of the same card — see WriteGuard.classify.
-                    onCard?.records?.firstOrNull()?.toUri(),
+                    // `.toString()` because the real NdefRecord.toUri() returns an
+                    // android.net.Uri; checks/fake/android-nfc.kt returns the String it
+                    // decodes, and both answer .toString() identically, which is why the
+                    // stub can drive this line at all.
+                    onCard?.records?.firstOrNull()?.toUri()?.toString(),
                 )
             } catch (_: FormatException) {
                 WriteGuard.Existing.Foreign(WriteGuard.UNREADABLE)

@@ -30,8 +30,6 @@ data class WriteSimulation(
     val label: String,
     val capacity: Int,
     val writable: Boolean,
-    /** What the card holds after the write. null = the read-back itself failed. */
-    val corrupt: (ByteArray) -> ByteArray?,
     /**
      * What the card ALREADY holds, minted from the build's own [TagLink]. null = blank.
      * Drives the TASK-220 overwrite guard.
@@ -40,8 +38,15 @@ data class WriteSimulation(
      * branding.properties, and android/checks fails on any occurrence of it under app/src.
      * A simulation with its own copy of the host would also be a simulation that keeps
      * passing after the host changes.
+     *
+     * DECLARED BEFORE [corrupt] on purpose: [corrupt] must stay the LAST parameter, because
+     * every scenario below passes it as a trailing lambda and Kotlin binds a trailing lambda
+     * to the last parameter — put this one after it and the six existing scenarios silently
+     * hand their corruption function to the wrong field.
      */
     val initial: (TagLink) -> ByteArray? = { null },
+    /** What the card holds after the write. null = the read-back itself failed. */
+    val corrupt: (ByteArray) -> ByteArray?,
 )
 
 /**
@@ -65,15 +70,15 @@ fun writeSimulations(): List<WriteSimulation> = listOf(
         label = "a MOUNTED card — already holds the HOIV id",
         capacity = 137,
         writable = true,
-        corrupt = { it },
         initial = { link -> NdefTag.message(link.uriFor(HOIV_LOCATION)?.toString()) },
+        corrupt = { it },
     ),
     WriteSimulation(
         label = "a foreign card — holds somebody else's URL",
         capacity = 137,
         writable = true,
-        corrupt = { it },
         initial = { NdefTag.message("https://example.com/hello") },
+        corrupt = { it },
     ),
 )
 

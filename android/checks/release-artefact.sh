@@ -96,11 +96,18 @@ done
 # simulator shipped or not. It stays in the list as a debug-side control (it must be found
 # in the debug dex, which proves member names are reachable by this search at all), but it
 # is not load-bearing for the release verdict and must never be the only needle left.
+#
+# THE LAST TWO ARE TASK-220's. The simulator now also pretends a card ALREADY CARRIES one
+# of our ids, which is the only way to see the overwrite refusal on an emulator. Shipped,
+# it would be worse than the others: it puts a real location uuid on the operator's screen
+# with no card present, i.e. it fakes the exact fact the guard exists to establish.
 NEEDLES=(
   "SIMULATED"
   "verify fails: one flipped byte in the uuid"
   "verify fails: the card reads back empty"
   "the foreign Ultralight at HOIV"
+  "a MOUNTED card"
+  "holds somebody else's URL"
   "runSimulation"
 )
 
