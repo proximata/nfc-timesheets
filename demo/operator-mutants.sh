@@ -93,12 +93,13 @@ if [ -z "$MAPS_KEY" ]; then
 fi
 
 PAGE=web/app/operators/page.tsx
+WORKERS=web/app/workers/page.tsx
 API=web/lib/api.ts
 OVERLAY=web/lib/useOverlay.ts
 CSS=web/app/globals.css
 DE=web/messages/de.json
 EN=web/messages/en.json
-FILES="$PAGE $API $OVERLAY $CSS $DE $EN"
+FILES="$PAGE $WORKERS $API $OVERLAY $CSS $DE $EN"
 LOG=/tmp/operator-mutants
 mkdir -p "$LOG"
 
@@ -118,7 +119,9 @@ selected() {
 
 apply() { python3 - "$@"; }
 
-# run <id> <what-must-go-red> — rebuild, run the check, require a NAMED failure.
+# run <id> <what-must-go-red> [check] — rebuild, run the check, require a NAMED failure.
+# `check` defaults to demo/check-operators.mjs; the w-* mutants below point it at
+# demo/check-worker-form.mjs, which owns the claims about the WORKER form.
 #
 # A non-zero exit is not enough: a check that dies on a hung CDP session exits 1 with every
 # assertion it reached still green, and counting that as „the negative case fires" is the
@@ -126,9 +129,9 @@ apply() { python3 - "$@"; }
 # must MENTION the property this mutant took away — otherwise the mutant was caught by
 # something unrelated and the assertion under test is still unproven.
 run() {
-  id=$1; want=$2
+  id=$1; want=$2; check=${3:-demo/check-operators.mjs}
   rebuild || { echo "  FAIL $id: the mutant did not build"; fails=$((fails + 1)); restore; return; }
-  DEMO_BASE="$BASE" node demo/check-operators.mjs > "$LOG/$id.log" 2>&1
+  DEMO_BASE="$BASE" node "$check" > "$LOG/$id.log" 2>&1
   rc=$?
   caught=$(grep -cE '^ +(FAIL|STALE-GAP)' "$LOG/$id.log")
   named=$(grep -E '^ +(FAIL|STALE-GAP)' "$LOG/$id.log" | grep -ci "$want")
@@ -502,6 +505,94 @@ open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
 PY
 [ $? -eq 0 ] || exit 1
 run gap-closed "STALE-GAP"
+fi
+
+# --- w-rate-optional --------------------------------------------------------------------
+if selected w-rate-optional; then
+echo ""
+echo "=== MUTANT w-rate-optional · the wage is marked OPTIONAL on the worker form ==="
+apply "$WORKERS" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p, encoding='utf-8').read()
+old = """            <Field
+              id={rateId}
+              label={t('fieldRate')}
+              required"""
+new = """            <Field
+              id={rateId}
+              label={t('fieldRate')}
+              optional"""
+assert old in s, 'w-rate-optional site not found — the rate Field moved'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
+[ $? -eq 0 ] || exit 1
+run w-rate-optional "marked mandatory" demo/check-worker-form.mjs
+fi
+
+# --- w-rate-nohint ----------------------------------------------------------------------
+if selected w-rate-nohint; then
+echo ""
+echo "=== MUTANT w-rate-nohint · the wage keeps its asterisk and loses its sentence ==="
+apply "$WORKERS" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p, encoding='utf-8').read()
+old = "help={`${t('rateHint')} ${t('rateRequiredHint')}`}"
+new = "help={t('rateHint')}"
+assert old in s, 'w-rate-nohint site not found'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
+[ $? -eq 0 ] || exit 1
+run w-rate-nohint "says in words" demo/check-worker-form.mjs
+fi
+
+# --- w-rate-passes ----------------------------------------------------------------------
+if selected w-rate-passes; then
+echo ""
+echo "=== MUTANT w-rate-passes · an empty wage is no longer caught before the request ==="
+apply "$WORKERS" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p, encoding='utf-8').read()
+candidates = [l for l in s.split('\n') if "errors.rate = 'errorRateRequired'" in l]
+assert candidates, 'w-rate-passes site not found — the rate validation moved'
+s = s.replace(candidates[0], candidates[0].replace("errors.rate = 'errorRateRequired'", 'void 0'), 1)
+open(p, 'w', encoding='utf-8').write(s)
+PY
+[ $? -eq 0 ] || exit 1
+run w-rate-passes "refused IN THE FIELD" demo/check-worker-form.mjs
+fi
+
+# --- w-generic-error --------------------------------------------------------------------
+if selected w-generic-error; then
+echo ""
+echo "=== MUTANT w-generic-error · the refusal stops saying what a missing wage costs ==="
+apply "$DE" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p, encoding='utf-8').read()
+old = '"errorRateRequired": "Bitte einen Stundensatz eingeben, zum Beispiel 14,50. Ein Stundensatz ist Pflicht \u2013 ohne ihn kann keine Stunde dieser Person abgerechnet werden."'
+assert old in s, 'w-generic-error site not found in de.json'
+new = '"errorRateRequired": "Bitte einen Stundensatz eingeben."'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
+[ $? -eq 0 ] || exit 1
+run w-generic-error "explains the consequence" demo/check-worker-form.mjs
+fi
+
+# --- w-no-link --------------------------------------------------------------------------
+if selected w-no-link; then
+echo ""
+echo "=== MUTANT w-no-link · /operators/ loses its ONLY inbound link and is off the map ==="
+apply "$WORKERS" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p, encoding='utf-8').read()
+old = """          <Link className="btn btn-quiet" href={OPERATORS_PATH}>
+            {t('operatorsLink')}
+          </Link>"""
+new = """          <span className="btn btn-quiet">{t('operatorsLink')}</span>"""
+assert old in s, 'w-no-link site not found'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
+[ $? -eq 0 ] || exit 1
+run w-no-link "inbound link" demo/check-worker-form.mjs
 fi
 
 # --- the tree is clean again ------------------------------------------------------------

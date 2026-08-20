@@ -4,6 +4,7 @@ title: 'Operators screen: say that an operator''s phone can never be a worker''s
 status: To Do
 assignee: []
 created_date: '2026-08-20 12:56'
+updated_date: '2026-08-20 13:26'
 labels:
   - ux
   - i18n
@@ -38,3 +39,19 @@ NOT DECIDED HERE: decisions 41-44 are still PROPOSED and none is touched — thi
 - [ ] #3 demo/check-operators.mjs's KNOWN_GAPS entry is deleted and the run exits 0
 - [ ] #4 cd web && pnpm check still reports exact de/en key parity
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+MEASURED CONSTRAINT the fix has to respect (found by demo/operator-mutants.sh's gap-closed mutant, which wrote the sentence into operators.phoneHint and watched it make no difference):
+
+web/app/operators/page.tsx passes ONE `help=` to the phone Field:
+
+    help={phonePreview === null ? t('phoneHint') : t('phonePreview', { phone: phonePreview })}
+
+so the standing hint is REPLACED by 'Wird gespeichert als: +43…' the instant the typed number parses. A rule written into phoneHint alone is therefore off the screen at exactly the moment it is being broken — the director sees the namespace rule only while the field is empty, and never while typing the colliding number.
+
+Options, in ladder order: (a) put the sentence in errorPhoneClaimed as well, so the refusal itself carries it — one key, no layout change; (b) render the preview and the hint together rather than as an either/or — Field takes a ReactNode, so this is a fragment, not a component; (c) standing copy on the page next to codeStandingNote — costs vertical space on the 390px screen for something only relevant inside the drawer, and is the weakest of the three.
+
+Whatever is chosen, demo/check-operators.mjs asserts BOTH the empty-field hint and the refusal text, so the sentence has to be somewhere a person actually reads.
+<!-- SECTION:NOTES:END -->
