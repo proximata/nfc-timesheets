@@ -23,6 +23,7 @@
 // "this exact guard, absent" and not a stand-in that could drift from the real script.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,6 +72,12 @@ const RESET_SQL = fs.readFileSync(RESET_SQL_PATH, "utf8");
 // the client's actual rows rather than rows this file invented, and it SKIPS loudly
 // without one rather than quietly reporting a green suite that never saw real data.
 const DUMP = process.argv[2];
+
+// AC#8's control credential. Seated before the wipe, exercised after it — see the long
+// comment at its insertion for what it proves and the one thing it cannot.
+const CONTROL_EMAIL = `reset-w1-control-${process.pid}@example.test`;
+const CONTROL_PASSWORD = `reset-w1-${randomBytes(12).toString("hex")}`;
+const APP_KEY = "reset-w1-check-key";
 if (DUMP && !fs.existsSync(DUMP)) {
   console.error(`FAIL check-reset-w1: ${DUMP} does not exist`);
   process.exit(1);
@@ -448,7 +455,7 @@ try {
     console.log("  --     and a seeded database cannot stand in for one nobody designed.");
     console.log("  --     usage: node ops/check-reset-w1.mjs /tmp/nfc-prod.sql.gz");
   } else {
-    await test(`AC#8: a RESTORED PRODUCTION DUMP (${path.basename(DUMP)}) resets twice, keeps the owner, then takes 006+007`, () => {
+    await test(`AC#8: a RESTORED PRODUCTION DUMP (${path.basename(DUMP)}) resets twice, keeps the owner, then takes 006+007`, async () => {
       const db = freshDb("ac8", { migrate: false, admin: false });
       const sql = DUMP.endsWith(".gz") ? sh("gunzip", ["-c", DUMP]) : fs.readFileSync(DUMP, "utf8");
       try {
@@ -467,6 +474,33 @@ try {
       // the numbers below are about a database that no longer exists and should say so.
       const adminsBefore = countOf(db, "SELECT count(*) FROM admins");
       assert.ok(adminsBefore >= 1, "the dump must carry at least one admin, or this reset is a lockout by definition");
+      const ownerEmail = psql(db, "SELECT email FROM admins ORDER BY id LIMIT 1");
+
+      // A CONTROL ADMIN WITH A PASSWORD THIS FILE KNOWS, seated BEFORE the reset.
+      //
+      // WHY IT IS NEEDED AND WHAT IT DOES NOT PROVE. "admins is byte-identical" is a
+      // statement about rows; "the owner can still log in" is a statement about a code
+      // path, and nobody here has the owner's password — his hash arrived in the dump and
+      // is not invertible. So the login is proven on a row whose password IS known, seated
+      // before the wipe and exercised after it, and the owner's own row is proven
+      // byte-identical alongside it. Same table, same query, same verifier: if the control
+      // logs in afterwards and the owner's row did not change, the owner's login did not
+      // change either. The one step nobody can run — typing his actual password — is named
+      // rather than papered over.
+      //
+      // DATABASE_URL IS SET BEFORE THE FIRST IMPORT OF ANYTHING UNDER server/lib.
+      // lib/db.js builds its pool from process.env at IMPORT time and the ESM cache hands
+      // that same module to every later importer, so an import one line too early points
+      // the whole server at the wrong database for the rest of the run.
+      process.env.DATABASE_URL = `postgres:///${db}`;
+      process.env.APP_KEY = APP_KEY;
+      process.env.PORT = "0";
+      const { hashPassword } = await import("../server/lib/auth.js");
+      psql(
+        db,
+        `INSERT INTO admins (email, password_hash) VALUES ('${CONTROL_EMAIL}', '${(await hashPassword(CONTROL_PASSWORD)).replace(/'/g, "''")}')`,
+      );
+
       const ownerFingerprint = psql(db, "SELECT md5(string_agg(id || '|' || email || '|' || password_hash || '|' || created_at, ',' ORDER BY id)) FROM admins");
       const untouchedBefore = {};
       for (const t of UNTOUCHED_TABLES) untouchedBefore[t] = countOf(db, `SELECT count(*) FROM ${t}`);
@@ -507,21 +541,98 @@ try {
       for (const t of UNTOUCHED_TABLES) {
         assert.equal(countOf(db, `SELECT count(*) FROM ${t}`), untouchedBefore[t], `${t} must be UNCHANGED across both runs`);
       }
-      // THE OWNER'S ROW, BYTE FOR BYTE. "admins is still 1" would pass if the reset had
-      // deleted his row and something else had inserted another; the hash is the claim.
-      assert.equal(
-        psql(db, "SELECT md5(string_agg(id || '|' || email || '|' || password_hash || '|' || created_at, ',' ORDER BY id)) FROM admins"),
-        ownerFingerprint,
-        "the admins table must be BYTE-IDENTICAL after two resets — same id, same email, same password hash",
-      );
-
-      // ...and NOW 006 + 007 apply, because the row that blocked 006 was a worker.
+      // NOW 006 + 007 apply, because the row that blocked 006 was a worker.
       sh("node", [MIGRATE], { env: { ...process.env, DATABASE_URL: `postgres:///${db}` } });
       const wantMigrations = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
       const haveMigrations = psql(db, "SELECT filename FROM schema_migrations ORDER BY filename").split("\n").map((s) => s.trim()).filter(Boolean);
       assert.deepEqual(haveMigrations, wantMigrations, "after the reset every migration must apply — that is decision-46 §2's whole argument");
       assert.equal(countOf(db, "SELECT count(*) FROM phone_identities WHERE worker_id IS NULL AND operator_id IS NULL"), 0, "no registry row may claim nobody");
       assert.equal(countOf(db, "SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND connamespace = 'public'::regnamespace AND NOT convalidated"), 0, "every foreign key must still be VALIDATED — an unvalidated one is where an orphan hides");
+
+      // NO ORPHAN ANYWHERE, not just in the registry. Every FK column in the public schema
+      // is walked and every non-NULL value is required to resolve. A count of the columns
+      // checked is asserted too, because a query that walks zero columns reports zero
+      // orphans and looks exactly like a pass.
+      const fkCols = psql(
+        db,
+        `SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND connamespace = 'public'::regnamespace`,
+      );
+      assert.ok(Number(fkCols) > 10, `this orphan sweep must have foreign keys to walk, got ${fkCols}`);
+      const orphans = psql(
+        db,
+        `DO $$
+         DECLARE r record; n bigint; total bigint := 0;
+         BEGIN
+           FOR r IN
+             SELECT c.conrelid::regclass AS child, c.confrelid::regclass AS parent,
+                    a.attname AS col, fa.attname AS refcol
+               FROM pg_constraint c
+               JOIN unnest(c.conkey)  WITH ORDINALITY AS k(att, ord)  ON true
+               JOIN unnest(c.confkey) WITH ORDINALITY AS fk(att, ord) ON fk.ord = k.ord
+               JOIN pg_attribute a  ON a.attrelid = c.conrelid  AND a.attnum = k.att
+               JOIN pg_attribute fa ON fa.attrelid = c.confrelid AND fa.attnum = fk.att
+              WHERE c.contype = 'f' AND c.connamespace = 'public'::regnamespace
+           LOOP
+             EXECUTE format(
+               'SELECT count(*) FROM %s ch WHERE ch.%I IS NOT NULL AND NOT EXISTS '
+               '(SELECT 1 FROM %s pa WHERE pa.%I = ch.%I)',
+               r.child, r.col, r.parent, r.refcol, r.col) INTO n;
+             IF n > 0 THEN RAISE EXCEPTION 'ORPHAN: % rows in %.% do not resolve to %', n, r.child, r.col, r.parent; END IF;
+             total := total + 1;
+           END LOOP;
+           RAISE NOTICE 'orphan sweep: % foreign-key column(s) walked, 0 orphans', total;
+         END $$;`,
+      );
+      assert.equal(orphans, "", "the orphan sweep must produce no rows — it raises on the first orphan instead");
+
+      // ---- THE LOGIN, THROUGH THE REAL ROUTE, ON THE RESET DATABASE ----------------
+      const { createServer } = await import("../server/server.js");
+      const server = createServer();
+      await new Promise((r) => server.listen(0, "127.0.0.1", r));
+      const base = `http://127.0.0.1:${server.address().port}`;
+      try {
+        const login = (email, password) =>
+          fetch(`${base}/admin/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-App-Key": APP_KEY },
+            body: JSON.stringify({ email, password }),
+          });
+
+        const good = await login(CONTROL_EMAIL, CONTROL_PASSWORD);
+        assert.equal(good.status, 200, `an admin seated BEFORE two resets must still log in afterwards, got ${good.status}`);
+        const cookie = good.headers.getSetCookie().find((c) => c.startsWith("ts_session="));
+        assert.ok(cookie, "a successful login must mint ts_session");
+
+        // A cookie that is not exercised proves only that a header was set.
+        const panel = await fetch(`${base}/admin/data`, { headers: { Cookie: cookie.split(";")[0], "X-App-Key": APP_KEY } });
+        assert.equal(panel.status, 200, "the session minted after the reset must actually open the panel");
+
+        // NON-VACUITY: a route that returned 200 for everything would satisfy the line
+        // above. The wrong password on the SAME row must be refused.
+        assert.equal((await login(CONTROL_EMAIL, `${CONTROL_PASSWORD}-wrong`)).status, 401, "a wrong password must still be refused — otherwise the 200 above means nothing");
+
+        // The owner's own row is still THERE and still the first admin, byte-identical per
+        // the fingerprint above. His password is not in this repo and is not typed here.
+        assert.equal(psql(db, "SELECT email FROM admins ORDER BY id LIMIT 1"), ownerEmail, "the owner must still be the first admin row, unchanged");
+        ok(`the owner's row survives byte-identical and the login route works on the reset database (control: ${CONTROL_EMAIL}; the owner's own password is not in this repo and was not typed)`);
+      } finally {
+        server.close();
+      }
+
+      // THE OWNER'S ROW, BYTE FOR BYTE, and DELIBERATELY LAST — after the login, not
+      // before it. This assertion is strictly stronger than the round-trip above (a
+      // rewritten password_hash fails both), so running it first would mask the login
+      // assertion in every mutant that could kill it, leaving it unfalsifiable and
+      // therefore not a check at all. Ordered so ops/check-reset-w1-mutants.sh's mutant 2
+      // lands on the BEHAVIOUR and mutant 1 lands on the BYTES.
+      //
+      // "admins is still 1" would pass if the reset had deleted his row and something else
+      // had inserted another; the hash is the claim.
+      assert.equal(
+        psql(db, "SELECT md5(string_agg(id || '|' || email || '|' || password_hash || '|' || created_at, ',' ORDER BY id)) FROM admins"),
+        ownerFingerprint,
+        "the admins table must be BYTE-IDENTICAL after two resets — same id, same email, same password hash",
+      );
     });
   }
 
@@ -541,7 +652,12 @@ try {
 } finally {
   for (const db of scratchDbs) {
     try {
-      sh("dropdb", ["--if-exists", db]);
+      // --force, not a plain dropdb: AC#8 boots the API, and lib/db.js's pool is built at
+      // import time and cannot be closed from here. Without --force the drop fails on
+      // "other users are connected", the warning scrolls past, and a database holding a
+      // copy of the client's payroll survives the run — the residue 9072a8e removed from
+      // check-prod-restore.mjs.
+      sh("dropdb", ["--force", "--if-exists", db]);
     } catch (e) {
       console.error(`warning: could not drop ${db}`, String(e.stderr || e.message).trim());
     }
