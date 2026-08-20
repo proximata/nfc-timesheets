@@ -11,9 +11,11 @@ server.js          http server, route table, static serving, boot + env fail-fas
 instrument.mjs     Sentry init. Loaded via `node --import`, BEFORE server.js
 lib/scrub.js       redaction at the telemetry boundary (pure, the PII trust boundary)
 routes/app.js      worker-session routes (iOS + Android) /roster /shifts/* /material-requests/*
-routes/auth.js     Sign in with Apple (iOS)   /auth/apple /auth/session /auth/logout
+routes/auth.js     Sign in with Apple (iOS), worker + operator codes /auth/*
 lib/apple.js       Apple identity token verification (RS256 + JWKS, stdlib only)
 routes/admin.js    session-cookie routes (web) /admin/*  (+ /admin/login, unauthenticated)
+routes/operator.js operator-session action routes /operator/tags (decision-45, this iteration)
+routes/release.js  app self-update /app/version /app/download (this iteration, no session)
 routes/wellknown.js AASA / assetlinks / /t, mounted before auth (decision-4)
 lib/db.js          pg pool
 lib/auth.js        app-key compare, scrypt passwords, sessions, login rate limit
@@ -27,6 +29,7 @@ bin/create-admin.js  interactive CLI to create/re-password an admin
 bin/geocode-backfill.js  pin buildings entered before geocoding existed; safe to re-run
 check-api.js       runnable self-check (assert, no framework)
 public/            static root for the Next.js admin export, override with PUBLIC_DIR
+releases/          the APK + its manifest for GET /app/version|download, override with RELEASES_DIR
 ```
 
 ## Auth
@@ -190,6 +193,54 @@ hardware behaviour, not a bug to be fixed, and the admin surface has to say so.
 real payload at a few hundred buildings. **Upgrade path:** a targeted session-gated
 `GET /tags/:serial`, built the day the roster crosses ~100 KB and not before.
 
+### Operators write tags; a fresh tag starts UNBOUND (this iteration, `server/db/migrations/008_reported_tags.sql`)
+
+This is a **different** mechanism from adopted serials above: it is for tags **we** write,
+our own `?l=<uuid>` URI, not third-party hardware. The id is minted **client-side, by the
+operator's phone**, before either a zone or a building exists to claim it — safe because a
+tag id is never a credential (decision-15) and means nothing until an admin claims it.
+
+```
+POST /operator/tags {id}      auth: "operator". "this tag now exists." Idempotent on `id`
+                               (ON CONFLICT DO NOTHING + read-back, same idiom as
+                               POST /shifts/open): reported twice, or by two operators at
+                               once, is ONE row either way.
+                               201 created / 200 already reported / 409 id_in_use
+```
+
+It lands **unbound** — its own table, `reported_tags`, not a zone row with a null
+`location_id`. An admin turns it into one of three things:
+
+```
+POST /admin/tags/:id/resolve-building       {name, slug, address?, lat?, lng?, ...}
+    a NEW building, id = :id — the reported tag's OWN id, so the physical bytes already
+    written to the card never need rewriting. Deliberately minimal; contract/geocoding are
+    the ordinary /admin/locations screen's job, one visit later.
+
+POST /admin/tags/:id/resolve-zone           {location_id, name, note?, area_sqm?}
+    a NEW zone in an EXISTING building, id = :id. tag_deployed_at is stamped from the
+    REPORT, not from this call — the card was mounted in the field, days before a desk.
+
+POST /admin/tags/:id/resolve-existing-zone  {zone_id}
+    THIS physical tag now ALSO resolves to an already-existing zone, via a `tag_aliases`
+    row — the one case that cannot reuse "this id becomes the new PK": the target zone
+    already has an id, and possibly its own already-printed tag. An alias never re-keys it.
+```
+
+All three share one shape: `UPDATE reported_tags SET resolved_at = now() WHERE ... AND
+resolved_at IS NULL` inside the SAME statement as the row it creates (a CTE — this codebase
+has no transaction helper, see `POST /admin/operators`'s own comment), so two admins
+resolving the same reported tag at once cannot both succeed. `404 unknown_reported_tag` /
+`409 already_resolved` tell apart "never reported" from "already decided".
+
+**A tap on a still-unbound tag must not open a shift against nothing, and must not 500.**
+`v.activePlace()` gained a distinct refusal for it: `422 tag_unbound`, told apart from the
+generic `422 unknown_location` a stranger's garbage tag gets, so the app can say something
+specific and true in German ("dieser Tag ist noch nicht zugewiesen") instead of a generic
+refusal. **The existing `unknown_location` code is unchanged for every case that already used
+it** — `tag_unbound` is new and an old build renders it as "unknown status from a newer
+server", the same safe degrade every other new code already gets.
+
 ## Admin write routes (003)
 
 All of them need the `ts_session` cookie; the app key does **not** substitute for it. One
@@ -209,6 +260,9 @@ keep naming the worker, the building, the client that was paying and the person 
 | `DELETE /admin/locations/:id` | — | soft, **revokes that building's portal links AND deactivates its zones** |
 | `POST /admin/zones` | `id?, location_id, name, note?, area_sqm?, tag_serial?, tag_deployed_at?, active?` | `{zone}`. `409 duplicate_zone_name` · `409 serial_taken` (which **names** the zone holding it). `location_id` is not patchable |
 | `DELETE /admin/zones/:id` | — | soft; its tag stops resolving, history keeps naming the door |
+| `POST /admin/tags/:id/resolve-building` | `name, slug, address?, lat?, lng?, client_id?, contact_id?` | 201 `{location}`, id = the reported tag's id; `404`/`409` if never reported / already resolved |
+| `POST /admin/tags/:id/resolve-zone` | `location_id, name, note?, area_sqm?` | 201 `{zone}`, id = the reported tag's id; `tag_deployed_at` from the report time |
+| `POST /admin/tags/:id/resolve-existing-zone` | `zone_id` | 200 `{alias}` — an ADDITIVE `tag_aliases` row, never a re-key |
 | `GET /admin/revenue?from=&to=` | — | the `/pl/` month grid: `{months, entries, suggestions}` |
 | `POST /admin/locations/:id/revenue` | `month` (`YYYY-MM`), `amount_cents`, `note?` | 201 new / 200 correction. `entered_by` from the **session** |
 | `DELETE /admin/locations/:id/revenue/:month` | — | **retract** → the month reverts to UNKNOWN, never to 0 |
@@ -436,6 +490,45 @@ Why a link and not accounts: the director cannot administer passwords for other 
 staff, and email delivery would mean running SMTP on the VM. Ceiling: anyone holding the link
 sees that building's cleaning history. Upgrade path: contact accounts + magic-link email.
 
+## App self-update (`routes/release.js`, this iteration)
+
+```
+GET /app/version   auth: "app" (X-App-Key only, no session)
+    { published: true,  version_code, version_name, sha256, notes, url: "/app/download" }
+    { published: false }                                    <- nothing published yet
+
+GET /app/download  auth: "app"
+    the current .apk's bytes, streamed from disk (lib/http.js `sendFile`, not sendJson —
+    a multi-MB binary has no business being JSON.stringify'd)
+    404 no_release_published | 404 release_file_missing
+```
+
+**Who may call it, in two lines:** unauthenticated would let a stranger download the app off
+the open internet; requiring a live worker/operator *session* would mean the phone that most
+needs an update — one whose session just expired — could not fetch the fix for it. The app
+key is the middle ground already used for sign-in itself: baked into every build that could
+possibly be asking, off the open web for a stray browser or curl, and never depends on the
+session the update might exist to repair.
+
+**Where the APK actually lives on the box:** `server/releases/`, a directory beside
+`server.js` exactly like `public/` and `ops/` (see `ops/deploy.sh`'s own "Artifact layout on
+the VM" comment) — `/srv/nfc/releases/` once deployed. Getting a real `.apk` there is a
+**deploy change** (one more `rsync` line in `ops/deploy.sh`) and is explicitly **not done by
+this task**: `sql/` and `server/` only, and this iteration deploys nothing. The route works
+the moment the directory holds two files, however they got there:
+
+```
+releases/latest.json   { "version_code": 5, "version_name": "0.4.0",
+                          "file": "nfc-timesheets-0.4.0-5-release.apk", "sha256": "..." }
+releases/<that file>.apk
+```
+
+A static file plus a tiny JSON document, on purpose — no migration, no admin screen to edit
+it, one fewer route that could leak the wrong environment's shape. Ship a new build by
+rsyncing the `.apk` and rewriting `latest.json`; **no database dependency at all**, so the
+update check answers even when Postgres is down, which is exactly when a worker most needs to
+know a fix already shipped.
+
 ## Config (env only, systemd EnvironmentFile)
 
 | var            | required | notes                                                |
@@ -444,6 +537,7 @@ sees that building's cleaning history. Upgrade path: contact accounts + magic-li
 | `APP_KEY`      | yes      | `X-App-Key`, baked into the iOS build                |
 | `PORT`         | yes      | exe.dev proxy terminates TLS in front of it          |
 | `PUBLIC_DIR`   | no       | static root, defaults to `server/public`             |
+| `RELEASES_DIR` | no       | APK + manifest root, defaults to `server/releases`    |
 | `PG_POOL_MAX`  | no       | pool size, default 10                                |
 | `SENTRY_DSN`   | no       | **absent = the SDK is disabled**, see below          |
 | `SENTRY_ENVIRONMENT` | no | defaults to `production`                            |
