@@ -329,7 +329,31 @@ async function main() {
       const header = rows[0];
       const dataRows = rows.slice(1, -1);
       const totalRow = rows.at(-1);
-      assert("payroll: the CSV filename is Vienna-dated", /^payroll-\d{4}-\d{2}-\d{2}\.csv$/.test(files[0]), files[0]);
+      // THE FILENAME IS THE ACCOUNTANT'S FILING KEY, and the shape regex that used to be
+      // here could not tell July from June. app/payroll/page.tsx says it in its own words:
+      // the period starts at VIENNA MIDNIGHT, which is 22:00 or 23:00 UTC the day BEFORE,
+      // so `range.from.slice(0, 10)` names July's payroll `payroll-2026-06-30.csv`. That
+      // string matches /^payroll-\d{4}-\d{2}-\d{2}\.csv$/ perfectly. So the date is pinned
+      // to a value computed HERE, from Intl in Europe/Vienna, and never imported from
+      // web/lib — a check that re-runs the implementation agrees with it about every wrong
+      // answer. /payroll/ with no query is `lastMonth` (page.tsx:151), whose range starts
+      // at Vienna midnight on the 1st.
+      const [vy, vm] = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Europe/Vienna",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      })
+        .format(new Date())
+        .split("-")
+        .map(Number);
+      const prev = vm === 1 ? { y: vy - 1, m: 12 } : { y: vy, m: vm - 1 };
+      const expectedCsvName = `payroll-${prev.y}-${String(prev.m).padStart(2, "0")}-01.csv`;
+      assert(
+        "payroll: the CSV filename is the VIENNA business date of the period start",
+        files[0] === expectedCsvName,
+        `got ${files[0]}, expected ${expectedCsvName}`,
+      );
       assert("payroll: the CSV keeps its UTF-8 BOM", csv.charCodeAt(0) === 0xfeff);
       assert(
         "payroll: the CSV header is unchanged (7 semicolon columns, audit + reason columns last)",
