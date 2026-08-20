@@ -1,5 +1,7 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
+import android.nfc.FormatException
+import android.nfc.NdefMessage
 import io.github.qwadratic.nfctimesheets.core.NdefTag
 import io.github.qwadratic.nfctimesheets.core.TagLink
 import io.github.qwadratic.nfctimesheets.core.WriteGuard
@@ -25,6 +27,14 @@ import io.github.qwadratic.nfctimesheets.core.WriteGuard
  * hold afterwards. The verdict still comes from `core/NdefTag.plan()` and
  * `core/NdefTag.verified()` — the same functions the real path calls. A simulation that
  * returned a canned Outcome would be a screen test that proves nothing about the writer.
+ *
+ * AND IT IS HELD TO THAT. `android/checks/live-flow-check.kt` § 2 replays every scenario
+ * below through the REAL nfc/TagWriter against a fake card and fails unless the two produce
+ * the same screen, word for word (the serial excepted — there is no card to have one). That
+ * is not decoration: it caught the truncated-write scenario telling the operator the
+ * read-back "mismatch"ed while the shipping build says `FormatException`, because this file
+ * compared raw bytes where TagWriter parses them through the platform first. A mock that
+ * shows a refusal the shipped build does not perform is worse than no mock.
  */
 data class WriteSimulation(
     val label: String,
@@ -104,9 +114,21 @@ fun runSimulation(
     }
     val write = plan as NdefTag.Plan.Write
 
-    // The overwrite guard, run by the SAME functions TagWriter calls. The mounted-card
-    // scenario's `initial` is a real encoded message, so this is the real classification.
-    val existing = WriteGuard.classify(tagLink, simulation.initial(tagLink))
+    // The overwrite guard, run by the SAME functions TagWriter calls, and fed the same two
+    // readings of the card: our strict bytes AND the platform decoder's own opinion
+    // (`NdefRecord.toUri()`). Passing only the bytes would make this file stricter than the
+    // shipping build about what counts as "one of ours" — i.e. it would show a card being
+    // overwritten that the phone refuses.
+    val existing = try {
+        val onCard = simulation.initial(tagLink)?.let { NdefMessage(it) }
+        WriteGuard.classify(
+            tagLink,
+            onCard?.toByteArray(),
+            onCard?.records?.firstOrNull()?.toUri()?.toString(),
+        )
+    } catch (_: FormatException) {
+        WriteGuard.Existing.Foreign(WriteGuard.UNREADABLE)
+    }
     when (val verdict = WriteGuard.decide(existing, write.locationId, confirmedOverwriteOf)) {
         is WriteGuard.Verdict.Occupied -> return TagWriter.Outcome.Refused.Occupied(
             serial = serial,
@@ -117,7 +139,16 @@ fun runSimulation(
         is WriteGuard.Verdict.Proceed -> Unit
     }
 
-    val readBack = simulation.corrupt(write.bytes)
+    // THE READ-BACK GOES THROUGH THE PLATFORM PARSER, exactly as TagWriter's does:
+    // `Ndef.getNdefMessage()` decodes before it returns bytes, so a card left holding half a
+    // message throws FormatException there and never reaches NdefTag.verified() at all.
+    // Comparing simulation.corrupt() output directly — which this did — reported `mismatch`
+    // for a case the phone reports as `FormatException`.
+    val readBack = try {
+        simulation.corrupt(write.bytes)?.let { NdefMessage(it).toByteArray() }
+    } catch (e: Exception) {
+        return TagWriter.Outcome.Unverified(serial, e.javaClass.simpleName, onTag = null)
+    }
     if (!NdefTag.verified(write.bytes, readBack)) {
         return TagWriter.Outcome.Unverified(
             serial = serial,

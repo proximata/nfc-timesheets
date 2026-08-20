@@ -28,6 +28,9 @@ checks/.out/
 # The android.nfc stubs compile here, deliberately apart from checks/.out: stub classes
 # named android.nfc.* must never share a classpath with anything else.
 checks/.out-nfc/
+# Same, for checks/live-flow.sh, which compiles the DEBUG source set in as well.
+checks/.out-live/
+checks/.live-out/
 
 # Android Studio per-user state
 .idea/
