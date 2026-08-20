@@ -146,8 +146,14 @@ cleanup() {
     # every time; a key that is authorised and works would fail none. So both directions are
     # asserted and the ratio is printed:
     #
-    #   drawn == 0  -> the referrer is genuinely not on the key. RED.
-    #   drawn == N  -> it is now solid; the note below is stale. RED, so the docs get fixed.
+    # ONLY ONE ARM IS AN ASSERTION, and that is deliberate. `drawn == 0` means the referrer
+    # is genuinely not on the key, and it goes RED — revoke it in the Cloud Console and this
+    # run fails, which is a negative case that can actually happen. "It must NOT draw every
+    # time" was the other arm for about an hour, and it is not an assertion: at roughly two
+    # draws in three, five clean loads in a row come up about one run in eight. A check that
+    # fails one run in eight teaches people to re-run it, which is worse than not having it.
+    # The blocked count is therefore REPORTED, with its sample size, and the finding lives in
+    # CORE-FLOW § 5 where a human can act on it.
     #
     # An unauthorised key does not fail the script LOAD, which is why the console is read
     # rather than the network: Google serves the file, `new Map()` succeeds, and what renders
@@ -175,13 +181,10 @@ cleanup() {
     if [ "$drawn" -eq 0 ]; then
       bad "the map NEVER drew in $samples loads — the browser key is not authorised for $BASE (TASK-206)"
       rc=1
-    elif [ "$drawn" -eq "$samples" ]; then
-      bad "the map drew $drawn/$samples — it is solid now, so the 'intermittent' note in CORE-FLOW § 5 is stale and must be removed"
-      rc=1
     else
       ok "the map drew $drawn/$samples — the key IS authorised for this host"
-      printf '  note: %s\n' \
-        "but $blocked of $samples identical loads came back RefererNotAllowedMapError for $BASE/ . Measured through headless Chrome with a cold profile; whether a warm human browser sees the same is UNPROVEN. TASK-206."
+      [ "$blocked" -gt 0 ] && printf '  note: %s\n' \
+        "$blocked of $samples identical loads came back RefererNotAllowedMapError for $BASE/ . Measured through headless Chrome with a cold profile; whether a warm human browser sees the same is UNPROVEN. TASK-206."
     fi
   fi
 
