@@ -131,6 +131,65 @@ arm64-v8a), literally, with the commands in § Emulator:
    the live server; creating one would put demo rows next to real payroll. So the screens
    behind sign-in were compiled and shrunk by R8 but never displayed — including the
    whole **Material** tab, which lives behind sign-in by construction.
+9. **Any physical write. No card has been written by this code, ever.** See the section
+   below — the write path is the one worth being precise about, because it is the one that
+   destroys something.
+
+### The tag writer: what is proven, and the seven things a phone still has to settle
+
+`checks/tag-writer-check.kt` compiles the shipped `nfc/TagWriter.kt` **unmodified** against
+stubs of `android.nfc` (`checks/fake/`) and drives it. Every call it makes is recorded in
+order, so these are assertions about observed behaviour, not about how the source reads:
+
+- capacity is read **before** any write, and a 46-byte tag — the foreign Ultralight already
+  mounted at the client — produces **no `writeNdefMessage` in the call log at all**
+- the read-back genuinely compares: six corrupted cards (flipped byte, truncated, one byte
+  extra, empty, another building, a Text record) each come back `Unverified`, with a live
+  control that an honest card still verifies
+- `makeReadOnly()`, `canMakeReadOnly()` and `cachedNdefMessage` **throw** in the stub, so
+  reaching any of them is a crash rather than a review note (decision-15)
+- the bytes are printed from the `writeNdefMessage` call itself: `d1 01 3c 55 04` + host +
+  uuid, 64 bytes, a URI record and never a Text record
+- the card's bytes are re-read by a **second, independent decoder** implementing the full
+  36-entry RTD-URI table — the tap path uses the platform's `NdefRecord.toUri()`, not ours —
+  and must yield the same uuid through the same `TagLink` a wall tag goes through
+
+`checks/core-check.kt` § 16b adds the two source-wide claims the harness cannot reach:
+`writeNdefMessage` is called from exactly one file, and `makeReadOnly` appears in no code in
+any variant (comments stripped first — `TagWriter`'s KDoc mentions it by name).
+`checks/release-artefact.sh` makes the same two claims about the **shipped dex**.
+
+**Not proven, and only a physical Android phone with a physical card can settle it:**
+
+1. **That any of this survives contact with a real card.** No card has been written. Every
+   tag above is a `FakeCard`.
+2. **That the platform's NDEF encoder agrees with ours byte-for-byte.** `TagWriter` refuses
+   to write if `NdefMessage(bytes).toByteArray()` differs from what it planned, so a
+   disagreement is safe — it fails closed, and nothing is burnt. But whether it *agrees* is
+   unknown, and if it does not, the writer refuses **every** card and the feature is dead on
+   arrival rather than dangerous. That is the failure to look for first on a real phone.
+3. **That a real NTAG213 reports `maxSize` 137, and the client's Ultralight reports 46.**
+   Both numbers are what the datasheets say and what the capacity gate is fought over. If a
+   real tag reports the *raw memory* size instead (180 on NTAG213), the gate is measuring
+   the wrong thing — the one number in this whole area that would let an over-large message
+   through.
+4. **Android 9 vs Android 16.** Everything here ran on one JVM. `Ndef.getMaxSize()`,
+   `isWritable` and the `NdefFormatable` fallback have OEM- and version-specific behaviour,
+   and the app's `minSdk` spans years of it. Nothing in this repo has run on Android 9.
+5. **A tag pulled out of the field mid-write.** Modelled as `writeNdefMessage` throwing,
+   which produces `Unverified` and never `Written`. Whether a real interrupted write throws,
+   returns silently, or leaves the card in a state `Ndef` will not reconnect to, is
+   untested — and that is exactly the case that produces a half-written card.
+6. **Screen locked, or the app force-stopped.** Android only dispatches tags when the screen
+   is on and unlocked, so the writer screen cannot even be reached in those states. Untested,
+   and no in-app fix exists for either.
+7. **NFC toggled off mid-write**, and the reader-mode callback that would or would not
+   arrive afterwards. Nothing here models the adapter disappearing between the tag read and
+   the read-back.
+
+The honest one-line summary: **the decision logic is proven, the physical write is not.**
+Before a card is written at a client's building, write one on a spare NTAG213 and one on a
+spare Ultralight, tap both, and confirm the Ultralight is refused rather than half-written.
 
 Proven by `checks/run.sh` on a plain JVM (see § Checks):
 
@@ -149,6 +208,9 @@ Proven by `checks/run.sh` on a plain JVM (see § Checks):
   the shape `server/routes/app.js` returns, the four failure outcomes, the queue plan and
   the merged list — plus two text-read seams: the log refresh and the tap path must never
   mention materials, and `materials.db` must never be `timesheets.db`
+- **the bytes that go onto a card**, and **the write loop that puts them there** — order,
+  refusals, read-back, and the tap-side decoder. See § the tag writer above for what that
+  does and does not settle.
 
 ---
 
@@ -405,7 +467,24 @@ Needs `kotlinc` and a JDK 17+ — the toolchain the operator already has, not a 
 dependency. Fetches one jar (`org.json`, which on-device comes from `android.jar`) into
 `checks/.lib/` on first run.
 
-Everything it *runs* is deliberately free of Android imports. That constraint is why
+Three checks run: `core-check`, `known-tags-check`, and `tag-writer-check`.
+
+`tag-writer-check` is the exception to the rule below, and the reason for `checks/fake/`.
+`nfc/TagWriter.kt` imports `android.nfc`, so it could never be compiled here — and NFC
+hardware does not exist on an emulator, so it could never be reached there either. The one
+class in this repo that modifies a physical object was the one class nothing had run. So
+`checks/fake/` stubs the `android.nfc` surface it touches, records every call in order, and
+throws on `makeReadOnly()` and `cachedNdefMessage`; the shipped `TagWriter.kt` is compiled
+against it unmodified. It prints the 64 bytes it captured at the `writeNdefMessage` call.
+The stub classes compile into `checks/.out-nfc/`, kept apart from `checks/.out/` so that
+classes named `android.nfc.*` never share a classpath with anything else.
+
+The artefact-level check is separate, because it is a claim about installed bytes rather
+than about source:
+
+    cd android && ./checks/release-artefact.sh    # needs both apks built
+
+Everything else it *runs* is deliberately free of Android imports. That constraint is why
 `core/` exists as a separate package: `data/`, `net/` and `ui/` cannot be compiled here.
 Where a rule lives in one of those — `commit()` on the session write, `sessionBearing =
 false` on `/auth/code`, cache-before-server on launch, every `stringIdFor` arm — the check
