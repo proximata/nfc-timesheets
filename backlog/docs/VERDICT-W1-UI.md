@@ -26,7 +26,7 @@ the probe itself           ⚠ three fabricated defects, found by disagreeing wi
 decisions 41…44            — untouched. Still PROPOSED, 43 still supersedes the ACCEPTED 37
 ```
 
-45 assertions on `/operators/` (44 green, 1 named gap) + 9 on the worker form, each one shown
+51 assertions on `/operators/` (50 green, 1 named gap) + 9 on the worker form, each one shown
 RED by a mutant that removes exactly the property it claims.
 
 ---
@@ -49,6 +49,7 @@ RED by a mutant that removes exactly the property it claims.
 | 390 / 360 | `audit-phone` 28/28: no sideways scroll, card captions match their columns, tap targets |
 | contrast | 55 visible strings, **both themes**, computed on the real DOM: worst 4.93:1 dark, 4.60:1 light |
 | greyscale | status and code state are WORDS on every row; contrast survives the luma matrix |
+| **the same write journey at 390px**  | create → code (whole, `scrollWidth 390`) → revoke through its confirmation → deactivate through its confirmation → the row says „Inaktiv" |
 | teardown | `operators 3→3 · identities 4→4 · codes 0→0`, asserted, not assumed |
 
 `node demo/check-worker-form.mjs` — the wage, because the brief asks and because decision-41 is
@@ -150,11 +151,12 @@ line is INCONCLUSIVE, never „caught".
 hide-inactive   unmarked        generic-409     raw-token      no-phone-col
 no-preview      no-notice       code-no-focus   code-no-once   revoke-direct
 soft-consequence no-trap        no-restore      wide-table     dim-muted
-dot-not-word    gap-closed      + w-rate-optional w-rate-nohint w-rate-passes
-w-generic-error w-no-link                                    → every negative case fires
+dot-not-word    gap-closed      phone-drawer-wide
+w-rate-optional w-rate-nohint   w-rate-passes   w-generic-error w-no-link
+                                                             → every negative case fires
 ```
 
-Three of them earned their keep immediately:
+Four of them earned their keep immediately:
 
 - **`revoke-direct`** removed the confirmation and the probe reported *„the probe reached the
   end of the run"* — a defect about the screen surfacing as a defect about the probe. Both
@@ -164,6 +166,11 @@ Three of them earned their keep immediately:
 - **`no-trap`** did not compile (`allowUnreachableCode` is off), which is not a measurement. It
   was replaced with a better inverse that does compile: focus landing outside is still pulled
   back, only the wrap at the two edges is gone — the classic half-built trap.
+- **`phone-drawer-wide`**'s first spelling mutated `.drawer { width: min(440px, 100vw) }` and
+  the check stayed green — correctly, because the phone width comes from the
+  `@media (max-width: 767px)` override, so nothing at 390 had changed. The harness said
+  *"GREEN with the truth reverted — nothing tests it"*, which is the harness working. The
+  mutant now removes the override.
 
 **The ceiling, printed every run and not counted:** `by-label` makes `useOverlay` restore focus
 by re-finding the opener by tag+label (its own `again()` fallback) instead of using the node.
@@ -177,7 +184,6 @@ property would catch a replaced node; nothing on `/operators/` replaces one.
 
 | what | why |
 |---|---|
-| **create/code/revoke/deactivate at 390px** | the full write journey was driven at 1680. At 390/360 the list, its cards, its captions and its tap targets are measured (`audit-phone` 28/28) and the drawer is measured from 767 up — the phone-width WRITE path is not driven end to end |
 | **the operator's own phone** | redeeming the code is Android (W2/W3), out of scope by brief. No device, no tap |
 | **a real screen reader** | live regions, roles and names are asserted in the DOM; nothing was heard |
 | **`opener` identity under a re-render** | §5's ceiling. Nothing on this screen replaces the opener node |
@@ -191,9 +197,9 @@ property would catch a replaced node; nothing on `/operators/` replaces one.
 | check | result |
 |---|---|
 | `sh demo/check-guards.sh` | OK — 16 refusals, 64 files parse |
-| `DEMO_BASE=…:8080 node demo/check-operators.mjs` | **44 ok, 1 named gap**, exit 0 |
+| `DEMO_BASE=…:8080 node demo/check-operators.mjs` | **50 ok, 1 named gap**, exit 0 |
 | `DEMO_BASE=…:8080 node demo/check-worker-form.mjs` | **9/9**, exit 0 |
-| `sh demo/operator-mutants.sh` | **every negative case fires** (22 counted, 1 exploratory) |
+| `sh demo/operator-mutants.sh` | **every negative case fires** (23 counted, 1 exploratory) |
 | `AUDIT_BASE=…:8080 node demo/audit-widths.mjs` | **442/442** — 11 widths × 20 states × 2 themes, /operators/ included |
 | `AUDIT_BASE=…:8080 node demo/audit-overlays.mjs` | 105/105, census 12/25 + 13 named ceilings |
 | `AUDIT_BASE=…:8080 node demo/audit-overlays2.mjs` | 25/25 |
