@@ -33,6 +33,20 @@
 // remember. SAFE because every migration in this tree is transactional DDL — no
 // CREATE INDEX CONCURRENTLY, no VACUUM (checked at time of writing, and a non-transactional
 // statement would fail here loudly rather than silently half-apply).
+//
+// ALL PENDING FILES GO IN ONE TRANSACTION, IN ORDER. They used to be dry-run one at a time,
+// each rolled back before the next started, and that was a gate that cried wolf: 008 creates
+// `tag_aliases` referencing `operators`, which 007 creates — and 007's CREATE had just been
+// rolled back. Measured against the live database with 006/007/008 pending:
+//
+//   would apply 006 / would apply 007 / ERROR: relation "operators" does not exist
+//   migrate --dry-run: 008 does NOT apply. Nothing was written.
+//
+// Nothing was wrong with 008. A gate whose FALSE alarm blocks a good deploy gets switched
+// off by the third person who meets it, and then it is not a gate at all. One transaction is
+// also the more honest question: it asks „does this deploy apply", which is the thing the
+// step actually decides, rather than „does each file apply to a database none of its
+// predecessors ever touched", which is a state that never exists.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -78,36 +92,60 @@ const files = fs.readdirSync(DIR).filter((f) => f.endsWith(".sql")).sort();
 
 const dryRun = process.argv.includes("--dry-run");
 
-let count = 0;
-for (const file of files) {
-  if (applied.has(file)) continue;
-  const sql = fs.readFileSync(path.join(DIR, file), "utf8");
-  if (dryRun) {
-    // Explicit BEGIN/ROLLBACK rather than `-1`: `-1` COMMITS on success, which is the one
-    // outcome a dry run must not produce. Pending files are dry-run one at a time and each
-    // is rolled back, so a file that depends on its predecessor's DDL will report a false
-    // failure — LOUDLY, which is the right way round for a gate.
-    try {
-      psql(`BEGIN;\n${sql}\nROLLBACK;`);
-    } catch {
-      // psql's own message already went to stderr verbatim (stdio inherit). A Node stack
-      // trace on top of it buries the one line a human has to act on, and this runs as the
-      // FIRST step of a deploy, where that line is the whole output that matters.
-      console.error(`\nmigrate --dry-run: ${file} does NOT apply. Nothing was written.`);
-      process.exit(1);
-    }
-    console.log(`would apply ${file}`);
-    count += 1;
-    continue;
+const pending = files.filter((f) => !applied.has(f));
+
+if (dryRun) {
+  if (pending.length === 0) {
+    console.log("up to date");
+    process.exit(0);
   }
+  // Explicit BEGIN/ROLLBACK rather than `-1`: `-1` COMMITS on success, which is the one
+  // outcome a dry run must not produce. The bookkeeping INSERTs are included too, so a
+  // migration that collides with schema_migrations itself is caught here rather than at
+  // step 5 — and they roll back with everything else.
+  //
+  // The \echo marker before each file is how a failure gets a FILENAME. psql reports errors
+  // by line number of its stdin, which for a concatenated script names nothing a human can
+  // act on; the last marker printed before the error is the file that refused.
+  const MARK = "dry-run applying:";
+  const script = [
+    "BEGIN;",
+    ...pending.flatMap((file) => [
+      `\\echo ${MARK} ${file}`,
+      fs.readFileSync(path.join(DIR, file), "utf8"),
+      `INSERT INTO schema_migrations (filename) VALUES (${sqlLiteral(file)});`,
+    ]),
+    "ROLLBACK;",
+  ].join("\n");
+
+  let out;
+  try {
+    out = psql(script);
+  } catch (e) {
+    // psql's own message already went to stderr verbatim (stdio inherit). A Node stack
+    // trace on top of it buries the one line a human has to act on, and this runs as the
+    // FIRST step of a deploy, where that line is the whole output that matters.
+    const marks = String(e.stdout ?? "")
+      .split("\n")
+      .filter((l) => l.startsWith(MARK));
+    const culprit = marks.length ? marks[marks.length - 1].slice(MARK.length).trim() : "(unknown file)";
+    console.error(`\nmigrate --dry-run: ${culprit} does NOT apply. Nothing was written.`);
+    process.exit(1);
+  }
+  // Every marker psql echoed is a file that applied on top of its predecessors.
+  for (const line of String(out).split("\n").filter((l) => l.startsWith(MARK))) {
+    console.log(`would apply ${line.slice(MARK.length).trim()}`);
+  }
+  console.log(`${pending.length} migration(s) would apply; nothing was written`);
+  process.exit(0);
+}
+
+let count = 0;
+for (const file of pending) {
+  const sql = fs.readFileSync(path.join(DIR, file), "utf8");
   // The migration and its bookkeeping row commit together, or neither does.
   psql(`${sql}\nINSERT INTO schema_migrations (filename) VALUES (${sqlLiteral(file)});`, true);
   console.log(`applied ${file}`);
   count += 1;
 }
-
-if (dryRun) {
-  console.log(count === 0 ? "up to date" : `${count} migration(s) would apply; nothing was written`);
-} else {
-  console.log(count === 0 ? "up to date" : `${count} migration(s) applied`);
-}
+console.log(count === 0 ? "up to date" : `${count} migration(s) applied`);

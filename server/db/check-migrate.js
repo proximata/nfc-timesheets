@@ -766,6 +766,16 @@ try {
     /have no hourly rate; refusing to invent one/,
     "--dry-run must REFUSE exactly as the real run does, and for the same stated reason",
   );
+  // ...AND IT MUST NAME THE FILE. All pending files now go to psql as ONE script, and psql
+  // reports errors by line number OF ITS STDIN — "ERROR at line 173" names nothing anybody
+  // can act on when three migrations were concatenated. migrate.js emits a `\echo` marker
+  // before each file and reports the last one echoed; if that ever breaks it prints
+  // "(unknown file)", which reads like a working gate and is not one.
+  assert.throws(
+    dryRun,
+    /migrate --dry-run: 006_zones_revenue_rates\.sql does NOT apply/,
+    "a refusal must name the FILE that refused, not a line number and not '(unknown file)'",
+  );
   assert.equal(
     liveQuery("SELECT to_regclass('public.zones') IS NULL;"),
     "t",
@@ -807,20 +817,31 @@ try {
   // THREE files are pending here, not one: 006, 007, AND 008. 008 is the FIRST migration in
   // this tree with a real cross-file dependency (`tag_aliases.zone_id -> zones`, `zones`
   // itself only existing once 006 has *committed*; `reported_tags.reported_by_operator_id
-  // -> operators`, same story with 007). migrate.js's own comment on `--dry-run` names
-  // exactly this: each pending file is dry-run in ITS OWN rolled-back transaction, so a file
-  // that depends on an EARLIER PENDING file's DDL "will report a false failure — LOUDLY,
-  // which is the right way round for a gate". 008 hitting that here, for the first time, is
-  // therefore expected, not a regression — `err.stdout` still carries everything printed
-  // before the chain broke, which is all THIS assertion needs. 008's OWN dry-run is checked
-  // on its own, correctly, once 006 and 007 have actually landed below.
-  let dryRunOutput;
-  try {
-    dryRunOutput = dryRun();
-  } catch (err) {
-    dryRunOutput = err.stdout ?? "";
-  }
+  // -> operators`, same story with 007).
+  //
+  // THAT DEPENDENCY USED TO MAKE THIS STEP FAIL, AND THE FAILURE WAS THE RUNNER'S, NOT 008's.
+  // Pending files were dry-run one at a time, each rolled back before the next began, so 008
+  // met a database where 007's `operators` had just been un-created:
+  //
+  //   would apply 006 / would apply 007 / ERROR: relation "operators" does not exist
+  //
+  // That is what step 0b printed against the LIVE box on deploy day, and it blocks a deploy
+  // that is perfectly good. A gate that cries wolf gets disabled by the third person who
+  // meets it. migrate.js now dry-runs ALL pending files in ONE transaction, in order, and
+  // rolls the lot back — which is also the more honest question: „does this DEPLOY apply".
+  // So the chain must now come back CLEAN, all three of them, and still write nothing.
+  const dryRunOutput = dryRun();
   assert.match(dryRunOutput, /would apply 006_zones_revenue_rates\.sql/, "--dry-run must clear once the rate is real");
+  assert.match(
+    dryRunOutput,
+    /would apply 007_operator_identity\.sql/,
+    "--dry-run must carry 007 on top of 006 in the same transaction",
+  );
+  assert.match(
+    dryRunOutput,
+    /would apply 008_reported_tags\.sql/,
+    "008 depends on tables 006 and 007 create — a per-file dry run reports a FALSE failure here",
+  );
   assert.equal(
     liveQuery("SELECT to_regclass('public.zones') IS NULL;"),
     "t",
@@ -946,9 +967,8 @@ try {
 
   // --- 008 on top of live data: composes with 006 AND 007, invents nothing -----------
   //
-  // Now that 006 and 007 have actually COMMITTED, --dry-run must cleanly clear 008 on its
-  // own — the failure exercised above was specifically about 006/007/008 all being PENDING
-  // at once; with the first two real, 008's FKs into `zones` and `operators` resolve fine.
+  // 008 alone, with 006 and 007 already COMMITTED: the other arrangement of the same
+  // question the all-three-pending dry run asks above. Both must clear.
   assert.match(
     dryRun(),
     /would apply 008_reported_tags\.sql/,
@@ -978,8 +998,9 @@ try {
       "003+004+005 apply on top of 001+002 with live data, 005's contract backfill is idempotent, " +
       "006 refuses a rate-less worker before applying cleanly over live rows, 007 composes with " +
       "006 (blocked transitively by filename order while 006 refuses) leaving workers/admins " +
-      "untouched, and 008 composes with both once they are real (its --dry-run correctly refuses " +
-      "while they are merely pending) and invents neither a tag nor an alias",
+      "untouched, --dry-run clears all three PENDING files in one rolled-back transaction " +
+      "(008's FKs resolve against 006/007 the same deploy applies), and 008 composes with both " +
+      "once they are real and invents neither a tag nor an alias",
   );
 } finally {
   for (const db of [DB_NAME, LIVE_DB_NAME]) {
