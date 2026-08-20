@@ -73,7 +73,17 @@ const bad = (label, detail) => {
 // ---------------------------------------------------------------------------------------
 // Anything that asks Intl for a currency renders money. `money(` alone would miss the four
 // screens that inline the formatter, and a hand-list would miss the next one.
-const MONEY = /style:\s*['"]currency['"]|currency:\s*['"]EUR['"]/
+//
+// ...AND MONEY THAT NEVER GOES THROUGH Intl. /payroll/ writes euros into the CSV as plain
+// digits through `centsToPlainEuros` + `decimalComma` (lib/money.ts, lib/payroll.ts), which
+// matches neither pattern above. payroll/page.tsx is in scope anyway because it ALSO renders
+// currency on screen — so the hole is not the file that exists, it is the next one: an export
+// screen that only ever writes a file would format real money and be silently out of scope,
+// which is the failure mode this whole file was written against ("somebody adding a seventh
+// screen, not somebody breaking the six"). Naming the two functions costs nothing and cannot
+// be satisfied by a comment.
+const MONEY =
+  /style:\s*['"]currency['"]|currency:\s*['"]EUR['"]|centsToPlainEuros|decimalComma/
 
 /** file -> the route that renders it. A component is placed by the routes that mount it. */
 const ROUTE_OF = {
