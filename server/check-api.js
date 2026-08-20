@@ -4,8 +4,10 @@
 // Runs against a throwaway Postgres schema; it never touches the real tables.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { createHash, generateKeyPairSync, sign as rsaSign } from "node:crypto";
+import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, generateKeyPairSync, randomBytes, sign as rsaSign } from "node:crypto";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import pg from "pg";
 import { CODE_TTL_MS } from "./lib/enrolment.js";
 import { redactUrl, scrubBreadcrumb, scrubEvent, scrubLogAttributes } from "./lib/scrub.js";
@@ -264,6 +266,20 @@ ALTER TABLE shifts
     FOREIGN KEY (end_zone_id, location_id) REFERENCES zones (id, location_id);
 CREATE INDEX shifts_start_zone_idx ON shifts (start_zone_id, start_time DESC)
   WHERE start_zone_id IS NOT NULL;
+-- 008_reported_tags.sql, transcribed verbatim.
+CREATE TABLE reported_tags (
+  id UUID PRIMARY KEY,
+  reported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  reported_by_operator_id BIGINT REFERENCES operators(id) ON DELETE SET NULL,
+  resolved_at TIMESTAMPTZ
+);
+CREATE INDEX reported_tags_unresolved_idx ON reported_tags (reported_at) WHERE resolved_at IS NULL;
+CREATE TABLE tag_aliases (
+  id UUID PRIMARY KEY REFERENCES reported_tags(id),
+  zone_id UUID NOT NULL REFERENCES zones(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX tag_aliases_zone_idx ON tag_aliases (zone_id);
 `;
 
 const APP_KEY = "check-app-key-aaaaaaaaaaaa";
@@ -586,6 +602,13 @@ try {
   process.env.APP_KEY = APP_KEY;
   delete process.env.ADMIN_PIN; // decision-20: must not be required any more
   process.env.PORT = "0";
+  // A scratch directory, empty to start — GET /app/version must answer {published:false}
+  // against a directory with NOTHING in it, not 500. Individual releases cases write a
+  // manifest (and, when they need one, a fake .apk) into this SAME directory mid-run:
+  // routes/release.js re-reads the manifest on every request, so there is no server
+  // restart needed between "nothing published" and "a build exists".
+  const RELEASES_DIR = mkdtempSync(path.join(tmpdir(), "ts-check-releases-"));
+  process.env.RELEASES_DIR = RELEASES_DIR;
 
   const { hashPassword, resetLoginRate } = await import("./lib/auth.js");
   await admin.query("INSERT INTO admins (email, password_hash) VALUES ($1, $2)", [
@@ -4756,6 +4779,416 @@ try {
         assert.throws(() => identityPhone(input, "phone"), (err) => err.code === code, `${JSON.stringify(input)} must be rejected as ${code}`);
       }
     });
+  }
+
+  // ===================================================================================
+  // reported tags: WRITE -> REPORT -> RESOLVE (this iteration,
+  // server/db/migrations/008_reported_tags.sql). An operator's phone mints a uuid, writes
+  // it to a physical NFC tag, and POST /operator/tags is the only thing it does with the
+  // server afterwards. Everything below that point is the admin turning it into something.
+  // ===================================================================================
+  {
+    const expect = async (res, status) => {
+      const payload = await res.json();
+      assert.equal(res.status, status, JSON.stringify(payload));
+      return payload;
+    };
+
+    /** A fresh operator, with a LIVE ts_operator session, minted directly (no need to walk
+     * the enrolment-code flow again — that is already pinned in the operators block above). */
+    const operatorCookieFor = async (name) => {
+      const { rows } = await admin.query("INSERT INTO operators (name) VALUES ($1) RETURNING id", [name]);
+      const operatorId = Number(rows[0].id);
+      const token = randomBytes(32).toString("hex");
+      await admin.query(
+        "INSERT INTO operator_sessions (token, operator_id, expires_at) VALUES ($1, $2, now() + interval '1 day')",
+        [hashToken(token), operatorId],
+      );
+      return { operatorId, cookie: `ts_operator=${token}` };
+    };
+
+    const reportTag = (tagId, cookie) => call("/operator/tags", { method: "POST", cookie, body: { id: tagId } });
+
+    let op1;
+
+    // ---- POST /operator/tags --------------------------------------------------------
+    await test("POST /operator/tags needs a live OPERATOR session; the app key or a worker session are not enough", async () => {
+      const tagId = uuid(91);
+      assert.equal((await call("/operator/tags", { method: "POST", key: null, body: { id: tagId } })).status, 401);
+      assert.equal(
+        (await call("/operator/tags", { method: "POST", body: { id: tagId } })).status,
+        401,
+        "the app key alone must not authorise this route",
+      );
+      assert.equal(
+        (await call("/operator/tags", { method: "POST", cookie: workerCookie, body: { id: tagId } })).status,
+        401,
+        "a WORKER session must not authorise an operator route",
+      );
+      assert.equal(await countOf("SELECT count(*) AS n FROM reported_tags WHERE id = $1", [tagId]), 0);
+    });
+
+    await test("a fresh report lands UNBOUND, the reporter comes from the SESSION, and malformed input is refused", async () => {
+      op1 = await operatorCookieFor("Feldleiter Tag Melder");
+      const tagId = uuid(91);
+
+      const created = await expect(await reportTag(tagId, op1.cookie), 201);
+      assert.equal(created.tag.id, tagId);
+      assert.equal(created.tag.resolved_at, null, "unbound: no zone, no building yet");
+      assert.equal(
+        (await admin.query("SELECT reported_by_operator_id FROM reported_tags WHERE id = $1", [tagId])).rows[0]
+          .reported_by_operator_id,
+        op1.operatorId,
+        "the reporter is taken from the SESSION — there is no operator_id field to lie in",
+      );
+
+      for (const body of [{}, { id: "not-a-uuid" }, { id: 12345 }, { id: "" }]) {
+        const res = await call("/operator/tags", { method: "POST", cookie: op1.cookie, body });
+        assert.equal(res.status, 400, `${JSON.stringify(body)} must be refused before it reaches the database`);
+      }
+    });
+
+    await test("reporting the SAME tag twice is ONE row, idempotently (200, not a second 201)", async () => {
+      const tagId = uuid(92);
+      const first = await expect(await reportTag(tagId, op1.cookie), 201);
+      const second = await expect(await reportTag(tagId, op1.cookie), 200);
+      assert.equal(second.tag.id, first.tag.id);
+      assert.equal(second.tag.reported_at, first.tag.reported_at, "a retry must not move the original report time");
+      assert.equal(await countOf("SELECT count(*) AS n FROM reported_tags WHERE id = $1", [tagId]), 1);
+    });
+
+    await test("THE DOUBLE-REPORT RACE: two operators reporting the SAME physical tag AT ONCE is still ONE row", async () => {
+      const op2 = await operatorCookieFor("Feldleiter Zweite Melderin");
+      const tagId = uuid(93);
+      const [a, b] = await Promise.all([reportTag(tagId, op1.cookie), reportTag(tagId, op2.cookie)]);
+      assert.deepEqual(
+        [a.status, b.status].sort(),
+        [200, 201],
+        "one request wins the INSERT, the other reads the row back — Postgres decides the race, not a check-then-insert in this process",
+      );
+      assert.equal(
+        await countOf("SELECT count(*) AS n FROM reported_tags WHERE id = $1", [tagId]),
+        1,
+        "two concurrent reporters must never land two rows",
+      );
+    });
+
+    await test("a reported id that collides with a REAL location or zone is refused, never silently landed", async () => {
+      // RED-FIRST evidence this guard is load-bearing: comment out the pre-insert clash
+      // check in reportTag() and this assertion flips from 409 to 201, with a row landing
+      // in reported_tags right on top of an id that already names a real building — the
+      // exact ambiguity this check exists to make unreachable.
+      const clash = await reportTag(locationUuid, op1.cookie);
+      assert.equal(clash.status, 409);
+      assert.equal((await clash.json()).error, "id_in_use");
+      assert.equal(
+        await countOf("SELECT count(*) AS n FROM reported_tags WHERE id = $1", [locationUuid]),
+        0,
+        "a refused report must not land a row either",
+      );
+    });
+
+    // ---- a tap on an unbound tag: MUST happen, MUST NOT 500, MUST be explainable -----
+    await test("a tap on an UNBOUND tag is refused with its OWN code — never a shift, never a 500", async () => {
+      const tagId = uuid(94);
+      await expect(await reportTag(tagId, op1.cookie), 201);
+
+      const before = await countShifts();
+      const res = await asWorker("/shifts/open", {
+        method: "POST",
+        body: { client_uuid: uuid(30), location_uuid: tagId, start_time: new Date().toISOString() },
+      });
+      assert.equal(res.status, 422, "never a 500");
+      assert.equal((await res.json()).error, "tag_unbound");
+      assert.equal(await countShifts(), before, "no shift may be opened against an unresolved tag");
+
+      // THE DIFFERENTIAL that makes the assertion above meaningful, not a tautology: a tag
+      // this server has NEVER heard of — no report, ever — must still answer the OLD,
+      // generic code. If `tag_unbound` ever became the answer for every miss (the RED
+      // mutation: delete the `reported && reported.resolved_at === null` guard in
+      // activePlace so it always tries the reported_tags branch), THIS is what would catch
+      // it, because these two assertions would then agree when they must not.
+      const stranger = await asWorker("/shifts/open", {
+        method: "POST",
+        body: { client_uuid: uuid(31), location_uuid: uuid(98), start_time: new Date().toISOString() },
+      });
+      assert.equal(res.status, stranger.status, "both are 422");
+      assert.equal(
+        (await stranger.json()).error,
+        "unknown_location",
+        "a tag we never heard of at all must NOT read as merely 'not yet assigned'",
+      );
+    });
+
+    // ---- RESOLVE: new building --------------------------------------------------------
+    await test("resolve-building requires the tag to have actually been reported", async () => {
+      const never = uuid(89);
+      const res = await asAdmin(`/admin/tags/${never}/resolve-building`, {
+        method: "POST",
+        body: { slug: "ghost-building", name: "Geisterhaus" },
+      });
+      assert.equal(res.status, 404);
+      assert.equal((await res.json()).error, "unknown_reported_tag");
+    });
+
+    await test("resolve-building mints a NEW building at the TAG'S OWN id, and a repeat resolve is refused", async () => {
+      const tagId = uuid(95);
+      await expect(await reportTag(tagId, op1.cookie), 201);
+
+      const created = await expect(
+        await asAdmin(`/admin/tags/${tagId}/resolve-building`, {
+          method: "POST",
+          body: { slug: "resolved-building", name: "Aufgel\u00f6stes Haus" },
+        }),
+        201,
+      );
+      assert.equal(created.location.id, tagId, "the physical bytes already on the card never need rewriting");
+
+      // it now taps like any other building, immediately.
+      const opened = await expect(
+        await asWorker("/shifts/open", {
+          method: "POST",
+          body: { client_uuid: uuid(32), location_uuid: tagId, start_time: new Date().toISOString() },
+        }),
+        201,
+      );
+      assert.equal(opened.shift.location_id, tagId);
+      await admin.query("DELETE FROM shifts WHERE client_uuid = $1", [uuid(32)]);
+
+      const again = await asAdmin(`/admin/tags/${tagId}/resolve-building`, {
+        method: "POST",
+        body: { slug: "resolved-building-again", name: "Zweiter Versuch" },
+      });
+      assert.equal(again.status, 409);
+      assert.equal((await again.json()).error, "already_resolved");
+      assert.equal(
+        await countOf("SELECT count(*) AS n FROM locations WHERE id = $1", [tagId]),
+        1,
+        "a refused repeat must not create a second building",
+      );
+    });
+
+    // ---- RESOLVE: new zone in an existing building ------------------------------------
+    await test("resolve-zone mints a NEW zone at the TAG'S OWN id, stamping tag_deployed_at from the REPORT", async () => {
+      const house = await expect(
+        await asAdmin("/admin/locations", { method: "POST", body: { slug: "resolve-zone-haus", name: "Zonenhaus f\u00fcr Resolve" } }),
+        201,
+      );
+      const tagId = uuid(96);
+      const reported = await expect(await reportTag(tagId, op1.cookie), 201);
+
+      const created = await expect(
+        await asAdmin(`/admin/tags/${tagId}/resolve-zone`, {
+          method: "POST",
+          body: { location_id: house.location.id, name: "Tiefgarage", area_sqm: "120" },
+        }),
+        201,
+      );
+      assert.equal(created.zone.id, tagId);
+      assert.equal(created.zone.location_id, house.location.id);
+      assert.equal(
+        created.zone.tag_deployed_at,
+        reported.tag.reported_at,
+        "the card was mounted when the operator reported it, not when an admin got to a desk",
+      );
+
+      const opened = await expect(
+        await asWorker("/shifts/open", {
+          method: "POST",
+          body: { client_uuid: uuid(33), location_uuid: tagId, start_time: new Date().toISOString() },
+        }),
+        201,
+      );
+      assert.equal(opened.shift.location_id, house.location.id, "a shift stays BUILDING-level");
+      assert.equal(opened.shift.start_zone_id, tagId);
+      await admin.query("DELETE FROM shifts WHERE client_uuid = $1", [uuid(33)]);
+    });
+
+    // ---- RESOLVE: an EXISTING zone, via an ADDITIVE alias -----------------------------
+    await test("resolve-existing-zone links via tag_aliases; the zone's OWN id is never re-keyed", async () => {
+      const house = await expect(
+        await asAdmin("/admin/locations", { method: "POST", body: { slug: "alias-haus", name: "Aliashaus" } }),
+        201,
+      );
+      const zone = await expect(
+        await asAdmin("/admin/zones", { method: "POST", body: { location_id: house.location.id, name: "Haupteingang" } }),
+        201,
+      );
+
+      const tagId = uuid(97);
+      await expect(await reportTag(tagId, op1.cookie), 201);
+
+      // Refused against an INACTIVE zone — aliasing to one would create a row that can
+      // never resolve, which is worse than refusing it up front.
+      await admin.query("UPDATE zones SET active = false WHERE id = $1", [zone.zone.id]);
+      const refused = await asAdmin(`/admin/tags/${tagId}/resolve-existing-zone`, {
+        method: "POST",
+        body: { zone_id: zone.zone.id },
+      });
+      assert.equal(refused.status, 422);
+      assert.equal((await refused.json()).error, "unknown_zone");
+      await admin.query("UPDATE zones SET active = true WHERE id = $1", [zone.zone.id]);
+
+      const linked = await expect(
+        await asAdmin(`/admin/tags/${tagId}/resolve-existing-zone`, { method: "POST", body: { zone_id: zone.zone.id } }),
+        200,
+      );
+      assert.equal(linked.alias.id, tagId);
+      assert.equal(linked.alias.zone_id, zone.zone.id);
+      assert.equal(
+        (await admin.query("SELECT id FROM zones WHERE id = $1", [zone.zone.id])).rowCount,
+        1,
+        "the zone's own id must be UNCHANGED — an alias is additive, never a re-key",
+      );
+
+      // BOTH ids now resolve to the SAME place: the zone's original id (its own printed
+      // tag, unaffected) and the newly aliased physical tag.
+      const viaOriginal = await expect(
+        await asWorker("/shifts/open", {
+          method: "POST",
+          body: { client_uuid: uuid(34), location_uuid: zone.zone.id, start_time: new Date().toISOString() },
+        }),
+        201,
+      );
+      assert.equal(viaOriginal.shift.start_zone_id, zone.zone.id);
+      await admin.query("DELETE FROM shifts WHERE client_uuid = $1", [uuid(34)]);
+
+      const viaAlias = await expect(
+        await asWorker("/shifts/open", {
+          method: "POST",
+          body: { client_uuid: uuid(35), location_uuid: tagId, start_time: new Date().toISOString() },
+        }),
+        201,
+      );
+      assert.equal(viaAlias.shift.location_id, house.location.id);
+      assert.equal(viaAlias.shift.start_zone_id, zone.zone.id, "the ALIAS resolves to the SAME zone, not a new one");
+      await admin.query("DELETE FROM shifts WHERE client_uuid = $1", [uuid(35)]);
+
+      const again = await asAdmin(`/admin/tags/${tagId}/resolve-existing-zone`, { method: "POST", body: { zone_id: zone.zone.id } });
+      assert.equal(again.status, 409);
+      assert.equal((await again.json()).error, "already_resolved");
+    });
+
+    await test("THE RESOLVE RACE: two admins resolving the SAME reported tag at once — only one wins", async () => {
+      const house = await expect(
+        await asAdmin("/admin/locations", { method: "POST", body: { slug: "resolve-race-haus", name: "Rennhaus" } }),
+        201,
+      );
+      const tagId = uuid(40);
+      await expect(await reportTag(tagId, op1.cookie), 201);
+
+      const [a, b] = await Promise.all([
+        asAdmin(`/admin/tags/${tagId}/resolve-zone`, {
+          method: "POST",
+          body: { location_id: house.location.id, name: "Zone A" },
+        }),
+        asAdmin(`/admin/tags/${tagId}/resolve-zone`, {
+          method: "POST",
+          body: { location_id: house.location.id, name: "Zone B" },
+        }),
+      ]);
+      assert.deepEqual([a.status, b.status].sort(), [201, 409], "exactly one resolve may win a race for the same reported tag");
+      assert.equal(await countOf("SELECT count(*) AS n FROM zones WHERE id = $1", [tagId]), 1);
+    });
+
+    // ---- the admin's own worklist -----------------------------------------------------
+    await test("GET /admin/data lists UNRESOLVED reported tags, and drops them the moment they resolve", async () => {
+      const tagId = uuid(41);
+      await expect(await reportTag(tagId, op1.cookie), 201);
+
+      const before = await (await asAdmin("/admin/data")).json();
+      assert.ok(
+        before.reported_tags.some((t) => t.id === tagId && t.reported_by_operator_name === "Feldleiter Tag Melder"),
+        "an unresolved report must appear in the admin worklist, named by its reporter",
+      );
+
+      await expect(
+        await asAdmin(`/admin/tags/${tagId}/resolve-building`, {
+          method: "POST",
+          body: { slug: "worklist-resolved", name: "Aus der Warteliste" },
+        }),
+        201,
+      );
+      const after = await (await asAdmin("/admin/data")).json();
+      assert.ok(!after.reported_tags.some((t) => t.id === tagId), "a resolved report is history, not a queue item");
+    });
+  }
+
+  // ===================================================================================
+  // the app self-update surface (routes/release.js, this iteration): GET /app/version and
+  // GET /app/download. No database dependency at all — a directory read is the whole
+  // mechanism — so this block never touches `admin`.
+  // ===================================================================================
+  {
+    const RELEASES_DIR = process.env.RELEASES_DIR;
+    const manifestPath = path.join(RELEASES_DIR, "latest.json");
+    const writeManifest = (obj) => writeFileSync(manifestPath, JSON.stringify(obj));
+    const removeManifest = () => {
+      try {
+        unlinkSync(manifestPath);
+      } catch {
+        // already gone — fine, this is cleanup
+      }
+    };
+
+    await test("GET /app/version answers {published:false} against an EMPTY releases directory, not an error", async () => {
+      const res = await call("/app/version");
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { published: false });
+    });
+
+    await test("GET /app/version and /app/download need the app key; no session is required or accepted as a substitute", async () => {
+      assert.equal((await call("/app/version", { key: null })).status, 401);
+      assert.equal((await call("/app/version", { key: "wrong" })).status, 401);
+      // A worker or admin session is NOT a wider credential than the app key here — the app
+      // key is what is checked, full stop.
+      assert.equal((await call("/app/version", { key: null, cookie: workerCookie })).status, 401);
+    });
+
+    await test("a published release answers version_code, version_name and a download url; the apk streams byte-for-byte", async () => {
+      const apkBytes = Buffer.from("not a real apk, just some bytes to stream\n".repeat(50), "utf8");
+      writeFileSync(path.join(RELEASES_DIR, "nfc-timesheets-9.9.9-9-release.apk"), apkBytes);
+      writeManifest({
+        version_code: 9,
+        version_name: "9.9.9",
+        file: "nfc-timesheets-9.9.9-9-release.apk",
+        sha256: "deadbeef",
+        notes: "check-api fixture build",
+      });
+
+      const version = await (await call("/app/version")).json();
+      assert.equal(version.published, true);
+      assert.equal(version.version_code, 9);
+      assert.equal(version.version_name, "9.9.9");
+      assert.equal(version.url, "/app/download");
+
+      const res = await call("/app/download");
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get("content-type"), "application/vnd.android.package-archive");
+      assert.equal(Number(res.headers.get("content-length")), apkBytes.length);
+      const body = Buffer.from(await res.arrayBuffer());
+      assert.ok(body.equals(apkBytes), "the downloaded bytes must match the file on disk exactly");
+    });
+
+    await test("a malformed manifest is read as 'nothing published', never a 500", async () => {
+      writeFileSync(manifestPath, "{ this is not json");
+      const res = await call("/app/version");
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { published: false });
+      assert.equal((await call("/app/download")).status, 404);
+      assert.equal((await (await call("/app/download")).json()).error, "no_release_published");
+    });
+
+    await test("a manifest naming a file that is not actually on disk is a clean 404, not a crash", async () => {
+      writeManifest({ version_code: 10, version_name: "10.0.0", file: "does-not-exist.apk" });
+      const version = await (await call("/app/version")).json();
+      assert.equal(version.published, true, "the manifest itself is well-formed");
+      const dl = await call("/app/download");
+      assert.equal(dl.status, 404);
+      assert.equal((await dl.json()).error, "release_file_missing");
+    });
+
+    removeManifest();
   }
 
   await test("unknown route returns a 404 code, not a stack trace", async () => {
