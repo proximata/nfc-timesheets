@@ -1,10 +1,13 @@
 // Auth. Trust boundary — nothing in here is a convenience wrapper.
 //
-//   X-App-Key  -> iOS routes. One shared secret baked into the build. A COARSE gate
-//                only: it says "this is our app", never "this is Anna". Kept as defence
-//                in depth, never as identity.
-//   ts_session -> /admin/* routes. Email + password, server-side session (decision-20).
-//   ts_worker  -> worker routes. Sign in with Apple, server-side session (decision-22).
+//   X-App-Key   -> iOS routes. One shared secret baked into the build. A COARSE gate
+//                 only: it says "this is our app", never "this is Anna". Kept as defence
+//                 in depth, never as identity.
+//   ts_session  -> /admin/* routes. Email + password, server-side session (decision-20).
+//   ts_worker   -> worker routes. Sign in with Apple, server-side session (decision-22).
+//   ts_operator -> operator routes. Admin-issued enrolment code, server-side session
+//                 (decision-45). An operator session can never reach a route that opens
+//                 or closes a shift — no route under /shifts/* is ever auth: "operator".
 //
 // decision-22 — the app key USED to be the whole story on /shifts/*, with the caller
 // naming themselves in body.worker_id. That let anyone holding the key file hours as
@@ -108,6 +111,14 @@ export const WORKER_SESSION_COOKIE = "ts_worker";
 // someone in the admin panel locks them out on their next call regardless.
 const WORKER_SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
+// Operators get their OWN cookie name and their OWN table (decision-45 §6), for the same
+// reason workers do not share `sessions` with admins: a nullable FK plus a discriminator
+// column is how a stray WHERE turns one credential into another. Same TTL as a worker's,
+// same field-with-no-signal rationale — an operator taps and reads tags from a phone in a
+// stairwell too, and `active` is re-checked from `operators` on every request regardless.
+export const OPERATOR_SESSION_COOKIE = "ts_operator";
+const OPERATOR_SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
 // The cookie carries the raw token; the DB only ever stores its SHA-256. A leaked dump,
 // a stolen pg_backup .gz, or any read-only SQL hole then yields hashes that cannot be
 // replayed as sessions. Same reasoning as password hashing, one rung down in cost.
@@ -163,6 +174,31 @@ export async function destroyWorkerSession(token) {
 /** Revoke every session a worker holds — used when the admin deactivates them. */
 export async function destroyWorkerSessions(workerId) {
   await query("DELETE FROM worker_sessions WHERE worker_id = $1", [workerId]);
+}
+
+/**
+ * Operators: mint a session against an already-VERIFIED enrolment code redemption
+ * (routes/auth.js owns the verification). Mirrors createWorkerSession line for line.
+ */
+export async function createOperatorSession(operatorId) {
+  const token = randomBytes(TOKEN_BYTES).toString("hex");
+  const expiresAt = new Date(Date.now() + OPERATOR_SESSION_TTL_MS);
+  await query("INSERT INTO operator_sessions (token, operator_id, expires_at) VALUES ($1, $2, $3)", [
+    hashToken(token),
+    operatorId,
+    expiresAt,
+  ]);
+  await query("DELETE FROM operator_sessions WHERE expires_at < now()"); // same opportunistic sweep
+  return { token, expiresAt };
+}
+
+export async function destroyOperatorSession(token) {
+  await query("DELETE FROM operator_sessions WHERE token = $1", [hashToken(token)]);
+}
+
+/** Revoke every session an operator holds — used when the admin deactivates them. */
+export async function destroyOperatorSessions(operatorId) {
+  await query("DELETE FROM operator_sessions WHERE operator_id = $1", [operatorId]);
 }
 
 // One cookie builder for both audiences: the flags are the security property and must
@@ -230,6 +266,30 @@ export async function requireWorkerSession(headers) {
   );
   if (!row) fail(401, "unauthorized");
   return { workerId: row.worker_id, name: row.name, token };
+}
+
+/**
+ * Resolve the operator cookie to an operator, or 401. THE ONLY SOURCE OF OPERATOR
+ * IDENTITY — mirrors requireWorkerSession line for line, including the deactivation
+ * lockout: `AND o.active` is re-read on every request, so deactivating an operator in the
+ * admin panel stops them redeeming anything immediately, with no session row to hunt down.
+ *
+ * Returns no phone number on purpose — handlers have no use for it, and what is not
+ * returned cannot end up in a log line.
+ */
+export async function requireOperatorSession(headers) {
+  const token = readCookie(headers, OPERATOR_SESSION_COOKIE);
+  if (!token || !TOKEN_RE.test(token)) fail(401, "unauthorized");
+
+  const row = await one(
+    `SELECT s.operator_id, o.name
+       FROM operator_sessions s
+       JOIN operators o ON o.id = s.operator_id
+      WHERE s.token = $1 AND s.expires_at > now() AND o.active`,
+    [hashToken(token)],
+  );
+  if (!row) fail(401, "unauthorized");
+  return { operatorId: row.operator_id, name: row.name, token };
 }
 
 // ---- login rate limit ------------------------------------------------------------

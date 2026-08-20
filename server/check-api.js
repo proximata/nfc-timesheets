@@ -114,6 +114,38 @@ CREATE TABLE sessions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX sessions_expires_at_idx ON sessions (expires_at);
+-- decision-45 / 007_operator_identity.sql, transcribed verbatim.
+CREATE TABLE operators (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_by BIGINT REFERENCES admins(id) ON DELETE SET NULL,
+  enrolment_code_hash TEXT UNIQUE,
+  enrolment_code_expires_at TIMESTAMPTZ,
+  enrolment_code_issued_at TIMESTAMPTZ,
+  enrolment_code_issued_by BIGINT REFERENCES admins(id) ON DELETE SET NULL,
+  enrolment_code_redeemed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT operators_enrolment_code_pair
+    CHECK ((enrolment_code_hash IS NULL) = (enrolment_code_expires_at IS NULL))
+);
+CREATE TABLE phone_identities (
+  phone_e164 TEXT PRIMARY KEY CHECK (phone_e164 ~ '^\\+[1-9][0-9]{7,14}$'),
+  worker_id BIGINT UNIQUE REFERENCES workers(id) ON DELETE SET NULL,
+  operator_id BIGINT UNIQUE REFERENCES operators(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT phone_identities_claims CHECK (worker_id IS NOT NULL OR operator_id IS NOT NULL)
+);
+CREATE INDEX phone_identities_worker_idx ON phone_identities (worker_id) WHERE worker_id IS NOT NULL;
+CREATE INDEX phone_identities_operator_idx ON phone_identities (operator_id) WHERE operator_id IS NOT NULL;
+CREATE TABLE operator_sessions (
+  token TEXT PRIMARY KEY,
+  operator_id BIGINT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX operator_sessions_expires_at_idx ON operator_sessions (expires_at);
+CREATE INDEX operator_sessions_operator_id_idx ON operator_sessions (operator_id);
 CREATE TABLE locations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   slug TEXT UNIQUE NOT NULL,
@@ -4369,6 +4401,361 @@ try {
     await admin.query("DELETE FROM material_requests WHERE worker_id = $1", [plWorker]);
     await admin.query("DELETE FROM shifts WHERE worker_id = $1", [plWorker]);
     await admin.query("DELETE FROM workers WHERE id = $1", [plWorker]);
+  }
+
+  // ---- operators (decision-45) ------------------------------------------------------
+  {
+    const expectOp = async (res, status) => {
+      const payload = await res.json();
+      assert.equal(res.status, status, JSON.stringify(payload));
+      return payload;
+    };
+
+    const createOperator = (name, phone) => asAdmin("/admin/operators", { method: "POST", body: { name, phone } });
+    const issueOperatorCode = (id) => asAdmin(`/admin/operators/${id}/enrolment-code`, { method: "POST" });
+    const revokeOperatorCode = (id) => asAdmin(`/admin/operators/${id}/enrolment-code`, { method: "DELETE" });
+    const deleteOperator = (id) => asAdmin(`/admin/operators/${id}`, { method: "DELETE" });
+    const redeemOperator = (code, ip) => call("/auth/operator-code", { method: "POST", body: { code }, ip });
+
+    /** Full lifecycle: create an operator with a phone, issue a code, return both. */
+    const freshOperator = async (name, phone) => {
+      const created = await expectOp(await createOperator(name, phone), 201);
+      const issued = await expectOp(await issueOperatorCode(created.operator.id), 201);
+      return { id: created.operator.id, name: created.operator.name, code: issued.code };
+    };
+
+    await test("every operator-facing route rejects a missing app key, admin session or operator session", async () => {
+      const adminRoutesToCheck = [
+        ["POST", "/admin/operators"],
+        ["DELETE", "/admin/operators/1"],
+        ["POST", "/admin/operators/1/enrolment-code"],
+        ["DELETE", "/admin/operators/1/enrolment-code"],
+      ];
+      for (const [method, path] of adminRoutesToCheck) {
+        const body = method === "POST" ? {} : undefined;
+        const noCred = await call(path, { method, key: null, body });
+        assert.equal(noCred.status, 401, `${method} ${path} with no credential`);
+        assert.equal(
+          (await call(path, { method, body })).status,
+          401,
+          `${method} ${path} must not accept the app key as an admin credential`,
+        );
+      }
+      // /auth/operator-code is auth: "app" — the app key gates it, there is no session yet.
+      assert.equal((await call("/auth/operator-code", { method: "POST", key: null, body: { code: "X" } })).status, 401);
+      // /auth/operator-logout needs BOTH the app key AND a live operator session.
+      assert.equal((await call("/auth/operator-logout", { method: "POST", key: null })).status, 401);
+      assert.equal((await call("/auth/operator-logout", { method: "POST" })).status, 401, "app key alone must not be an operator session");
+    });
+
+    let opCookie = null;
+    let opId = null;
+
+    await test("POST /auth/operator-code mints ts_operator (not ts_worker), single use, TASK-212 AC#2", async () => {
+      resetLoginRate();
+      const op = await freshOperator("Feldleiter Redeem", "0664 900 00 01");
+      opId = op.id;
+      const before = Number(
+        (await admin.query("SELECT count(*) AS n FROM operator_sessions")).rows[0].n,
+      );
+
+      const res = await redeemOperator(op.code, "10.6.1.1");
+      const raw200 = await res.text();
+      assert.equal(res.status, 200, `redemption should succeed, got ${raw200}`);
+      const body = JSON.parse(raw200);
+      assert.equal(body.operator.id, op.id);
+      assert.equal(body.operator.name, "Feldleiter Redeem");
+
+      // THE COOKIE NAME, checked literally — copy-pasting "ts_worker" here would collide
+      // an operator session with the worker session table.
+      const rawCookie = res.headers.getSetCookie?.()[0] ?? res.headers.get("set-cookie");
+      assert.match(rawCookie, /^ts_operator=/, "POST /auth/operator-code must set ts_operator, not ts_worker");
+      assert.ok(
+        /HttpOnly/i.test(rawCookie) && /Secure/i.test(rawCookie) && /SameSite=Strict/i.test(rawCookie),
+        rawCookie,
+      );
+
+      opCookie = cookieFrom(res);
+      assert.equal(
+        Number((await admin.query("SELECT count(*) AS n FROM operator_sessions")).rows[0].n),
+        before + 1,
+        "exactly one operator_sessions row",
+      );
+
+      const hashRow = await admin.query("SELECT 1 FROM operator_sessions WHERE token = $1", [
+        hashToken(opCookie.split("=")[1]),
+      ]);
+      assert.equal(hashRow.rowCount, 1, "the DB stores the HASH, matched by hashing the raw cookie the same way");
+      const rawStored = await admin.query("SELECT 1 FROM operator_sessions WHERE token = $1", [
+        opCookie.split("=")[1],
+      ]);
+      assert.equal(rawStored.rowCount, 0, "the raw token must never be stored verbatim");
+
+      const cleared = await admin.query("SELECT enrolment_code_hash FROM operators WHERE id = $1", [op.id]);
+      assert.equal(cleared.rows[0].enrolment_code_hash, null, "redeeming must clear the code — single use");
+
+      // Single use: the same code must not redeem twice.
+      assert.equal((await redeemOperator(op.code, "10.6.1.2")).status, 401);
+      resetLoginRate();
+    });
+
+    await test("operator code guesses spend their OWN per-IP bucket, not the worker one", async () => {
+      resetLoginRate();
+      const ip = "10.6.2.1";
+      for (let i = 0; i < 5; i++) await redeemOperator("ZZZZ-ZZZY", ip);
+      const locked = await redeemOperator("ZZZZ-ZZZY", ip);
+      assert.equal(locked.status, 429, "the operator bucket must lock out after repeated failures, same as the worker one");
+      // ...and must not spill onto /auth/code from the SAME address.
+      assert.equal(
+        (await call("/auth/code", { method: "POST", body: { code: "ZZZZ-ZZZY" }, ip })).status,
+        401,
+        "a locked-out operator bucket must not lock out the worker endpoint from the same IP (own bucket: enrolop:, not enrol:)",
+      );
+      resetLoginRate();
+    });
+
+    await test("operator and worker enrolment codes spend ONE shared global ceiling", async () => {
+      resetLoginRate();
+      const statuses = [];
+      for (let i = 0; i < 20; i++) statuses.push((await redeemOperator("ZZZZ-ZZZX", `10.6.3.${i}`)).status);
+      for (let i = 20; i < 40; i++) statuses.push((await call("/auth/code", { method: "POST", body: { code: "ZZZZ-ZZZX" }, ip: `10.6.3.${i}` })).status);
+      assert.ok(statuses.includes(429), `40 guesses split across both endpoints must be throttled, got ${statuses}`);
+      assert.ok(
+        statuses.indexOf(429) <= 30,
+        `the GLOBAL ceiling (shared across worker + operator codes) must bite by the 31st attempt total, first 429 at ${statuses.indexOf(429)}`,
+      );
+      resetLoginRate();
+    });
+
+    await test("an expired or revoked operator session is rejected in the SAME shape as an expired worker session", async () => {
+      const op = await freshOperator("Feldleiter Expiry", "0664 900 00 02");
+      const cookie = cookieFrom(await redeemOperator(op.code, "10.6.4.1"));
+
+      await admin.query("UPDATE operator_sessions SET expires_at = now() - interval '1 minute' WHERE token = $1", [
+        hashToken(cookie.split("=")[1]),
+      ]);
+      const expiredOp = await call("/auth/operator-logout", { method: "POST", cookie });
+      const expiredOpBody = await expiredOp.text();
+
+      // The SAME comparison, on the worker side: an expired ts_worker session hitting a
+      // worker route. Both paths call the identical `fail(401, "unauthorized")` — this
+      // proves it at the wire, not by reading the source.
+      await expectOp(
+        await call("/admin/workers", {
+          method: "POST",
+          key: null,
+          cookie: adminCookie,
+          body: { name: "Op Expiry Check", email: "op.expiry.check@example.test", hourly_rate_cents: 1500 },
+        }),
+        201,
+      );
+      const workerCookie = await workerCookieFor("apple-sub-op-expiry-check", "op.expiry.check@example.test", "10.6.4.2");
+      await admin.query(
+        "UPDATE worker_sessions SET expires_at = now() - interval '1 minute' WHERE token = $1",
+        [hashToken(workerCookie.split("=")[1])],
+      );
+      const expiredWorker = await call("/roster", { cookie: workerCookie });
+      const expiredWorkerBody = await expiredWorker.text();
+
+      assert.equal(expiredOp.status, 401);
+      assert.equal(expiredOp.status, expiredWorker.status);
+      assert.equal(expiredOpBody, expiredWorkerBody, "an expired operator session and an expired worker session must fail identically");
+      assert.equal(expiredOpBody, '{"error":"unauthorized"}');
+
+      // Revoked: the row is simply gone. Same shape again.
+      await admin.query("DELETE FROM operator_sessions WHERE token = $1", [hashToken(cookie.split("=")[1])]);
+      const revoked = await call("/auth/operator-logout", { method: "POST", cookie });
+      assert.equal(await revoked.text(), expiredOpBody, "revoked and expired must be indistinguishable, same as the worker path");
+    });
+
+    await test("deactivating an operator invalidates the session on the NEXT request — TASK-212 AC#1", async () => {
+      const { requireOperatorSession } = await import("./lib/auth.js");
+      const op = await freshOperator("Feldleiter Deaktiviert", "0664 900 00 03");
+      const cookie = cookieFrom(await redeemOperator(op.code, "10.6.5.1"));
+      const headers = { cookie };
+
+      // WORKS BEFORE deactivation — the leg a bug that 401s everything would still pass
+      // without. Without this assertion, removing `AND o.active` entirely would also
+      // pass the test below by accident.
+      const before = await requireOperatorSession(headers);
+      assert.equal(before.operatorId, op.id);
+
+      // Deactivated by hand (raw SQL), NOT via DELETE /admin/operators/:id — that route
+      // also revokes the session row directly (destroyOperatorSessions), which would make
+      // the 401 below prove "the row is gone", not "AND o.active reads live state". This
+      // is the one property that matters for AC#1: expiry is not the only way out.
+      await admin.query("UPDATE operators SET active = false WHERE id = $1", [op.id]);
+      await assert.rejects(
+        () => requireOperatorSession(headers),
+        /unauthorized/,
+        "deactivating an operator must invalidate their session on the NEXT request, not just at expiry",
+      );
+      await admin.query("UPDATE operators SET active = true WHERE id = $1", [op.id]);
+    });
+
+    await test("POST /admin/operators creates one, and a claimed phone is a non-enumerating 409", async () => {
+      const created = await expectOp(await createOperator("Feldleiter Erstellt", "0664 900 10 01"), 201);
+      assert.equal(created.operator.phone_e164, "+436649001001");
+      assert.equal(created.operator.active, true);
+
+      // Same phone again — 409, no hint of who holds it.
+      const dup = await createOperator("A Second Person", "0664 900 10 01");
+      assert.equal(dup.status, 409);
+      const dupBody = await dup.json();
+      assert.equal(dupBody.error, "phone_claimed");
+      assert.deepEqual(Object.keys(dupBody), ["error"], "the 409 must name nothing about who holds the number");
+
+      // No orphan operator row left behind by the failed second insert — the whole point
+      // of the single writable CTE.
+      assert.equal(
+        Number((await admin.query("SELECT count(*) AS n FROM operators WHERE name = $1", ["A Second Person"])).rows[0].n),
+        0,
+        "a phone_claimed 409 must not leave an orphan operators row",
+      );
+
+      // CROSS-KIND collision: a phone already claimed by a WORKER's identity refuses an
+      // operator claiming the same number — this is the owner's whole "one namespace"
+      // requirement, proven across the table boundary decision-45 exists to keep safe.
+      await admin.query("INSERT INTO phone_identities (phone_e164, worker_id) VALUES ('+436649002001', $1)", [
+        workerId,
+      ]);
+      const crossKind = await createOperator("Claims A Worker Phone", "0664 900 20 01");
+      assert.equal(crossKind.status, 409);
+      assert.equal((await crossKind.json()).error, "phone_claimed");
+      await admin.query("DELETE FROM phone_identities WHERE phone_e164 = '+436649002001'");
+
+      // A malformed phone never reaches the database at all.
+      const bad = await createOperator("Bad Phone", "Anna");
+      assert.equal(bad.status, 422);
+      assert.equal((await bad.json()).error, "invalid_phone");
+
+      const missingName = await call("/admin/operators", { method: "POST", key: null, cookie: adminCookie, body: { phone: "0664 900 30 01" } });
+      assert.equal(missingName.status, 400);
+    });
+
+    await test("DELETE /admin/operators/:id soft-deletes and revokes every session", async () => {
+      const op = await freshOperator("Feldleiter Delete", "0664 900 40 01");
+      const cookie = cookieFrom(await redeemOperator(op.code, "10.6.6.1"));
+      assert.ok(cookie, "must have a live session to prove revocation");
+
+      const del = await expectOp(await deleteOperator(op.id), 200);
+      assert.equal(del.operator.active, false);
+      assert.equal(
+        (await admin.query("SELECT active FROM operators WHERE id = $1", [op.id])).rows.length,
+        1,
+        "soft delete must keep the row — an operator's issued codes are still audit history",
+      );
+      assert.equal(
+        Number((await admin.query("SELECT count(*) AS n FROM operator_sessions WHERE operator_id = $1", [op.id])).rows[0].n),
+        0,
+        "deleting must revoke every session, same as deleteWorker",
+      );
+    });
+
+    await test("operator enrolment code issue/revoke mirror the worker route byte-for-byte", async () => {
+      const created = await expectOp(await createOperator("Feldleiter Code", "0664 900 50 01"), 201);
+      const issued = await expectOp(await issueOperatorCode(created.operator.id), 201);
+      assert.equal(issued.operator.id, created.operator.id);
+      assert.match(issued.code, /^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}-[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}$/);
+
+      // The plaintext is shown exactly once — GET /admin/data can never hand it back.
+      const raw = await (await asAdmin("/admin/data")).text();
+      assert.ok(!raw.includes(issued.code), "the code leaked back out of /admin/data");
+      assert.ok(!raw.includes("enrolment_code_hash"), "the hash is not the panel's business either");
+
+      const revoked = await expectOp(await revokeOperatorCode(created.operator.id), 200);
+      assert.equal(revoked.operator.enrolment_code_expires_at, null, "revoke must clear the expiry");
+      assert.equal((await redeemOperator(issued.code, "10.6.7.1")).status, 401, "a revoked code must not redeem");
+    });
+
+    await test("GET /admin/data carries operators, joined to their phone and any linked worker", async () => {
+      const op = await freshOperator("Feldleiter Roster", "0664 900 60 01");
+      // The owner-cleans-a-building case (§3): link the SAME phone to a worker too.
+      await admin.query("UPDATE phone_identities SET worker_id = $1 WHERE operator_id = $2", [workerId, op.id]);
+
+      const data = await (await asAdmin("/admin/data")).json();
+      assert.ok(Array.isArray(data.operators), "GET /admin/data must carry operators — no separate GET /admin/operators exists");
+      const row = data.operators.find((o) => o.id === op.id);
+      assert.ok(row, "the created operator must be in the list");
+      assert.equal(row.phone_e164, "+436649006001");
+      assert.equal(row.linked_worker_id, workerId, "both a worker_id and an operator_id on one phone_identities row must be visible");
+      assert.equal(row.enrolment_code_hash, undefined, "the hash must never reach the panel");
+
+      await admin.query("UPDATE phone_identities SET worker_id = NULL WHERE operator_id = $1", [op.id]);
+    });
+
+    await test("an operator has NO clock-in path — structural, not a check a handler could forget", async () => {
+      const op = await freshOperator("Feldleiter Kein Dienst", "0664 900 70 01");
+      const cookie = cookieFrom(await redeemOperator(op.code, "10.6.8.1"));
+
+      const shiftsBefore = await countShifts();
+
+      // ONLY an operator session, no ts_worker at all.
+      const bare = await call("/shifts/open", { method: "POST", cookie, body: {} });
+      assert.equal(bare.status, 401, "an operator session alone must not open /shifts/open");
+
+      // ...and it cannot be bypassed by naming a worker in the body either — the SAME
+      // decision-22 invariant ("body.worker_id is never read") re-confirmed under an
+      // operator session specifically.
+      const withBody = await call("/shifts/open", {
+        method: "POST",
+        cookie,
+        body: { worker_id: workerId, client_uuid: uuid(90), location_uuid: locationUuid, start_time: new Date().toISOString() },
+      });
+      assert.equal(withBody.status, 401, "naming a real worker id in the body must not let an operator session through");
+      assert.equal(await countShifts(), shiftsBefore, "neither refusal may have created a shift");
+
+      // RED-FIRST, per TASK-212 AC#3 exactly: mutate the LIVE route object in place —
+      // spreading into server.js's `routes` array copies references, not clones, so this
+      // reaches the running server. If this assertion did NOT flip to passing auth, the
+      // 401 above would be unfalsifiable — a check whose negative case cannot fail.
+      const { appRoutes } = await import("./routes/app.js");
+      const openRoute = appRoutes.find((r) => r.method === "POST" && r.path === "/shifts/open");
+      assert.ok(openRoute, "/shifts/open route object must exist to mutate");
+      const originalAuth = openRoute.auth;
+      assert.equal(originalAuth, "worker");
+      try {
+        openRoute.auth = "operator";
+        const mutated = await call("/shifts/open", { method: "POST", cookie, body: {} });
+        assert.notEqual(
+          mutated.status,
+          401,
+          "with auth mutated to 'operator' the SAME cookie must get PAST auth (a 400/422 on the missing body is fine — 401 here means the mutation didn't take, and the earlier 401 proved nothing)",
+        );
+      } finally {
+        openRoute.auth = originalAuth;
+      }
+      const restored = await call("/shifts/open", { method: "POST", cookie, body: {} });
+      assert.equal(restored.status, 401, "restoring auth: 'worker' must bring the refusal back");
+    });
+
+    await test("identityPhone: the worked-example table from decision-45 §4, and the collision it exists to catch", async () => {
+      const { identityPhone } = await import("./lib/validate.js");
+      const accept = [
+        ["0664 123 45 67", "+436641234567"],
+        ["+43 664/1234567", "+436641234567"],
+        ["0043 664 1234567", "+436641234567"],
+        ["01 5055904", "+4315055904"],
+      ];
+      for (const [input, expected] of accept) {
+        assert.equal(identityPhone(input, "phone"), expected, `${JSON.stringify(input)} must normalise to ${expected}`);
+      }
+      // THE COLLISION — this pair normalising to the SAME string is the whole reason the
+      // function exists. Paired with a genuinely DIFFERENT third number so a stub that
+      // always returns one fixed string cannot pass this test by accident.
+      assert.equal(identityPhone(accept[0][0], "phone"), identityPhone(accept[1][0], "phone"));
+      assert.notEqual(identityPhone(accept[0][0], "phone"), identityPhone(accept[3][0], "phone"));
+
+      const reject = [
+        ["664 1234567", "invalid_phone"], // no leading 0 or + — never guessed as Austrian
+        ["Anna", "invalid_phone"],
+        ["+43664", "invalid_phone"], // below the 8-digit floor
+        ["", "required_field"],
+      ];
+      for (const [input, code] of reject) {
+        assert.throws(() => identityPhone(input, "phone"), (err) => err.code === code, `${JSON.stringify(input)} must be rejected as ${code}`);
+      }
+    });
   }
 
   await test("unknown route returns a 404 code, not a stack trace", async () => {

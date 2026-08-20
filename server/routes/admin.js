@@ -10,6 +10,7 @@ import {
   clearedSessionCookie,
   createSession,
   decoy,
+  destroyOperatorSessions,
   destroySession,
   destroyWorkerSessions,
   hashPassword,
@@ -57,6 +58,12 @@ const TREND_MONTHS_MAX = 24;
 const WORKER_COLS =
   "id, name, email, phone, hourly_rate_cents, active, created_at, " +
   "enrolment_code_expires_at, enrolment_code_redeemed_at";
+
+// An operator (decision-45). No email, no rate, no apple_sub — the columns that exist on
+// `workers` for reasons that are all worker-specific. `enrolment_code_hash` is deliberately
+// absent, exactly like WORKER_COLS: the panel can do nothing with it, the code itself is
+// returned once by the route that mints it, and it has no business in a browser or a log.
+const OPERATOR_COLS = "id, name, active, created_at, enrolment_code_expires_at, enrolment_code_redeemed_at";
 
 // The building, including the four contract facts added in 003 and the two geocoding
 // facts added in 005. All NULLable: buildings existed before the columns did, the director
@@ -285,6 +292,7 @@ async function adminData({ query }) {
 
   const [
     workers,
+    operators,
     locations,
     zones,
     shifts,
@@ -298,6 +306,17 @@ async function adminData({ query }) {
     settings,
   ] = await Promise.all([
     all(`SELECT ${WORKER_COLS} FROM workers ORDER BY active DESC, name`),
+    // decision-45. `enrolment_code_hash` never selected, mirroring WORKER_COLS's existing
+    // omission exactly. No `to_regclass` guard: matches the existing (unguarded) `zones`
+    // query below — adding one here and not there would be a new inconsistency, not a fix.
+    all(
+      `SELECT o.id, o.name, o.active, o.created_at, o.enrolment_code_expires_at, o.enrolment_code_redeemed_at,
+              pi.phone_e164, pi.worker_id AS linked_worker_id, w.name AS linked_worker_name
+         FROM operators o
+         LEFT JOIN phone_identities pi ON pi.operator_id = o.id
+         LEFT JOIN workers w ON w.id = pi.worker_id
+        ORDER BY o.active DESC, o.name`,
+    ),
     // id is the UUID that goes on the tag; slug is the human handle (decision-21).
     // client_name / contact_name ride along so the buildings screen can show "Hausverwaltung
     // Meier - Frau Gruber" without a second request or a client-side join.
@@ -397,6 +416,7 @@ async function adminData({ query }) {
     status: 200,
     body: {
       workers,
+      operators,
       locations,
       zones,
       shifts,
@@ -567,6 +587,130 @@ async function revokeEnrolmentCode({ params }) {
   );
   if (!row) fail(404, "unknown_worker");
   return { status: 200, body: { worker: row } };
+}
+
+// ---- operators (decision-45) ------------------------------------------------------
+//
+// POST /operator/workers {name, phone} — "create a worker from the phone by typing name
+// + phone" — is NOT BUILT HERE, or anywhere else in this tree. OPERATOR-MODEL.md §8: the
+// owner's own instruction (no rate in the input) is in direct, unresolved conflict with
+// decision-41 (PROPOSED, unconditional `hourly_rate_cents > 0`, no exemption for any
+// state). Building it against TODAY's schema (rate defaults to 0) would manufacture the
+// exact invisible-€0/h defect decision-41 exists to close, on purpose, on every call.
+// TASK-212 AC#5 names this route BLOCKED until the owner rules on §8. Do not build it.
+
+/**
+ * POST /admin/operators {name, phone} -> 201 {operator}. CREATE ONLY — no id in the body,
+ * no update branch. Nothing in OPERATOR-MODEL.md or its tasks asks for editing an
+ * operator's name or re-pointing their phone; a phone that needs to change is a new
+ * identity claim, not an edit of an old one.
+ *
+ * ONE writable-CTE statement, not two round trips: this codebase has NO transaction
+ * helper anywhere (`grep -rn "BEGIN\|pool.connect" server/routes/*.js` -> nothing — every
+ * existing "one transaction" claim here already IS a single SQL statement), and a
+ * two-statement version would leave an orphan `operators` row behind on a `phone_claimed`
+ * 409. The CTE can't: either both inserts land, or neither does.
+ *
+ * 409 phone_claimed names nothing about WHO holds the number — anti-enumeration,
+ * decision-45 §7, the same posture decision-22's 403 already applies to a claimed email.
+ * `phone_identities_pkey` is the only 23505 source reachable here: `operators.id` is a
+ * BIGSERIAL (never collides) and `operators` carries no other UNIQUE column.
+ */
+async function createOperator({ body, session }) {
+  const name = v.str(body.name, "name", { max: 120 });
+  const phone = v.identityPhone(body.phone, "phone");
+
+  try {
+    const row = await one(
+      `WITH new_operator AS (
+         INSERT INTO operators (name, created_by) VALUES ($1, $2)
+         RETURNING id, name, active, created_at
+       )
+       INSERT INTO phone_identities (phone_e164, operator_id)
+         SELECT $3, id FROM new_operator
+       RETURNING (SELECT id FROM new_operator) AS id, (SELECT name FROM new_operator) AS name,
+                 (SELECT active FROM new_operator) AS active, (SELECT created_at FROM new_operator) AS created_at`,
+      [name, session.adminId, phone],
+    );
+    return { status: 201, body: { operator: { ...row, phone_e164: phone } } };
+  } catch (err) {
+    if (err?.code === "23505") fail(409, "phone_claimed");
+    throw err;
+  }
+}
+
+/**
+ * DELETE /admin/operators/:id -> soft delete (`active = false`), never a hard delete.
+ * Mirrors deleteWorker exactly, including revoking sessions — `requireOperatorSession`
+ * re-checks `active` on every request regardless, but a live session row for someone let
+ * go is not a state worth keeping. `phone_identities.operator_id` survives as NULL
+ * (ON DELETE SET NULL, never CASCADE): the phone claim decays, it is not silently freed
+ * for reuse while the deactivated row still exists — see 007's own comment on that table.
+ */
+async function deleteOperator({ params }) {
+  const operatorId = v.id(params.id, "id");
+  const row = await one("UPDATE operators SET active = false WHERE id = $1 RETURNING id, active", [operatorId]);
+  if (!row) fail(404, "unknown_operator");
+  await destroyOperatorSessions(operatorId);
+  return { status: 200, body: { operator: row } };
+}
+
+/**
+ * POST /admin/operators/:id/enrolment-code -> byte-identical shape to
+ * POST /admin/workers/:id/enrolment-code, against `operators`. Same CODE_TTL_MS, same
+ * newEnrolmentCode from lib/enrolment.js — reused, not reimplemented (decision-45 §6).
+ * ACTIVE operators only, same reasoning as the worker route: a live code for someone let
+ * go is not a state worth being able to reach.
+ */
+async function issueOperatorEnrolmentCode({ params, session }) {
+  const operator = await one("SELECT id, name FROM operators WHERE id = $1 AND active", [v.id(params.id, "id")]);
+  if (!operator) fail(404, "unknown_operator");
+
+  const expiresAt = new Date(Date.now() + CODE_TTL_MS);
+  // enrolment_code_hash is UNIQUE, same collision handling as the worker route: retry
+  // rather than let a ~1-in-2^40 event surface as an unreproducible 500.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { code, display } = newEnrolmentCode();
+    try {
+      await query(
+        `UPDATE operators
+            SET enrolment_code_hash = $2,
+                enrolment_code_expires_at = $3,
+                enrolment_code_issued_at = now(),
+                enrolment_code_issued_by = $4,
+                enrolment_code_redeemed_at = NULL
+          WHERE id = $1`,
+        [operator.id, hashToken(code), expiresAt, session.adminId],
+      );
+      return {
+        status: 201,
+        body: {
+          operator: { id: operator.id, name: operator.name },
+          code: display,
+          expires_at: expiresAt.toISOString(),
+        },
+      };
+    } catch (err) {
+      if (err?.code !== "23505") throw err;
+    }
+  }
+  fail(503, "code_unavailable");
+}
+
+/**
+ * DELETE /admin/operators/:id/enrolment-code -> revoke. Byte-identical to the worker
+ * route: idempotent, 200 whether or not a code was live, issued_at/issued_by survive.
+ */
+async function revokeOperatorEnrolmentCode({ params }) {
+  const row = await one(
+    `UPDATE operators
+        SET enrolment_code_hash = NULL, enrolment_code_expires_at = NULL
+      WHERE id = $1
+      RETURNING ${OPERATOR_COLS}`,
+    [v.id(params.id, "id")],
+  );
+  if (!row) fail(404, "unknown_operator");
+  return { status: 200, body: { operator: row } };
 }
 
 /**
@@ -1689,6 +1833,12 @@ export const adminRoutes = [
   { method: "DELETE", path: "/admin/workers/:id", auth: "admin", handler: deleteWorker },
   { method: "POST", path: "/admin/workers/:id/enrolment-code", auth: "admin", handler: issueEnrolmentCode },
   { method: "DELETE", path: "/admin/workers/:id/enrolment-code", auth: "admin", handler: revokeEnrolmentCode },
+  // decision-45. POST /operator/workers is deliberately NOT in this list — see the
+  // comment above createOperator.
+  { method: "POST", path: "/admin/operators", auth: "admin", handler: createOperator },
+  { method: "DELETE", path: "/admin/operators/:id", auth: "admin", handler: deleteOperator },
+  { method: "POST", path: "/admin/operators/:id/enrolment-code", auth: "admin", handler: issueOperatorEnrolmentCode },
+  { method: "DELETE", path: "/admin/operators/:id/enrolment-code", auth: "admin", handler: revokeOperatorEnrolmentCode },
   { method: "POST", path: "/admin/locations", auth: "admin", handler: upsertLocation },
   { method: "DELETE", path: "/admin/locations/:id", auth: "admin", handler: deleteLocation },
   { method: "POST", path: "/admin/clients", auth: "admin", handler: upsertClient },

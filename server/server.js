@@ -6,7 +6,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as Sentry from "@sentry/node";
-import { requireAdminSession, requireAppKey, requireWorkerSession } from "./lib/auth.js";
+import { requireAdminSession, requireAppKey, requireOperatorSession, requireWorkerSession } from "./lib/auth.js";
 import { pool } from "./lib/db.js";
 import { HttpError, readJson, sendJson } from "./lib/http.js";
 import { redactUrl } from "./lib/scrub.js";
@@ -41,11 +41,15 @@ export function assertEnv(env = process.env) {
 
 // ---- routing ---------------------------------------------------------------------
 // `auth` is one of:
-//   null     - open (health, AASA)
-//   "app"    - X-App-Key only. Sign-in itself, which cannot require a session yet.
-//   "worker" - X-App-Key AND a ts_worker session (decision-22). Identity comes from
-//              the session; handlers must never read a worker id from the request.
-//   "admin"  - ts_session cookie (decision-20).
+//   null       - open (health, AASA)
+//   "app"      - X-App-Key only. Sign-in itself, which cannot require a session yet.
+//   "worker"   - X-App-Key AND a ts_worker session (decision-22). Identity comes from
+//                the session; handlers must never read a worker id from the request.
+//   "admin"    - ts_session cookie (decision-20).
+//   "operator" - X-App-Key AND a ts_operator session (decision-45). No route with this
+//                auth kind is ever reachable near /shifts/open or /shifts/close — that
+//                absence, not a check inside a handler, is what makes "an operator does
+//                not clock in" structural rather than a promise a route could forget.
 //
 // portalRoutes is `auth: null` and is the only PUBLIC data route: the token in the URL is
 // the credential (see routes/portal.js). It rate-limits itself and answers 404 for anything
@@ -232,12 +236,13 @@ async function handle(req, res, ctx) {
   const active = Sentry.getActiveSpan();
   if (active) Sentry.updateSpanName(Sentry.getRootSpan(active), `${req.method} ${route.path}`);
 
-  // The app key gates both app-key-only and worker routes: it stays a coarse "this is
-  // our build" check in front of the session, never a substitute for one.
-  if (route.auth === "app" || route.auth === "worker") requireAppKey(req.headers);
+  // The app key gates app-key-only, worker AND operator routes: it stays a coarse "this
+  // is our build" check in front of the session, never a substitute for one.
+  if (route.auth === "app" || route.auth === "worker" || route.auth === "operator") requireAppKey(req.headers);
   const session =
     route.auth === "admin" ? await requireAdminSession(req.headers)
     : route.auth === "worker" ? await requireWorkerSession(req.headers)
+    : route.auth === "operator" ? await requireOperatorSession(req.headers)
     : null;
 
   // ID ONLY, and only for workers. Never the name, never the email, never the admin's

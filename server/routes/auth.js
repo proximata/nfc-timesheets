@@ -25,12 +25,15 @@
 // is a response to the person who just authenticated as that address, not a log line.
 import { verifyIdentityToken } from "../lib/apple.js";
 import {
+  OPERATOR_SESSION_COOKIE,
   WORKER_SESSION_COOKIE,
   checkGlobalEnrolmentRate,
   checkLoginRate,
   clearLoginFailures,
   clearedSessionCookie,
+  createOperatorSession,
   createWorkerSession,
+  destroyOperatorSession,
   destroyWorkerSession,
   hashToken,
   recordLoginFailure,
@@ -247,6 +250,84 @@ async function whoami({ session }) {
   return { status: 200, body: { worker: { id: session.workerId, name: session.name } } };
 }
 
+/**
+ * POST /auth/operator-code {code} -> operator session cookie. Mirrors POST /auth/code
+ * (decision-45 §6) against `operators` instead of `workers` — same rate limiting, same
+ * decoy-timing discipline, same single-use-decided-by-the-database redemption, same ONE
+ * byte-for-byte failure response for every failure mode.
+ *
+ *   200 {operator: {id, name}, expires_at}  + Set-Cookie: ts_operator
+ *   401 {error: "invalid_code"}             EVERYTHING else
+ *   429 {error: "too_many_attempts"}
+ *
+ * `checkGlobalEnrolmentRate()` is the SAME shared module-level counter POST /auth/code
+ * already spends against — the search space (every live code, worker or operator) is one
+ * space, so the ceiling has to be one ceiling (lib/enrolment.js's own arithmetic; see
+ * decision-45's server-side plan for why the existing 30/min headroom still holds).
+ * The per-IP bucket is OWN (`enrolop:`, not `enrol:`), so a stranger guessing operator
+ * codes cannot lock out a worker enrolling from the same office address, or vice versa.
+ */
+async function operatorCodeAuth({ body, ip }) {
+  checkGlobalEnrolmentRate();
+  const bucket = `enrolop:${ip}`;
+  checkLoginRate(bucket);
+
+  const code = normaliseCode(body.code);
+  const presented = code === null ? null : hashToken(code);
+
+  const row =
+    presented === null ? null : (
+      await one(
+        `SELECT id, name, active, enrolment_code_hash AS stored,
+                (enrolment_code_expires_at > now()) AS live
+           FROM operators
+          WHERE enrolment_code_hash = $1`,
+        [presented],
+      )
+    );
+
+  const matched = safeEqual(row?.stored ?? DECOY_STORED, presented ?? DECOY_PRESENTED);
+  if (!matched || row === null || row.live !== true || row.active !== true) {
+    recordLoginFailure(bucket);
+    fail(401, "invalid_code");
+  }
+
+  const claimed = await one(
+    `UPDATE operators
+        SET enrolment_code_hash = NULL,
+            enrolment_code_expires_at = NULL,
+            enrolment_code_redeemed_at = now()
+      WHERE id = $1
+        AND enrolment_code_hash = $2
+        AND enrolment_code_expires_at > now()
+        AND active
+      RETURNING id, name`,
+    [row.id, presented],
+  );
+  if (!claimed) {
+    recordLoginFailure(bucket);
+    fail(401, "invalid_code");
+  }
+
+  clearLoginFailures(bucket);
+  const { token, expiresAt } = await createOperatorSession(claimed.id);
+  return {
+    status: 200,
+    body: { operator: { id: claimed.id, name: claimed.name }, expires_at: expiresAt.toISOString() },
+    headers: { "set-cookie": sessionCookie(token, expiresAt, OPERATOR_SESSION_COOKIE) },
+  };
+}
+
+/** POST /auth/operator-logout -> revoke this operator's session. Mirrors POST /auth/logout. */
+async function operatorLogout({ session }) {
+  await destroyOperatorSession(session.token);
+  return {
+    status: 200,
+    body: { ok: true },
+    headers: { "set-cookie": clearedSessionCookie(OPERATOR_SESSION_COOKIE) },
+  };
+}
+
 export const authRoutes = [
   // `auth: "app"` and not `null`: the X-App-Key gate stays in front of sign-in as
   // defence in depth, so this endpoint is not reachable from a browser or curl.
@@ -256,4 +337,8 @@ export const authRoutes = [
   { method: "POST", path: "/auth/code", auth: "app", handler: codeAuth },
   { method: "POST", path: "/auth/logout", auth: "worker", handler: logout },
   { method: "GET", path: "/auth/session", auth: "worker", handler: whoami },
+  // decision-45 §6/§7. Not `POST /operator/workers` — that route is BLOCKED, see
+  // routes/admin.js (§8, TASK-212 AC#5).
+  { method: "POST", path: "/auth/operator-code", auth: "app", handler: operatorCodeAuth },
+  { method: "POST", path: "/auth/operator-logout", auth: "operator", handler: operatorLogout },
 ];
