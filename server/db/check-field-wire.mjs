@@ -307,7 +307,27 @@ try {
     ok(`(${rateless} rate-less worker(s) removed from the SCRATCH copy so 006 can apply here)`);
   }
   sh("node", [path.join(__dirname, "migrate.js")], { env: { ...process.env, DATABASE_URL: `postgres:///${MIG_DB}` } });
-  assert.equal(q(MIG_DB, "SELECT count(*) FROM schema_migrations"), "6", "006 must be applied for the rest of this file");
+  // EVERY pending file, not a magic number. This assertion used to read `count === "6"`,
+  // which is a claim about how many migrations exist rather than about whether the schema
+  // this file's assertions need is actually present: 007 landed, the count became 7, and
+  // the pre-deploy field-wire gate died on an AssertionError about arithmetic — printing a
+  // raw stack an operator reads as "the tooling is broken", exactly the failure mode
+  // 9072a8e fixed in check-prod-restore.mjs. Comparing against the directory listing means
+  // 008 does not have to remember this line exists.
+  const wantMigrations = fs
+    .readdirSync(path.join(__dirname, "migrations"))
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
+  const haveMigrations = q(MIG_DB, "SELECT filename FROM schema_migrations ORDER BY filename")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  assert.deepEqual(
+    haveMigrations,
+    wantMigrations,
+    `every migration file must be applied before the wire assertions below mean anything — missing: ${wantMigrations.filter((f) => !haveMigrations.includes(f)).join(", ") || "(none)"}`,
+  );
+  ok(`${haveMigrations.length} migration(s) applied, matching migrations/ exactly: ${haveMigrations.at(-1)} is the newest`);
 
   const mig = await fixtureSession(MIG_DB);
   const call = await boot(MIG_DB, mig.token);
