@@ -81,9 +81,30 @@ never offer an upgrade over it because the version code is equal.
 Re-ran `./dist-apk.sh`. `dist/` and `app/build/outputs/apk/release/` are now the same sha256
 `c4c46ffb…6b33`, and the fix is in it. (`dist/` is gitignored; nothing to commit.)
 
-### ⚠ NOT FIXED — the write screen **silently overwrites a live, mounted card**
+### ✓ FIXED at `9822f64` — the write screen **no longer overwrites a mounted card**
 
-Driven off-device just now, real `TagWriter`, fake card pre-loaded with the live HOIV tag:
+> Everything from here to the end of this section describes the defect as it stood at
+> `3b78510`, and is kept because the phone script below was written around it. **The build
+> to carry into the stairwell is now `dist/nfc-timesheets-0.4.1-6-release.apk`**, and on it:
+>
+> | card presented | 0.4.0 (5) | 0.4.1 (6) |
+> |---|---|---|
+> | blank NTAG213 | writes | writes |
+> | one of ours, **same** id (retry after a bad verify) | writes | writes |
+> | one of ours, **different** id — **a mounted card** | **writes, says success** | **REFUSED, untouched** |
+> | foreign content (a shop's URL, a Text record, rubbish) | writes | writes, and says what it replaced |
+> | card unreadable before the write | writes | nothing written — present it again |
+>
+> The override is not "are you sure": the screen prints the id on the card and the operator
+> types its **last six characters** back. That authorises **that one card**; the next card
+> is refused again. And the write itself now needs an operator session on the phone —
+> without one, reader mode is never enabled and the screen does not read a card at all.
+>
+> **Which means step 3 below changed in the field:** on 0.4.1 the operator must enrol
+> (`Betreiber-Code`) **before** a card can be written, and `POST /operator/enrol` is still
+> 404 on production (§1). **Deploy first, or carry 0.4.0 for a write-only test.**
+
+Driven off-device at `3b78510`, real `TagWriter`, fake card pre-loaded with the live HOIV tag:
 
 ```
 card holds : c3c37d4a-…-9704b9907ec7   (the building in production)
@@ -97,9 +118,13 @@ Nothing compares the card's existing content to anything. `Tag beschreiben` is o
 session only gates the *report*, never the *write*. One mis-tap next to a mounted tag turns a
 working door into 422 for everybody, and the screen says **"Geschrieben und geprueft."**
 
-Not fixed here on purpose: it is the one class that changes a physical object, there is no
-hardware to verify a change against, and the owner is about to test. Filed. **The script below
-is written so he never triggers it.**
+Not fixed *in that pass* on purpose: it is the one class that changes a physical object, there
+is no hardware to verify a change against, and the owner was about to test. Filed as TASK-220,
+and fixed in the next pass the same way it was found — by driving the real `TagWriter` against
+fake cards and reading the observed call log, eleven kinds of card, printed as a table
+(`android/checks/run.sh`). Both halves of the fix were seeded back and shown RED before being
+believed: deleting the guard turns nine assertions red, including this exact trace; deleting
+the role gate turns two red in `core-check` § 16c.
 
 ---
 
@@ -135,10 +160,15 @@ Hold the phone to the **existing mounted HOIV tag**.
 
 `Erfassen` → **`Tag beschreiben`**.
 
-> ⚠ **From the moment that screen is open, keep every already-mounted card away from the
-> phone.** This screen writes whatever card it sees, including a working one, and reports
-> success. Press **`Fertig`** the instant you are done with it. Do not walk past a mounted
+> **On 0.4.0 (5):** ⚠ from the moment that screen is open, keep every already-mounted card
+> away from the phone. That build writes whatever card it sees, including a working one, and
+> reports success. Press **`Fertig`** the instant you are done. Do not walk past a mounted
 > tag with it open.
+>
+> **On 0.4.1 (6):** a mounted card is refused —
+> *"NICHT beschrieben. Diese Karte traegt bereits die ID …"* — and nothing is written to it.
+> That message is the guard working, not a fault. The card in your hand is unchanged.
+> This screen also needs a `Betreiber-Code` before it reads any card at all.
 
 Hold a **blank** NTAG213 to the phone. Keep it still.
 
@@ -148,9 +178,24 @@ Hold a **blank** NTAG213 to the phone. Keep it still.
 | "Der Tag war zu kurz am Telefon…" | nothing was written | hold it steady, try again |
 | "NICHT beschrieben…" (any wording) | the card was **not touched**, it is still blank | **NO** — use a different card |
 | **"ACHTUNG: … Kontrolle beim Zurueklesen hat NICHT gestimmt"** | the card may hold half a message | **NO. STOP.** Re-present it once; if it still says this, **bin the card.** Never mount it. |
+| *(0.4.1)* "NICHT beschrieben. Diese Karte traegt bereits die ID …" | that card is **already one of ours** — it came off a wall, or you wrote it earlier. Untouched. | **NO** — take a blank one. Only override it if you genuinely mean to retire that id. |
+| *(0.4.1)* "Hinweis: Die Karte war nicht leer… (fremder Inhalt)" | it held somebody else's data, now overwritten. Nothing of ours was lost. | **YES** |
 
 **Write the ID down on paper, next to where you are mounting it.** Today the office cannot be
 told automatically (step 3), so paper is the only record.
+
+### Step 1b — *(0.4.1 only)* the mounted card must be REFUSED
+
+Same screen. Hold the card you just wrote in step 1 to the phone **a second time, after the
+new id has been reported or written down** — i.e. once the screen is offering a fresh id.
+
+- ✓ expected: **"NICHT beschrieben. Diese Karte traegt bereits die ID …"**, and the card is
+  unchanged. Tap it as a worker afterwards: it still resolves to the id you wrote.
+- ✗ **if it says "Geschrieben und geprueft" — the guard did not fire on real hardware.**
+  Stop writing cards and report it. Off a phone this is proven only against a fake card.
+
+*(Re-presenting a card while the screen is still offering the SAME id is the retry path and
+does write — that is correct, and it is how a card that failed its read-back is repaired.)*
 
 ### Step 2 — the Ultralight must be REFUSED
 
