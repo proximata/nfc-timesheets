@@ -493,6 +493,91 @@ export function revokeEnrolmentCode(workerId: number, signal?: AbortSignal): Pro
 }
 
 /**
+ * A row of `operators` joined to its `phone_identities` claim (decision-45), exactly as the
+ * `adminData` operator SELECT in server/routes/admin.js returns it. `enrolment_code_hash` is
+ * never selected server-side, same omission as `Worker` above.
+ *
+ * `phone_e164` is nullable in the TYPE only because a LEFT JOIN can theoretically miss — in
+ * practice every operator row is created inside the same transaction that claims a phone
+ * (createOperator's one writable CTE), so an operator with no phone is not a state this
+ * screen's own create path can produce. It is typed nullable anyway rather than asserted
+ * non-null, because asserting it would be trusting the server's invariant instead of the
+ * response actually in hand.
+ */
+export type Operator = {
+  id: number
+  name: string
+  active: boolean
+  created_at: string
+  phone_e164: string | null
+  /** Set only when this same phone also claims a `workers` row (decision-45 §3). */
+  linked_worker_id: number | null
+  linked_worker_name: string | null
+  enrolment_code_expires_at: string | null
+  enrolment_code_redeemed_at: string | null
+}
+
+/**
+ * Create only — `POST /admin/operators` has no update branch (decision-45 §7, the route's
+ * own comment: a phone that needs to change is a new identity claim, not an edit of an old
+ * one). No `id` field exists on this type for that reason, not by omission.
+ */
+export type OperatorInput = { name: string; phone: string }
+
+/**
+ * ponytail: `/admin/data` returns far more than operators; typing the rest here would be
+ * fiction no screen reads — same convention as `fetchInventory`/`fetchClientsSnapshot`
+ * above, each of which reads its own slice of the same response.
+ */
+export function fetchOperators(signal?: AbortSignal): Promise<Operator[]> {
+  return apiFetch<{ operators: Operator[] }>('/admin/data', { signal }).then(
+    (data) => data.operators,
+  )
+}
+
+/**
+ * 409 `phone_claimed` is the only conflict this route can raise (createOperator's own
+ * comment: `phone_identities_pkey` is the sole 23505 source reachable here) — and it names
+ * nothing about who holds the number, on purpose (anti-enumeration, decision-45 §7).
+ */
+export function saveOperator(input: OperatorInput, signal?: AbortSignal): Promise<Operator> {
+  return apiFetch<{ operator: Operator }>('/admin/operators', {
+    method: 'POST',
+    body: input,
+    signal,
+  }).then((data) => data.operator)
+}
+
+/** Soft delete (`active = false`) — mirrors `DELETE /admin/operators/:id` exactly. */
+export function deactivateOperator(id: number, signal?: AbortSignal): Promise<void> {
+  return apiFetch<void>(`/admin/operators/${id}`, { method: 'DELETE', signal })
+}
+
+/** Byte-identical shape to `FreshEnrolmentCode` above, over an operator instead of a worker. */
+export type FreshOperatorCode = {
+  operator: { id: number; name: string }
+  code: string
+  expires_at: string
+}
+
+export function issueOperatorEnrolmentCode(
+  operatorId: number,
+  signal?: AbortSignal,
+): Promise<FreshOperatorCode> {
+  return apiFetch<FreshOperatorCode>(`/admin/operators/${operatorId}/enrolment-code`, {
+    method: 'POST',
+    signal,
+  })
+}
+
+export function revokeOperatorEnrolmentCode(operatorId: number, signal?: AbortSignal): Promise<void> {
+  return apiFetch<void>(`/admin/operators/${operatorId}/enrolment-code`, {
+    method: 'DELETE',
+    signal,
+  })
+}
+
+/**
  * A row of `inventory_items`. Products and equipment are ONE table and one screen: they
  * differ by this `kind` label and by nothing else (server/db/migrations/003).
  */
