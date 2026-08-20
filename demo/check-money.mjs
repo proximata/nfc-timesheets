@@ -394,6 +394,88 @@ async function main() {
       JSON.stringify(rows.map((r) => [r.head, ...r.tds.slice(0, 3)])),
     );
 
+    // ================================================================================
+    // A3 · THE SCREEN AND THE SERVER AGGREGATE AGREE, AND THE ROUNDING IS WHY
+    // ================================================================================
+    //
+    // /payroll/ carries THREE copies of one number: the answer band, the table footer, and
+    // `reconcile()` in web/lib/payroll.ts, which compares the rows this browser summed with
+    // the `hours` aggregate `GET /admin/data` computed in Postgres. The screen then prints
+    // ONE of two sentences — „auf dieser Seite fehlt nichts“ or „Die Summe des Servers für
+    // diesen Zeitraum beträgt …“.
+    //
+    // WHAT WAS GUARDED, AND WHAT WAS NOT. demo/check-reports.mjs asserts that EXACTLY ONE
+    // of those branches is on screen. It does not assert WHICH. A build in which the two
+    // totals disagreed by 810,30 € would render the mismatch branch, satisfy that assertion
+    // and be reported green — the screen would be correctly describing a broken number.
+    // Nothing anywhere asserted that the client and the server arrive at the same cents.
+    //
+    // THE ORACLE IS SQL, WRITTEN HERE. Not the API's response (that is the server's own
+    // answer, and comparing it with itself is green for any wrong answer both agree on) and
+    // not web/lib/payroll.ts (that is the code under test). Same half-open Vienna month, the
+    // same decision-10 predicate.
+    const PERIOD = `s.start_time >= (date_trunc('month', (now() AT TIME ZONE 'Europe/Vienna')) - interval '1 month') AT TIME ZONE 'Europe/Vienna'
+                AND s.start_time <  date_trunc('month', (now() AT TIME ZONE 'Europe/Vienna')) AT TIME ZONE 'Europe/Vienna'`;
+    // Written with the boundaries cast back to timestamptz through AT TIME ZONE, so the
+    // comparison never depends on the session's TimeZone. A bare timestamp on the right of
+    // a timestamptz comparison is resolved with whatever `SHOW TimeZone` happens to be, and
+    // a check that changes answer with an environment variable is not an oracle.
+    const PER_WORKER = `WITH p AS (
+         SELECT s.worker_id, w.hourly_rate_cents,
+                SUM(EXTRACT(EPOCH FROM (s.end_time - s.start_time)) / 3600.0) AS h,
+                SUM(ROUND(EXTRACT(EPOCH FROM (s.end_time - s.start_time)) / 3600.0 * w.hourly_rate_cents)) AS per_shift
+           FROM shifts s JOIN workers w ON w.id = s.worker_id
+          WHERE s.end_time IS NOT NULL AND NOT (s.auto_closed AND s.corrected_at IS NULL)
+            AND ${PERIOD}
+          GROUP BY s.worker_id, w.hourly_rate_cents)`;
+    const payOracle = Number(sql(`${PER_WORKER} SELECT COALESCE(SUM(ROUND(h * hourly_rate_cents)), 0) FROM p`));
+    const perShiftOracle = Number(sql(`${PER_WORKER} SELECT COALESCE(SUM(per_shift), 0) FROM p`));
+    const hoursOracle = Number(sql(`${PER_WORKER} SELECT COALESCE(ROUND(SUM(h)::numeric, 2), 0) FROM p`));
+
+    assert(
+      "payroll: the period has money in it, or every assertion below is vacuous",
+      payOracle > 0 && hoursOracle > 0,
+      `db pay ${payOracle} cents, hours ${hoursOracle}`,
+    );
+    // THE HEADLINE THE DIRECTOR TRANSFERS. Compared in CENTS, from the German string, so a
+    // formatter that dropped a thousands group cannot pass by looking similar.
+    const payoutCents = Math.round((de(cell(cleanPayroll, "Auszuzahlen").v) ?? 0) * 100);
+    assert(
+      "payroll: the payout on screen IS the server's aggregate, to the cent",
+      payoutCents === payOracle,
+      `screen „${cell(cleanPayroll, "Auszuzahlen").v}“ = ${payoutCents} cents, db ${payOracle}`,
+    );
+    assert(
+      "payroll: the hours on screen ARE the server's aggregate",
+      Math.abs((de(cell(cleanPayroll, "Stunden").v) ?? -1) - hoursOracle) < 0.005,
+      `screen „${cell(cleanPayroll, "Stunden").v}“, db ${hoursOracle}`,
+    );
+    // ROUNDED ONCE PER WORKER, AND THE FIXTURE PROVES THE RULE HAS TEETH. Rounding each
+    // SHIFT instead drifts by up to half a cent per shift; on this data the two answers are
+    // ${perShiftOracle - payOracle} cents apart, so „once per worker“ is a claim that can be
+    // wrong here rather than a distinction without a difference. The non-vacuity gate is
+    // the first assertion: if a future fixture ever makes the two agree, this says so
+    // loudly instead of passing for the wrong reason.
+    assert(
+      "payroll: per-shift rounding is DISTINGUISHABLE on this fixture, or the rule below is untested",
+      perShiftOracle !== payOracle,
+      `per-worker ${payOracle} == per-shift ${perShiftOracle} — seed a shift whose price is not a whole cent`,
+    );
+    assert(
+      "payroll: the payout is rounded ONCE PER WORKER, not once per shift",
+      payoutCents !== perShiftOracle,
+      `screen ${payoutCents} == the per-shift total ${perShiftOracle}`,
+    );
+    // ...AND THE SCREEN SAYS THEY AGREE. `reconcile()` is allowed to report a shortfall —
+    // that is what the LIMIT on the row list is for — but it must not be reporting one now,
+    // with six buildings and 267 hours in a demo database nothing truncates.
+    assert(
+      "payroll: the reconciliation branch on screen is the AGREEING one",
+      cleanPayroll.text.includes("auf dieser Seite fehlt nichts") &&
+        !cleanPayroll.text.includes("Die Summe des Servers für diesen Zeitraum beträgt"),
+      "the screen is reporting a shortfall against the server aggregate",
+    );
+
   } finally {
     page.close();
     child.kill();
