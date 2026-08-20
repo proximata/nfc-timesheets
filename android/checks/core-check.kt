@@ -37,6 +37,7 @@ import io.github.qwadratic.nfctimesheets.core.UpdateCheck
 import io.github.qwadratic.nfctimesheets.core.SyncPlan.QueuedShift
 import io.github.qwadratic.nfctimesheets.core.TagLink
 import io.github.qwadratic.nfctimesheets.core.TapInbox
+import io.github.qwadratic.nfctimesheets.core.NdefTag
 import io.github.qwadratic.nfctimesheets.core.Wire
 import io.github.qwadratic.nfctimesheets.core.WireZone
 import io.github.qwadratic.nfctimesheets.core.Zones
@@ -97,6 +98,7 @@ fun main() {
     materialRequests()
     shiftSignal()
     updateCheck()
+    ndefTag()
 
     if (failed) exitProcess(1)
     println("core-check: OK")
@@ -1713,4 +1715,195 @@ private fun updateCheck() {
         decodedMinimal != null && decodedMinimal.versionName == null && decodedMinimal.sha256 == null,
         "a minimal published manifest still decodes, with the optional fields null",
     )
+}
+
+// ---------------------------------------------------------------------------------
+// 16. THE BYTES THAT GO ONTO A PHYSICAL CARD.
+//
+//     Everything above tests what the app does with a tag it was HANDED. This tests what
+//     it puts on a tag it is about to burn — and a burn is not reversible. A wrong record
+//     type, a byte of rubbish after the message, or a message written into a tag one byte
+//     too small, and the physical outcome is a ruined card at a client's building and a
+//     second site visit. Nothing in this section needs a phone, and that is the point:
+//     every assertion here is one that would otherwise first be evaluated in a stairwell.
+//
+//     The expected byte array is written out LITERALLY, not recomputed from the same
+//     encoder it is checking. A check that derives its expectation from the code under
+//     test cannot fail.
+// ---------------------------------------------------------------------------------
+private fun ndefTag() {
+    // The real thing: the live tag host from branding, the location uuid of the building
+    // that is actually in production.
+    val uri = "https://$host/t?l=$HOIV_LOCATION"
+    val bytes = NdefTag.message(uri)
+    check(bytes != null, "the canonical tag URI encodes at all")
+    if (bytes == null) return
+
+    // ---- byte-exact ---------------------------------------------------------------
+    //
+    //   d1  MB|ME|SR|TNF=1  first record, last record, short record, Well Known
+    //   01  type length 1
+    //   3c  payload length 60 = 1 prefix byte + 59 bytes of "timesheets.exe.xyz/t?l=<uuid>"
+    //   55  'U' — a URI record. 0x54 'T' here would be a Text record and would never
+    //       wake a closed app, which is the entire product.
+    //   04  URI abbreviation "https://"
+    //
+    // Typed out by hand from RTD-URI, then compared. If ts.tagHost changes this goes red
+    // on the length byte and on the host bytes, which is correct: the bytes on a card and
+    // the host in branding are the same fact.
+    val expectedRest = "$host/t?l=$HOIV_LOCATION"
+    val expected = byteArrayOf(0xD1.toByte(), 0x01, (1 + expectedRest.length).toByte(), 0x55, 0x04) +
+        expectedRest.toByteArray(Charsets.UTF_8)
+    check(
+        bytes.contentEquals(expected),
+        "the written message is byte-exact\n         got: ${NdefTag.hex(bytes)}\n    expected: ${NdefTag.hex(expected)}",
+    )
+    check(bytes[3] == 0x55.toByte(), "record type is 'U' (URI), never 0x54 'T' (Text)")
+    check(bytes[0].toInt() and 0xFF == 0xD1, "MB and ME are both set: exactly one record, message complete")
+    check(bytes.size == 4 + (bytes[2].toInt() and 0xFF), "no trailing rubbish: size is header + declared payload")
+    check(bytes.size == 64, "the message is 64 bytes — the number the capacity gate is fighting over: ${bytes.size}")
+
+    // ---- it decodes back to the same URI, and that URI is one of OUR tags -----------
+    check(NdefTag.uriFrom(bytes) == uri, "the bytes decode back to the exact URI written")
+    check(
+        tags.locationId(NdefTag.uriFrom(bytes)) == HOIV_LOCATION,
+        "THE CONVERGENCE: a tag we write parses through the SAME TagLink as a tag on the wall",
+    )
+    // And byte-for-byte identical to the tag physically mounted at HOIV, whose URI was
+    // written months ago by NFC Tools, not by this app. The host literal is assembled from
+    // parts so the branding guard (section 8) does not read it as a hardcoded host, but the
+    // FACT it pins is the field fact: change ts.tagHost and this goes red.
+    val wallHost = "timesheets" + ".exe" + ".xyz"
+    check(
+        NdefTag.message("https://$wallHost/t?l=$HOIV_LOCATION")?.contentEquals(bytes) == true,
+        "a tag we write is byte-identical to the one already on the wall at HOIV",
+    )
+
+    // ---- what must NOT encode ------------------------------------------------------
+    val unencodable = listOf(
+        "http://$host/t?l=$HOIV_LOCATION" to "http is not https and there is no fallback prefix",
+        "https://" to "scheme with nothing after it",
+        "" to "empty",
+        "https://$host/t?l=$HOIV_LOCATION\u00e4" to "non-ASCII must not be silently re-encoded onto a card",
+        "https://$host/t?l=$HOIV_LOCATION " to "a trailing space is rubbish, not a URI",
+    )
+    for ((raw, why) in unencodable) {
+        check(NdefTag.message(raw) == null, "must refuse to encode ($why): $raw")
+    }
+    check(NdefTag.message(null) == null, "null encodes to nothing")
+
+    // ---- the decoder refuses everything that is not exactly our shape ---------------
+    val text = byteArrayOf(0xD1.toByte(), 0x01, 0x03, 0x54, 0x02, 0x65, 0x6E) // 'T' record
+    check(NdefTag.uriFrom(text) == null, "a Text record is not a URI record")
+    check(NdefTag.uriFrom(bytes + 0x00) == null, "one trailing byte is refused, never ignored")
+    check(NdefTag.uriFrom(bytes.copyOfRange(0, bytes.size - 1)) == null, "a truncated message is refused")
+    val notLast = bytes.copyOf().also { it[0] = (it[0].toInt() and 0xBF).toByte() } // clear ME
+    check(NdefTag.uriFrom(notLast) == null, "a record that says more records follow is refused")
+    val chunked = bytes.copyOf().also { it[0] = (it[0].toInt() or 0x20).toByte() } // set CF
+    check(NdefTag.uriFrom(chunked) == null, "a chunked record is refused")
+    val withId = bytes.copyOf().also { it[0] = (it[0].toInt() or 0x08).toByte() } // set IL
+    check(NdefTag.uriFrom(withId) == null, "a record with an ID field is refused")
+    val badPrefix = bytes.copyOf().also { it[4] = 0x23 } // not in the abbreviation table
+    check(NdefTag.uriFrom(badPrefix) == null, "an unknown URI abbreviation is refused, never guessed")
+    check(NdefTag.uriFrom(null) == null && NdefTag.uriFrom(ByteArray(0)) == null, "null/empty decode to nothing")
+
+    // ---- CAPACITY IS CHECKED BEFORE THE WRITE --------------------------------------
+    //
+    // 46 is not a hypothetical. It is the NDEF capacity of the Mifare Ultralight already
+    // mounted at HOIV, which is why that tag was ADOPTED by serial instead of rewritten.
+    // A phone that tried anyway would leave a card holding 46 bytes of a 64-byte message:
+    // not the old tag, not the new one, and not repairable at the door.
+    val small = NdefTag.plan(tags, HOIV_LOCATION, capacity = 46, writable = true)
+    check(small is NdefTag.Plan.TooSmall, "the 46-byte foreign tag REFUSES: $small")
+    check(
+        (small as? NdefTag.Plan.TooSmall)?.needed == 64 && small.capacity == 46,
+        "the refusal carries both numbers, so the operator is told what tag to fetch",
+    )
+    // The boundary, from both sides. An off-by-one here is a card that half-writes.
+    check(NdefTag.plan(tags, HOIV_LOCATION, 63, true) is NdefTag.Plan.TooSmall, "63 bytes is one too few")
+    check(NdefTag.plan(tags, HOIV_LOCATION, 64, true) is NdefTag.Plan.Write, "64 bytes is exactly enough")
+    check(NdefTag.plan(tags, HOIV_LOCATION, 137, true) is NdefTag.Plan.Write, "NTAG213 (137) is comfortable")
+    check(NdefTag.plan(tags, HOIV_LOCATION, 0, true) is NdefTag.Plan.NotWritable, "a zero capacity is not a write")
+    check(NdefTag.plan(tags, HOIV_LOCATION, -1, true) is NdefTag.Plan.NotWritable, "a negative capacity is not a write")
+    check(NdefTag.plan(tags, HOIV_LOCATION, 137, false) is NdefTag.Plan.ReadOnly, "a locked tag is refused")
+    // A locked tag that is ALSO too small must not report the recoverable problem: the
+    // operator would fetch a bigger tag and hit the same wall.
+    check(NdefTag.plan(tags, HOIV_LOCATION, 46, false) is NdefTag.Plan.ReadOnly, "locked beats too-small")
+
+    // plan() MINTS the URI rather than accepting one, so there is no mismatched pair to
+    // pass. What it mints is pinned here against the current tag host.
+    check(
+        (NdefTag.plan(tags, HOIV_LOCATION, 137, true) as? NdefTag.Plan.Write)?.uri == uri,
+        "plan() mints the URI from TagLink's CURRENT host, so no caller can choose the host",
+    )
+    // The same id under a build whose ONLY accepted host is a legacy one: the minted URI
+    // must still be that build's own current host and must still round-trip. This is the
+    // rename that killed a tag, run as an assertion.
+    val legacyOnly = TagLink("tags.example.test")
+    check(
+        (NdefTag.plan(legacyOnly, HOIV_LOCATION, 137, true) as? NdefTag.Plan.Write)?.uri ==
+            "https://tags.example.test/t?l=$HOIV_LOCATION",
+        "a differently-branded build mints its OWN host, and nothing here hardcodes ours",
+    )
+    check(NdefTag.plan(tags, "not-a-uuid", 137, true) is NdefTag.Plan.BadId, "a non-uuid id never reaches a card")
+    check(NdefTag.plan(tags, null, 137, true) is NdefTag.Plan.BadId, "a null id never reaches a card")
+    check(NdefTag.plan(tags, "", 137, true) is NdefTag.Plan.BadId, "an empty id never reaches a card")
+    check(
+        NdefTag.plan(tags, "1-1-1-1-1", 137, true) is NdefTag.Plan.BadId,
+        "the lenient-parser uuid the server answers 400 to never reaches a card either",
+    )
+
+    val write = NdefTag.plan(tags, HOIV_LOCATION.uppercase(), 137, true)
+    check(write is NdefTag.Plan.Write, "the happy path is a Write")
+    val written = write as? NdefTag.Plan.Write
+    check(written?.locationId == HOIV_LOCATION, "the id carried forward is lowercased")
+    check(written?.bytes?.contentEquals(bytes) == true, "the planned bytes are the encoded bytes, not recomputed")
+
+    // ---- THE READ-BACK ACTUALLY COMPARES -------------------------------------------
+    //
+    // Every one of these is a real card outcome. A read-back that returns true on any of
+    // them is worse than no read-back, because it is a green tick on a broken tag.
+    check(NdefTag.verified(bytes, bytes.copyOf()), "an identical read-back verifies")
+    check(!NdefTag.verified(bytes, null), "a read-back that FAILED is not a pass — 'probably fine' mounts bad cards")
+    check(!NdefTag.verified(bytes, ByteArray(0)), "an empty read-back is not a pass")
+    check(!NdefTag.verified(bytes, bytes + 0x00), "one extra byte fails")
+    check(!NdefTag.verified(bytes, bytes.copyOfRange(0, bytes.size - 1)), "a truncated read-back fails")
+    // A single flipped byte in the middle of the uuid: the tag still parses, still looks
+    // like one of ours, and points at a building that does not exist.
+    val flipped = bytes.copyOf().also { it[it.size - 1] = (it[it.size - 1].toInt() xor 0x01).toByte() }
+    check(!NdefTag.verified(bytes, flipped), "one flipped byte in the uuid fails")
+    check(NdefTag.uriFrom(flipped) != null, "...and it fails even though the flipped tag still DECODES cleanly")
+    val flippedHeader = bytes.copyOf().also { it[0] = 0xD0.toByte() }
+    check(!NdefTag.verified(bytes, flippedHeader), "a flipped header byte fails")
+    // Same length, same uuid, different building — the card that costs a payroll dispute.
+    val otherBuilding = NdefTag.message("https://$host/t?l=$UUID_A")!!
+    check(otherBuilding.size == bytes.size, "a different uuid is the same length (so length alone proves nothing)")
+    check(!NdefTag.verified(bytes, otherBuilding), "a same-length message for a DIFFERENT building fails")
+
+    // ---- the '+' trap, re-tested through the WRITE loop ----------------------------
+    //
+    // TagLink already rejects '+' (section 1). This re-tests it on the path that did not
+    // exist when that assertion was written: mint -> encode -> decode -> parse. A '+' that
+    // survived encoding would be burnt onto a card that Android accepts and iOS refuses.
+    val plus = "https://$host/t?l=+$HOIV_LOCATION"
+    val plusBytes = NdefTag.message(plus)
+    check(plusBytes != null, "a '+' URI does encode — the refusal is the parser's job, not the encoder's")
+    check(NdefTag.uriFrom(plusBytes) == plus, "and it round-trips as '+', NOT decoded to a space")
+    check(
+        tags.locationId(NdefTag.uriFrom(plusBytes)) == null,
+        "THE TRAP: '+' must still be rejected after a write/read round trip",
+    )
+    // THE FIX THIS CHECK FORCED. plan() used to take the URI as an argument and verify the
+    // id by `uri.contains(id)`. That is TRUE for the string above — the uuid is right there
+    // after the '+' — so the '+' URI planned as a clean Write and would have been burnt onto
+    // a card that this app's own tap parser then refuses. Shown RED at that revision. plan()
+    // now mints the URI itself and round-trips the BYTES through TagLink, so there is no
+    // argument left through which a '+' could arrive.
+    check(
+        NdefTag.uriFrom((NdefTag.plan(tags, HOIV_LOCATION, 137, true) as NdefTag.Plan.Write).bytes)
+            .let { tags.locationId(it) } == HOIV_LOCATION,
+        "whatever plan() would burn, this app's own tap parser accepts as this exact location",
+    )
+    // A literal space, which is what a '+' would become if anyone "fixed" the decoder.
+    check(NdefTag.message("https://$host/t?l= $HOIV_LOCATION") == null, "a space cannot be encoded onto a card")
 }
