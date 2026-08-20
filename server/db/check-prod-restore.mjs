@@ -53,6 +53,23 @@ const skip = (why) => {
   process.exit(0);
 };
 
+// SKIP is for "this machine cannot run the check at all". Once a dump has been HANDED to
+// this file, the operator is standing in front of a deploy window and a silent exit 0 is
+// the worst possible answer — so a restore that fails FAILS, loudly, with the fix.
+// process.exit() does NOT run a pending finally, so the throwaway database has to be
+// dropped HERE or a failed pre-deploy check leaves a copy of the client's payroll on the
+// operator's laptop — exactly the artefact this file's header promises not to leave.
+const die = (why, fix) => {
+  console.error(`\nFAIL check-prod-restore: ${why}`);
+  if (fix) console.error(`       fix: ${fix}`);
+  try {
+    sh("dropdb", ["--if-exists", DB_NAME]);
+  } catch {
+    console.error(`       warning: could not drop ${DB_NAME}`);
+  }
+  process.exit(1);
+};
+
 const dump = process.argv[2];
 if (!dump) skip("no dump given — usage: node server/db/check-prod-restore.mjs <nfc-*.sql[.gz]>");
 if (!fs.existsSync(dump)) skip(`${dump} does not exist`);
@@ -92,10 +109,23 @@ try {
   // stdio[0] must be "pipe" for `input` to reach psql. With the default "ignore" above,
   // psql reads an EMPTY script, exits 0, and the restore silently does nothing — which then
   // surfaces three lines later as a confusing "schema_migrations does not exist".
-  sh("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-q", "-f", "-"], {
-    input: sql,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  //
+  // A pg_dump of production carries `ALTER TABLE ... OWNER TO nfc` 22 times, so restoring it
+  // needs a LOCAL role called `nfc`. On a machine that has never run this project's demo
+  // stack there is none, psql exits 3, and this file used to print a raw Node stack trace —
+  // which an operator reads as "the tooling is broken", not as "one createuser away". The
+  // pre-deploy gate for the migration that gates the whole onboarding must not fail that way.
+  try {
+    sh("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-q", "-f", "-"], {
+      input: sql,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (e) {
+    const message = String(e.stderr || e.message);
+    const missingRole = message.match(/role "([^"]+)" does not exist/);
+    if (missingRole) die(`the dump needs a local role "${missingRole[1]}" and this machine has none`, `createuser ${missingRole[1]}`);
+    die(`the dump did not restore: ${message.trim().split("\n").slice(0, 3).join(" / ")}`);
+  }
   const applied = psql("SELECT count(*) FROM schema_migrations");
   assert.equal(applied, "5", `the dump must be at migration 005, found ${applied}`);
   ok(`restored: ${psql(

@@ -63,9 +63,18 @@ const skip = (why) => {
   console.log(`SKIP check-field-wire: ${why}`);
   process.exit(0);
 };
+// process.exit() does NOT run a pending finally, so every throwaway database has to be
+// dropped HERE too, or a failed run leaves a copy of the client's payroll on the laptop.
 const die = (why, fix) => {
   console.error(`\nFAIL check-field-wire: ${why}`);
   if (fix) console.error(`       fix: ${fix}`);
+  for (const name of created) {
+    try {
+      sh("dropdb", ["--if-exists", name]);
+    } catch {
+      console.error(`       warning: could not drop ${name}`);
+    }
+  }
   process.exit(1);
 };
 const ok = (m) => console.log(`  ok   ${m}`);
@@ -164,6 +173,7 @@ const sql = dump.endsWith(".gz") ? sh("gunzip", ["-c", dump]) : fs.readFileSync(
 
 function restore(name) {
   sh("createdb", [name]);
+  created.push(name);
   try {
     sh("psql", [`postgres:///${name}`, "-v", "ON_ERROR_STOP=1", "-q", "-f", "-"], {
       input: sql,
@@ -172,7 +182,6 @@ function restore(name) {
   } catch (e) {
     const message = String(e.stderr || e.message);
     const missingRole = message.match(/role "([^"]+)" does not exist/);
-    sh("dropdb", ["--if-exists", name]);
     if (missingRole) die(`the dump needs a local role "${missingRole[1]}" and this machine has none`, `createuser ${missingRole[1]}`);
     die(`the dump did not restore: ${message.trim().split("\n").slice(0, 3).join(" / ")}`);
   }
@@ -180,8 +189,10 @@ function restore(name) {
 
 const q = (db, s) => sh("psql", [`postgres:///${db}`, "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A", "-c", s]).trim();
 
-let servers = [];
-let clients = [];
+const servers = [];
+const clients = [];
+// Declared BEFORE die() needs it: every database this file creates is pushed here the
+// moment it exists, so both the finally and the early exits drop all of them.
 const created = [];
 
 // A worker with a REAL rate (006 makes any other kind unrepresentable) plus a session. The
@@ -276,7 +287,6 @@ if (process.env.WIRE_PHASE === "pre") {
 
 try {
   restore(PRE_DB);
-  created.push(PRE_DB);
   // The child inherits nothing that matters except the two variables below; its stdout is
   // this file's stdout, so its `ok` lines land in order.
   execFileSync(process.execPath, [fileURLToPath(import.meta.url), dump], {
@@ -288,7 +298,6 @@ try {
   // B · THE MIGRATED DATABASE — the field APK's exact bytes.
   // =================================================================================
   restore(MIG_DB);
-  created.push(MIG_DB);
 
   // The ops step (server/db/README.md §006), reproduced on the SCRATCH copy only. 006's
   // refusal on the real rows is check-prod-restore.mjs's assertion and is not repeated.
