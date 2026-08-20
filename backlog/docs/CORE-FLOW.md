@@ -1,305 +1,314 @@
 # CORE FLOW — what actually works, and the phone script
 
-Last reader before the owner. Written at `8c01fb6`, tree clean.
-Everything below was re-run by this agent, not copied from the two reports it reconciles.
-Where the reports disagreed with the machine, the machine won.
+Rewritten at `65bb162`, after the whole product was driven against **production** rather
+than a laptop. Everything below was re-run by the agent that wrote it. Where a report and
+the machine disagreed, the machine won.
 
-> ## DEPLOYED 2026-08-20 21:25Z — §1's four `✗`s are now `✓`
->
-> Production is at **8 migrations** and serves every route this file called 404. The APK is
-> published (`GET /app/version` → 0.4.1 (6)), the operator routes answer, `/tags/` renders,
-> and 82 live assertions passed against the real box with the database left exactly as it
-> was found (`./ops/smoke-live.sh`).
->
-> **What that changes in the stairwell, in one line each:**
->
-> | step | it said | it now says |
-> |---|---|---|
-> | 1 · install | carry 0.4.0-5 | carry **0.4.1-6** — the guarded write |
-> | 3 · the report | „…Meldung an das Buero ist fehlgeschlagen (not_found)" | **„An das Buero gemeldet."** |
-> | 4 · tap the new card | `422 unknown_location` | **`422 tag_unbound`** — same outcome, no shift |
-> | 5 · self-update | unavailable | **offers 0.4.1 (6)**, sha-checked |
->
-> The writing screen now needs a `Betreiber-Code` first, and issuing one finally works:
-> admin → Betreiber → code → `Betreiber-Code` on the phone.
->
-> **Unchanged, and still the whole point of the trip:** nothing here has touched real
-> hardware. Step 2 (the Ultralight must be refused) and step 1b (a mounted card must be
-> refused) are proven only against fake cards.
+Reproduce the whole thing:
+
+```
+./ops/prove-live.sh                    # 75 assertions against schimmer-glanz.exe.xyz
+./ops/check-prove-live-mutants.sh      # the same 14 assertions, shown RED first
+```
+
+`prove-live` creates an operator, two written cards, a building, a zone, a worker and three
+shifts on the live box, drives them through the real HTTP surface, and deletes every one of
+them — then counts what is left and fails if a single row survives.
 
 ---
 
 ## 1. The verdict on the six things
 
-`lab` = driven against a real Postgres / a fake card / a real apk, on this laptop.
-`field` = will happen on the owner's phone against `schimmer-glanz.exe.xyz` today.
+`lab` = a real Postgres, a fake card, a real apk, on this laptop.
+`field` = **production**: `schimmer-glanz.exe.xyz`, its Postgres, its published APK.
+`hand` = a human, a phone and a physical card. **Nothing has ever reached this column.**
 
-| # | What the owner needs | lab | field | why |
-|---|---|---|---|---|
-| 1 | self-update | ✓ | ✓ | `GET /app/version` → `published: true`, 0.4.1 (6) |
-| 2 | writing a tag | ✓ | ⚠ | phone-local, works — but **no card has ever been written** |
-| 3 | reporting the tag to the office | ✓ | ✓ | `POST /operator/tags` → 201, lands UNBOUND |
-| 4 | admin turning it into a building/zone | ✓ | ✓ | `/tags/` renders, resolve-zone → 201, **DB at 008** |
-| 5 | a tap opening a shift | ✓ | ✓ | old-shape body, wall uuid, 201, zone NULL |
-| 6 | a tap on an unbound tag being harmless | ✓ | ✓ | 422 `tag_unbound`, no shift row |
+| # | What the owner needs | lab | field | hand | evidence |
+|---|---|---|---|---|---|
+| 1 | self-update | ✓ | **✓** | ✗ | `/app/version` → 0.4.1 (6); bytes match the manifest sha; same signer as the field build |
+| 2 | writing a tag | ✓ | n/a | **✗** | phone-local. No server can close this; step 1 of § 4 is what does |
+| 3 | reporting the tag to the office | ✓ | **✓** | ✗ | `POST /operator/tags` → 201, lands UNBOUND; twice → 200, still one row |
+| 4 | admin turning it into a building/zone | ✓ | **✓** | ✗ | resolve-building + resolve-zone → 201; screenshot of the live `/tags/` panel |
+| 5 | a tap opening a shift | ✓ | **✓** | ✗ | old-shape body; zone card → 201 carrying `start_zone_id`; second tap closes it |
+| 6 | a tap on an unbound tag being harmless | ✓ | **✓** | ✗ | 422 `tag_unbound`, no shift row, a German sentence |
 
-**Six of six answer in the field. The one ⚠ is hardware, and no server can close it.**
+**Five of six are now proven in the field.** The sixth is a card in a hand, and the field
+column does not apply to it: no server, no check and no emulator can write an NTAG213.
 
-> The rest of §1 is kept as written on deploy morning, because the probe transcript below is
-> what the deploy was measured against. It is history now, not status.
+### What the field run added that the lab run could not
 
-### The thing neither report said
+The lab checks mint their tag ids with `randomUUID()`. That tests the server and nothing
+about the product: a phone that wrote the wrong bytes, refused every card, or overwrote a
+mounted one would leave every lab assertion green. `ops/prove-live.sh` starts at the card —
+`android/checks/live-flow.sh` runs the real `nfc/TagWriter`, and **the ids it emits are the
+ids that are then reported, resolved, tapped and closed on production**.
 
-Both reports drove the flow against a **local** server. Nobody looked at production.
-Probed read-only, just now:
+Three kinds of evidence at every step, because each alone lies:
 
 ```
-POST /operator/tags                     -> 404 not_found
-POST /operator/enrol                    -> 404 not_found
-POST /admin/tags/<id>/resolve-building  -> 404 not_found
-GET  /app/version                       -> 404 not_found
-GET  /tags/   (admin panel)             -> 404
-GET  /operators/                        -> 404
-ssh: /srv/nfc/routes/ = admin app auth portal wellknown     (no operator.js, no release.js)
-ssh: db/migrations/   = 001..005        (no 006 zones, no 007 operators, no 008 reported_tags)
+row    psql on the box            what is true
+log    journalctl -u nfc-api      that THIS process answered, not a cache or a proxy
+screen the German the phone renders + a headless-Chrome shot of the live admin, logged in
 ```
 
-The API host is **three migrations and two route files behind this repo**. Steps 3, 4 and the
-self-update cannot run in the field until someone deploys. That is not in scope here and was
-not done.
-
-Consequence for the stairwell, and it is the useful one: **a card written today can be written
-and verified, but cannot be reported, and cannot be turned into a building.** It is a correct
-card that nothing yet points at.
+An empty access-log match is a FAILURE, not a shrug. Mutant 11 pushes the log window past
+every request the run makes and all eight `log:` lines go red.
 
 ---
 
-## 2. What was re-run here, and what it said
+## 2. What was re-run, and what it said
 
 | check | result |
 |---|---|
-| `android/checks/run.sh` | OK — core, known-tags, **tag-writer** (bytes printed at the write call) |
-| `android/checks/release-artefact.sh` | OK — 5 needles absent from release, `makeReadOnly` absent from both |
-| ↳ **re-seeded RED by this agent** | a needle that IS in release → `FAILED`, exit 1 ✓ the check can fail |
-| `server/check-api.js` | PASS, **182 assertions, 0 skips**, against a real Postgres |
-| `server/check-close-flag.mjs` | 7 pass 0 fail |
+| `ops/prove-live.sh` | **OK — 75 assertions, 0 fail, against production** |
+| `ops/check-prove-live-mutants.sh` | **OK — 14 assertions RED, restored, GREEN** |
+| `ops/smoke-live.sh` | OK — 82 assertions |
+| `android/checks/run.sh` | OK — core, known-tags, tag-writer |
+| `android/checks/live-flow.sh` | OK — 77 assertions, against the LIVE building id |
+| `android/checks/release-artefact.sh` | OK — the simulator is absent from the release dex |
+| `server/check-api.js` | PASS — **182 assertions, 0 skips** |
+| `server/check-close-flag.mjs` | 7 pass, 0 fail |
+| `server/check-phone-namespace.mjs` | OK |
+| `server/check-telemetry-wire.mjs` | PASS — needs `node --import ./instrument.mjs`, or it asserts out |
 | `demo/check-guards.sh` | OK |
-| `web && pnpm verify` | OK, `/tags` in the route table |
-| `NFCTimeSheets/checks/run.sh` | OK — incl. the `+` corpus report 1 fixed |
-| `ops/check-branding.mjs` | OK (one pre-existing TODO: iOS still names the renameable host) |
-| apk signer, 0.3.0-4 vs 0.4.0-5 | **identical cert** `6c786899…996c` ∴ installs over the field build, **no uninstall** |
-| tag host `assetlinks.json` | publishes that same fingerprint ∴ a passive tap opens the app, not Chrome |
+| `web && pnpm verify` | OK — `/tags` in the route table |
+| `ops/check-branding.mjs` | OK |
+| `ops/check-hoiv-survives-006.mjs` · `check-delete-worker` · `check-reset-w1` | OK |
 
-Report 1's central claim — that `release-artefact.sh` was inverted by `pipefail` + `grep -q` +
-SIGPIPE, and that the release arm therefore could not fail — is **confirmed**. So is the fix.
+### Three things the field run found that no lab run could
+
+**a. The debug mock had drifted from the shipping build.** `src/debug/WriteSimulation.kt` is
+what an operator taps in place of a card on an emulator. It compared the read-back as raw
+bytes, so a card left holding half a message reported `mismatch` — where the phone reports
+`FormatException`, because `Ndef.getNdefMessage()` parses before it returns. It also fed
+`WriteGuard` only our strict decoder's opinion, making it *stricter* than the phone about
+what counts as one of ours. Both fixed; `live-flow-check` § 2 now replays every scenario
+through the real `TagWriter` and requires the same screen, word for word.
+
+**b. The map is intermittent, and it is not a code fault.** Five identical loads of the live
+home screen: **4 drew, 1 came back `RefererNotAllowedMapError`**, Google naming
+`https://schimmer-glanz.exe.xyz/` as the URL to authorise. The referrer IS on the key — a
+key without it fails every time — so this is upstream flake, or a stale edge cache, and the
+director sees a grey box some fraction of the time. TASK-206. Measured through headless
+Chrome with a cold profile; **whether a warm human browser sees the same is unproven.**
+
+**c. The closing count caught a row this work itself left behind** — a throwaway admin from
+a debugging session — and blamed the run for it. `admins` is now in the START guard too: a
+start guard that does not cover a table the end guard covers only moves the failure to the
+wrong place.
 
 ---
 
-## 3. Two findings this pass, neither in either report
+## 3. The guard, against the row the cleaners tap
 
-### ✗ FIXED — `android/dist/` held a **stale apk under the same version number**
-
-`dist/nfc-timesheets-0.4.0-5-release.apk` was built at 18:06, before the process-death fix
-landed at 20:44. Same `versionName` 0.4.0, same `versionCode` 5, **different bytes**, missing
-`pending_tag_report`. `dist/` is the obvious place to grab a build from, and self-update would
-never offer an upgrade over it because the version code is equal.
-
-Re-ran `./dist-apk.sh`. `dist/` and `app/build/outputs/apk/release/` are now the same sha256
-`c4c46ffb…6b33`, and the fix is in it. (`dist/` is gitignored; nothing to commit.)
-
-### ✓ FIXED at `9822f64` — the write screen **no longer overwrites a mounted card**
-
-> Everything from here to the end of this section describes the defect as it stood at
-> `3b78510`, and is kept because the phone script below was written around it. **The build
-> to carry into the stairwell is now `dist/nfc-timesheets-0.4.1-6-release.apk`**, and on it:
->
-> | card presented | 0.4.0 (5) | 0.4.1 (6) |
-> |---|---|---|
-> | blank NTAG213 | writes | writes |
-> | one of ours, **same** id (retry after a bad verify) | writes | writes |
-> | one of ours, **different** id — **a mounted card** | **writes, says success** | **REFUSED, untouched** |
-> | foreign content (a shop's URL, a Text record, rubbish) | writes | writes, and says what it replaced |
-> | card unreadable before the write | writes | nothing written — present it again |
->
-> The override is not "are you sure": the screen prints the id on the card and the operator
-> types its **last six characters** back. That authorises **that one card**; the next card
-> is refused again. And the write itself now needs an operator session on the phone —
-> without one, reader mode is never enabled and the screen does not read a card at all.
->
-> **Which means step 3 below changed in the field:** on 0.4.1 the operator must enrol
-> (`Betreiber-Code`) **before** a card can be written, and `POST /operator/enrol` is still
-> 404 on production (§1). **Deploy first, or carry 0.4.0 for a write-only test.**
-
-Driven off-device at `3b78510`, real `TagWriter`, fake card pre-loaded with the live HOIV tag:
+TASK-220 was proven against a **hardcoded** uuid in a source file that *says* it is the
+building in production. Nobody had asked production. `live-flow-check` refuses to run
+without `LIVE_HOIV_ID` read off the live database, so this is now a claim about the card on
+the wall:
 
 ```
-card holds : c3c37d4a-…-9704b9907ec7   (the building in production)
-screen offers: 11111111-…-555555555599  (a fresh, unknown id)
-outcome    : Written(...)               <- SUCCESS, no warning
-card now   : 11111111-…-555555555599
+live building        c3c37d4a-ca0a-42c5-b248-9704b9907ec7   (SELECTed off the box)
+card presented       holds exactly that
+screen offers        a fresh, unknown id
+outcome              Refused.Occupied      token 907ec7 = the last six of the LIVE id
+call log             Ndef.get -> connect -> getMaxSize -> isWritable -> getNdefMessage -> close
+                     ^ no writeNdefMessage. The card was not touched.
 ```
 
-Nothing compares the card's existing content to anything. `Tag beschreiben` is on the
-**Erfassen** screen, reachable by any user of the app, not just an operator — the operator
-session only gates the *report*, never the *write*. One mis-tap next to a mounted tag turns a
-working door into 422 for everybody, and the screen says **"Geschrieben und geprueft."**
-
-Not fixed *in that pass* on purpose: it is the one class that changes a physical object, there
-is no hardware to verify a change against, and the owner was about to test. Filed as TASK-220,
-and fixed in the next pass the same way it was found — by driving the real `TagWriter` against
-fake cards and reading the observed call log, eleven kinds of card, printed as a table
-(`android/checks/run.sh`). Both halves of the fix were seeded back and shown RED before being
-believed: deleting the guard turns nine assertions red, including this exact trace; deleting
-the role gate turns two red in `core-check` § 16c.
+- an empty box, six wrong characters, and **the last six of the id being OFFERED** (which is
+  on the same screen, right above, and is the obvious wrong thing to copy) all confirm nothing
+- the right six do — and confirming *this* card does not license the *next* one
+- the override then writes, and the screen says the live id is gone and the office must
+  re-assign that door
 
 ---
 
 ## 4. THE PHONE SCRIPT
 
-Real phone, real card. Read only this section in the stairwell.
+Real phone, real cards. **Read only this section in the stairwell.** Everything else in this
+file is already true; this is the part that is not.
 
-### Before you leave the desk
+### At the desk
 
-1. Install the build. **Never uninstall first** — that wipes the worker's login.
+1. **Install `android/dist/nfc-timesheets-0.4.1-6-release.apk`.**
    ```
-   adb install -r android/dist/nfc-timesheets-0.4.0-5-release.apk
+   adb install -r android/dist/nfc-timesheets-0.4.1-6-release.apk
    ```
-2. Open the app once. Android sends NFC to an app that has never been opened: **no.**
-3. `Einstellungen` must read `Installiert: 0.4.0 (5)`. If it reads 0.3.0 (4), the install did
-   not take — stop and redo it.
-4. Carry: **two blank NTAG213**, and **one spare Mifare Ultralight** (the small foreign kind
-   already on the wall at HOIV). The Ultralight is not a spare card — it is the test.
-5. Screen **on and unlocked** for every step. Android does not deliver a tag otherwise.
-   This is not a bug and there is nothing to report about it.
+   **Never uninstall first** — that wipes the worker's login. `-r` works because 0.4.1 and
+   the build already on the phone carry the same signing certificate (`6c786899…996c`),
+   which `prove-live` § 9 checks every run.
+2. Open the app once. Android does not deliver NFC to an app that has never been opened.
+3. `Einstellungen` must read **`Installiert: 0.4.1 (6)`**. If it says 0.4.0 (5) or 0.3.0 (4),
+   the install did not take. Stop and redo it.
+4. **Get a `Betreiber-Code`**: admin panel → `Betreiber` → the operator → issue a code.
+   Type it into `Tag beschreiben`. **Without a code that screen does not read a card at
+   all** — reader mode is never enabled. This is the role gate, not a fault.
+5. Carry: **two blank NTAG213**, and **the foreign Mifare Ultralight** (the small kind
+   already on the wall at HOIV). The Ultralight is not a spare card. It is step 1.
+6. Screen **on and unlocked** for every step. Android delivers no tag otherwise. Not a bug,
+   nothing to report.
 
-### Step 0 — the tap still works (do this first, it is the only thing in production)
+---
 
-Hold the phone to the **existing mounted HOIV tag**.
+### Step 1 — THE ULTRALIGHT MUST BE REFUSED. Do this before anything is written.
 
-- ✓ the app opens and a shift starts. Tap it again → the shift closes.
-- ✗ **Chrome opens instead of the app** → App Links did not verify on this phone.
-  Not a card fault. The card is fine. Reinstall the app and open it once.
-- ✗ nothing at all → NFC off, or screen locked. The app shows
-  *"NFC ist ausgeschaltet"* if that is it.
+`Erfassen` → `Tag beschreiben`. Hold the **foreign Mifare Ultralight** to the phone.
 
-### Step 1 — write a blank NTAG213
+- ✓ **`NICHT beschrieben. Dieser Tag fasst nur 46 Byte, gebraucht werden 64…`**
+  The card was not touched. Go on to step 2.
+- ✗ **`Geschrieben und geprueft` on the Ultralight → STOP THE WHOLE TEST.**
+  Write nothing else. Bin nothing yet, mount nothing, and report it.
 
-`Erfassen` → **`Tag beschreiben`**.
+**Why this is first, and why it is load-bearing.** The refusal comes from one number: what
+`Ndef.getMaxSize()` reports. Every check in this repo feeds that number to a fake card, so
+all of them assume the platform tells the truth. A real NTAG213 has 180 bytes of memory and
+should report **137** as its NDEF capacity; if some phone or some card reports the raw
+**180** instead, the gate opens for a message that does not fit, and a card gets written
+half-way. The Ultralight is the only instrument that answers this, because it is the one
+card in the building whose real capacity is below our message size. **If it writes, every
+card written after it is suspect** — which is why nothing is written before it.
 
-> **On 0.4.0 (5):** ⚠ from the moment that screen is open, keep every already-mounted card
-> away from the phone. That build writes whatever card it sees, including a working one, and
-> reports success. Press **`Fertig`** the instant you are done. Do not walk past a mounted
-> tag with it open.
->
-> **On 0.4.1 (6):** a mounted card is refused —
-> *"NICHT beschrieben. Diese Karte traegt bereits die ID …"* — and nothing is written to it.
-> That message is the guard working, not a fault. The card in your hand is unchanged.
-> This screen also needs a `Betreiber-Code` before it reads any card at all.
+---
 
-Hold a **blank** NTAG213 to the phone. Keep it still.
+### Step 2 — write a blank NTAG213
+
+Same screen. Hold a **blank** card. Keep it still.
 
 | what you see | what it means | mount it? |
 |---|---|---|
-| **"Geschrieben und geprueft."** + ID + `64 von 137 Byte` | the card was written, read back, and matched byte for byte | **YES** |
-| "Der Tag war zu kurz am Telefon…" | nothing was written | hold it steady, try again |
-| "NICHT beschrieben…" (any wording) | the card was **not touched**, it is still blank | **NO** — use a different card |
-| **"ACHTUNG: … Kontrolle beim Zurueklesen hat NICHT gestimmt"** | the card may hold half a message | **NO. STOP.** Re-present it once; if it still says this, **bin the card.** Never mount it. |
-| *(0.4.1)* "NICHT beschrieben. Diese Karte traegt bereits die ID …" | that card is **already one of ours** — it came off a wall, or you wrote it earlier. Untouched. | **NO** — take a blank one. Only override it if you genuinely mean to retire that id. |
-| *(0.4.1)* "Hinweis: Die Karte war nicht leer… (fremder Inhalt)" | it held somebody else's data, now overwritten. Nothing of ours was lost. | **YES** |
+| **`Geschrieben und geprueft.`** + ID + `64 von 137 Byte` | written, read back, byte-identical | **YES** |
+| `Der Tag war zu kurz am Telefon…` | nothing was written | hold it steadier, try again |
+| `NICHT beschrieben…` (any wording) | **untouched**, still blank | **NO** — use another card |
+| **`ACHTUNG: … Kontrolle beim Zurueklesen hat NICHT gestimmt`** | may hold half a message | **NO. STOP.** Re-present once; if it repeats, **bin the card** |
+| `Hinweis: Die Karte war nicht leer… (fremder Inhalt)` | somebody else's data, now overwritten. Nothing of ours lost | **YES** |
 
-**Write the ID down on paper, next to where you are mounting it.** Today the office cannot be
-told automatically (step 3), so paper is the only record.
+**`64 von 137 Byte` is a result, not decoration.** If that first number is not 64, or the
+second is not 137, write it down — it is the answer to the question step 1 asks.
 
-### Step 1b — *(0.4.1 only)* the mounted card must be REFUSED
+---
 
-Same screen. Hold the card you just wrote in step 1 to the phone **a second time, after the
-new id has been reported or written down** — i.e. once the screen is offering a fresh id.
+### Step 3 — the same card must now be REFUSED
 
-- ✓ expected: **"NICHT beschrieben. Diese Karte traegt bereits die ID …"**, and the card is
-  unchanged. Tap it as a worker afterwards: it still resolves to the id you wrote.
-- ✗ **if it says "Geschrieben und geprueft" — the guard did not fire on real hardware.**
-  Stop writing cards and report it. Off a phone this is proven only against a fake card.
+Hold the card you just wrote to the phone **again**, once the screen is offering a fresh id.
 
-*(Re-presenting a card while the screen is still offering the SAME id is the retry path and
-does write — that is correct, and it is how a card that failed its read-back is repaired.)*
+- ✓ **`NICHT beschrieben. Diese Karte traegt bereits die ID …`** and the card is unchanged.
+  This is the guard working. That card came off a wall as far as the phone knows.
+- ✗ **`Geschrieben und geprueft` → the guard did not fire on real hardware.** Stop writing
+  cards and report it. Off a phone this is proven only against fake cards.
 
-### Step 2 — the Ultralight must be REFUSED
+*(Re-presenting a card while the screen still offers the SAME id is the retry path and does
+write — that is correct, and it is how a card that failed its read-back is repaired.)*
 
-Same screen. Hold the **foreign Mifare Ultralight** to the phone.
+---
 
-- ✓ expected: **"NICHT beschrieben. Dieser Tag fasst nur 46 Byte, gebraucht werden 64…"**
-  The card was not touched. This is the check working.
-- ✗ **if it says "Geschrieben und geprueft" on the Ultralight — STOP THE WHOLE TEST.**
-  It means the capacity gate did not fire on real hardware, and every card written after
-  it is suspect. Nothing off a phone can rule this out; that is why this step exists.
+### Step 4 — the office is told, by itself
 
-This is the single most important step in the script.
+Right after a successful write the phone reports the card.
 
-### Step 3 — the report to the office (expected to FAIL today)
+- ✓ **`An das Buero gemeldet. Der Tag kann jetzt montiert werden.`** — the office has it.
+- `Der Tag ist fertig, aber dieses Telefon ist nicht als Betreiber angemeldet.` — the code
+  from desk step 4 was not entered or has expired. **The card is fine.** Enter a code; the
+  report is sent automatically.
+- `…die Meldung an das Buero ist fehlgeschlagen (…)` — no signal. **The card is fine.**
+  Tap `Meldung erneut senden` when there is signal, or write the ID on paper.
+- Killing and reopening `Tag beschreiben` brings the last written card back with a
+  `Meldung erneut senden` button and no words beside it. **That button being there means
+  the office still does not know.** That is the whole point of it.
 
-Right after a successful write the screen tries to tell the office, by itself.
+Reporting the same card twice is harmless: one row, every time.
 
-- **Today it will say: "Der Tag ist fertig, aber die Meldung an das Buero ist fehlgeschlagen
-  (not_found)."** That is correct and expected — the server does not have this feature yet
-  (§1). **The card is fine. Mount it.** The paper note is the record.
-- "Der Tag ist fertig, aber dieses Telefon ist nicht als Betreiber angemeldet." — also fine,
-  same conclusion. Do not type a code; there is nothing to enrol against yet.
-- "An das Buero gemeldet. Der Tag kann jetzt montiert werden." — only possible after a deploy.
-- If you kill the app and reopen `Tag beschreiben`, the last written card comes back with a
-  **`Meldung erneut senden`** button and no words next to it. That button being there means
-  **the office still does not know.** That is the whole point of it.
+---
 
-### Step 4 — tap the new card (expected to be REFUSED today)
+### Step 5 — the office decides what the card IS
 
-Mount or just hold the card you wrote in step 1, and tap it as a worker.
+Admin panel → `Unzugeordnete Tags`. The card is in the table with the time and the operator
+who reported it. Two choices, both keep the id already burned into the card:
 
-- ✓ expected: the app opens and shows **"Vom Server abgelehnt. Diese Schicht bitte der
-  Verwaltung melden."** — and **no shift is created.**
-  That is the correct answer for a card the office has never claimed. Verified against
-  production's own code path: `422 unknown_location`, and after a deploy the same tap gives
-  `422 tag_unbound`. Either way: no shift, a German sentence, no crash.
-- ✗ **if a shift opens on a card nobody has claimed — stop and report it.** That is the one
+- **`Neues Gebäude`** — name + slug. The building's id IS the card's id.
+- **`Neue Zone in bestehendem Gebäude`** — pick the building, name the zone.
+
+Nothing is written to the card by any of this. Once resolved, the row leaves the list.
+
+---
+
+### Step 6 — a cleaner taps it
+
+Mount the card, or just hold it, and tap as a worker.
+
+- ✓ the app opens and a shift starts. **Tap it again → the shift closes.** There is no
+  button in the app that closes a shift, and there is not meant to be.
+- ✗ **Chrome opens instead of the app** → App Links did not verify on this phone. Not a card
+  fault. Reinstall the app and open it once.
+- ✗ nothing at all → NFC off, or the screen locked. The app says `NFC ist ausgeschaltet` if
+  that is it.
+
+---
+
+### Step 7 — a card the office has NOT claimed must open nothing
+
+Tap the **second** card you wrote, before anybody resolves it in step 5.
+
+- ✓ **`Vom Server abgelehnt. Diese Schicht bitte der Verwaltung melden.`** and **no shift.**
+  The server answered `422 tag_unbound`. The sentence is the generic rejection bucket on
+  purpose — the phone must not guess between six server refusals — and it still says the two
+  things that matter at a door: it did not work, and tell the office.
+- ✗ **a shift opens on a card nobody has claimed → stop and report it.** That is the one
   outcome that must not happen.
-- ✗ if the app crashes → report it, keep the card.
 
-### Step 5 — self-update (expected to be UNAVAILABLE today)
+---
+
+### Step 8 — self-update
 
 `Einstellungen` → `Nach Updates suchen`.
 
-- expected today: it fails and offers **`Erneut versuchen`**. Nothing is broken; the endpoint
-  is not deployed. It never blocks anything and never touches a running shift.
-- ✗ if it downloads and installs something → stop, that would mean it is talking to a server
-  nobody deployed.
+- ✓ it offers **0.4.1 (6)** when the phone is on an older build, downloads it, checks the
+  sha256, and hands it to Android's installer. Android's own confirmation dialogue appears.
+- it never blocks anything and never touches a running shift.
+- ✗ if Android says the app is **not compatible with the installed version**, the build was
+  signed with a different key. Do not sideload around it — report it. `prove-live` § 9
+  checks this every run and has been shown red by re-signing the same APK with another key.
+
+---
 
 ### The three sentences that mean STOP
 
-1. **"Geschrieben und geprueft"** shown for the **Ultralight** → capacity gate failed on
-   hardware. Bin every card written after it.
-2. **"ACHTUNG: … Kontrolle beim Zurueklesen hat NICHT gestimmt"** → half-written card. Bin it.
-3. **A shift opens on a card the office has never claimed** → the unbound guard failed.
+1. **`Geschrieben und geprueft`** shown for the **Ultralight** (step 1) — capacity gate
+   failed on hardware. Bin every card written after it.
+2. **`ACHTUNG: … Kontrolle beim Zurueklesen hat NICHT gestimmt`** — half-written card. Bin it.
+3. **A shift opens on a card the office has never claimed** (step 7) — the unbound guard
+   failed.
 
-Anything else on this list is a card you can mount or a feature that is simply not deployed.
+Everything else on the list is a card you can mount, or a message that is telling you the
+truth about the network.
 
 ---
 
 ## 5. What is still unproven, in one place
 
+Everything here is a phone, a card, or an Android version. Nothing on this list can be
+closed from a laptop, and production has nothing to say about any of it.
+
 - **No NFC card has ever been written by this code.** Every write assertion is against a
   stubbed card in `android/checks/fake/`.
+- Whether a real NTAG213 reports `maxSize` **137** or the raw **180**. Step 1 of § 4 settles
+  it, and is the reason step 1 is step 1.
 - Whether the platform's own NDEF encoder agrees byte-for-byte with `core/NdefTag`. It fails
   **closed** (`TagWriter` refuses rather than writes), so the risk is a card that will not
   write, not a card written wrongly.
-- Whether a real NTAG213 reports `maxSize` **137** or the raw **180**. This is the one wrong
-  number that would let an over-large message through — step 2 of the script is what settles it.
+- Whether the overwrite guard fires against a real mounted card (§ 4 step 3).
 - Tag pulled mid-write, NFC toggled off mid-write, screen locked, app force-stopped mid-write.
-- Android 9 vs 16. Only one phone has been used.
-- ~~Anything in production: nothing was deployed~~ — **DEPLOYED 2026-08-20 21:25Z.** 8
-  migrations, both new route files, the APK published, both hosts verified, 82 live
-  assertions green and the database left exactly as found (`./ops/smoke-live.sh`, TASK-221).
-  What production still cannot tell you is anything on this list above it: every remaining
-  unknown here is a phone, a card, or an Android version.
-- ~~Decisions 41–44 are still PROPOSED~~ — **RULED 2026-08-19: 41, 42, 43, 44 ACCEPTED;
-  decision-37 marked `superseded` with the four contradictions written into its own file.**
-  The consequence 43 was written to prevent was then checked against the real production row,
-  not against a fixture: `ops/check-hoiv-survives-006.mjs`. HOIV stays active, keeps its pin
-  and still answers 201 to `POST /shifts/open` after 006 — it is merely grey on the map.
+- Android 9 vs 16. One phone has been used.
+- Whether a warm, human browser sees the map flake in § 2b, or only headless Chrome does.
+
+### And what is no longer unproven
+
+- ~~Anything in production~~ — the whole chain now runs against it, writes rows and deletes
+  them again (`ops/prove-live.sh`).
+- ~~The guard is proven against a constant that claims to be the live building~~ — it is
+  proven against the uuid read off the live database.
+- ~~The debug mock stands in for hardware~~ — it does, and it is now held to the shipping
+  writer's own verdict on every scenario.
+- ~~Decisions 41–44 are PROPOSED~~ — ACCEPTED 2026-08-19; decision-37 superseded, with the
+  four contradictions written into its own file. HOIV stays active, keeps its pin and still
+  answers 201 after 006 — grey on the map, never gone (decision-43, re-asserted live in
+  `prove-live` § 10).
