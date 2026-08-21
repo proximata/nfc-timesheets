@@ -23,9 +23,26 @@
 # sample of it. It also catches the opposite failure — files on the box that this tree does
 # not have — which a per-URL check structurally cannot see.
 #
-# WHAT IT DOES NOT DO: it does not build. Run `cd web && pnpm build` first, or it compares the
-# box against whatever `web/out` last held, which is its own kind of lie. It says so out loud
-# when web/out is older than the newest file under web/.
+# WHAT IT DOES NOT DO: it does not build. Build first, WITH THE SAME ENVIRONMENT ops/deploy.sh
+# uses, or it compares the box against a different artefact and reports a difference that is
+# its own fault:
+#
+#   cd web && NEXT_PUBLIC_DEFAULT_LOCALE=de \
+#     NEXT_PUBLIC_GOOGLE_MAPS_KEY="$(cd .. && psst get NEXT_PUBLIC_GOOGLE_MAPS_KEY)" pnpm build
+#
+# Measured, not guessed: this file's own instruction used to read `cd web && pnpm build`, and a
+# keyless build changes four content-hashed chunks, so the check said „the box is NOT serving
+# this tree" about a box that was.
+#
+# AND THE BUILD MUST BE REPRODUCIBLE, which is `web/next.config.mjs`'s job, not this file's.
+# Next's default build id is random and is embedded in all 133 emitted .html/.txt files, so
+# with it this check can never be green — the same commit built twice does not equal itself.
+# `generateBuildId` derives the id from the commit for exactly this reason. If this check
+# fails ONLY on .html/.txt files while `_next/static/chunks` and `css` match (§ 1a below says
+# so explicitly), the code IS on the box and the build ids differ — a dirty tree, or a build
+# from a different commit.
+#
+# It says so out loud when web/out is older than the newest file under web/.
 #
 # SHOW IT RED:  ./ops/check-box-serves-head.sh --mutate
 #   perturbs the LOCAL side by one byte and runs the same comparison, which must fail.
@@ -73,7 +90,25 @@ if [ "$MUTATE" = "1" ]; then
   trap 'rm -rf "$mutant_dir"' EXIT INT TERM
   cp -R web/out/. "$mutant_dir/"
   printf x >> "$mutant_dir/index.txt"
+  # AND one byte into a real chunk, so § 1a is falsifiable too. Without this the mutant only
+  # ever reddened § 1, and § 1a — the assertion that actually means "the fix is live" — was
+  # a line that could not fail.
+  printf ';' >> "$(find "$mutant_dir/_next/static/chunks" -name '*.js' | LC_ALL=C sort | head -1)"
   local_web=$(cd "$mutant_dir" && find . -type f | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256 | cut -d' ' -f1)
+  MUTANT_DIR_FOR_CODE="$mutant_dir"
+fi
+
+# 1a · the content-addressed half, reported SEPARATELY and always.
+# chunks/ css/ media/ are named by a hash OF THEIR OWN CONTENT, so this pair answers "is the
+# code and the stylesheet the director downloads the code in this tree" with no build-id
+# noise in it. When § 1 fails and this passes, nobody needs to read a 176-line diff to learn
+# that the answer is yes.
+local_code=$(cd "${MUTANT_DIR_FOR_CODE:-web/out}/_next/static" && find chunks css media -type f 2>/dev/null | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256 | cut -d' ' -f1)
+remote_code=$(ssh "$HOST" "cd /srv/nfc/public/_next/static && find chunks css media -type f 2>/dev/null | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d' ' -f1")
+if [ "$local_code" = "$remote_code" ]; then
+  ok "the JS and CSS the browser downloads are this tree's, byte for byte ($local_code)"
+else
+  bad "the JS/CSS on the box DIFFERS from this tree — this is the one that means the fix is not live"
 fi
 
 if [ "$local_web" = "$remote_web" ]; then
