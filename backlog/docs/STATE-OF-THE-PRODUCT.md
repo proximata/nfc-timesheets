@@ -185,14 +185,29 @@ account, and `instrument.mjs` is loaded with `--import` — so a DSN would now t
 July and `list-timers` was green throughout; it is alive today only through an undocumented
 `postgres ∈ app` group membership, now asserted by `check-timers-ran.sh` (TASK-226).
 
-**First to break at 20 workers / 8 buildings — and the top of the whole ranking.** A shift
+~~**First to break at 20 workers / 8 buildings — and the top of the whole ranking.** A shift
 tapped with no signal is written correctly on the phone and **never pushed**, because there
-is no background sync worker (TASK-225). No server row means no 8h net, no payroll line, and
-**no way to ask the question** — `worker_sessions` has no last-seen column. With one worker
-in one building this is a rounding error someone notices. With twenty workers across eight
-buildings, several of them basements, it is a payroll that is quietly short every month and
-a director who cannot tell absence from a phone in a pocket. The cheap half is detection,
-not delivery.
+is no background sync worker (TASK-225).~~ **CLOSED — 0.5.1 / versionCode 8, published.**
+The paragraph above was the single worst thing in this document and it is no longer true of
+the build the box serves. Delivery is a JobScheduler job with a network constraint that
+survives a reboot; ordering and idempotency are a pure function over the existing
+`client_uuid`; and what has NOT arrived is now visible to the worker (German, with the time
+of the last attempt) and to the office (`X-Pending-*` → four `workers` columns, migration
+009). Proven by switching a real device's radio off against production —
+`demo/prove-offline-push.mjs`, 9 phases, OK with **6 assertions observed RED in the same
+run**. Full write-up, including the three defects the run found rather than asserted, is
+`backlog/docs/RELIABILITY.md` § 1.
+
+**And it is in the field's reach, which is a different claim.** § 0 of this document is
+about thirteen commits that were in git and not on the box; the same trap was sprung on the
+APK. The box was serving **0.4.1 / 6** — the build whose background push is dead and in
+which opening the app from Recents CLOSES the worker's shift — while every fix sat in
+`android/dist/`. Now published, and driven end to end on a phone running the field build:
+Settings reads „Installiert: 0.4.1 (6)" and **„Version 0.5.1 ist verfügbar."**
+
+What is left of it is smaller and filed: TASK-233 (the force-stop caveat sits below the
+fold at 1080×2400 — to be moved, never deleted) and TASK-234 (a job armed for real work is
+not cancelled when the foreground pass delivers it instead). Neither loses an hour.
 
 ---
 
@@ -211,4 +226,8 @@ is the full list. The load-bearing ones:
 - Whether App Links verify on the phone in hand: `adb shell pm get-app-links …` must report
   `timesheets.exe.xyz: verified`, or every tap opens Chrome instead of the app.
 - Android 9 vs 16. One phone has been used.
-- A real radio in a real basement — which is the mechanism behind TASK-225.
+- A real radio in a real basement. TASK-225's delivery is now proven on a real Android
+  instance with the radio switched off by `svc`, which is a **clean, instant** loss of
+  connectivity. A basement is a slow, flapping one: a radio that holds a dead association,
+  a TCP connect that hangs rather than refuses, captive-portal wifi in a lobby. The queue
+  and the ordering are proven; the timing against a real radio is not.
