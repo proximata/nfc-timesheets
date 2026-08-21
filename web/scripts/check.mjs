@@ -395,6 +395,23 @@ check(
   },
 )
 
+check('messages/de.json: "Kunde" stays singular in its own drawer headings (C13, LOOK.md)', () => {
+  // "Kunden anlegen" for a drawer that creates exactly ONE client reads as a bare plural
+  // noun + verb ("Objekte anlegen" would mean several) rather than the elided-article
+  // accusative singular it was meant as. Every sibling heading ("Objekt anlegen",
+  // "Eintrag anlegen", "Zone bearbeiten"...) uses the nominative SINGULAR as a title, and
+  // "Kunde"/"Kunden bearbeiten" now matches: "der Kunde" as a title, never the bare plural.
+  const keys = ['clients.clientCreateHeading', 'clients.clientEditHeading']
+  const offenders = keys
+    .filter((key) => /\bKunden\b/.test(dictionaries.de[key] ?? ''))
+    .map((key) => `${key}: "${dictionaries.de[key]}"`)
+  assert.ok(
+    keys.every((key) => key in dictionaries.de),
+    `key(s) missing, check is vacuous: ${keys.filter((key) => !(key in dictionaries.de))}`,
+  )
+  assert.deepEqual(offenders, [], offenders.join('\n'))
+})
+
 // --- 3. auth hygiene (decision-20) -----------------------------------------------------
 
 const SOURCE_DIRS = ['app', 'components', 'lib']
