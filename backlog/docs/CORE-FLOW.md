@@ -11,6 +11,12 @@ Reproduce the whole thing:
 ./ops/check-prove-live-mutants.sh      # the same 14 assertions, shown RED first
 ```
 
+**This file says what WORKS. `backlog/docs/RELIABILITY.md` says what happens when it
+breaks** — production stopped, restarted, rebooted, filled and raced on purpose on
+2026-08-20, ranked by what each failure costs the cleaner or the director. Read it before
+the client starts relying on this: five of the ten entries there are things nobody finds
+out about at all.
+
 `prove-live` creates an operator, two written cards, a building, a zone, a worker and three
 shifts on the live box, drives them through the real HTTP surface, and deletes every one of
 them — then counts what is left and fails if a single row survives.
@@ -299,6 +305,11 @@ closed from a laptop, and production has nothing to say about any of it.
 - Tag pulled mid-write, NFC toggled off mid-write, screen locked, app force-stopped mid-write.
 - Android 9 vs 16. One phone has been used.
 - Whether a warm, human browser sees the map flake in § 2b, or only headless Chrome does.
+  (2026-08-20: five consecutive loads all drew — 5/5 — so the flake is not constant and a
+  clean sample is not evidence of a fix. TASK-206 stands.)
+- **Everything in `backlog/docs/RELIABILITY.md` § "What this run did NOT test"**: a real
+  phone losing signal in a real basement, Postgres corrupting itself rather than merely
+  running out of disk, and more than one worker tapping at once.
 
 ### And what is no longer unproven
 
