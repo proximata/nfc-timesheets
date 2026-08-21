@@ -12,6 +12,20 @@ import {
   type TagsSnapshot,
 } from '@/lib/api'
 import { LOGIN_PATH } from '@/lib/nav'
+import { BUSINESS_TIME_ZONE } from '@/lib/shifts'
+
+/**
+ * Vienna, explicitly, on a screen that has no next-intl `format.dateTime` to reach for
+ * (this page carries no i18n on purpose — see the file header). Every OTHER boundary in
+ * this product pins Europe/Vienna; a raw `toISOString()` string here showed the previous
+ * calendar day for anything reported 00:00-02:00 Vienna time (UTC is behind Vienna), which
+ * is exactly when a night crew mounts cards (LOOK.md W7).
+ */
+const REPORTED_AT_FORMAT = new Intl.DateTimeFormat('de-AT', {
+  timeZone: BUSINESS_TIME_ZONE,
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
 
 /**
  * Unzugeordnete Tags (unbound tags) — the admin's worklist for
@@ -181,7 +195,7 @@ export default function TagsPage() {
                   <td>
                     <code>{tag.id}</code>
                   </td>
-                  <td>{tag.reported_at}</td>
+                  <td>{REPORTED_AT_FORMAT.format(new Date(tag.reported_at))}</td>
                   <td>{tag.reported_by_operator_name ?? '(unbekannt)'}</td>
                   <td>
                     <div>
