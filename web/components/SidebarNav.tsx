@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useTranslations } from 'next-intl'
+import { useEffect, useRef } from 'react'
 import { FUTURE_NAV, NAV_GROUPS } from '@/lib/nav'
 
 const FUTURE_HINT_ID = 'nav-future-hint'
@@ -10,9 +11,28 @@ const FUTURE_HINT_ID = 'nav-future-hint'
 export function SidebarNav() {
   const t = useTranslations('nav')
   const pathname = usePathname()
+  const navRef = useRef<HTMLElement>(null)
+
+  /**
+   * PHONE #6 (LOOK-PHONE.md): below 768px `.sidebar` becomes a horizontally scrolling strip
+   * (globals.css) that always opened scrolled to its LEFT edge, showing "Übersicht·Schichten"
+   * regardless of which of the nine entries was current — on seven of nine screens the
+   * `aria-current="page"` mark was 300–500px off to the right, out of view. A screen reader
+   * was told (`aria-current` is rendered); a director looking at the screen was not.
+   *
+   * `scrollIntoView({ inline: 'nearest' })` is a no-op when the link is already visible —
+   * on desktop, where `.sidebar` never scrolls at all, this runs and changes nothing. `block:
+   * 'nearest'` for the same reason on the vertical axis: the strip's OWN vertical position
+   * must never move, only its horizontal scroll offset.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `pathname` is not read inside; it is the TRIGGER. The element to scroll to is found fresh off the DOM (aria-current) on every run, not derived from pathname, because NAV_GROUPS already maps hrefs to labels in lib/nav.ts and re-deriving that here would be a second copy of it.
+  useEffect(() => {
+    const current = navRef.current?.querySelector<HTMLElement>('[aria-current="page"]')
+    current?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+  }, [pathname])
 
   return (
-    <nav className="sidebar" aria-label={t('primaryLabel')}>
+    <nav className="sidebar" aria-label={t('primaryLabel')} ref={navRef}>
       {NAV_GROUPS.map((group) => {
         const headingId = `nav-${group.headingKey}`
         const className = group.pinBottom ? 'nav-group nav-group-bottom' : 'nav-group'
