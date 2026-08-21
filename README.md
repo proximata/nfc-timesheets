@@ -202,6 +202,18 @@ exist yet.
 That builds the web export, installs production server deps, rsyncs both plus `ops/`, runs
 migrations, restarts the unit, and finally runs `verify.sh` against the live host.
 
+**`./ops/deploy.sh` is not optional and "it is committed" is not "it is live."** Three times in
+one week this repo held a fix that production was not serving — thirteen web fixes, the APK
+with the offline-push fix, and nine clarity fixes — each time with every local check green,
+because the checks answer *is the code right* and none answered *is the code there*. Step 7c
+of the deploy now answers it, and it can be run on its own at any time:
+
+```bash
+cd web && pnpm build && cd ..        # it compares web/out, so build first
+./ops/check-box-serves-head.sh       # hashes public/, server.js, lib/, routes/ and the APK
+./ops/check-box-serves-head.sh --mutate   # ...and shows the comparison going red
+```
+
 First-time VM provisioning (user, Postgres, `/etc/nfc/env`, unit install) is **not** in that
 script — see `ops/README.md` and `backlog/docs/runbook-vm-provisioning.md`. Run those once, then
 `deploy.sh` forever after.

@@ -223,6 +223,14 @@ else
   echo "         Publish a build with: ./ops/publish-apk.sh" >&2
 fi
 
+echo "==> 7c/8 and is the box serving THIS tree, file for file?"
+# The last thing, on purpose: everything above can succeed and still leave the box serving
+# something else — a partial rsync, an rsync to the wrong host, a build that never ran. This
+# hashes the deployed artefact against the local one and refuses if they differ. FATAL,
+# unlike 7b: "the deploy said ok and the box served the old bug" has happened three times in
+# one week (see the file's own header), and every time the next person believed the ok.
+./ops/check-box-serves-head.sh "$HOST"
+
 echo "==> and the TAG host, which is what is actually on the walls"
 # Not deployed by this script and deliberately not restarted by it - only checked. If this
 # fails, tags are dead and no amount of redeploying the API fixes it.
