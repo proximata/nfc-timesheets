@@ -4,6 +4,7 @@ title: 'Answer bands print 0 where they mean ''nothing to measure'', on four scr
 status: To Do
 assignee: []
 created_date: '2026-08-18 18:55'
+updated_date: '2026-08-21 02:56'
 labels:
   - ux
 dependencies: []
@@ -38,3 +39,11 @@ DO NOT delete or shorten any sub-line. They are the part that is already right.
 - [ ] #6 When there ARE rows and the count genuinely is zero, the cell still shows 0 (an all-clear that is a real all-clear must still read as one)
 - [ ] #7 Journey D4 (JOURNEYS.md 2.D4) and D8 (2.D8): a screen with nothing to measure cannot be read as a screen with nothing wrong
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+PARTIAL PROGRESS 2026-08-21, from the Fix/LOOK run (LOOK.md W4): AC #3's specific case (no margin baseline set -> /pl/'s 'Unter der Zielmarge' cell is not a numeral) is now handled, generalised slightly beyond just the no-baseline case: whenever totals.notAssessable === buildings.length (every building unassessable, for ANY reason — no baseline is the one that occurs in production today), the cell reads 'Nicht beurteilbar' instead of a bare 0. Mechanism differs from the task's own suggestion: a translated word (answerFlaggedNoneAssessable) rather than an em dash, judged more actionable than a dash on a screen already carrying other worded states (marginUnknown = 'Nicht berechenbar', assessNoBaseline). AC #6 preserved: still a real 0 when some buildings WERE assessed and genuinely cleared the bar. Verified RED->GREEN by demo/check-pl-vacuous.mjs, commit 1267c1d.
+
+STILL OPEN: AC #2 (the zero-BUILDINGS case on /pl/ and /analytics/ — a different vacuous denominator than the one this run fixed; with 0 buildings, totals.notAssessable is also 0, so my guard does not fire and the cell still reads a bare 0), AC #4 (/'s 'Zu erledigen' cell), and generalising AnswerBand itself to accept a non-numeric value per the task's original FIX proposal. /analytics/ untouched entirely.
+<!-- SECTION:NOTES:END -->
