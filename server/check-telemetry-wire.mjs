@@ -45,8 +45,18 @@ const SECRETS = {
 const IOS_TRACE_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const IOS_SPAN_ID = "bbbbbbbbbbbbbbbb";
 
+// This check needs the SDK actually initialised AND actually able to send: run it any
+// other way and every case below fails for the SAME one reason, dressed up as a dozen
+// different assertion messages plus (with no --import at all) a raw Node stack. Catch
+// both misinvocations here, in one line, before that happens. TASK-223.
+const REQUIRED_INVOCATION =
+  "cd server && SENTRY_DSN='https://check@o4509000000000000.ingest.de.sentry.io/451' " +
+  "node --import ./instrument.mjs check-telemetry-wire.mjs";
 const client = Sentry.getClient();
-assert.ok(client, "instrument.mjs must be loaded with --import, or nothing is instrumented");
+if (!client || !client.getOptions().dsn) {
+  console.error(`check-telemetry-wire: run with: ${REQUIRED_INVOCATION}`);
+  process.exit(1);
+}
 
 const wire = [];
 const capture = (hook) => {

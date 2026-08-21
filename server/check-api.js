@@ -492,6 +492,47 @@ await test("the REAL SDK payload leaks nothing and lands as ONE trace", () => {
   assert.ok(out.includes("check-telemetry-wire: PASS"), out);
 });
 
+// TASK-223: run it the two WRONG ways and demand ONE line naming the right one, not a
+// stack. This is the guard's own message under test — delete the guard in
+// check-telemetry-wire.mjs and this fails, because a raw Node AssertionError stack is
+// many lines and does not contain "run with:".
+const misinvoke = (args, env) => {
+  try {
+    const out = execFileSync(process.execPath, args, {
+      cwd: import.meta.dirname,
+      env,
+      encoding: "utf8",
+      timeout: 20_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { status: 0, out };
+  } catch (err) {
+    return { status: err.status ?? 1, out: `${err.stdout ?? ""}${err.stderr ?? ""}` };
+  }
+};
+
+await test("check-telemetry-wire refuses to run without --import: ONE line, no stack (TASK-223)", () => {
+  const env = { ...process.env };
+  delete env.SENTRY_DSN;
+  const { status, out } = misinvoke(["check-telemetry-wire.mjs"], env);
+  assert.notEqual(status, 0, "must exit non-zero");
+  const trimmed = out.trim();
+  assert.equal(trimmed.split("\n").length, 1, `expected exactly one line: ${out}`);
+  assert.ok(trimmed.includes("run with:") && trimmed.includes("--import"), trimmed);
+  assert.ok(!trimmed.includes("AssertionError") && !trimmed.includes("at file://"), `looks like a stack: ${out}`);
+});
+
+await test("check-telemetry-wire refuses to run without SENTRY_DSN: ONE line, no stack (TASK-223)", () => {
+  const env = { ...process.env };
+  delete env.SENTRY_DSN;
+  const { status, out } = misinvoke(["--import", "./instrument.mjs", "check-telemetry-wire.mjs"], env);
+  assert.notEqual(status, 0, "must exit non-zero");
+  const trimmed = out.trim();
+  assert.equal(trimmed.split("\n").length, 1, `expected exactly one line: ${out}`);
+  assert.ok(trimmed.includes("run with:") && trimmed.includes("SENTRY_DSN="), trimmed);
+  assert.ok(!trimmed.includes("TypeError") && !trimmed.includes("at file://"), `looks like a stack: ${out}`);
+});
+
 // ---- decision-6 arithmetic (no database needed) ------------------------------------
 // The pro-rata split is the one piece of P&L arithmetic that can be wrong QUIETLY: the
 // naive `round(total * share)` per building loses a cent on almost every three-way split

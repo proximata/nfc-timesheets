@@ -605,7 +605,17 @@ nothing would be instrumented.
 
 ```bash
 node check-api.js   # uses DATABASE_URL, exits 0 with SKIP when no database is reachable
+
+# The one telemetry case check-api.js cannot run in-process (it needs --import to be the
+# FIRST thing loaded). check-api.js already runs this as a child; to run it standalone:
+cd server && SENTRY_DSN='https://check@o4509000000000000.ingest.de.sentry.io/451' \
+  node --import ./instrument.mjs check-telemetry-wire.mjs
 ```
+
+Run `node check-telemetry-wire.mjs` any other way — no `--import`, or `--import` with no
+`SENTRY_DSN` — and it prints one `run with: ...` line and exits non-zero instead of a raw
+Node stack (TASK-223). check-api.js asserts that message directly, so deleting the guard
+fails the suite rather than going back to a stack trace.
 
 The telemetry cases run **first and without a database**, because their whole point is that
 they hold when nothing else does.

@@ -1,10 +1,10 @@
 ---
 id: TASK-223
 title: check-telemetry-wire.mjs dies with a raw Node stack when run the obvious way
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-20 22:46'
-updated_date: '2026-08-21 00:23'
+updated_date: '2026-08-21 01:55'
 labels:
   - server
   - checks
@@ -27,9 +27,9 @@ Same shape as TASK-218 (migrate.js burying a refusal under a stack trace): the c
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Running `node server/check-telemetry-wire.mjs` with no loader prints ONE line naming the exact command to run instead, and exits non-zero — no stack.
-- [ ] #2 The correct invocation still passes unchanged, and is written next to the checks in server/README.md.
-- [ ] #3 Shown red: the guard's own message is asserted, so deleting the guard fails the check rather than producing a stack again.
+- [x] #1 Running `node server/check-telemetry-wire.mjs` with no loader prints ONE line naming the exact command to run instead, and exits non-zero — no stack.
+- [x] #2 The correct invocation still passes unchanged, and is written next to the checks in server/README.md.
+- [x] #3 Shown red: the guard's own message is asserted, so deleting the guard fails the check rather than producing a stack again.
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -55,4 +55,6 @@ So the guard AC #1 asks for has to cover BOTH halves: no loader, and no DSN. Wit
   -> check-telemetry-wire: PASS
 
 RELATED, and it changes the priority argument: ops/deploy.sh now installs the systemd unit and the deployed API really does run with --import (commit f5c53ed). Before that the flag was missing in production, so this check was guarding a property the box did not have. It now guards a real one. TASK-224 is the remaining half -- there is still no DSN in production.
+
+FIXED. Top-of-file guard in check-telemetry-wire.mjs now checks Sentry.getClient() AND client.getOptions().dsn before running any case; either miss prints ONE 'check-telemetry-wire: run with: ...' line to stderr and exit(1), no stack. Verified by hand: no loader, loader+no DSN, and the correct invocation (PASS, exit 0). Regression-proofed in check-api.js: two new cases run both wrong invocations as children and assert exactly one line containing 'run with:' and no 'AssertionError'/'at file://' — deleting the guard fails these, not just check-telemetry-wire.mjs itself. Documented next to the other checks in server/README.md.
 <!-- SECTION:NOTES:END -->
