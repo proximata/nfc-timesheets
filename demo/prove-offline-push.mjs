@@ -105,6 +105,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * one needs PSST_SKIP_SCAN=1, with gitleaks as the check that actually matters.)
  */
 const TAP_SETTLE_MS = 8 * 1000;
+/**
+ * The CEILING on that wait. See [tapAndSettle].
+ */
+const TAP_CEILING_MS = Number(process.env.TAP_CEILING_SECONDS ?? 90) * 1000;
 const phase = (n, title) => console.log(`\n── ${n}. ${title} ${"─".repeat(Math.max(0, 62 - title.length))}`);
 
 // ---- the device --------------------------------------------------------------------
@@ -213,6 +217,36 @@ const screenText = () => {
 
 /** The exact intent a physical tag produces. NOT an in-app button — there is none. */
 const tap = () => shell(`am start -n ${ACTIVITY} -a android.intent.action.VIEW -d "https://${TAG_HOST}/t?l=${HOIV}"`);
+/**
+ * TAP, THEN WAIT FOR THE PHONE'S OWN DATABASE TO CHANGE — not for a fixed eight seconds.
+ *
+ * THIS COST A WHOLE RUN AND ALMOST COST A CORRECT BUILD ITS REPUTATION. The first run
+ * against 0.5.2 / versionCode 9 reported 14 failures beginning with „the tap produced a row
+ * ON THE PHONE (0)", which reads exactly like "the clock-in is broken". It was not: the APK
+ * had been installed SECONDS earlier, the platform was still doing its post-install dexopt,
+ * and the first cold start after an install took longer than the flat `sleep(8s)` this
+ * function replaces. The row appeared; the instrument had already moved on, so phase 1 saw
+ * an empty queue and every phase after it was then measuring nothing. Measured immediately
+ * afterwards on the same build, once warm: **2 seconds**.
+ *
+ * A fixed sleep is a race condition with a nice name. This polls the one thing that
+ * actually answers the question, keeps the 8s as a FLOOR (so a tap that is instantly
+ * wrong is still caught rather than raced past), and gives up at a ceiling so a genuinely
+ * broken tap still fails instead of hanging.
+ *
+ * @returns seconds waited, so a slow tap is visible in the transcript rather than silent.
+ */
+async function tapAndSettle() {
+  const before = JSON.stringify(localShifts());
+  const startedAt = Date.now();
+  tap();
+  await sleep(TAP_SETTLE_MS);
+  const deadline = startedAt + TAP_CEILING_MS;
+  while (JSON.stringify(localShifts()) === before && Date.now() < deadline) await sleep(2000);
+  const waited = Math.round((Date.now() - startedAt) / 1000);
+  if (waited > TAP_SETTLE_MS / 1000) console.log(`  (the tap took ${waited}s to reach the phone's database)`);
+  return waited;
+}
 /**
  * Opening the app the way a worker does. `-f 0x10100000` is NEW_TASK |
  * LAUNCHED_FROM_HISTORY, i.e. the Recents card — and until `4698c90` this very call
@@ -440,6 +474,19 @@ async function main() {
   const startLocal = localShifts().filter((s) => !s.openSynced || (s.end && !s.closeSynced));
   check(startLocal.length === 0, `the phone is holding nothing to start with (${startLocal.length})`);
 
+  // A JOB LEFT OVER FROM A PREVIOUS RUN IS NOT THIS RUN'S FINDING, and the assertion below
+  // cannot tell the two apart. Nothing in the app ever calls JobScheduler.cancel (TASK-234),
+  // so a job armed for rows that have since been delivered — or, as happened here, deleted
+  // out of band while tidying up — stays armed until it next runs. force-stop is the one
+  // instrument that clears it: the platform cancels every job a force-stopped app holds,
+  // which is the very ceiling § 5 measures. Only ever done over an EMPTY queue, so it can
+  // never hide a real pending row.
+  if (startLocal.length === 0 && jobScheduled()) {
+    console.log(`  (a job was left armed over an empty queue: "${jobState()}" — force-stopping to clear it, see TASK-234)`);
+    tryShell(`am force-stop ${PKG}`);
+    await sleep(2500);
+  }
+
   // THE RED THAT MAKES PHASE 2 MEAN SOMETHING. An empty queue must schedule NO job: a
   // background push that is always armed would make "the job is pending" unfalsifiable.
   red(!jobScheduled(), `no job is pending over an empty queue — "${jobState()}"`);
@@ -454,8 +501,7 @@ async function main() {
   check(defaultNetwork() === "none", `…and dumpsys agrees: Active default network: ${defaultNetwork() || "(none)"}`);
 
   const tapAt = new Date();
-  tap();
-  await sleep(TAP_SETTLE_MS);
+  await tapAndSettle();
   shot("10-offline-tap.png");
 
   const queued = localShifts().filter((s) => !s.openSynced);
@@ -539,8 +585,7 @@ async function main() {
   // time in the same drain, which is the case SyncPlan's ordering exists for.
   check(await goOffline(), "the radio is OFF again");
 
-  tap(); // clock OUT: same building, so writeTap closes the running shift
-  await sleep(TAP_SETTLE_MS);
+  await tapAndSettle(); // clock OUT: same building, so writeTap closes the running shift
   shot("11-offline-close.png");
 
   const closedLocally = localShifts().find((s) => s.clientUuid === uuid);
@@ -610,8 +655,7 @@ async function main() {
 
   check(await goOffline(), "the radio is OFF");
   const tap2At = new Date();
-  tap();
-  await sleep(TAP_SETTLE_MS);
+  await tapAndSettle();
   const queued2 = localShifts().filter((s) => !s.openSynced);
   check(queued2.length === 1, `a second offline tap is queued (${queued2.length})`);
   const uuid2 = queued2[0]?.clientUuid;
@@ -698,8 +742,7 @@ async function main() {
   phase(6, "the session expires while a tap is queued");
 
   check(await goOffline(), "the radio is OFF");
-  tap(); // closes the shift opened in phase 5
-  await sleep(TAP_SETTLE_MS);
+  await tapAndSettle(); // closes the shift opened in phase 5
   const queued3 = localShifts().find((s) => s.clientUuid === uuid2);
   check(queued3?.end != null && queued3?.closeSynced == null, "a close is queued on the phone");
 
@@ -789,12 +832,39 @@ async function main() {
   // ---- what the office ends up seeing --------------------------------------------
   phase(9, "what the director sees");
   check(await networkBack(), "the network is back for the closing read");
-  const w = await workerRow();
-  check(w.phone_last_seen_at !== null, `phone_last_seen_at = ${w.phone_last_seen_at}`);
-  check(
-    w.phone_pending_shifts === 0,
-    `phone_pending_shifts = ${w.phone_pending_shifts} — the phone is holding nothing, and said so itself`,
-  );
+  const w0 = await workerRow();
+  check(w0.phone_last_seen_at !== null, `phone_last_seen_at = ${w0.phone_last_seen_at}`);
+
+  // FIRST: the phone's OWN queue, which is the ground truth. The server's counter is a
+  // report ABOUT that queue and can only be as fresh as the last request that carried it.
+  const stillHeld = localShifts().filter((s) => !s.openSynced || (s.end != null && !s.closeSynced));
+  check(stillHeld.length === 0, `the phone itself is holding nothing (${stillHeld.length} row(s) unsent)`);
+
+  // THEN the office's copy, with a bounded wait rather than a single read.
+  const w = await until(workerRow, (r) => r.phone_pending_shifts === 0, 60);
+  if (w.phone_pending_shifts === 0) {
+    ok("phone_pending_shifts = 0 — the office's copy agrees with the phone");
+  } else if (stillHeld.length === 0) {
+    // NOT A FLAKE, AND NOT A LOST HOUR — a STALE COUNTER, and the run must name it as
+    // exactly that or the next reader will file it as either "the queue is broken" or
+    // "the test is flaky" and both are wrong.
+    //
+    // net/Api.kt attaches X-Pending-* to every request, and the value it attaches is the
+    // queue as it stood BEFORE that request. So the request that delivers the LAST row
+    // reports "1 outstanding", the row commits, and nothing ever sends the 0 — there is no
+    // further request to carry it. The office's /workers/ screen and /payroll/'s caveat
+    // then claim a phone is holding a shift that is already in the ledger, until that
+    // phone next taps (i.e. the next shift, possibly tomorrow).
+    //
+    // Observed here: server rows complete, phone queue EMPTY, phone_pending_shifts = 1.
+    // Filed as TASK-237. It costs a false caveat on a money screen, never an hour.
+    bad(
+      `phone_pending_shifts = ${w.phone_pending_shifts} while the phone's queue is EMPTY — ` +
+        "the office's counter is stale, because only the NEXT request can carry the zero (TASK-237)",
+    );
+  } else {
+    bad(`phone_pending_shifts = ${w.phone_pending_shifts}, and the phone really is holding ${stillHeld.length}`);
+  }
 
   const final = await serverShifts();
   writeFileSync(`${OUT}/shifts.json`, JSON.stringify(final, null, 2));
