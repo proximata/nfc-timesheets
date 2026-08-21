@@ -870,7 +870,11 @@ a {
 .badge,
 .shift-state {
   display: inline-block;
-  font-size: 0.6875rem;
+  /* PHONE #7 (LOOK-PHONE.md): 11px, below DESIGN.md §4's own smallest step (0.75rem/12px) -
+     and this is the cell that says whether a shift is paid, in a stairwell, in daylight.
+     Contrast was never the problem (audit-contrast.mjs already passed every state token at
+     4.5:1+); this is a SIZE finding. */
+  font-size: 0.75rem;
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid var(--border-strong);
