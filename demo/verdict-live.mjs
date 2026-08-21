@@ -209,9 +209,16 @@ try {
     else console.log(`     load ${i + 1}: ${JSON.stringify(state)}`);
   }
   const refErr = errors.filter((e) => /RefererNotAllowed/.test(e));
-  drew === SAMPLES
-    ? ok(`the map drew ${drew}/${SAMPLES} on ${BASE}`)
-    : bad(`the map drew only ${drew}/${SAMPLES} on ${BASE}`);
+  // A SKIP IS NOT A PASS. With MAP_SAMPLES=0 `drew === SAMPLES` is 0 === 0 and this section
+  // printed a green line over zero loads — the sixth vacuous check in this project, written
+  // by the run that exists to find them. It says SKIPPED now, and says why.
+  if (SAMPLES === 0) {
+    console.log("  skip: MAP_SAMPLES=0 — the map was NOT looked at. This is a skip, not a pass.");
+  } else if (drew === SAMPLES) {
+    ok(`the map drew ${drew}/${SAMPLES} on ${BASE}`);
+  } else {
+    bad(`the map drew only ${drew}/${SAMPLES} on ${BASE}`);
+  }
   refErr.length === 0
     ? ok("no RefererNotAllowedMapError in the browser console across every load")
     : bad(`RefererNotAllowedMapError x${refErr.length}: ${refErr[0]}`);
