@@ -5,6 +5,30 @@
     <uses-permission android:name="android.permission.NFC" />
 
     <!--
+      THE BACKGROUND PUSH DOES NOT EXIST WITHOUT THIS LINE (TASK-225), AND ITS ABSENCE IS
+      SILENT. A NORMAL, install-time permission: no dialog, nothing to deny, nothing on the
+      clock-in path.
+
+      `JobScheduler.schedule()` on a JobInfo carrying `setRequiredNetworkType(...)` throws
+
+          SecurityException: android.permission.ACCESS_NETWORK_STATE required for jobs
+                             with a connectivity constraint
+
+      This app declared INTERNET and not this, so EVERY schedule() threw, sync/SyncScheduler
+      caught it in a `runCatching {}` that discarded the result, and the offline push shipped
+      DEAD: `adb shell cmd jobscheduler get-job-state io.github.qwadratic.NFCTimeSheets 225`
+      answered "unknown" after every offline tap. Nothing in the app, on the screen, or in
+      any source-reading check could have said so — which is TASK-225's own bug rebuilt one
+      layer down, and it was found only by asking a real device
+      (`demo/prove-offline-push.mjs` § 1).
+
+      Two guards now keep it: SyncScheduler.Armed.Refused carries the platform's answer to
+      the screen instead of dropping it, and `android/checks/manifest-check.sh` fails the
+      build when a connectivity constraint exists without this permission.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
       Self-update (this iteration). A normal, install-time permission below Android 8;
       on 8+ it also requires the per-app "install unknown apps" toggle the worker (or
       whoever set the phone up) must grant once in Settings — update/UpdateReadiness.kt

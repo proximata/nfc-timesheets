@@ -92,3 +92,9 @@ mkdir -p "$OUT_NFC"
   "$NFC"/TagWriter.kt checks/tag-writer-check.kt
 
 "$JAVA_BIN" -cp "$OUT_NFC:$JSON_JAR:$STDLIB" io.github.qwadratic.nfctimesheets.checks.Tag_writer_checkKt
+
+# THE MANIFEST. Everything above this line reads Android-free Kotlin, which is what makes
+# it runnable on a laptop — and is also why none of it could see that the background push
+# was dead on every device for want of one <uses-permission> line (TASK-225). This last
+# check reads the manifest against the scheduler's own source. See checks/manifest-check.sh.
+sh checks/manifest-check.sh
