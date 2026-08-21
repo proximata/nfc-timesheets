@@ -458,17 +458,28 @@ a {
 }
 
 /* The one exception to the 44px floor: a quiet button is a text link wearing a button's
-   semantics, it sits inside a 44px-tall row or header, and the row is the target. */
+   semantics, it sits inside a 44px-tall row or header, and the row is the target.
+
+   C10 (LOOK.md): no border, no fill, body colour - on /locations/ a row carries FOUR of
+   these ("Zonen verwalten", "Mit X teilen", "Bearbeiten", "Deaktivieren") interleaved with
+   plain data cells that render identically. "Mit Lena Hofbauer teilen" in particular read
+   as a STATUS ("shared with Lena Hofbauer"), not a control that mints a link. An underline
+   is the one affordance that survives greyscale, costs no space, and does not fight "the
+   row is the target" above - it still looks quiet, it just now also looks clickable. */
 .btn-quiet {
   background: transparent;
   color: var(--text-secondary);
   padding: 6px 10px;
   min-height: 32px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--border-strong);
 }
 
 .btn-quiet:hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--bg-overlay);
+  text-decoration-color: currentColor;
 }
 
 .btn-danger {
