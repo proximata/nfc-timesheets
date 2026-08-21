@@ -4,7 +4,7 @@ title: Run CORE-FLOW section 4 on a real phone with real cards — the Ultraligh
 status: To Do
 assignee: []
 created_date: '2026-08-20 22:46'
-updated_date: '2026-08-21 02:00'
+updated_date: '2026-08-21 03:24'
 labels:
   - android
   - nfc
@@ -42,5 +42,11 @@ THE SCRIPT IS backlog/docs/CORE-FLOW.md section 4. Do not improvise around it.
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-AC updated 2026-08-21 by the Fix run: the unbound-tap sentence changed from the generic err_rejected bucket to a dedicated err_tag_unbound string (owner ask: 'a cleaner tapping a card nobody has resolved yet must get a German sentence telling him what to do, not an error code' — and specifically not 'report this shift', since no shift was ever opened). New sentence to expect on real hardware: 'Dieser Tag ist noch keinem Objekt zugeordnet. Bitte bei der Verwaltung melden.'
+VERDICT PASS 2026-08-21: everything that is not this task is now proven, deployed and photographed on the live box (backlog/docs/STATE-OF-THE-PRODUCT.md). This is the only remaining gate on the product, and it cannot be closed from a laptop by anyone.
+
+Read backlog/docs/CORE-FLOW.md section 4 in the stairwell and nothing else. Step 1 is load-bearing and is step 1 on purpose: the foreign Mifare Ultralight MUST be refused before a single blank card is written, because it is the one card in the building whose real capacity is below our message size, and it is therefore the only instrument that can tell you whether a real NTAG213 reports maxSize 137 or the raw 180. If it writes, every card written after it is suspect.
+
+The three sentences that mean STOP are in that section. Also run, once, on the phone in hand:
+  adb shell pm get-app-links io.github.qwadratic.NFCTimeSheets
+It must report 'timesheets.exe.xyz: verified'. Anything else and every tap opens Chrome instead of the app — not a card fault, and not visible from any server.
 <!-- SECTION:NOTES:END -->

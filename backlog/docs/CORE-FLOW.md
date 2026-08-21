@@ -11,6 +11,14 @@ Reproduce the whole thing:
 ./ops/check-prove-live-mutants.sh      # the same 14 assertions, shown RED first
 ```
 
+**Read `backlog/docs/STATE-OF-THE-PRODUCT.md` first if you are about to show this to a
+client.** It is the verdict pass of 2026-08-21: it re-ran, re-photographed and re-measured
+this file, `LOOK.md`, `LOOK-PHONE.md` and `RELIABILITY.md` against the live box, separates
+what is proven from what was merely never looked at, and answers VISUAL / UX / RELIABILITY
+separately. Its first finding is the one that matters here: thirteen fixes were committed
+and none of them deployed, so for five hours production served the bugs those commits had
+already closed (TASK-231).
+
 **This file says what WORKS. `backlog/docs/RELIABILITY.md` says what happens when it
 breaks** — production stopped, restarted, rebooted, filled and raced on purpose on
 2026-08-20, ranked by what each failure costs the cleaner or the director. Read it before

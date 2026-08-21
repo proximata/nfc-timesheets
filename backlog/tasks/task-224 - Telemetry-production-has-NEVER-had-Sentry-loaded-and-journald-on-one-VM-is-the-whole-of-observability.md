@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-21 00:08'
+updated_date: '2026-08-21 03:23'
 labels: []
 dependencies: []
 priority: high
@@ -42,3 +43,18 @@ ACCEPTANCE:
 
 MUST NOT REGRESS: telemetry must never be required to boot and must never block a clock-in (decision-23). instrument.mjs must stay throw-free -- Restart=always + RestartSec=5 turns a throw here into a crash loop that takes the API down for telemetry.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERDICT PASS 2026-08-21 — half of this is now impossible to get wrong, and the remaining half is confirmed still open.
+
+ops/check-unit-drift.sh against production, this run:
+  ok: the running process's argv IS the repo's ExecStart: /usr/bin/node --import /srv/nfc/instrument.mjs /srv/nfc/server.js
+  ok: instrument.mjs is loaded via --import, so a DSN would actually take effect
+  ok: the API runs as 'app' — a nologin system account
+
+STILL OPEN, verified directly: SENTRY_DSN is unset on the box. `sudo grep -c '^SENTRY_DSN=' /etc/nfc/env` -> 0. The SDK is in the process and reports nowhere; journald remains the whole of observability.
+
+The wire check itself is green when handed a DSN: `cd server && SENTRY_DSN=… node --import ./instrument.mjs check-telemetry-wire.mjs` -> PASS, including 'nothing forbidden survives on the wire' and 'the phone's trace is CONTINUED'. So the only thing between here and telemetry is the DSN in /etc/nfc/env and a restart.
+<!-- SECTION:NOTES:END -->

@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-21 02:56'
+updated_date: '2026-08-21 03:23'
 labels:
   - ux
   - web
@@ -45,3 +46,17 @@ UGLY (LOOK.md section 3, U1-U16): genuinely cosmetic by the owner's own instruct
 
 Also still open, unrelated to LOOK: TASK-180 AC #2/#4 (the zero-BUILDINGS vacuous-0 case on /pl/, /analytics/, /) and TASK-181 (raw geocode status tokens) — both pre-existing, noted here only because they rhyme with W4/C4 and might get picked up in the same pass.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERDICT PASS 2026-08-21 (backlog/docs/STATE-OF-THE-PRODUCT.md, commits 0ece084 / f41b358 / e3bf0e3 / 4c95145) — two entries here are PARTLY STALE and must be re-read before anyone starts.
+
+C5 and PHONE #5, first half: ALREADY FIXED, verified in a browser. demo/verdict-failure.mjs blocks every /admin/* response with Network.setBlockedURLs and reads five screens back. Result: /, /payroll/, /shifts/, /pl/ and /locations/ each show the error and NOT ONE of them still says 'Wird berechnet…' / 'Wird geladen…'. Commit 5456650 (the RELIABILITY run) fixed that half after LOOK.md was written. Evidence: docs/media/verdict/failure/*.png + *.json.
+
+C5 and PHONE #5, second half: STILL TRUE and unchanged. 4 of 5 screens offer NO retry control at all — only / has 'Aktualisieren'. 'versuchen Sie es noch einmal' is an instruction attached to nothing on /payroll/, /shifts/, /pl/ and /locations/. That is the whole of what is left of C5.
+
+NEW, in no report, found in the same photographs: on all five screens the failure sentence is printed TWICE — once as .form-error (red, 14px) and once as an ordinary near-white paragraph (15px) below the filter card. Nothing is misleading; it is said twice, in two weights, and neither copy is a button. Fold this into whatever fixes the retry control.
+
+UGLY re-confirmed by eye on the deployed bundle, not just in source: U1 (every money column left-aligned — 236,25 € and 3.874,51 € share a left edge on /payroll/) and U5 (brand wraps to two lines at 1280) are both live on schimmer-glanz.exe.xyz right now.
+<!-- SECTION:NOTES:END -->
