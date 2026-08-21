@@ -655,13 +655,25 @@ export default function PayrollPage() {
                   </Link>
                 </li>
               ) : null}
-              {totals.unresolvedShifts === 0 && totals.openShifts === 0 ? (
+              {/* …EXCEPT over zero rows. "Nothing is excluded" and "the server agrees with
+                  what's on screen" are both vacuously true with no shifts in ANY period at
+                  all (LOOK.md W6) — the exact shape production ships in on day one — and
+                  read as "your payroll is complete" rather than "nothing has happened yet".
+                  /shifts/ already suppresses `noneBlocked` the same way, over the same
+                  condition, for the same reason: a claim about an empty table is a claim
+                  about nothing. The EmptyState below states the real fact instead. */}
+              {totals.unresolvedShifts === 0 &&
+              totals.openShifts === 0 &&
+              totals.lines.length > 0 ? (
                 <li>{t('caveatNoneExcluded')}</li>
               ) : null}
               {/* The row list is capped; the server aggregate is not. The failing branch is
                   in the warning above, and the reconciled branch is stated here, because
-                  silence would read as "not checked". */}
-              {reconciliation !== null && reconciliation.missingCents === 0 ? (
+                  silence would read as "not checked" — UNLESS there is nothing to
+                  reconcile, per the guard above. */}
+              {reconciliation !== null &&
+              reconciliation.missingCents === 0 &&
+              totals.lines.length > 0 ? (
                 <li>{t('caveatReconcileOk')}</li>
               ) : null}
               {/* NOT COMPUTED is a third answer and it is not silence. While a scope is on,

@@ -638,6 +638,30 @@ export default function PlPage() {
       />
       {scopeUnknown ? <p className="notice bad">{tFilter('unknownNotice')}</p> : null}
 
+      {/* THE RESULT MAY BE MEANINGLESS, not merely absent. Zero recorded hours against real
+          typed revenue prices the period as pure profit at a 100% margin — a tap-pipeline
+          outage, a truncated payload and a pre-go-live month all draw exactly this picture
+          (LOOK.md W1). `labourCents` sums every building unconditionally, priced or not, so
+          this fires independently of which buildings happen to have revenue typed. */}
+      {report !== null &&
+      totals !== null &&
+      totals.labourCents === 0 &&
+      totals.marginBp !== null ? (
+        <p className="note bad">{t('caveatNoHours')}</p>
+      ) : null}
+
+      {/* /inventory/ says „Kein Preis hinterlegt" for an item nobody priced, in words, never
+          0,00 €. Here the same unpriced requests are pro-rated into every building's
+          Material column AS 0,00 € — a real number, not a display choice, that reads as "no
+          material was used" rather than "the cost is unknown" (LOOK.md W5). The fact was
+          already stated, truthfully, in bullet 6 of 11 of the method list ~1400px down;
+          repeated here where the number it changes actually is. */}
+      {report !== null && report.materials.unpriced_requests > 0 ? (
+        <p className="note bad">
+          {t('caveatMaterialUnpriced', { unpriced: report.materials.unpriced_requests })}
+        </p>
+      ) : null}
+
       {/* The answer first, above the control that changes it. `flagged` leads because it is
           the only cell that asks for something; everything else here is context. */}
       {report === null || totals === null ? null : (
@@ -645,8 +669,18 @@ export default function PlPage() {
           cells={[
             {
               k: t('answerFlagged'),
-              v: totals.flagged,
-              calm: totals.flagged === 0,
+              // A BARE „0" READS AS A CLEAN PASS. When every building is `notAssessable`
+              // there is nothing to be a clean pass OF — „6 von 6 nicht beurteilbar" is the
+              // whole content of the answer and the numeral 0 above it said the opposite
+              // (LOOK.md W4). Still 0 whenever SOME buildings were actually assessed and
+              // simply cleared the bar.
+              v:
+                totals.notAssessable > 0 && totals.notAssessable === buildings.length
+                  ? t('answerFlaggedNoneAssessable')
+                  : totals.flagged,
+              calm:
+                totals.flagged === 0 &&
+                !(totals.notAssessable > 0 && totals.notAssessable === buildings.length),
               sub:
                 totals.notAssessable > 0
                   ? t('totalNotAssessable', { buildings: totals.notAssessable })
@@ -655,7 +689,21 @@ export default function PlPage() {
             {
               k: t('answerProfit'),
               v: totals.profitCents === null ? t('profitUnknown') : money(totals.profitCents),
-              sub: rangeLabel,
+              // The scope caption used to live only on the NEXT tile (Umsatz). A building
+              // can carry real labour cost and still be invisible here, whole, because it
+              // has no revenue typed — the headline then silently overstates profit
+              // (LOOK.md W3). Stated on the tile it changes, not the one next door.
+              sub: [
+                rangeLabel,
+                totals.unpricedBuildings > 0 && totals.costCentsUnpriced > 0
+                  ? t('answerProfitScope', {
+                      buildings: totals.unpricedBuildings,
+                      cost: money(totals.costCentsUnpriced),
+                    })
+                  : null,
+              ]
+                .filter((part) => part !== null)
+                .join(' · '),
             },
             {
               k: t('answerMargin'),
