@@ -103,8 +103,12 @@ fi
 # code and the stylesheet the director downloads the code in this tree" with no build-id
 # noise in it. When § 1 fails and this passes, nobody needs to read a 176-line diff to learn
 # that the answer is yes.
-local_code=$(cd "${MUTANT_DIR_FOR_CODE:-web/out}/_next/static" && find chunks css media -type f 2>/dev/null | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256 | cut -d' ' -f1)
-remote_code=$(ssh "$HOST" "cd /srv/nfc/public/_next/static && find chunks css media -type f 2>/dev/null | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d' ' -f1")
+# `-name '*'` over the whole tree MINUS the build-id directory, rather than naming chunks/
+# css/ media/: `find chunks css media` exits 1 when media/ does not exist, and under
+# `set -e -o pipefail` that killed this script silently after one ok: line.
+CODE_FIND="find . -type f ! -path './[A-Za-z0-9_-]*/_buildManifest.js' ! -name '_buildManifest.js' ! -name '_ssgManifest.js' ! -name '_clientMiddlewareManifest.json'"
+local_code=$(cd "${MUTANT_DIR_FOR_CODE:-web/out}/_next/static" && eval "$CODE_FIND" | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256 | cut -d' ' -f1)
+remote_code=$(ssh "$HOST" "cd /srv/nfc/public/_next/static && $CODE_FIND | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d' ' -f1")
 if [ "$local_code" = "$remote_code" ]; then
   ok "the JS and CSS the browser downloads are this tree's, byte for byte ($local_code)"
 else
