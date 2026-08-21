@@ -774,6 +774,51 @@ a {
   text-align: right;
 }
 
+/* An inline money field INSIDE a numeric table cell (TASK-236: the /pl/ revenue ledger's
+   bulk-entry grid). Right-aligned explicitly rather than inherited, so it stays correct
+   even where U1's `.data-table td { text-align: left }` beats `.col-numeric` on
+   specificity — an <input> is not itself a td and would otherwise default to the
+   browser's own left alignment, which is a second, worse wrong. 44px tall: the same
+   touch-target floor every other control on this page holds to, not the compact size a
+   spreadsheet cell would use, because a director on a phone is exactly who this exists
+   for (LOOK-PHONE.md, 390px must work). */
+.cell-input {
+  width: 100%;
+  min-width: 9ch;
+  max-width: 16ch;
+  min-height: 44px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding: 6px var(--s3);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-ctrl);
+}
+
+.cell-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.cell-input::placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* The bulk-save bar above the ledger table: how many blank cells this period has, and the
+   one button that saves every filled-in one at once. Sits in the SAME .list-body the intro
+   paragraph already uses, so it reads as part of the panel's opening statement rather than
+   as a second toolbar. */
+.bulk-save-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s3);
+}
+
 /* --- State badges ------------------------------------------------------------------- */
 
 /*

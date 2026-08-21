@@ -24,6 +24,7 @@ import {
   type RevenueGrid,
   retractRevenue,
   saveRevenue,
+  saveRevenueBulk,
   saveSetting,
 } from '@/lib/api'
 import { filterHref, useFilters } from '@/lib/filters'
@@ -211,6 +212,27 @@ export default function PlPage() {
     month: string
   } | null>(null)
 
+  /**
+   * BULK ENTRY (TASK-236): the day-one grid is 8 buildings x 12 months = 96 cells, and a
+   * drawer that opens one cell at a time is not a ritual anyone performs 96 times.
+   *
+   * Scoped ON PURPOSE to cells with NO existing entry. The comment above the single-cell
+   * drawer further down explains the original reasoning against "a screen full of money
+   * fields saved by one button": a stray keystroke in row nine, discovered a quarter
+   * later, with no undo for a figure already reported. That risk is real for EDITING an
+   * existing figure and is not eliminated here, it is AVOIDED: an inline field only ever
+   * exists for a cell that currently reads "Nicht eingetragen", so the worst a stray
+   * keystroke can do is create a wrong NEW entry, never silently overwrite a correct one
+   * — and every existing figure still goes through the one-cell drawer's slower,
+   * note-carrying, individually-confirmed path. A review step (`bulkReviewOpen`) before
+   * the request goes out is the second guard: nothing is saved without the director
+   * reading every amount back first, named against its own building and month.
+   */
+  const [bulkDrafts, setBulkDrafts] = useState<Record<string, string>>({})
+  const [bulkError, setBulkError] = useState<string | null>(null)
+  const [bulkReviewOpen, setBulkReviewOpen] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
+
   const handleAuthLoss = useCallback(
     (cause: unknown): boolean => {
       if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
@@ -259,6 +281,11 @@ export default function PlPage() {
     // under the new period's heading while the request is in flight.
     setReport(null)
     setGrid(null)
+    // A different period means different months, so any unsaved bulk drafts belong to rows
+    // that are no longer on screen — keeping them would silently resurrect a typed amount
+    // under a different building-month if the same row key ever recurred.
+    setBulkDrafts({})
+    setBulkError(null)
     void load(controller.signal)
     return () => controller.abort()
   }, [load])
@@ -592,6 +619,47 @@ export default function PlPage() {
           })),
         )
 
+  /** Blank cells with something typed into them this session — the batch a save submits. */
+  const bulkPending = ledgerRows
+    .filter((row) => row.entry === null)
+    .map((row) => ({ row, raw: bulkDrafts[row.key] ?? '' }))
+    .filter(({ raw }) => raw.trim() !== '')
+  const bulkMissingCount = ledgerRows.filter((row) => row.entry === null).length
+
+  /** Parse every pending draft and either open the review or name what is wrong. */
+  function openBulkReview() {
+    if (bulkPending.length === 0) return
+    const invalid = bulkPending.filter(({ raw }) => parseEuroToCents(raw) === null)
+    if (invalid.length > 0) {
+      setBulkError(t('bulkInvalid', { count: invalid.length }))
+      return
+    }
+    setBulkError(null)
+    setBulkReviewOpen(true)
+  }
+
+  async function confirmBulkSave() {
+    if (bulkBusy) return
+    setBulkBusy(true)
+    try {
+      const entries = bulkPending.map(({ row, raw }) => ({
+        location_id: row.building.location_id,
+        month: row.month,
+        amount_cents: parseEuroToCents(raw) as number,
+      }))
+      await saveRevenueBulk(entries)
+      setBulkDrafts({})
+      setBulkReviewOpen(false)
+      setBaselineNotice({ ok: true, text: t('bulkSaved', { count: entries.length }) })
+      await load()
+    } catch (cause) {
+      setBulkReviewOpen(false)
+      if (!handleAuthLoss(cause)) setBaselineNotice({ ok: false, text: t('revenueFailed') })
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -812,6 +880,27 @@ export default function PlPage() {
                   })}
                 </p>
               )}
+              {/* THE OFFER TO FIX IT, not just the refusal. A screen that only ever says
+                  "nicht beurteilbar" until 96 cells are hand-typed one drawer at a time is
+                  a design problem, not a data-entry problem (TASK-236) — so the blank cells
+                  are counted here, and every one of them is a field two paragraphs down,
+                  not a modal away. */}
+              {bulkMissingCount > 0 ? (
+                <p className="note">{t('bulkMissingCount', { count: bulkMissingCount })}</p>
+              ) : null}
+              {bulkPending.length > 0 ? (
+                <div className="bulk-save-bar">
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={bulkBusy}
+                    onClick={openBulkReview}
+                  >
+                    {t('bulkSaveButton', { count: bulkPending.length })}
+                  </button>
+                  {bulkError === null ? null : <span className="form-error">{bulkError}</span>}
+                </div>
+              ) : null}
             </div>
             {ledgerRows.length === 0 ? (
               <div className="list-body">
@@ -846,9 +935,35 @@ export default function PlPage() {
                       <td>{row.building.name}</td>
                       <td className="col-numeric">
                         {/* NEVER 0,00 EUR for "nobody has typed one". A typed 0 is a
-                            different, real answer and renders as 0,00 EUR right here. */}
+                            different, real answer and renders as 0,00 EUR right here.
+
+                            BULK ENTRY (TASK-236): a blank cell is an inline field, not a
+                            button that opens a drawer — typing here and pressing the save
+                            bar above is how 96 cells stop being 96 trips through a modal.
+                            Nothing is sent until that button is pressed and the review
+                            step confirms it; typing alone writes nothing. */}
                         {row.entry === null ? (
-                          <span className="cell-muted">{t('revenueNotEntered')}</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className="cell-input"
+                            aria-label={`${t('fieldAmount')}${t('forBuildingMonth', {
+                              name: row.building.name,
+                              month: monthLabel(row.month),
+                            })}`}
+                            // NOT the contract figure: this codebase keeps "erhalten" and
+                            // "vereinbart" visually separate everywhere else (the Agreed
+                            // column two cells to the right IS where that number lives),
+                            // and a placeholder that echoed it here would blur the one
+                            // distinction decision-42 exists to keep. A format example only.
+                            placeholder={t('bulkAmountPlaceholder')}
+                            value={bulkDrafts[row.key] ?? ''}
+                            disabled={busy || bulkBusy}
+                            onChange={(event) => {
+                              setBulkError(null)
+                              setBulkDrafts((prev) => ({ ...prev, [row.key]: event.target.value }))
+                            }}
+                          />
                         ) : (
                           money(row.entry.amount_cents)
                         )}
@@ -886,6 +1001,13 @@ export default function PlPage() {
                         )}
                       </td>
                       <td className="cell-actions">
+                        {/* The blank cell's PRIMARY path is now the inline field above,
+                            saved in bulk — this button is the slower path with a note and
+                            an explicit drawer, still here because a note sometimes matters
+                            ("Teilzahlung, Rest im Oktober") and typing one 96 times over is
+                            exactly the ceiling this task exists to remove. An ENTERED cell
+                            keeps the same button it always had: correcting a real figure is
+                            deliberately still one at a time, with its own confirm. */}
                         <button
                           type="button"
                           className="btn btn-quiet"
@@ -905,7 +1027,7 @@ export default function PlPage() {
                             })
                           }}
                         >
-                          {row.entry === null ? t('revenueEnter') : t('revenueEdit')}
+                          {row.entry === null ? t('revenueEnterWithNote') : t('revenueEdit')}
                           <span className="visually-hidden">
                             {t('forBuildingMonth', {
                               name: row.building.name,
@@ -947,7 +1069,24 @@ export default function PlPage() {
               take to a client; these paragraphs are. */}
           <ListPanel title={t('flaggedHeading')} padded>
             {baselineBp === null ? (
-              <EmptyState>{t('flaggedNoBaseline')}</EmptyState>
+              <>
+                <EmptyState>{t('flaggedNoBaseline')}</EmptyState>
+                {/* THE OFFER TO FIX IT, not just the refusal (TASK-236): a button right
+                    where the refusal is read, not only in the page header above the fold
+                    it may already have scrolled past. */}
+                <p className="form-actions">
+                  <button
+                    type="button"
+                    className="btn btn-quiet"
+                    onClick={() => {
+                      setBaselineError(false)
+                      setBaselineOpen(true)
+                    }}
+                  >
+                    {t('flaggedSetBaseline')}
+                  </button>
+                </p>
+              </>
             ) : flagged.length === 0 ? (
               <EmptyState>
                 {t('flaggedNone', { baseline: percent(baselineBp) })}
@@ -1346,6 +1485,15 @@ export default function PlPage() {
         }
       >
         <p>{t('baselineIntro')}</p>
+        {/* A SUGGESTED starting point, offered exactly like the revenue drawer's contract
+            figure below — named out loud, never pre-filled into the bound value, and never
+            saved unless a human presses save (TASK-236 "a sane default the director can
+            change"). 0% is not this codebase having an opinion about a Viennese cleaning
+            contract's margin, which `baselineIntro` above already refuses to do — it is the
+            one number with no opinion in it at all: "tell me about a building that is
+            losing money", the floor every business already agrees on before any target is
+            set. It is a PLACEHOLDER, so leaving it untouched saves nothing. */}
+        {report?.baseline_set === true ? null : <p className="note">{t('baselineSuggested')}</p>}
         {/* The form is in the body and the submit button is in the footer, joined by `form=`
             rather than by a click handler: Enter in the field must save, exactly as it did
             when the form was inline on the page. */}
@@ -1360,6 +1508,7 @@ export default function PlPage() {
               type="text"
               inputMode="decimal"
               value={baselineDraft}
+              placeholder={report?.baseline_set === true ? undefined : '0'}
               disabled={busy}
               onChange={(event) => setBaselineDraft(event.target.value)}
             />
@@ -1525,6 +1674,34 @@ export default function PlPage() {
         confirmLabel={t('revenueRetract')}
         destructive
         busy={busy}
+      />
+
+      {/* THE REVIEW STEP that makes bulk entry safe: every amount, named against its own
+          building and month, read back before anything is sent. Nothing above this modal
+          writes a row — typing into the inline fields only fills local state. */}
+      <ConfirmModal
+        open={bulkReviewOpen}
+        onClose={() => setBulkReviewOpen(false)}
+        onConfirm={() => void confirmBulkSave()}
+        title={t('bulkReviewTitle', { count: bulkPending.length })}
+        body={
+          <>
+            <p>{t('bulkReviewIntro')}</p>
+            <ul>
+              {bulkPending.map(({ row, raw }) => {
+                const cents = parseEuroToCents(raw)
+                return (
+                  <li key={row.key}>
+                    {row.building.name}, {monthLabel(row.month)}:{' '}
+                    {cents === null ? raw : money(cents)}
+                  </li>
+                )
+              })}
+            </ul>
+          </>
+        }
+        confirmLabel={t('bulkSaveButton', { count: bulkPending.length })}
+        busy={bulkBusy}
       />
     </>
   )

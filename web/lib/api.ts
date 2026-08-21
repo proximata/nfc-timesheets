@@ -1688,10 +1688,7 @@ export type RevenueBulkEntry = {
  * 404 `unknown_location` = a location id in the batch does not exist; nothing is written.
  * 422 `too_many_entries` = over the server's per-request cap (`REVENUE_BULK_MAX`).
  */
-export function saveRevenueBulk(
-  entries: RevenueBulkEntry[],
-  signal?: AbortSignal,
-): Promise<void> {
+export function saveRevenueBulk(entries: RevenueBulkEntry[], signal?: AbortSignal): Promise<void> {
   return apiFetch<{ entries: unknown[] }>('/admin/revenue', {
     method: 'POST',
     body: { entries },
