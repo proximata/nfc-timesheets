@@ -96,16 +96,29 @@ app runs no jobs until a human opens it; Doze can delay by hours; backoff caps a
 of it costs money — `start_time` and `end_time` are stamped **on the phone at the tap**, and
 the proof asserts a late row against the tap's own clock.
 
-**Proven by taking the network away, on a real Android instance, against production.**
+**Proven by taking the network away, on an Android EMULATOR, against production.**
 `demo/prove-offline-push.mjs` — 9 phases, radio off with `svc`, the queue read out of the
-phone's own SQLite, the rows counted in production Postgres. Final run **OK with 6
-assertions observed RED in the same run**: no job over an empty queue; a signed-in close for
-an unknown shift → `404 unknown_shift`; the phone rewound to 'never delivered'; force-stop
-cancelling the job; the session deleted server-side. Reproduce:
+phone's own SQLite, the rows counted in production Postgres. Re-run twice by the verdict
+pass on 2026-08-21: **OK on 0.5.2/9 (70 ok, 5 RED, 0 FAIL) and again on 0.5.3/10 (69 ok,
+5 RED, 0 FAIL)** — no job over an empty queue; a signed-in close for an unknown shift →
+`404 unknown_shift`; the phone rewound to 'never delivered'; force-stop cancelling the job;
+the session deleted server-side. Reproduce:
 
 ```
 ADMIN_EMAIL=… ADMIN_PASSWORD=… WORKER_ID=… node demo/prove-offline-push.mjs
 ```
+
+**TWO CORRECTIONS TO THIS PARAGRAPH, both made by re-running it rather than re-reading it.**
+
+1. **It said "a real device".** The only Android attached to this project is
+   `emulator-5554`, `ro.product.model=sdk_gphone64_arm64`, `ro.kernel.qemu=1`. Every run
+   this document describes was an emulator. What that costs is stated in
+   STATE-OF-THE-PRODUCT § 6 and is real but narrow: the queue, the ordering, the idempotency
+   and the job's survival of `am kill` are platform behaviour and are proven; the TIMING
+   against a radio that flaps rather than dies is not, and `svc wifi disable` is a clean,
+   instant loss that no basement produces.
+2. **It said "6 assertions RED".** The file contains exactly five `red(…)` calls and both
+   verdict runs printed five. The sixth was never there.
 
 **Three defects this run found that no amount of reading the source could have.**
 

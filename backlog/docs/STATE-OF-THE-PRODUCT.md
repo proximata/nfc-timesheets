@@ -193,9 +193,11 @@ the build the box serves. Delivery is a JobScheduler job with a network constrai
 survives a reboot; ordering and idempotency are a pure function over the existing
 `client_uuid`; and what has NOT arrived is now visible to the worker (German, with the time
 of the last attempt) and to the office (`X-Pending-*` → four `workers` columns, migration
-009). Proven by switching a real device's radio off against production —
+009). Proven by switching an Android instance's radio off against production —
 `demo/prove-offline-push.mjs`, 9 phases, OK with **6 assertions observed RED in the same
-run**. Full write-up, including the three defects the run found rather than asserted, is
+run**. *(Corrected 2026-08-21 by § 8: that instance is an EMULATOR, not a real device. The
+sentence originally read "a real device". See § 8.2 for what that does and does not
+invalidate.)* Full write-up, including the three defects the run found rather than asserted, is
 `backlog/docs/RELIABILITY.md` § 1.
 
 **And it is in the field's reach, which is a different claim.** § 0 of this document is
@@ -260,3 +262,250 @@ is `backlog/docs/SCALE-PROOF.md`, not repeated here. The headline:
 - Deployed: `./ops/deploy.sh` clean, `check-unit-drift` OK, association files verified on
   both hosts, `./ops/smoke-live.sh` 82/82, production left exactly as found (0 workers,
   0 shifts, HOIV pinned).
+
+---
+
+## 8 · THE LAST READ — the verdict pass, 2026-08-21, after `64f6f3f`
+
+Everything below was done to the **live box** by this pass, not read out of a report. Where
+a report and the machine disagreed, the machine is recorded and the report is corrected in
+place. Reproduce:
+
+```
+./ops/check-box-serves-head.sh                 # is the box serving THIS tree
+./ops/deploy.sh                                # build, migrate, restart, verify, re-hash
+./ops/smoke-live.sh                            # 82 assertions against production
+./ops/check-media-pii.sh                       # no committed screenshot names a real person
+ADMIN_EMAIL=… ADMIN_PASSWORD=… node demo/verdict-live.mjs
+ADMIN_EMAIL=… ADMIN_PASSWORD=… node demo/verdict-clarity-live.mjs
+ADMIN_EMAIL=… ADMIN_PASSWORD=… node demo/verdict-map.mjs
+ADMIN_EMAIL=… ADMIN_PASSWORD=… WORKER_ID=… node demo/prove-offline-push.mjs
+node demo/check-shift-screen-brand.mjs         # the screen the CLEANER looks at
+cd android && ./checks/run.sh
+```
+
+### 8.0 The box was one web-commit behind, again — and this time the check said so
+
+`check-box-serves-head.sh` (written by the previous pass, in response to this failing three
+times in one week) found the box serving a bundle built at `2358102a6244` while HEAD was
+`64f6f3f`. Its § 3a correctly reported that nothing under `web/` had changed between them,
+so nothing was actually stale — the instrument that used to be missing now distinguishes
+"behind" from "wrong". Deployed anyway; the box now hashes identical to this tree, file for
+file, including the APK.
+
+### 8.1 The worst finding: TASK-238 was Done, and the cleaner's screen was still pink
+
+Found by opening a screenshot `demo/prove-offline-push.mjs` had written an hour earlier and
+nobody had looked at.
+
+TASK-238 removed Material You from `ui/Theme.kt` and shipped 0.5.2 / versionCode 9 with a
+hand-written scheme. That half was right. But `lightColorScheme()` assigns only what it is
+handed, and the three roles the **clocked-in screen** is painted with were not handed over.
+Measured on the shipped build, on that screen:
+
+```
+#FFD8E4  47.9% of the app's pixels   channel spread 39   Material baseline tertiaryContainer
+#E6E0E9  40.9%                       channel spread  9   Material baseline surfaceContainerHighest
+#31111D   0.7%                       channel spread 32   Material baseline onTertiaryContainer
+```
+
+**88.8% of the one screen the person doing the work looks at all day** was a colour nobody
+in this project chose. The task's own AC — *"the dominant surface is achromatic"* — was
+checked off over it.
+
+**Why the check stayed green, which is the more useful half.**
+`demo/check-app-not-wallpaper.mjs` renders with `am force-stop` + `am start -n <activity>`
+and **no tap intent**, so it lands on the idle screen — whose dominant surface is `#FAFAFA`
+and genuinely is the brand's — and has never once rendered the running screen its own
+finding was written about. It asks whether the app follows the wallpaper. It answers that
+correctly. It is not the question the AC was closed on. § 2 above counted the
+`MAP_SAMPLES=0` line as the sixth vacuous check found in this project; this is the
+seventh, and the second in a row found by a pass whose job is to find them.
+
+The distinction worth keeping: `check-app-not-wallpaper` is **not vacuous** — its negative
+case is a real build and it can go red. It answers a true and useful question. It was
+closed over a DIFFERENT question, by a human reading `OK` and a task title in the same
+glance. That failure mode survives every rule about falsifiability.
+
+Fixed, shipped and verified: every role assigned in both schemes, elevation reading the same
+way in both themes, `surfaceTint` set to the surface so Material's tonal overlay cannot leak
+the accent back. **0.5.3 / versionCode 10**, published, `/app/version` byte-identical to
+`android/dist`, signer unchanged so App Links still verify.
+
+| instrument | what it covers | red | green |
+|---|---|---|---|
+| `core-check.kt` § 17 | the CLASS — every role used in `app/src` assigned in BOTH schemes | drop `tertiaryContainer` from one scheme → sets disagree; from both → `Missing: [tertiaryContainer]` | `core-check: OK` |
+| `check-shift-screen-brand.mjs` | the INSTANCE, on a device — photograph the RUNNING screen | 0.5.2/9 → `#FFD8E4, 47.9%, spread 39` | 0.5.3/10 light `#F0F1F3`/`#FFFFFF` worst spread 6; dark `#131519`/`#1B1E23` worst spread 8 |
+
+`prove-offline-push` re-run end to end on 0.5.3/10 afterwards: **OK, 69 ok, 5 RED, 0 FAIL** —
+the theme change costs no wage.
+
+### 8.2 The offline tap, re-proven — and two corrections to how it was reported
+
+**PROVEN, twice, by this pass, against production.** Radio off with `svc`, tap, the row on
+the phone and **nowhere else**, `am kill`, network back, and the row arrives with the app
+never reopened, carrying the *tap's* own timestamp. Then: a close never overtakes its open
+(`404 unknown_shift`, fully credentialled); the same `client_uuid` twice is one row; a
+force-stop stalls it **visibly** and opening the app clears it; a server-side session delete
+neither loses the row nor files it under the next holder.
+
+```
+0.5.2 / 9   70 ok   5 RED   0 FAIL
+0.5.3 / 10  69 ok   5 RED   0 FAIL     ← the build the box now publishes
+```
+
+**Correction 1 — it is an EMULATOR, not a real device.** The only Android attached to this
+project is `emulator-5554`, `ro.product.model=sdk_gphone64_arm64`, `ro.kernel.qemu=1`. Every
+run ever made of this file was an emulator. `RELIABILITY.md` § 1 said "a real Android
+instance"; the WAGES report said "real device". Both are corrected in place.
+
+*What that does NOT invalidate:* the queue, the ordering, the idempotency, the survival of
+`am kill`, and JobScheduler's persistence are platform behaviour and are genuinely proven.
+*What it does:* `svc wifi disable` is a clean, instantaneous loss of connectivity. A basement
+is a slow, flapping one — a radio holding a dead association, a TCP connect that hangs
+rather than refuses, a lobby captive portal. The mechanism is proven; the timing against a
+real radio is not, and cannot be from here.
+
+**Correction 2 — five REDs, not six.** `demo/prove-offline-push.mjs` contains exactly five
+`red(…)` calls and both runs printed five. Small, and recorded because averaging two
+disagreeing reports is how this project has twice mistaken a skip for a result.
+
+**One thing an emulator DID settle, and it was on the "unknowable" list.**
+`adb shell pm get-app-links io.github.qwadratic.NFCTimeSheets` reports
+`timesheets.exe.xyz: verified`. App Link verification is a network fetch of
+`assetlinks.json` plus a signature comparison, and neither is hardware-dependent: this is
+real evidence that the association file and the shipped signer agree. What remains
+phone-specific is only whether a given OEM build performs verification at all and when.
+
+### 8.3 A real person, a real address and a real contract sum were in HEAD of a PUBLIC repo
+
+Found by opening a **committed** screenshot. `docs/media/prove-live/02-building-created.png`
+and its `.txt` sibling carried, legibly: the client contact's full name, the building's
+street address, and `5.000,00 €` per month. `github.com/proximata/nfc-timesheets` is public.
+Tracked since `2cc19b2`.
+
+The README in the same directory ended with *"Nothing here carries a real customer name,
+address or rate."* That sentence was written by the run that produced the files, believed by
+every run after it, and there was nothing that could have contradicted it.
+
+Done here (`987368b`, TASK-239): the four files out of HEAD, and `ops/check-media-pii.sh` —
+which reads the real names, addresses, contacts and contract sums out of the **live
+database at run time** (hard-coding them would put the leak in the file meant to prevent
+it), greps every committed transcript, and refuses any committed `prove-live` screenshot
+with no transcript beside it, because painted text is invisible to grep. `--mutate` restores
+the withdrawn file from history and goes red on three values.
+
+Its own first two revisions each found fewer than they should have — `to_char()` formats in
+the *server* locale, and Node's `de-AT` groups with U+202F while the bundle renders a full
+stop. Both are written into the file: it read 3 needles and matched 2, i.e. it would have
+cleared the very file it was written for.
+
+**NOT fixed, and it is the owner's:** the blobs are still fetchable from history. That needs
+`git-filter-repo` plus a **force push to a public repo**, which an agent does not do
+unilaterally. TASK-37 is the same remedy for a different blob — do both in one rewrite.
+
+### 8.4 Verified live, with eyes, this pass
+
+| What | Evidence |
+|---|---|
+| the box serves this tree | `check-box-serves-head` OK — JS/CSS `1135dc1e…`, bundle `4d6c7ce9…`, `server/{lib,routes,server.js,instrument.mjs}`, APK byte for byte, build id `64f6f3fce16b` |
+| the clarity pass is LIVE, not just committed | `verdict-clarity-live` **all green on production**: `Betreiber` (never `Operator`), a 401 returns to `/payroll/?period=2026-07` and says the session expired, `Erneut versuchen` at 44px on four screens and it actually reloads, 12px badge floor, `.btn-quiet` underlined, `.form-error` luma 178 ≥ prose 173, `Kunde anlegen` singular |
+| the phone shell at 390 | nav row 61px, `h1` at y=122, `scrollWidth` 390 on `/ /tags/ /payroll/ /shifts/ /pl/`; the strip self-scrolls to „you are here" on `/`, `/pl/`, `/payroll/`, `/account/` |
+| the map DRAWS on the real host | 18 tile requests, 30 tile nodes, **138 distinct colours** in the clipped rect, HOIV pinned and labelled `HOIV · 0 vor Ort · ohne Zone`, 5/5 loads, zero `RefererNotAllowedMapError` — seen, not counted |
+| `/pl/` on a fresh box has a way forward | four tiles read `Nicht beurteilbar` / `Nicht berechenbar` / `Nicht berechenbar` / `Nicht eingetragen`, and the screen offers `Zielmarge festlegen`, `Zielmarge jetzt festlegen` and an inline blank-cell revenue row in the same view |
+| money right-aligns | `0,00 €` under ARBEIT and MATERIAL share a right edge on live `/pl/` (U1) |
+| the API is what the repo says | `check-unit-drift` OK — argv is `/usr/bin/node --import /srv/nfc/instrument.mjs /srv/nfc/server.js`, running as nologin `app` |
+| the timers RAN | `check-timers-ran` OK, last fire 46216s ago against a 129600s ceiling, `postgres ∈ app` asserted |
+| the whole API surface | `smoke-live` **82/82** |
+| the Android logic | `checks/run.sh` — core-check, known-tags, tag-writer, manifest-check all OK |
+| production is exactly as found | `0 workers, 0 operators, 0 shifts, 0 zones, 0 reported_tags, 0 phone_identities, 0 location_revenue, 0 app_settings, 1 location, 1 admin (schimmer), 1 session`; HOIV `hoiv-arsenalstrasse-11 \| true \| 48.1761151 \| 16.3953038` |
+
+Everything this pass created on production was removed by it: one throwaway admin (73), one
+throwaway worker (88), four shifts. Counted before and after, exactly, not estimated.
+
+### 8.5 VISUAL
+
+**Good enough to show a client.** The desk admin at 1680 is coherent, German throughout,
+dark and light both ship, and the map draws with the building pinned and labelled. The
+screens that carry money say what they do not know — three distinct refusals, never a silent
+zero — and now offer the control that resolves each. The phone shell is whole at 390 on
+every route measured, the nav strip scrolls itself to where you are, and money right-aligns.
+**And the cleaner's own screen is finally the product's colour rather than Google's**, in
+both themes, which until today was true of no build ever shipped.
+
+**Weak.** Most of the UGLY list is still open (TASK-230): in-cell buttons sit below their
+row, and on a phone only 2 of 9 nav destinations are visible at a time even though the strip
+now scrolls. `/analytics/` still does not answer its own question. `/pl/` on a fresh box is
+eleven bullets of argument under four refusals — honest, and bleak on day one.
+
+**First to break at 20 workers / 8 buildings.** `/shifts/` row density on a phone, measured
+this pass on the live box: **four shifts render 2318 CSS px**, i.e. roughly 0.7 phone screens
+each. TASK-235 fixed the *fetch* — the window is correct and the truncation message is
+truthful — and explicitly did not fix this. A 20-worker month is 440–880 shifts; at this
+density that is several hundred phone screens with no search and no triage control. It is
+LOOK-PHONE #3, it is filed, and it is the first thing a second client will feel.
+
+### 8.6 UX
+
+**Good enough to show a client.** The card chain works end to end without typing a URL:
+write → report → `Unzugeordnete Tags` → building or zone → tap. Nothing in the app closes a
+shift. A 401 no longer discards the director's period. Every screen that can fail to load
+now offers a control rather than an instruction attached to nothing. Caveats survive where
+money leaves the building.
+
+**Weak.** `/pl/` is inert until the director types a Zielmarge and one revenue figure —
+both now reachable in two clicks from the screen itself, which is the change that makes it
+weak rather than useless. The `Unzugeordnete Tags` route is still reached only from
+`/locations/`. TASK-230 keeps C7, C9, C11, C12 and PHONE #8/#9 open.
+
+**First to break at 20 workers / 8 buildings.** Eight buildings × twelve months is 96 revenue
+cells. TASK-236 turned that from 96 drawer submissions into one 42ms bulk write scoped to
+blank cells — that is the ceiling raised, not removed: there is still no import, and every
+figure is typed by a human once.
+
+### 8.7 RELIABILITY
+
+**Good enough to show a client, and it is the strongest of the three** — the only one proven
+by breaking production rather than by asserting at it. Postgres stopped mid-request →
+recovers in ~2s; two reboots with a shift open → the shift survives; disk at 4MB → clock-in
+still works; the tag host down → the cleaner still clocks in; nine concurrent taps → one
+row; the 8h net closes a 9h shift and leaves a 7h one open. The stranded-shift hole is
+closed and re-proven twice by this pass. The unit file is an artefact the deploy installs
+and asserts.
+
+**Weak.** `SENTRY_DSN` is **still unset on the box** — verified again this pass, 0 matching
+lines in `/etc/nfc/env`. The SDK is loaded via `--import` and reports nowhere; journald on
+one VM is the whole of observability (TASK-224). Backups are all on the one disk (TASK-227).
+The 8h net lives on an undocumented `postgres ∈ app` group membership, now asserted
+(TASK-226).
+
+**First to break at 20 workers / 8 buildings.** Not the API and not the queue — the *people*
+layer. Twenty phones is twenty enrolments, twenty `phone_pending_*` columns nobody has a
+screen to sort by, and one `admins` row. Behind that: `SHIFT_PAGE_MAX` at 2000 is proven
+truthful rather than removed, so a „Dieses Jahr" period on a second client truncates —
+visibly, with the right sentence, which is the correct behaviour and still a wall.
+
+### 8.8 What still cannot be known without hardware and a real card
+
+Unchanged, and unchangeable from a laptop. `CORE-FLOW.md` § 4 is the script.
+
+- **No NFC card has ever been written by this code.** Every write assertion is against a
+  stubbed card. **TASK-222, the owner's, by hand.**
+- **The Ultralight refusal is step 1 and is the owner's**: present a foreign Mifare
+  Ultralight and watch the writer refuse it. It is step 1 because if it *writes*, every card
+  written after it is suspect. It also settles whether a real NTAG213 reports `maxSize` 137
+  or the raw 180.
+- Whether the overwrite guard fires against a real mounted card.
+- Tag pulled mid-write, NFC toggled off mid-write, screen locked, app force-stopped mid-write.
+- Android 9 vs 16, and one OEM vs another: **one emulator has been used**, not one phone.
+- A radio that flaps instead of dying. See § 8.2.
+
+### 8.9 What needs the owner, and nothing else
+
+1. **`SENTRY_DSN`** — one string into `/etc/nfc/env`, then `systemctl restart nfc-api`.
+   Everything else is already wired and asserted; without it the product has no way to tell
+   anyone it is broken except journald on a box nobody watches (TASK-224 / TASK-44).
+2. **The Ultralight refusal, then a real card** (TASK-222). Until this runs, the feature the
+   product is named after has never touched hardware.
+3. **A force push to the public repo** to purge two blobs from history — TASK-239 and
+   TASK-37, one rewrite, and a decision on whether this repository stays public at all.
