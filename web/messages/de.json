@@ -351,7 +351,7 @@
     "filterNoEmail": "Nur Mitarbeiter ohne E-Mail-Adresse.",
     "rateRequiredHint": "Pflichtfeld und größer als null: Ohne Stundensatz lässt sich keine Stunde dieser Person abrechnen, und ein Satz von 0,00 € wäre kein vereinbarter Lohn, sondern ein fehlender. Steht der Satz noch nicht fest, legen Sie die Person erst an, wenn er feststeht.",
     "errorRateRequired": "Bitte einen Stundensatz eingeben, zum Beispiel 14,50. Ein Stundensatz ist Pflicht – ohne ihn kann keine Stunde dieser Person abgerechnet werden.",
-    "operatorsLink": "Operatoren verwalten"
+    "operatorsLink": "Betreiber verwalten"
   },
   "locations": {
     "heading": "Objekte",
@@ -1156,13 +1156,13 @@
     "panelObjectLink": "Objektpanel öffnen"
   },
   "operators": {
-    "heading": "Operatoren",
+    "heading": "Betreiber",
     "question": "Wer darf Tags lesen und beschreiben, ohne selbst einzustempeln?",
-    "createHeading": "Operator anlegen",
-    "listHeading": "Alle Operatoren",
-    "loading": "Operatoren werden geladen…",
-    "tableCaption": "Operatoren, aktive zuerst, danach nach Name.",
-    "empty": "Noch keine Operatoren. Rechts oben „Operator anlegen“ wählen, um den ersten Operator zu erfassen.",
+    "createHeading": "Betreiber anlegen",
+    "listHeading": "Alle Betreiber",
+    "loading": "Betreiber werden geladen…",
+    "tableCaption": "Betreiber, aktive zuerst, danach nach Name.",
+    "empty": "Noch keine Betreiber. Rechts oben „Betreiber anlegen“ wählen, um den ersten Betreiber zu erfassen.",
     "colName": "Name",
     "colPhone": "Telefon",
     "colAlsoWorker": "Auch Mitarbeiter",
@@ -1184,10 +1184,10 @@
     "errorPhoneInvalid": "Das ist keine gültige Telefonnummer. Bitte mit 0 oder +43 beginnen, zum Beispiel 0664 1234567.",
     "errorPhoneClaimed": "Diese Telefonnummer ist bereits vergeben.",
     "errorRejected": "Der Server hat diese Angaben abgelehnt. Bitte die Felder prüfen und erneut versuchen.",
-    "submitCreate": "Operator anlegen",
+    "submitCreate": "Betreiber anlegen",
     "submitting": "Wird gespeichert…",
     "cancel": "Abbrechen",
-    "saved": "Operator angelegt.",
+    "saved": "Betreiber angelegt.",
     "codeStandingNote": "Ein Zugangscode wird nur ein einziges Mal angezeigt – im Moment, in dem Sie ihn erstellen – und kann danach nicht mehr nachgesehen werden. Bitte sofort notieren oder kopieren. Geht er verloren, einfach einen neuen erstellen.",
     "codeNone": "Kein Zugangscode",
     "codeLive": "Gültig bis {expires}",

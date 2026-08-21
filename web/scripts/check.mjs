@@ -355,6 +355,46 @@ for (const locale of LOCALES) {
   })
 }
 
+// --- 2b. one word for the tag-writer role, everywhere (LOOK.md C2) ----------------------
+//
+// The phone (Android, default = German resources) has always said "Betreiber", and until
+// this check existed the web admin's German said "Operator" - a loan word from the code -
+// for the exact same procedure. This is the one word the owner runs by hand, so a check
+// that lets the two drift apart again is worse than none: it fails the moment EITHER the
+// English loan word reappears in German copy, or the German word leaks into English copy.
+
+check(
+  'German never says "Operator", English never says "Betreiber" (C2, one word for the role)',
+  () => {
+    const androidRoot = join(ROOT, '..', 'android', 'app', 'src', 'main', 'res')
+    // JSON KEY names (e.g. "forOperator") are not shown to anyone - only VALUES are checked.
+    const deValues = Object.values(dictionaries.de).join('\n')
+    const enValues = Object.values(dictionaries.en).join('\n')
+    const germanSurfaces = [
+      ['messages/de.json', deValues],
+      [
+        'android/…/values/strings.xml',
+        readFileSync(join(androidRoot, 'values', 'strings.xml'), 'utf8'),
+      ],
+    ]
+    const englishSurfaces = [
+      ['messages/en.json', enValues],
+      [
+        'android/…/values-en/strings.xml',
+        readFileSync(join(androidRoot, 'values-en', 'strings.xml'), 'utf8'),
+      ],
+    ]
+    const bad = []
+    for (const [name, text] of germanSurfaces) {
+      if (/Operator/.test(text)) bad.push(`${name} says "Operator" (should say "Betreiber")`)
+    }
+    for (const [name, text] of englishSurfaces) {
+      if (/Betreiber/.test(text)) bad.push(`${name} says "Betreiber" (should say "Operator")`)
+    }
+    assert.deepEqual(bad, [], bad.join('\n'))
+  },
+)
+
 // --- 3. auth hygiene (decision-20) -----------------------------------------------------
 
 const SOURCE_DIRS = ['app', 'components', 'lib']
