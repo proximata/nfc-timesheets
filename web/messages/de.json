@@ -1250,7 +1250,8 @@
     "conflict": "Diese Änderung passt nicht zu den bereits gespeicherten Daten. Bitte prüfen Sie Ihre Eingaben und versuchen Sie es noch einmal.",
     "request": "Das konnte so nicht verarbeitet werden. Bitte prüfen Sie Ihre Eingaben und versuchen Sie es noch einmal.",
     "server": "Das hat gerade nicht funktioniert. Bitte versuchen Sie es in einigen Minuten noch einmal.",
-    "badResponse": "Die Antwort vom Server war unerwartet. Bitte laden Sie die Seite neu und versuchen Sie es noch einmal."
+    "badResponse": "Die Antwort vom Server war unerwartet. Bitte laden Sie die Seite neu und versuchen Sie es noch einmal.",
+    "retry": "Erneut versuchen"
   },
   "account": {
     "heading": "Konto",

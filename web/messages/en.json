@@ -1250,7 +1250,8 @@
     "conflict": "That change conflicts with existing data.",
     "request": "The request could not be processed.",
     "server": "The server had a problem. Please try again later.",
-    "badResponse": "The server sent an unexpected response."
+    "badResponse": "The server sent an unexpected response.",
+    "retry": "Try again"
   },
   "account": {
     "heading": "Account",

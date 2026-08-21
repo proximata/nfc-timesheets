@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
 import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
+import { LoadStatus } from '@/components/LoadStatus'
 import { PageHeader } from '@/components/PageHeader'
 import { type BadgeState, StateBadge } from '@/components/StateBadge'
 import {
@@ -762,7 +763,12 @@ export default function ShiftsPage() {
           /objekte that banner sits ~370px above this table, so a director reading the table
           never saw it at all. */}
       {snapshot === null ? (
-        <p role="status">{loadError === null ? t('loading') : tError(loadError)}</p>
+        <LoadStatus
+          loading={t('loading')}
+          error={loadError === null ? null : tError(loadError)}
+          retryLabel={tError('retry')}
+          onRetry={() => void load()}
+        />
       ) : (
         <>
           {/* The answer first: how much of what is on screen the pay total will leave out.

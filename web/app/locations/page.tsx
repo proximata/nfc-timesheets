@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
 import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
+import { LoadStatus } from '@/components/LoadStatus'
 import { PageHeader } from '@/components/PageHeader'
 import {
   ApiError,
@@ -1549,7 +1550,12 @@ export default function LocationsPage() {
             /objekte that banner sits ~370px above this table, so a director reading the table
             never saw it at all. */}
         {snapshot === null ? (
-          <p role="status">{loadError === null ? t('loading') : tError(loadError)}</p>
+          <LoadStatus
+            loading={t('loading')}
+            error={loadError === null ? null : tError(loadError)}
+            retryLabel={tError('retry')}
+            onRetry={() => void load()}
+          />
         ) : locations.length === 0 ? (
           /* THREE different sentences, and they are not interchangeable. „Noch keine
              Objekte angelegt" said to a company with forty of them is the misreading this

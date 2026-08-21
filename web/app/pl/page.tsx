@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
 import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
+import { LoadStatus } from '@/components/LoadStatus'
 import { PageHeader } from '@/components/PageHeader'
 import {
   ApiError,
@@ -845,7 +846,12 @@ export default function PlPage() {
           /objekte that banner sits ~370px above this table, so a director reading the table
           never saw it at all. */}
       {report === null || totals === null ? (
-        <p role="status">{loadError === null ? t('loading') : tError(loadError)}</p>
+        <LoadStatus
+          loading={t('loading')}
+          error={loadError === null ? null : tError(loadError)}
+          retryLabel={tError('retry')}
+          onRetry={() => void load()}
+        />
       ) : (
         <>
           {/* „Nicht gesetzt" is a supported, deliberate state and not a fault. The sentence

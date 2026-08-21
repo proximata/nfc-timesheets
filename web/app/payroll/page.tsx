@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { Field } from '@/components/Field'
 import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
+import { LoadStatus } from '@/components/LoadStatus'
 import { PageHeader } from '@/components/PageHeader'
 import { type AdminSnapshot, ApiError, fetchPayrollSnapshot } from '@/lib/api'
 import { filterHref, useFilters } from '@/lib/filters'
@@ -168,23 +169,28 @@ export default function PayrollPage() {
     [router],
   )
 
-  useEffect(() => {
-    const controller = new AbortController()
-    // The payload IS the period. Clear it first, or the old period's rows stay on screen
-    // under the new period's heading while the request is in flight.
-    setSnapshot(null)
-    void (async () => {
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
       try {
-        setSnapshot(await fetchPayrollSnapshot(range, controller.signal))
+        setSnapshot(await fetchPayrollSnapshot(range, signal))
         setLoadError(null)
       } catch (cause) {
         if (cause instanceof DOMException && cause.name === 'AbortError') return
         if (handleAuthLoss(cause)) return
         setLoadError(cause instanceof ApiError ? cause.messageKey : 'server')
       }
-    })()
+    },
+    [handleAuthLoss, range],
+  )
+
+  useEffect(() => {
+    const controller = new AbortController()
+    // The payload IS the period. Clear it first, or the old period's rows stay on screen
+    // under the new period's heading while the request is in flight.
+    setSnapshot(null)
+    void load(controller.signal)
     return () => controller.abort()
-  }, [handleAuthLoss, range])
+  }, [load])
 
   /**
    * A SCOPED VIEW, and it says so. `?location=` / `?worker=` narrow the rows to one
@@ -588,7 +594,12 @@ export default function PayrollPage() {
           /objekte that banner sits ~370px above this table, so a director reading the table
           never saw it at all. */}
       {snapshot === null || totals === null || coverage === null ? (
-        <p role="status">{loadError === null ? t('loading') : tError(loadError)}</p>
+        <LoadStatus
+          loading={t('loading')}
+          error={loadError === null ? null : tError(loadError)}
+          retryLabel={tError('retry')}
+          onRetry={() => void load()}
+        />
       ) : (
         <>
           {/* THE TOTAL MAY BE WRONG, not merely incomplete. Two sentences, above everything,
