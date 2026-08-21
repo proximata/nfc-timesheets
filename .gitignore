@@ -47,3 +47,13 @@ docs/media/look/
 docs/media/look-phone/
 docs/media/verdict/
 docs/media/break-look/
+
+# Device evidence from demo/prove-offline-push.mjs (TASK-225). Ignored for TWO reasons and
+# the second is the load-bearing one:
+#   - it is regenerable: screenshots, uiautomator dumps and JSON off a real Android
+#     instance, all reproduced by re-running the script
+#   - IT HOLDS CREDENTIALS. The run writes admin.email / admin.pw / admin.cookie so its
+#     phases can log back in, and a live admin session cookie in a git history is a leak
+#     that deleting the file does not undo. Ignored here BEFORE any of it was committed,
+#     which is the lesson docs/media above was already paid for once.
+.field-recordings/
