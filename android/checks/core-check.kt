@@ -2426,21 +2426,70 @@ private fun theBackgroundPush() {
     val signOut = model.substringAfter("fun signOut() {").substringBefore("\n    private fun adopt(")
     check(!signOut.contains("store.delete"), "signing out never deletes a queued shift")
     check(
-        signOut.contains("LogState(pending = io { app.store.pendingSummary() })"),
+        signOut.contains("LogState(") && signOut.contains("app.store.pendingSummary()"),
         "…and the pending count survives the sign-out so the sign-in screen can show it",
     )
     val app = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetApp.kt").readText()
     check(
-        app.contains("PendingCard(pending.pending, signedOut = true)"),
+        app.contains("PendingCard(pending.pending, signedOut = true"),
         "the SIGN-IN screen shows what is still queued",
     )
-    check(app.contains("PendingCard(pending)"), "the SHIFT screen shows it — the screen a basement tap lands on")
-    check(app.contains("item { PendingCard(log.pending) }"), "the LOG screen shows it")
+    check(app.contains("PendingCard(pending, armed ="), "the SHIFT screen shows it — the screen a basement tap lands on")
+    check(app.contains("item { PendingCard(log.pending, armed ="), "the LOG screen shows it")
+
+    // EVERY CALL SITE MUST PASS `armed`, and this counts them rather than naming them: the
+    // default is `true`, so a fourth card added without the argument would silently promise
+    // automatic delivery on a phone where the platform is holding no job. That promise was
+    // false on every device until the ACCESS_NETWORK_STATE fix, and nothing could say so.
+    val cards = Regex("""PendingCard\(""").findAll(app).count() - 1 // minus the declaration
+    val armedArgs = Regex("""PendingCard\([^)]*armed =""").findAll(app).count()
+    check(
+        cards == 3 && armedArgs == 3,
+        "all $cards PendingCard call sites are told whether the platform is actually " +
+            "holding the job ($armedArgs pass `armed`) — the default is `true`, i.e. a promise",
+    )
+    val vm = model
+    check(
+        vm.contains("SyncScheduler.isScheduled(app)"),
+        "…and that answer is ASKED of JobScheduler, never remembered by us",
+    )
 
     // The ceiling, printed on the screen rather than only in a source comment.
     check(
         scheduler.contains("FORCE-STOPPED"),
         "SyncScheduler names the force-stop ceiling it shares with WorkManager and every other scheduler",
+    )
+    // THE ONE THAT SHIPPED BROKEN. schedule() reports failure by RETURN VALUE as well as by
+    // throwing, and the first version of this feature discarded both in one runCatching{} —
+    // so the background push was absent on every device and green in every check. The
+    // manifest side of the same obligation is checks/manifest-check.sh.
+    check(
+        scheduler.contains("JobScheduler.RESULT_SUCCESS"),
+        "schedule()'s RETURN VALUE is compared — RESULT_FAILURE is not an exception and is not " +
+            "caught by runCatching",
+    )
+    // COMMENTS STRIPPED FIRST. The header of SyncScheduler.kt QUOTES the swallowing line in
+    // order to explain what it cost, so a whole-file search finds it in the one file where
+    // its absence matters and reports the fix as the bug.
+    val schedulerCode = scheduler.lines()
+        .filterNot { it.trimStart().startsWith("*") || it.trimStart().startsWith("//") || it.trimStart().startsWith("/*") }
+        .joinToString("\n")
+    check(
+        scheduler.contains("Armed.Refused") && !schedulerCode.contains("runCatching { scheduler.schedule"),
+        "…and a refusal becomes a value the screen can render, instead of being swallowed",
+    )
+
+    // OPENING THE APP IS NOT A TAP (TASK-225). Bringing a task back re-delivers the intent
+    // that started it; MainActivity read that as a second tag at the same door, which is a
+    // CLOCK-OUT. Measured: tap in, `am kill`, reopen from Recents -> end_time set.
+    val main = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/MainActivity.kt").readText()
+    check(
+        main.contains("FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY"),
+        "a task brought back from Recents does not re-read the morning's tag as a clock-out",
+    )
+    check(
+        main.contains("if (savedInstanceState == null) handle(intent)"),
+        "…nor does an activity Android is REBUILDING after killing the process in a pocket",
     )
     val de = File("app/src/main/res/values/strings.xml").readText()
     check(

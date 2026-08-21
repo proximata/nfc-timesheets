@@ -67,6 +67,11 @@
     </plurals>
     <string name="pending_signed_out">These shifts belong to your sign-in. They will be sent once you sign in again. Nothing is deleted.</string>
     <string name="pending_force_stop_note">If this phone force-stops the app (battery saver, “Force stop”), delivery pauses until you open the app again. Opening it is enough.</string>
+    <!-- The promise is withdrawn when it stops being true. pending_body says “even with the
+         app closed”, which holds only while the OS is actually holding the delivery job —
+         and once it was not: the job was refused for a missing permission and this screen
+         went on promising automatic delivery anyway. See the German for the whole story. -->
+    <string name="pending_not_armed">Automatic delivery is not scheduled on this phone right now. Open the app once you are back online — it will be sent then. Nothing is lost.</string>
     <string name="sync_waiting">Waiting for a connection</string>
     <string name="sync_last_try">Last tried %1$s</string>
     <string name="sync_never_tried">Not attempted yet</string>
