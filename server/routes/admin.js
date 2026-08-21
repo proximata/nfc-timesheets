@@ -1940,6 +1940,113 @@ async function putRevenue({ params, body, session }) {
   };
 }
 
+// 8 buildings x 12 months = 96, the day-one grid this route exists for. A generous
+// multiple of that, not a tight fit: a second client's portfolio is still one request.
+const REVENUE_BULK_MAX = 500;
+
+/**
+ * POST /admin/revenue {entries: [{location_id, month, amount_cents, note?}, ...]} -> file
+ * or correct MANY building-months in one request (TASK-236).
+ *
+ * WHY THIS EXISTS: `putRevenue` above is one drawer, one building-month, and the day-one
+ * grid is 8 buildings x 12 months = 96 cells. A ritual that opens a drawer 96 times is not
+ * a ritual anyone performs, and — unlike a P&L that merely LOOKS unusable — that ceiling is
+ * the reason `location_revenue` stays empty and `/pl/` reads "nicht beurteilbar" forever.
+ *
+ * SAME RULE AS THE SINGLE-CELL ROUTE (supersede, THEN insert), applied to every row in TWO
+ * BULK STATEMENTS rather than one CTE. One CTE was tried first and is wrong: Postgres runs
+ * every data-modifying clause of a single `WITH` against ONE shared snapshot, so an INSERT
+ * that needs to see an UPDATE's supersede IN THE SAME STATEMENT is not guaranteed to — and
+ * measured here, it did not: a same-batch correction 500'd on
+ * `location_revenue_one_live_idx` because the INSERT's uniqueness check ran before the
+ * UPDATE's supersede was visible to it. Two SEPARATE statements (bulk UPDATE, THEN bulk
+ * INSERT, both over `unnest()` so it is still 2 round trips and not 2N) sidestep that
+ * because each is its own command with its own snapshot. This is exactly `putRevenue`'s own
+ * two-statement shape above, scoped to N rows instead of 1 — including its same small,
+ * accepted window: a crash between the two statements leaves a superseded row with no live
+ * replacement, same risk a single edit already carries today, just wider. This codebase has
+ * no transaction helper anywhere (`grep -rn "BEGIN\|pool.connect" server/routes/*.js` ->
+ * nothing), so accepting that window is the existing convention, not a new one.
+ *
+ * Every location id is checked to exist BEFORE anything is written: a bulk save that
+ * silently drops the one row with a typo'd id is worse than refusing the whole batch.
+ * Duplicate (location_id, month) pairs WITHIN one request are refused too — the supersede
+ * step can only correctly retire ONE prior row per pair, and two entries claiming the same
+ * cell in the same request is a client bug or two tabs open on the same grid, not a case to
+ * silently pick a winner for.
+ *
+ * NOTHING HERE INVENTS A FIGURE. Every entry is a value the caller sent; there is no
+ * pre-fill from the contract suggestion and no zero for a cell the director left blank —
+ * an omitted cell is simply not in `entries` and stays exactly as unknown as it was
+ * (decision-42). The bulk grid on `/pl/` only ever sends cells a human actually typed into.
+ */
+async function putRevenueBulk({ body, session }) {
+  const rawEntries = Array.isArray(body.entries) ? body.entries : null;
+  if (rawEntries === null || rawEntries.length === 0) fail(400, "invalid_field", "entries");
+  if (rawEntries.length > REVENUE_BULK_MAX) fail(422, "too_many_entries", "entries");
+
+  const parsed = rawEntries.map((entry, i) => {
+    const locationId = v.uuid(entry?.location_id, `entries[${i}].location_id`);
+    const month = v.isoMonth(entry?.month, `entries[${i}].month`);
+    // Same "absent is not zero" rule as the single-cell route: a cell with no amount is not
+    // an entry, and 0 IS accepted — "they paid nothing this month" is a real answer.
+    if (entry?.amount_cents === undefined || entry?.amount_cents === null || entry?.amount_cents === "") {
+      fail(422, "amount_required", `entries[${i}].amount_cents`);
+    }
+    const amountCents = v.cents(entry.amount_cents, `entries[${i}].amount_cents`);
+    const note = v.optionalStr(entry?.note, `entries[${i}].note`, { max: 500 });
+    return { locationId, month, amountCents, note };
+  });
+
+  const seen = new Set();
+  for (const { locationId, month } of parsed) {
+    const key = `${locationId}|${month}`;
+    if (seen.has(key)) fail(422, "duplicate_entry", key);
+    seen.add(key);
+  }
+
+  const locationIds = [...new Set(parsed.map((p) => p.locationId))];
+  const known = await all("SELECT id FROM locations WHERE id = ANY($1::uuid[])", [locationIds]);
+  const knownIds = new Set(known.map((r) => r.id));
+  const missing = locationIds.filter((id) => !knownIds.has(id));
+  if (missing.length > 0) fail(404, "unknown_location", missing.join(","));
+
+  const locationIdArr = parsed.map((p) => p.locationId);
+  const monthArr = parsed.map((p) => p.month);
+
+  // Statement 1: supersede every LIVE row this batch is about to replace, in one bulk
+  // UPDATE. Rows the batch does not touch are untouched, same as the single-cell route.
+  const superseded = await all(
+    `UPDATE location_revenue r
+        SET superseded_at = now(), superseded_by = $3
+       FROM unnest($1::uuid[], $2::date[]) AS i(location_id, month)
+      WHERE r.location_id = i.location_id AND r.month = i.month AND r.superseded_at IS NULL
+      RETURNING r.location_id, r.month, r.amount_cents AS previous_cents`,
+    [locationIdArr, monthArr, session.adminId],
+  );
+  const previousOf = new Map(superseded.map((s) => [`${s.location_id}|${String(s.month).slice(0, 10)}`, Number(s.previous_cents)]));
+
+  // Statement 2, run AFTER statement 1 has committed its own snapshot: bulk INSERT the new
+  // live row for every entry. Postgres now sees every row statement 1 just superseded, so
+  // the partial unique index (`location_revenue_one_live_idx`) admits exactly one live row
+  // per (building, month) the way the single-cell route already relies on it to.
+  const inserted = await all(
+    `INSERT INTO location_revenue (location_id, month, amount_cents, note, entered_by)
+     SELECT location_id, month, amount_cents, note, $5
+       FROM unnest($1::uuid[], $2::date[], $3::bigint[], $4::text[])
+                 AS t(location_id, month, amount_cents, note)
+     RETURNING ${REVENUE_COLS}`,
+    [locationIdArr, monthArr, parsed.map((p) => p.amountCents), parsed.map((p) => p.note), session.adminId],
+  );
+
+  const entries = inserted.map((row) => ({
+    ...row,
+    previous_cents: previousOf.get(`${row.location_id}|${String(row.month).slice(0, 10)}`) ?? null,
+  }));
+
+  return { status: 200, body: { entries } };
+}
+
 /**
  * DELETE /admin/locations/:id/revenue/:month -> RETRACT. The month reverts to UNKNOWN.
  *
@@ -2078,6 +2185,7 @@ export const adminRoutes = [
   { method: "POST", path: "/admin/tags/:id/resolve-zone", auth: "admin", handler: resolveTagToZone },
   { method: "POST", path: "/admin/tags/:id/resolve-existing-zone", auth: "admin", handler: resolveTagToExistingZone },
   { method: "GET", path: "/admin/revenue", auth: "admin", handler: listRevenue },
+  { method: "POST", path: "/admin/revenue", auth: "admin", handler: putRevenueBulk },
   { method: "POST", path: "/admin/locations/:id/revenue", auth: "admin", handler: putRevenue },
   { method: "DELETE", path: "/admin/locations/:id/revenue/:month", auth: "admin", handler: retractRevenue },
   { method: "GET", path: "/admin/pl", auth: "admin", handler: plReport },

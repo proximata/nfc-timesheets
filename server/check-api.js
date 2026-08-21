@@ -3829,6 +3829,144 @@ try {
       await admin.query("DELETE FROM location_revenue WHERE location_id = $1", [plC]);
     });
 
+    // ---- POST /admin/revenue: the BULK grid (TASK-236) --------------------------------
+    //
+    // The day-one ceiling was never the arithmetic — it was that `putRevenue` is one
+    // drawer, one building-month, and 8 buildings x 12 months is 96 of them. These cases
+    // assert the bulk route saves many cells in ONE request, atomically, and invents
+    // nothing: every cell it writes is a cell the caller actually sent.
+
+    await test("a bulk save files MANY building-months in ONE request, and corrects in the same batch", async () => {
+      const before = await countOf(
+        "SELECT count(*) AS n FROM location_revenue WHERE location_id = ANY($1::uuid[]) AND month = DATE '2025-11-01'",
+        [[plA, plB, plC]],
+      );
+      assert.equal(before, 0, "November must be untouched by every earlier case, or this proves nothing");
+
+      const first = await expect(
+        await asAdmin("/admin/revenue", {
+          method: "POST",
+          body: {
+            entries: [
+              { location_id: plA, month: "2025-11", amount_cents: 111_000 },
+              { location_id: plB, month: "2025-11", amount_cents: 222_000, note: "Sammelerfassung" },
+              { location_id: plC, month: "2025-11", amount_cents: 0 },
+            ],
+          },
+        }),
+        200,
+      );
+      assert.equal(first.entries.length, 3, "one round trip, three rows");
+      for (const e of first.entries) assert.equal(e.previous_cents, null, "nothing existed yet to replace");
+
+      const november = await pl(VIENNA_NOV_2025);
+      assert.equal(building(november, plA).revenue_cents, 111_000);
+      assert.equal(building(november, plB).revenue_cents, 222_000);
+      assert.equal(building(november, plC).revenue_cents, 0, "a typed 0 is a real answer, not the unknown");
+
+      // A SECOND batch, mixing a correction with a brand-new cell — the append-only rule
+      // (a correction INSERTS, never UPDATEs in place) must hold for EVERY row in the batch,
+      // not just a lone one.
+      const second = await expect(
+        await asAdmin("/admin/revenue", {
+          method: "POST",
+          body: {
+            entries: [
+              { location_id: plA, month: "2025-11", amount_cents: 115_000, note: "Korrektur" },
+              { location_id: plA, month: "2025-12", amount_cents: 90_000 },
+            ],
+          },
+        }),
+        200,
+      );
+      const corrected = second.entries.find((e) => e.month === "2025-11-01");
+      const fresh = second.entries.find((e) => e.month === "2025-12-01");
+      assert.equal(corrected.previous_cents, 111_000, "the batch's correction must say what it replaced");
+      assert.equal(fresh.previous_cents, null, "...and the brand-new cell in the SAME batch must not");
+      assert.equal(
+        await countOf(
+          "SELECT count(*) AS n FROM location_revenue WHERE location_id = $1 AND month = DATE '2025-11-01'",
+          [plA],
+        ),
+        2,
+        "append-only inside a batch too: the superseded row survives",
+      );
+
+      await admin.query("DELETE FROM location_revenue WHERE location_id = ANY($1::uuid[]) AND month = ANY($2::date[])", [
+        [plA, plB, plC],
+        ["2025-11-01", "2025-12-01"],
+      ]);
+    });
+
+    await test("a bulk save is ALL OR NOTHING: an unknown location refuses the whole batch", async () => {
+      const before = await countOf(
+        "SELECT count(*) AS n FROM location_revenue WHERE location_id = $1 AND month = DATE '2025-11-01'",
+        [plA],
+      );
+      const bogus = "11111111-2222-4333-8444-555555555fff";
+      const res = await asAdmin("/admin/revenue", {
+        method: "POST",
+        body: {
+          entries: [
+            { location_id: plA, month: "2025-11", amount_cents: 500_000 },
+            { location_id: bogus, month: "2025-11", amount_cents: 1 },
+          ],
+        },
+      });
+      assert.equal(res.status, 404);
+      assert.equal((await res.json()).error, "unknown_location");
+      assert.equal(
+        await countOf(
+          "SELECT count(*) AS n FROM location_revenue WHERE location_id = $1 AND month = DATE '2025-11-01'",
+          [plA],
+        ),
+        before,
+        "the valid row in the SAME batch must not have landed either",
+      );
+    });
+
+    await test("a bulk save refuses two entries naming the same building-month", async () => {
+      const res = await asAdmin("/admin/revenue", {
+        method: "POST",
+        body: {
+          entries: [
+            { location_id: plA, month: "2025-11", amount_cents: 1 },
+            { location_id: plA, month: "2025-11", amount_cents: 2 },
+          ],
+        },
+      });
+      assert.equal(res.status, 422);
+      assert.equal((await res.json()).error, "duplicate_entry");
+    });
+
+    await test("a bulk save enforces the same per-cell rules as the single-cell route", async () => {
+      assert.equal((await asAdmin("/admin/revenue", { method: "POST", body: {} })).status, 400, "entries must be an array");
+      assert.equal(
+        (await asAdmin("/admin/revenue", { method: "POST", body: { entries: [] } })).status,
+        400,
+        "an empty batch is not a batch",
+      );
+      assert.equal(
+        (
+          await asAdmin("/admin/revenue", {
+            method: "POST",
+            body: { entries: [{ location_id: plA, month: "2025-11" }] },
+          })
+        ).status,
+        422,
+        "amount is not optional per cell, same as the single-cell route",
+      );
+
+      const tooMany = Array.from({ length: 501 }, (_, i) => ({
+        location_id: plA,
+        month: `9999-${String((i % 12) + 1).padStart(2, "0")}`, // never validated: length is checked first
+        amount_cents: 1,
+      }));
+      const res = await asAdmin("/admin/revenue", { method: "POST", body: { entries: tooMany } });
+      assert.equal(res.status, 422);
+      assert.equal((await res.json()).error, "too_many_entries");
+    });
+
     // ---- decision-43 §6: per square metre AT THE BUILDING, and never per zone ---------
 
     await test("per-m2 is refused until every live zone has been measured", async () => {

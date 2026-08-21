@@ -1669,6 +1669,36 @@ export function saveRevenue(
   ).then(() => undefined)
 }
 
+/** One cell of the bulk grid: exactly what `POST /admin/revenue` files or corrects. */
+export type RevenueBulkEntry = {
+  location_id: string
+  /** `YYYY-MM`. */
+  month: string
+  amount_cents: number
+  note?: string
+}
+
+/**
+ * File, or CORRECT, MANY building-months in one request (TASK-236) — the grid on `/pl/`
+ * saves every cell a director actually typed into with ONE click, instead of `saveRevenue`
+ * above 96 times. Same rule per cell: an entry with no amount is not an entry, 0 IS a real
+ * answer, and nothing is pre-filled — only cells the caller put in `entries` are touched.
+ *
+ * 422 `duplicate_entry` = two entries named the same building-month in one request.
+ * 404 `unknown_location` = a location id in the batch does not exist; nothing is written.
+ * 422 `too_many_entries` = over the server's per-request cap (`REVENUE_BULK_MAX`).
+ */
+export function saveRevenueBulk(
+  entries: RevenueBulkEntry[],
+  signal?: AbortSignal,
+): Promise<void> {
+  return apiFetch<{ entries: unknown[] }>('/admin/revenue', {
+    method: 'POST',
+    body: { entries },
+    signal,
+  }).then(() => undefined)
+}
+
 /**
  * RETRACT: the month reverts to UNKNOWN. NOT the same as entering 0, and not optional.
  *
