@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-21 07:34'
-updated_date: '2026-08-21 12:20'
+updated_date: '2026-08-21 13:04'
 labels:
   - android
   - task-225-followup
@@ -49,15 +49,5 @@ ACCEPTANCE:
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-OBSERVED this run rather than reasoned about. Phase 0 of prove-offline-push asserts 'no job
-is pending over an empty queue'; it went red over a queue emptied out of band, because
-nothing ever calls JobScheduler.cancel and the job outlived the work.
-
-Measured cost, corrected downward from the earlier note: ShiftSyncJob returns false from
-onStartJob when pendingSummary().waiting == 0, so a stale job costs exactly ONE no-op wake-up
-and then goes away. It is not a battery leak and it is not a correctness problem. Keep it
-filed; do not let it be re-described as either.
-
-prove-offline-push now force-stops ONCE over an empty queue to clear a leftover, which is the
-platform's own documented way, and says so in the transcript naming this task.
+RE-READ by the verdict pass 2026-08-21 and left AS FILED. The closing report struck its own 'measured' claim here and was right to: the reading was void. The task body's measured context stands as the description of what to seed. Not attempted this pass — the fix is a cancel on the delivery path, which is precisely the change that can lose a shift, and it wants its own run with the prove-offline-push phase the AC already names.
 <!-- SECTION:NOTES:END -->

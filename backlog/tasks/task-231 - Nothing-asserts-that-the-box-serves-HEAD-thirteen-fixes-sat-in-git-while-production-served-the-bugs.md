@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-21 03:24'
-updated_date: '2026-08-21 12:20'
+updated_date: '2026-08-21 13:04'
 labels:
   - ops
   - deploy
@@ -45,32 +45,7 @@ NOT IN SCOPE: rollback, build ids, CI. decision-16 stands — this is four shasu
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-SHIPPED in 782761e, and this verdict pass found it could NEVER GO GREEN. Both causes were
-the check's own:
-
-1. Its documented invocation was 'cd web && pnpm build'. ops/deploy.sh builds with
-   NEXT_PUBLIC_DEFAULT_LOCALE=de and the Maps key; a keyless build moves four content-hashed
-   chunks, so the check reported a difference it had created itself.
-2. Next's build id is RANDOM and is embedded in all 133 emitted .html/.txt files, so the same
-   commit built twice does not equal itself. web/next.config.mjs now derives it from the
-   commit (generateBuildId), and the export is reproducible: two builds of one commit, 176
-   files, identical sha (ec44b83821befee4...).
-
-Also fixed, and both were the same shape as the bug the task exists for -- a gate that stops
-early and says nothing:
-  - 'find chunks css media' exits 1 when media/ is absent; under set -e -o pipefail the whole
-    check exited 0 after ONE ok: line, and deploy.sh step 7c called it that way.
-  - 'diff | head -20' killed the script on SIGPIPE, so under --mutate sections 2, 3, 3a and 4
-    had never run. The mutant still exited 1, for the right reason, which is why nobody saw it.
-
-New assertions:
-  - section 1a hashes _next/static/chunks+css alone -- the half that means 'the fix is live'
-    -- so it is never buried in a 176-line diff. PROVEN identical while section 1 was red.
-  - section 3a reads the BUILD ID OFF THE BOX and asks git whether anything under web/ has
-    changed since: 'built at 2358102a6244, and nothing under web/ has changed since'. That
-    answers the task's question without a redeploy after every unrelated commit.
-
-Live now: CHECK-BOX-SERVES-HEAD OK, and RED on both halves under --mutate.
+EARNED ITS KEEP ON THE VERY NEXT RUN. The verdict pass 2026-08-21 found the box serving a bundle built at 2358102a6244 while HEAD was 64f6f3f. § 3a correctly reported that nothing under web/ had changed between the two, so nothing was actually stale — which is exactly the distinction the earlier three incidents lacked an instrument for. Deployed anyway; the box now hashes identical to this tree file for file, including the APK. Both --mutate paths still red.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

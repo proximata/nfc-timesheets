@@ -4,7 +4,7 @@ title: Run CORE-FLOW section 4 on a real phone with real cards — the Ultraligh
 status: To Do
 assignee: []
 created_date: '2026-08-20 22:46'
-updated_date: '2026-08-21 03:24'
+updated_date: '2026-08-21 13:04'
 labels:
   - android
   - nfc
@@ -42,11 +42,9 @@ THE SCRIPT IS backlog/docs/CORE-FLOW.md section 4. Do not improvise around it.
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERDICT PASS 2026-08-21: everything that is not this task is now proven, deployed and photographed on the live box (backlog/docs/STATE-OF-THE-PRODUCT.md). This is the only remaining gate on the product, and it cannot be closed from a laptop by anyone.
+STILL THE OWNER'S, AND STILL THE LOAD-BEARING UNKNOWN. Verdict pass 2026-08-21: no NFC card has ever been written by this code; every write assertion is against a stubbed FakeCard, and the only Android this project has ever run on is an emulator (sdk_gphone64_arm64), which has no NFC radio at all.
 
-Read backlog/docs/CORE-FLOW.md section 4 in the stairwell and nothing else. Step 1 is load-bearing and is step 1 on purpose: the foreign Mifare Ultralight MUST be refused before a single blank card is written, because it is the one card in the building whose real capacity is below our message size, and it is therefore the only instrument that can tell you whether a real NTAG213 reports maxSize 137 or the raw 180. If it writes, every card written after it is suspect.
+ONE THING NARROWED, and it was on the 'unknowable' list. 'adb shell pm get-app-links io.github.qwadratic.NFCTimeSheets' on the emulator reports 'timesheets.exe.xyz: verified'. App Link verification is a network fetch of assetlinks.json plus a signature comparison against the installed APK — neither is hardware-dependent. So the association file and the shipped signer (6C:78:...:2C:42:99:6C) demonstrably agree. What remains phone-specific is only whether a given OEM build performs verification, and when.
 
-The three sentences that mean STOP are in that section. Also run, once, on the phone in hand:
-  adb shell pm get-app-links io.github.qwadratic.NFCTimeSheets
-It must report 'timesheets.exe.xyz: verified'. Anything else and every tap opens Chrome instead of the app — not a card fault, and not visible from any server.
+STEP 1 IS STILL THE ULTRALIGHT REFUSAL, and it is step 1 for the reason CORE-FLOW § 4 gives: if it WRITES, every card written after it is suspect. It also settles whether a real NTAG213 reports maxSize 137 or the raw 180.
 <!-- SECTION:NOTES:END -->

@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-21 00:09'
-updated_date: '2026-08-21 12:20'
+updated_date: '2026-08-21 13:04'
 labels: []
 dependencies: []
 priority: high
@@ -51,19 +51,20 @@ ACCEPTANCE:
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-RE-VERIFIED INDEPENDENTLY by the verdict pass on 2026-08-21, against production, twice:
-  0.5.1 / versionCode 8   69 ok, 5 RED in the same run, 0 FAIL
-  0.5.2 / versionCode 9   69 ok, 5 RED in the same run, 0 FAIL   (after the theme fix, TASK-238)
+RE-PROVEN by the verdict pass 2026-08-21, against production, twice — and the report that closed it corrected twice.
 
-ONE CORRECTION TO THE RECORD, and it matters for how the evidence is read. The delivery run
-was NOT on a physical phone. It ran on emulator-5554, sdk_gphone64_arm64, Android 16,
-ro.kernel.qemu=1 -- the file's own header says 'a REAL Android instance', which is accurate;
-the report that reached the owner said 'real device', which is not. The instance has no NFC
-radio at all (the app says so, correctly, in red on its own screen), so every 'tap' in the
-proof is the ACTION_VIEW intent a tag produces and not a tag. What is proven is the queue,
-the ordering, the idempotency, the job's survival of am kill and of a reboot, the force-stop
-ceiling, and the timestamps. What is NOT proven is any of it against a real radio or a real
-card. TASK-222 remains the owner's.
+  0.5.2 / 9   70 ok   5 RED   0 FAIL
+  0.5.3 / 10  69 ok   5 RED   0 FAIL     <- the build the box now publishes
+
+Radio off with svc, tap, the row on the phone and NOWHERE ELSE, am kill, network back, and the row arrives with the app never reopened carrying the TAP's own timestamp. A close never overtakes its open (404 unknown_shift, fully credentialled). The same client_uuid twice is one row. Force-stop stalls it visibly and opening the app clears it. A server-side session delete neither loses the row nor files it under the next holder.
+
+CORRECTION 1 — IT IS AN EMULATOR. The only Android attached to this project is emulator-5554, ro.product.model=sdk_gphone64_arm64, ro.kernel.qemu=1. RELIABILITY.md § 1 said 'a real Android instance' and the closing report said 'real device'. Both corrected in place.
+  NOT invalidated: the queue, the ordering, the idempotency, survival of am kill, JobScheduler persistence — all platform behaviour, all genuinely proven.
+  Invalidated: 'svc wifi disable' is a clean, instantaneous loss. A basement is a slow flapping one — a radio holding a dead association, a TCP connect that hangs rather than refuses, a lobby captive portal. The mechanism is proven; the timing against a real radio is not, and cannot be from a laptop.
+
+CORRECTION 2 — FIVE REDs, NOT SIX. demo/prove-offline-push.mjs contains exactly five red() calls and both runs printed five.
+
+STAYS DONE. The remainder is TASK-233 and TASK-234, both still To Do, both correctly scoped, neither loses an hour.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

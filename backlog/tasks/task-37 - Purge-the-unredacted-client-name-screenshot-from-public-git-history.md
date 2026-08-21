@@ -4,6 +4,7 @@ title: Purge the unredacted client-name screenshot from public git history
 status: To Do
 assignee: []
 created_date: '2026-08-04 17:44'
+updated_date: '2026-08-21 13:00'
 labels:
   - privacy
   - security
@@ -40,25 +41,5 @@ Filed by triage agent 2, 2026-08-04. Found during the demo verify phase.
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-TRIAGE 2026-08-04 (agent 2) — OPEN. Privacy-affecting, PUBLIC repo.
-
-WHAT LEAKED: docs/media/app-shift.png carried a real third-party client name on every row of the
-shift history. It was removed from the tree at 33e66b2 and replaced with a masked version.
-
-WHAT IS STILL TRUE: 'git show 33e66b2:docs/media/app-shift.png' works for anyone who clones this
-repo. The redaction commit changed the tree, not the history.
-
-RELATED AND ALREADY FIXED (do not re-do): the demo library at
-~/Desktop/demos/hoiv/nfc-timesheets/clips/stills/app-shift.png held a byte-identical copy
-(sha256 4920c2ad…) - it was the only unredacted copy OUTSIDE git history. It has been deleted and
-replaced with the masked version, and MANIFEST.md records the exposure. That does NOT touch the
-git blob, which is what this task is about.
-
-WHAT BREAKS IF NEVER DONE: a real client of the cleaning company is named, publicly and
-permanently, in a repo anyone can clone. It is not visible on the GitHub UI's file list, so the
-exposure is quiet rather than absent - which is worse, because nobody is reminded of it.
-
-ponytail: the cheap option is to accept and record it. Ceiling: it stays fetchable forever.
-Upgrade path: git-filter-repo --path docs/media/app-shift.png --invert-paths, force push, then
-ask GitHub Support to run GC.
+RELATED AND WIDER, filed 2026-08-21 as TASK-239: this task is about a blob DELETED from the tree in 33e66b2. TASK-239 found the same class still TRACKED IN HEAD — docs/media/prove-live/02-building-created.png named a real person, a street address and a contract sum. Removed from HEAD in 987368b; the blob remains fetchable from 2cc19b2. DO BOTH BLOBS IN ONE REWRITE — a second force push to a public repo is a second round of invalidated clones for no extra benefit.
 <!-- SECTION:NOTES:END -->

@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-08-21 02:56'
-updated_date: '2026-08-21 09:21'
+updated_date: '2026-08-21 13:04'
 labels:
   - ux
   - web
@@ -50,15 +50,11 @@ Also still open, unrelated to LOOK: TASK-180 AC #2/#4 (the zero-BUILDINGS vacuou
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERDICT PASS 2026-08-21 (backlog/docs/STATE-OF-THE-PRODUCT.md, commits 0ece084 / f41b358 / e3bf0e3 / 4c95145) — two entries here are PARTLY STALE and must be re-read before anyone starts.
+VERIFIED LIVE ON PRODUCTION by the verdict pass 2026-08-21, in a real browser against the shipped bundle — not against the source tree. Every one of the nine closed items is green on the box: Betreiber never Operator; a 401 returns to /payroll/?period=2026-07 and says the session expired; 'Erneut versuchen' at 44px on /payroll/ /shifts/ /pl/ /locations/ and it actually reloads; the 12px badge floor; .btn-quiet underlined; .form-error luma 178 >= prose 173; 'Kunde anlegen' singular; the nav strip self-scrolls to 'you are here'; the 390px shell whole (nav 61px, h1 y=122, scrollWidth 390).
 
-C5 and PHONE #5, first half: ALREADY FIXED, verified in a browser. demo/verdict-failure.mjs blocks every /admin/* response with Network.setBlockedURLs and reads five screens back. Result: /, /payroll/, /shifts/, /pl/ and /locations/ each show the error and NOT ONE of them still says 'Wird berechnet…' / 'Wird geladen…'. Commit 5456650 (the RELIABILITY run) fixed that half after LOOK.md was written. Evidence: docs/media/verdict/failure/*.png + *.json.
+STAYS IN PROGRESS. Remainder unchanged: C7, C9, C11, C12, PHONE #3/#8/#9, UGLY U3-U16.
 
-C5 and PHONE #5, second half: STILL TRUE and unchanged. 4 of 5 screens offer NO retry control at all — only / has 'Aktualisieren'. 'versuchen Sie es noch einmal' is an instruction attached to nothing on /payroll/, /shifts/, /pl/ and /locations/. That is the whole of what is left of C5.
-
-NEW, in no report, found in the same photographs: on all five screens the failure sentence is printed TWICE — once as .form-error (red, 14px) and once as an ordinary near-white paragraph (15px) below the filter card. Nothing is misleading; it is said twice, in two weights, and neither copy is a button. Fold this into whatever fixes the retry control.
-
-UGLY re-confirmed by eye on the deployed bundle, not just in source: U1 (every money column left-aligned — 236,25 € and 3.874,51 € share a left edge on /payroll/) and U5 (brand wraps to two lines at 1280) are both live on schimmer-glanz.exe.xyz right now.
+MEASURED THIS PASS FOR PHONE #3, so the remainder has a number on it: /shifts/ at 390px renders FOUR shifts in 2318 CSS px — roughly 0.7 phone screens each. TASK-235 fixed the fetch and the truncation message and explicitly not this. A 20-worker month is 440-880 shifts. That is the first thing a second client will feel.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
