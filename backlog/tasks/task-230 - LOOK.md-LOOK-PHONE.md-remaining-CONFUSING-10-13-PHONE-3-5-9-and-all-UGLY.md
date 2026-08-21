@@ -3,10 +3,10 @@ id: TASK-230
 title: >-
   LOOK.md / LOOK-PHONE.md remaining: CONFUSING (10/13), PHONE #3/#5-#9, and all
   UGLY
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-08-21 02:56'
-updated_date: '2026-08-21 03:23'
+updated_date: '2026-08-21 09:21'
 labels:
   - ux
   - web
@@ -60,3 +60,29 @@ NEW, in no report, found in the same photographs: on all five screens the failur
 
 UGLY re-confirmed by eye on the deployed bundle, not just in source: U1 (every money column left-aligned — 236,25 € and 3.874,51 € share a left edge on /payroll/) and U5 (brand wraps to two lines at 1280) are both live on schimmer-glanz.exe.xyz right now.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-21 09:21
+---
+CLARITY PASS 2026-08-21 (this run) — 9 findings closed, each shown RED then GREEN with a committed, runnable check. Commits, oldest to newest:
+
+23d881c C2  Betreiber/Operator unified — web German now says Betreiber everywhere; pnpm check gained a standing German-never-says-Operator / English-never-says-Betreiber rule (web/messages/*.json values + android strings.xml).
+0dd5fe8 C6  401 sends him back to the screen and filters he was on (/login/?returnTo=), not a bare blank form; login.sessionExpired shown only when reached this way. demo/check-login-return.mjs.
+43ee1fb C5 / PHONE #5  /payroll/, /shifts/, /pl/, /locations/ each gained a real retry control (new components/LoadStatus.tsx) wired to the screens own load(). demo/check-retry-control.mjs.
+c557747 U1 + U5  money/duration columns actually right-align now (.data-table td.col-numeric outranks the old left-align default on specificity); brand stops wrapping to two lines at 1280 (white-space: nowrap, inherited). demo/check-brand-nowrap.mjs; upgraded check-clients-contracts-inventory.mjs own note into a real assertion.
+85b4b1c PHONE #6  the phone nav strip scrolls itself to the current entry on every navigation (was stuck at its left edge, Konto sat 300+px off-screen). demo/check-nav-scroll.mjs.
+fcecbbc TASK-229 (1)  .form-error is no longer dimmer (luma) than the body text beside it — new --danger-text token, dark theme only. demo/check-form-error-luma.mjs; extended demo/audit-contrast.mjs.
+387ac50 C13  Kunde anlegen / Kunde bearbeiten, singular, matching every sibling drawer (was Kunden...). Standing check in web/scripts/check.mjs — its first version was vacuous (wrong flattened key path), caught by re-seeding the bad string and watching it stay green, then fixed for real.
+9463672 C10  .btn-quiet row actions get a muted underline so they read as controls, not status text. demo/check-btn-quiet-underline.mjs.
+c518ac5 PHONE #7  state pills grow from 11px to DESIGN.md own 12px floor. demo/check-badge-size.mjs.
+3d68d34 C8  Am Tag gescannt stops being typeset with the same italic/muted style used for absent values everywhere else on /shifts/. New .shift-origin-tap class. demo/check-tap-origin-not-muted.mjs.
+
+INVESTIGATED, NOT A BUG: U2 (buttons 8px low). Measured directly in a real browser on /inventory/ (the screen LOOK.md cited): a text glyphs rendered top and a same-row buttons box top are ~2px apart, not 8 — the original 8px figure compares a CELLs own border-box top (which is never where content starts, padding exists) against a BUTTONs box top, an apples-to-oranges reading. Screenshot confirms no visible stagger. Left unchanged; a fix here would be styling something that is not actually broken.
+
+STILL OPEN, in LOOK.md/LOOK-PHONE.md own ranking: C7 (tag URI wraps 4x with hyphen ambiguity), C9 (unbekannt next to a euro amount), C11 (/analytics/ never answers its own question — the largest of what is left, needs a total plus ranking, not a style fix), C12 (STUNDEN decimal vs DAUER STD:MIN, two notations for one quantity), PHONE #3 (shifts triage has no tappable control, 39.7 screens — a real feature, not a style fix), PHONE #8 (card transform right-aligns prose), PHONE #9 (client portal wraps short columns), and UGLY U3 through U16 (U1/U2 were the two named as highest-reach; U2 turned out not to reproduce, U1 is done).
+
+Every fix above: seeded the negative condition (git stash on the source file, rebuilt, re-ran the check) and watched it go RED before restoring and confirming GREEN. Full regression after each commit: pnpm check, pnpm lint, pnpm typecheck, pnpm build, sh demo/check-guards.sh, demo/audit-contrast.mjs, and the other demo/check-*.mjs scripts already in the tree — all green. Nothing deployed to production this pass (local nfc_demo plus demo-server.mjs only, per the constraint that production has no meaningful work to break).
+---
+<!-- COMMENTS:END -->
