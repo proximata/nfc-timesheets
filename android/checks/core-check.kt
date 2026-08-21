@@ -105,6 +105,7 @@ fun main() {
     theOverwriteGuard()
     pendingWork()
     theBackgroundPush()
+    theBrandPalette()
 
     if (failed) exitProcess(1)
     println("core-check: OK")
@@ -2549,4 +2550,126 @@ private fun theBackgroundPush() {
         "'never tried' and 'last tried at X' are DIFFERENT sentences — they mean opposite " +
             "things to somebody deciding whether to walk upstairs for a signal",
     )
+}
+
+// ---------------------------------------------------------------------------------
+// 17. THE BRAND PALETTE, AND THE ROLES NOBODY ASSIGNED.
+//
+//     TASK-238 took `dynamicLightColorScheme(context)` out of ui/Theme.kt and put a
+//     hand-written scheme in. It shipped as 0.5.2 / versionCode 9, and the clocked-in
+//     screen was STILL BRIGHT PINK. Measured on that build, on that screen:
+//
+//       #FFD8E4  47.9% of the app's pixels   channel spread 39
+//       #E6E0E9  40.9%                       channel spread  9
+//
+//     Those are Material 3's BASELINE `tertiaryContainer` and `surfaceContainerHighest` —
+//     the purple family Google ships for any role a scheme leaves unassigned.
+//     `TimeSheetApp.kt` paints the running shift with the first and its clock card with
+//     the second, and Theme.kt assigned neither. A partial scheme is not a partial brand;
+//     it is this brand plus somebody else's, and which half a worker sees depends on which
+//     screen they are on.
+//
+//     `demo/check-app-not-wallpaper.mjs` was green throughout, correctly: it asks whether
+//     the app follows the WALLPAPER, and it does not. It cold-starts with no tap intent,
+//     so it photographs the idle screen and never the running one.
+//
+//     THIS CHECK IS THE CLASS, NOT THE INSTANCE. Every colour role rendered anywhere under
+//     app/src must be assigned in BOTH schemes. A new screen reaching for a role nobody has
+//     defined fails here, on a plain JVM, with no device — instead of on a phone in a
+//     stairwell, in a colour nobody chose.
+//
+//     SHOW IT RED: delete `tertiaryContainer = BgOverlayLight,` from LightBrand.
+// ---------------------------------------------------------------------------------
+private fun theBrandPalette() {
+    val theme = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/Theme.kt").readText()
+
+    // Material You is the bug this section exists downstream of. Comments strip first: the
+    // file's own KDoc names the function in order to explain what it cost.
+    val themeCode = strippedOfComments(theme)
+    check(
+        !themeCode.contains("dynamicLightColorScheme") && !themeCode.contains("dynamicDarkColorScheme"),
+        "the app does not take its palette from the worker's wallpaper (DESIGN.md section 1: the mark is achromatic)",
+    )
+
+    // The two schemes, read as the argument lists they are. `darkColorScheme(` / `lightColorScheme(`
+    // to the matching paren, so a role assigned in one and forgotten in the other is visible.
+    fun assignedRoles(builder: String): Set<String> {
+        val at = themeCode.indexOf("$builder(")
+        check(at >= 0, "Theme.kt builds a scheme with $builder(")
+        if (at < 0) return emptySet()
+        var depth = 0
+        var end = at
+        for (i in at until themeCode.length) {
+            if (themeCode[i] == '(') depth++
+            if (themeCode[i] == ')') {
+                depth--
+                if (depth == 0) { end = i; break }
+            }
+        }
+        return Regex("""(?m)^\s*([a-zA-Z]+)\s*=""")
+            .findAll(themeCode.substring(at, end))
+            .map { it.groupValues[1] }
+            .toSet()
+    }
+
+    val dark = assignedRoles("darkColorScheme")
+    val light = assignedRoles("lightColorScheme")
+    check(dark.isNotEmpty() && light.isNotEmpty(), "both schemes assign roles by name")
+    check(
+        dark == light,
+        "the two schemes assign the SAME roles — a role set in one theme only is a screen " +
+            "that is on-brand in daylight and Material-purple at night. " +
+            "dark-only=${(dark - light).sorted()} light-only=${(light - dark).sorted()}",
+    )
+
+    // Every role the app actually renders with. Sources, not the theme file, so this
+    // tracks the UI rather than restating Theme.kt back at itself.
+    val used = sortedSetOf<String>()
+    for (file in File("app/src").walkTopDown().filter { it.isFile && it.extension == "kt" }) {
+        if (file.path.endsWith("ui/Theme.kt")) continue
+        for (m in Regex("""colorScheme\.([a-zA-Z]+)""").findAll(strippedOfComments(file.readText()))) {
+            used += m.groupValues[1]
+        }
+    }
+    check(used.isNotEmpty(), "the app renders with named Material roles (found ${used.size})")
+    val missing = used - dark
+    check(
+        missing.isEmpty(),
+        "every colour role the app renders is assigned in Theme.kt — unassigned falls through " +
+            "to Material's BASELINE PURPLE, which is how the clocked-in screen shipped pink in " +
+            "0.5.2/9. Missing: ${missing.sorted()}",
+    )
+
+    // The two roles the running shift is painted with, named explicitly. The set comparison
+    // above would go green again the moment somebody stopped USING them, and the finding was
+    // about that screen.
+    val app = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetApp.kt").readText()
+    check(
+        app.contains("colorScheme.tertiaryContainer") && dark.contains("tertiaryContainer"),
+        "the RUNNING shift's field is a role this project defines, not a Material default",
+    )
+
+    // Achromatic, computed from the hexes in the file rather than trusted. DESIGN.md
+    // section 1 measured the mark at saturation exactly zero; the accent, the amber state
+    // and Material's own error pair are the deliberate exceptions and are NAMED, so the
+    // list of things allowed to carry a hue cannot grow by accident.
+    //
+    // TWO BUDGETS, because the two kinds of token do different work and one number for
+    // both is either too loose for surfaces or a false alarm on text. SURFACES are the
+    // large fields — they are what the pink finding was about, and DESIGN.md section 3.1
+    // gives them at spread 0-8. TEXT tokens are small, and section 3.2's own light muted
+    // grey #767C85 is spread 15 on purpose: it is the brand's #ACACAC family nudged for
+    // contrast. Measured, not guessed — a single budget of 12 failed this check against
+    // a value taken verbatim out of the design document it is enforcing.
+    val chromatic = setOf("AccentDark", "AccentLight", "AmberDark", "AmberLight", "ErrorDark", "OnErrorDark", "ErrorLight")
+    for (m in Regex("""val (\w+) = Color\(0xFF([0-9A-Fa-f]{6})\)""").findAll(theme)) {
+        val (name, hex) = m.destructured
+        if (name in chromatic) continue
+        val r = hex.substring(0, 2).toInt(16)
+        val g = hex.substring(2, 4).toInt(16)
+        val b = hex.substring(4, 6).toInt(16)
+        val spread = maxOf(r, g, b) - minOf(r, g, b)
+        val budget = if (name.startsWith("Bg")) 8 else 16
+        check(spread <= budget, "$name #$hex is achromatic (channel spread $spread, budget $budget)")
+    }
 }
