@@ -68,6 +68,13 @@ CREATE TABLE workers (
   enrolment_code_issued_at TIMESTAMPTZ,
   enrolment_code_issued_by BIGINT,
   enrolment_code_redeemed_at TIMESTAMPTZ,
+  -- 009 (TASK-225): what this worker's phone last told us it is still holding. The two
+  -- counts default to 0 and phone_last_seen_at stays NULL until a phone actually calls,
+  -- which is what distinguishes "nothing pending" from "never heard from".
+  phone_last_seen_at TIMESTAMPTZ,
+  phone_pending_shifts INTEGER NOT NULL DEFAULT 0,
+  phone_pending_blocked INTEGER NOT NULL DEFAULT 0,
+  phone_pending_oldest_start TIMESTAMPTZ,
   CONSTRAINT workers_enrolment_code_pair
     CHECK ((enrolment_code_hash IS NULL) = (enrolment_code_expires_at IS NULL))
 );
@@ -669,7 +676,7 @@ try {
 
   // `cookie` is passed explicitly: node's fetch has no cookie jar, which is a feature
   // here - every case states exactly which credential it is presenting.
-  const call = (path, { method = "GET", body, key = APP_KEY, cookie, ip } = {}) =>
+  const call = (path, { method = "GET", body, key = APP_KEY, cookie, ip, headers = {} } = {}) =>
     fetch(base + path, {
       method,
       headers: {
@@ -679,6 +686,10 @@ try {
         // process would otherwise share one bucket and poison unrelated cases.
         ...(ip ? { "X-Forwarded-For": ip } : {}),
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        // Arbitrary extras, LAST so a case can override any of the above. Added for the
+        // X-Pending-* heartbeat (TASK-225), which is the only thing in this API that a
+        // client states in a header rather than in a body.
+        ...headers,
       },
       body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
     });
@@ -980,6 +991,109 @@ try {
   // Named helpers so every request below states WHOSE session it is presenting.
   const asWorker = (path, opts = {}) => call(path, { cookie: workerCookie, ...opts });
   const asOther = (path, opts = {}) => call(path, { cookie: otherCookie, ...opts });
+
+  // ---- what a phone is still holding (TASK-225, migration 009) ---------------------
+  //
+  // The office's half of the offline-tap problem. A cleaner taps in a basement, the row
+  // is written on the phone and delivered later by a background job; these three headers
+  // are how the director finds out, BEFORE month end, that hours exist which the server
+  // has never seen. Recorded fire-and-forget in server.js, so every case below has to
+  // wait for the write rather than read it straight off the response.
+
+  const phoneRow = async () =>
+    (
+      await admin.query(
+        `SELECT phone_last_seen_at, phone_pending_shifts, phone_pending_blocked, phone_pending_oldest_start
+           FROM workers WHERE id = $1`,
+        [workerId],
+      )
+    ).rows[0];
+
+  /** The heartbeat UPDATE is deliberately not awaited by the request. Poll for it. */
+  const untilPhone = async (predicate) => {
+    for (let i = 0; i < 100; i++) {
+      const row = await phoneRow();
+      if (predicate(row)) return row;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return await phoneRow();
+  };
+
+  await test("a worker request carrying X-Pending-* records what that phone is still holding", async () => {
+    const oldest = "2026-08-20T04:15:00.000Z";
+    const res = await asWorker("/roster", {
+      headers: { "X-Pending-Shifts": "2", "X-Pending-Blocked": "1", "X-Pending-Oldest": oldest },
+    });
+    assert.equal(res.status, 200, "the heartbeat must never change the answer to the request");
+
+    const row = await untilPhone((r) => r.phone_pending_shifts === 2);
+    assert.equal(row.phone_pending_shifts, 2);
+    assert.equal(row.phone_pending_blocked, 1, "blocked is counted SEPARATELY from waiting");
+    assert.equal(row.phone_pending_oldest_start.toISOString(), oldest, "the oldest undelivered start survives");
+    assert.ok(row.phone_last_seen_at, "…and we know when we last heard from the phone");
+  });
+
+  await test("a client that reports nothing updates last-seen but must NOT zero a real count", async () => {
+    // THE BUG THIS PREVENTS: an iOS build, a curl, or an older Android calls the API and
+    // silently overwrites a live Android count with an implied 0 — so the one screen that
+    // says "this phone is holding two shifts" goes quiet while the shifts are still there.
+    const before = await phoneRow();
+    assert.equal(before.phone_pending_shifts, 2, "precondition: a real count is on the row");
+
+    const seenBefore = before.phone_last_seen_at.getTime();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal((await asWorker("/roster")).status, 200);
+
+    const row = await untilPhone((r) => r.phone_last_seen_at.getTime() > seenBefore);
+    assert.equal(row.phone_pending_shifts, 2, "a silent client must not zero somebody else's queue");
+    assert.equal(row.phone_pending_blocked, 1);
+    assert.ok(row.phone_last_seen_at.getTime() > seenBefore, "…but 'we heard from this phone' is still recorded");
+  });
+
+  await test("an emptied queue is reported as zero, and the oldest start goes back to NULL", async () => {
+    // X-Pending-Oldest is OMITTED, never sent empty, when there is nothing outstanding.
+    // A NULL here is therefore a statement and must be written as one — leaving yesterday's
+    // timestamp standing would tell the office work is still missing after it arrived.
+    assert.equal((await asWorker("/roster", { headers: { "X-Pending-Shifts": "0" } })).status, 200);
+    const row = await untilPhone((r) => r.phone_pending_shifts === 0);
+    assert.equal(row.phone_pending_shifts, 0);
+    assert.equal(row.phone_pending_blocked, 0);
+    assert.equal(row.phone_pending_oldest_start, null, "an absent oldest header clears the column");
+  });
+
+  await test("a garbage or hostile heartbeat is ignored, never trusted and never a 500", async () => {
+    for (const headers of [
+      { "X-Pending-Shifts": "-4" },
+      { "X-Pending-Shifts": "1e9" },
+      { "X-Pending-Shifts": "'; DROP TABLE workers;--" },
+      { "X-Pending-Shifts": "999999999999999999999" },
+      { "X-Pending-Shifts": "3", "X-Pending-Oldest": "not a date" },
+      { "X-Pending-Shifts": "3", "X-Pending-Oldest": "2099-01-01T00:00:00Z" },
+    ]) {
+      const res = await asWorker("/roster", { headers });
+      assert.equal(res.status, 200, `a bad heartbeat must not change the answer: ${JSON.stringify(headers)}`);
+    }
+    // The two well-formed-count rows above did land; both carry an unusable date, so the
+    // column must be NULL rather than holding a phone's broken clock.
+    const row = await untilPhone((r) => r.phone_pending_shifts === 3);
+    assert.equal(row.phone_pending_shifts, 3, "a valid count alongside a bad date still counts");
+    assert.equal(row.phone_pending_oldest_start, null, "an unparseable or far-future date is dropped, not stored");
+    assert.equal(
+      await countOf("SELECT count(*) AS n FROM workers"),
+      await countOf("SELECT count(*) AS n FROM workers"),
+      "…and the table is still there",
+    );
+  });
+
+  await test("the heartbeat never leaks a session: a worker cannot report for anybody else", async () => {
+    // decision-22 from the other side. The count is filed against the SESSION's worker and
+    // there is no id in the header — so a phone cannot claim somebody else is offline.
+    const before = await phoneRow();
+    const res = await asOther("/roster", { headers: { "X-Pending-Shifts": "77" } });
+    assert.equal(res.status, 200);
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal((await phoneRow()).phone_pending_shifts, before.phone_pending_shifts, "another session's heartbeat lands on THAT worker");
+  });
 
   // ---- password login (decision-20) -----------------------------------------------
   let adminCookie = null;
@@ -4746,6 +4860,21 @@ try {
       assert.equal(row.enrolment_code_hash, undefined, "the hash must never reach the panel");
 
       await admin.query("UPDATE phone_identities SET worker_id = NULL WHERE operator_id = $1", [op.id]);
+    });
+
+    await test("GET /admin/data carries what each phone is still holding (TASK-225)", async () => {
+      // A fact behind its own endpoint is a fact nobody fetches. The four phone_* columns
+      // ride in WORKER_COLS, so every screen that lists workers already has them — and the
+      // director can answer "is Anna off sick, or is her phone holding three shifts" at any
+      // moment instead of at month end, which is the most expensive place to find out.
+      const data = await (await asAdmin("/admin/data")).json();
+      const row = data.workers.find((w) => w.id === workerId);
+      assert.ok(row, "the seeded worker is in /admin/data");
+      assert.equal(row.phone_pending_shifts, 3, "the director sees the count the phone last reported");
+      assert.ok(row.phone_last_seen_at, "…and when that phone was last heard from");
+      assert.ok("phone_pending_blocked" in row, "…with 'needs a human' counted apart from 'waiting for signal'");
+      assert.ok("phone_pending_oldest_start" in row, "…and how old the oldest undelivered shift is");
+      assert.equal(row.enrolment_code_hash, undefined, "and still no code hash, as before");
     });
 
     await test("an operator has NO clock-in path — structural, not a check a handler could forget", async () => {

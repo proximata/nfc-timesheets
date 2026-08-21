@@ -55,9 +55,14 @@ const TREND_MONTHS_MAX = 24;
 // absent, exactly like apple_sub — the panel can do nothing with it and it has no
 // business in a browser or a log. The code itself is returned once, by the route that
 // mints it, and is unrecoverable afterwards.
+// The four phone_* columns are migration 009 (TASK-225): what that worker's phone last
+// told us it is still holding. They ride along in WORKER_COLS rather than in a separate
+// query because every screen that lists workers is a screen where "this phone is holding
+// two shifts" belongs — and because a fact behind its own endpoint is a fact nobody fetches.
 const WORKER_COLS =
   "id, name, email, phone, hourly_rate_cents, active, created_at, " +
-  "enrolment_code_expires_at, enrolment_code_redeemed_at";
+  "enrolment_code_expires_at, enrolment_code_redeemed_at, " +
+  "phone_last_seen_at, phone_pending_shifts, phone_pending_blocked, phone_pending_oldest_start";
 
 // An operator (decision-45). No email, no rate, no apple_sub — the columns that exist on
 // `workers` for reasons that are all worker-specific. `enrolment_code_hash` is deliberately

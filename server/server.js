@@ -9,6 +9,7 @@ import * as Sentry from "@sentry/node";
 import { requireAdminSession, requireAppKey, requireOperatorSession, requireWorkerSession } from "./lib/auth.js";
 import { pool } from "./lib/db.js";
 import { HttpError, readJson, sendFile, sendJson } from "./lib/http.js";
+import { recordPhoneHeartbeat } from "./lib/phones.js";
 import { redactUrl } from "./lib/scrub.js";
 import { adminRoutes } from "./routes/admin.js";
 import { appRoutes } from "./routes/app.js";
@@ -262,6 +263,15 @@ async function handle(req, res, ctx) {
   if (session?.workerId !== undefined) {
     ctx.workerId = session.workerId;
     Sentry.setUser({ id: String(session.workerId) });
+
+    // WHAT THAT PHONE IS STILL HOLDING (TASK-225, lib/phones.js). DELIBERATELY NOT
+    // AWAITED: this is the office's number, and the office's number must never be able to
+    // delay, fail or slow down a clock-in. If the UPDATE is slow, the tap has already been
+    // answered; if it throws, the catch below eats it and the request is unaffected.
+    //
+    // Placed here rather than inside a handler so it covers EVERY worker route — including
+    // the ones a phone with a full queue is most likely to be calling, which is all of them.
+    void recordPhoneHeartbeat(session.workerId, req.headers).catch(() => {});
   }
 
   const body = route.method === "GET" || route.method === "DELETE" ? {} : await readJson(req);
