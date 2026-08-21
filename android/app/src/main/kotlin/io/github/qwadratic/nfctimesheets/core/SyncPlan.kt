@@ -32,6 +32,13 @@ object SyncPlan {
         val openSyncedAt: Instant?,
         val closeSyncedAt: Instant?,
         val syncBlocked: Boolean,
+        /**
+         * When a push was last ATTEMPTED for this row — success or failure, both. Read
+         * only by [PendingWork]; [plan] deliberately does not branch on it, because a row
+         * that has been tried a hundred times and a row that has never been tried are the
+         * same job to do. Defaulted so every existing construction site is unchanged.
+         */
+        val lastAttemptAt: Instant? = null,
     ) {
         val isOpen: Boolean get() = endTime == null
         val isFullySynced: Boolean get() = openSyncedAt != null && (isOpen || closeSyncedAt != null)

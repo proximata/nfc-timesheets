@@ -6,6 +6,7 @@ import io.github.qwadratic.nfctimesheets.core.CloseShiftRequest
 import io.github.qwadratic.nfctimesheets.core.CreateMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.EnrolmentRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
+import io.github.qwadratic.nfctimesheets.core.PendingWork
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
 import io.github.qwadratic.nfctimesheets.core.Wire
 import io.github.qwadratic.nfctimesheets.core.WireRoster
@@ -34,10 +35,15 @@ import java.time.Instant
  *        The session is expired, revoked, or the worker was deactivated in the admin
  *        panel. Dropping to signed-out here means no call site can retry a request that
  *        can never succeed.
+ * @param pending what this phone is still holding, read once per request and attached as
+ *        the X-Pending-* headers below (TASK-225). Defaults to "nothing", which is what
+ *        the operator's Api instance reports and is true of it: an operator does not clock
+ *        in (decision-45) and has no queue.
  */
 class Api(
     private val cookies: CookieJar,
     private val onSessionRejected: () -> Unit,
+    private val pending: () -> PendingWork.Summary = { PendingWork.NOTHING },
 ) {
     /**
      * THE API HOST, NEVER THE TAG HOST (decision-40).
@@ -245,6 +251,7 @@ class Api(
                 // log name the platform behind a bad payload. NOT a server change.
                 setRequestProperty("X-Client", "android/${BuildConfig.VERSION_NAME}")
                 setRequestProperty("Accept", "application/json")
+                attachPendingHeaders(this)
                 cookies.header()?.let { setRequestProperty("Cookie", it) }
                 if (body != null) {
                     doOutput = true
@@ -285,6 +292,38 @@ class Api(
                 throw ApiFailure.network()
             }
         }
+
+    /**
+     * WHAT THIS PHONE IS STILL HOLDING, told to the office for free (TASK-225).
+     *
+     * A shift that never reached the server is invisible to everyone: no row, no 8h net, no
+     * payroll line, and no way for a director to tell a cleaner who was off sick from a
+     * phone that has been in a pocket in a basement for three days. These three headers are
+     * the cheap half of that problem, and they are HEADERS and not a new endpoint for three
+     * reasons that all matter:
+     *
+     *   - no extra round trip, therefore nothing new on the clock-in path. The numbers ride
+     *     on requests the app already makes.
+     *   - AN OLDER SERVER IGNORES THEM. Unknown request headers are dropped, silently, by
+     *     every HTTP server there is. So an app newer than the box degrades to exactly
+     *     today's behaviour instead of failing — no version negotiation, no feature flag.
+     *   - the values are read from an in-memory cache (ShiftStore.pendingSummary), so this
+     *     is a field read and not a query.
+     *
+     * NEVER THROWS. A header is a nicety; a clock-in is not. Anything that goes wrong here
+     * costs the office a number, and must not cost a cleaner a shift.
+     */
+    private fun attachPendingHeaders(connection: HttpURLConnection) {
+        runCatching {
+            val summary = pending()
+            connection.setRequestProperty("X-Pending-Shifts", summary.waiting.toString())
+            connection.setRequestProperty("X-Pending-Blocked", summary.blocked.toString())
+            // Omitted, not sent empty, when there is nothing pending: "" would have to be
+            // parsed into a null on the far side, and a header that is absent says the same
+            // thing without anybody writing that parser.
+            summary.oldestStart?.let { connection.setRequestProperty("X-Pending-Oldest", Wire.string(it)) }
+        }
+    }
 
     private companion object {
         const val TIMEOUT_MS = 15_000

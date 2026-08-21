@@ -80,6 +80,7 @@ import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
 import io.github.qwadratic.nfctimesheets.core.MaterialEntry
 import io.github.qwadratic.nfctimesheets.core.MaterialQueue
 import io.github.qwadratic.nfctimesheets.core.MaterialStatus
+import io.github.qwadratic.nfctimesheets.core.PendingWork
 import io.github.qwadratic.nfctimesheets.core.QueuedMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.RunningShift
 import io.github.qwadratic.nfctimesheets.core.ShiftSignal
@@ -146,6 +147,10 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?) {
     // red while you retype tells you nothing and looks broken.
     var attempted by rememberSaveable { mutableStateOf<String?>(null) }
     val busy by model.signingIn.collectAsStateWithLifecycle()
+    // Signing out does NOT delete a queued shift — it belongs to the worker who logged it
+    // and goes out when that worker signs back in. So the count has to be on THIS screen,
+    // or somebody hands the phone back believing their hours went with it (TASK-225).
+    val pending by model.log.collectAsStateWithLifecycle()
     // The refusal that is currently on screen, or null. Non-null exactly when there IS a
     // reason AND the field still holds the string it was about.
     val errorKey = reasonKey?.takeIf { typed == attempted }
@@ -171,6 +176,8 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?) {
             modifier = Modifier.semantics { heading() },
         )
         Text(stringResource(R.string.signin_code_intro), style = MaterialTheme.typography.bodyLarge)
+
+        PendingCard(pending.pending, signedOut = true)
 
         OutlinedTextField(
             value = typed,
@@ -388,6 +395,7 @@ private fun LogScreen(
             onResolve = { showResolver = true },
             notice = log.switchNotice,
             onDismissNotice = model::dismissSwitchNotice,
+            pending = log.pending,
             readiness = readiness,
             openIntent = openIntent,
         )
@@ -414,6 +422,12 @@ private fun LogScreen(
 
         if (readiness != NfcReadiness.READY) {
             item { NfcBanner(readiness, openIntent) }
+        }
+
+        // ABOVE the buttons and above the recent list: this is unpaid work that the server
+        // has never heard of, and it outranks everything else on the screen.
+        if (!log.pending.isEmpty) {
+            item { PendingCard(log.pending) }
         }
 
         // MANUAL FALLBACK, deliberately secondary. The product is the passive tap: hold the
@@ -535,6 +549,8 @@ private fun ShiftRunningScreen(
     onResolve: () -> Unit,
     notice: Pair<String?, String?>?,
     onDismissNotice: () -> Unit,
+    /** What this phone is still holding (TASK-225). Usually zero; never hidden when not. */
+    pending: PendingWork.Summary,
     readiness: NfcReadiness,
     openIntent: (Intent) -> Unit,
 ) {
@@ -703,6 +719,11 @@ private fun ShiftRunningScreen(
             NfcBanner(readiness, openIntent)
         }
 
+        // A shift tapped in a basement is EXACTLY the shift that is on this screen, so this
+        // is the most important of the three places the pending card appears — not the
+        // afterthought at the bottom of a list.
+        PendingCard(pending)
+
         notice?.let { (from, to) ->
             val unknown = stringResource(R.string.unknown_location)
             Card(Modifier.fillMaxWidth()) {
@@ -819,6 +840,78 @@ private fun NfcBanner(readiness: NfcReadiness, openIntent: (Intent) -> Unit) {
 }
 
 /**
+ * WHAT THIS PHONE IS STILL HOLDING (TASK-225). The whole reason this composable exists is
+ * that the background push can fail for a hundred reasons that are nobody's fault, and the
+ * only unacceptable outcome is that it fails SILENTLY: a queued tap that only exists in a
+ * log is the same bug in a different place.
+ *
+ * Shown on the shift screen, on the log screen and on the SIGN-IN screen — that last one is
+ * not decoration: signing out does not delete a queued row, and somebody handing a phone
+ * back must not believe their hours went with it.
+ *
+ * Colour is the SECOND signal, never the first: the blocked line says "braucht Ihre
+ * Verwaltung" in words and is additionally tinted, and everything else is ordinary text.
+ */
+@Composable
+private fun PendingCard(pending: PendingWork.Summary, signedOut: Boolean = false) {
+    if (pending.isEmpty) return
+    val spoken = pluralStringResource(R.plurals.a11y_pending, pending.total, pending.total)
+    Card(
+        Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) { contentDescription = spoken },
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                stringResource(R.string.pending_heading),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.semantics { heading() },
+            )
+            Text(pluralStringResource(R.plurals.pending_count, pending.total, pending.total))
+
+            pending.oldestStart?.let {
+                Text(
+                    stringResource(R.string.pending_oldest, dateTime(it)),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            // WHEN IT LAST TRIED, always, and "never tried" is a DIFFERENT sentence rather
+            // than a blank timestamp: the two mean opposite things to somebody deciding
+            // whether to walk upstairs for a signal.
+            Text(
+                pending.lastAttemptAt?.let { stringResource(R.string.pending_last_try, dateTime(it)) }
+                    ?: stringResource(R.string.pending_never_tried),
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            if (pending.blocked > 0) {
+                Text(
+                    pluralStringResource(R.plurals.pending_blocked, pending.blocked, pending.blocked),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
+            Text(
+                stringResource(if (signedOut) R.string.pending_signed_out else R.string.pending_body),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            // The ceiling, printed. A force-stopped app runs no jobs at all until a human
+            // opens it; that is true of every scheduler on Android and it is not something
+            // this screen is allowed to leave out just because it is inconvenient.
+            Text(
+                stringResource(R.string.pending_force_stop_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
  * A failed sync is NEVER invisible. `syncBlocked` means nobody is retrying and a human
  * has to act, so it says that in the error colour rather than "pending".
  */
@@ -873,7 +966,19 @@ private fun ShiftRow(shift: LocalShift, siteName: String?) {
                 },
             )
             shift.isFullySynced -> Text(stringResource(R.string.sync_sent), style = MaterialTheme.typography.bodySmall)
-            else -> Text(stringResource(R.string.sync_sending), style = MaterialTheme.typography.bodySmall)
+            // "Wird gesendet …" was a lie for the case that matters: a row taken in a
+            // basement is not being sent, it is WAITING, and the difference is the whole
+            // of TASK-225. The last attempt rides on the same line so the worker can tell
+            // "the phone is trying and failing" from "the phone has not had a signal since".
+            else -> {
+                Text(stringResource(R.string.sync_waiting), style = MaterialTheme.typography.bodySmall)
+                Text(
+                    shift.lastAttemptAt?.let { stringResource(R.string.sync_last_try, timeOfDay(it)) }
+                        ?: stringResource(R.string.sync_never_tried),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         HorizontalDivider()
     }

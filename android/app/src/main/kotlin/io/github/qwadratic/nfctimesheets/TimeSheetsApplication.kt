@@ -52,7 +52,14 @@ class TimeSheetsApplication : Application() {
      */
     val sessionRejected = MutableStateFlow(false)
 
-    val api: Api by lazy { Api(cookies) { sessionRejected.value = true } }
+    /**
+     * `pending = store::pendingSummary` is the ONLY new wire here (TASK-225): every request
+     * this app already makes carries the X-Pending-* headers, so the office learns what this
+     * phone is still holding without a new endpoint and without a second round trip. It is a
+     * cached field read — see ShiftStore.pendingSummary — so nothing on the tap path got
+     * slower, and Api swallows any failure of it rather than letting a header cost a shift.
+     */
+    val api: Api by lazy { Api(cookies, { sessionRejected.value = true }, store::pendingSummary) }
 
     /**
      * THE OPERATOR SIDE, DELIBERATELY A SECOND EVERYTHING.
@@ -74,7 +81,11 @@ class TimeSheetsApplication : Application() {
         PrefsCookieJar(this, SessionCookie.OPERATOR_NAME, file = "operator-session")
     }
 
-    val operatorApi: Api by lazy { Api(operatorCookies) { /* not the worker's session */ } }
+    // No `pending` argument on purpose: it defaults to "nothing pending", which is TRUE of
+    // an operator — an operator does not clock in (decision-45) and has no shift queue. The
+    // worker's count must not ride on the operator's cookie; the two identities do not share
+    // a jar and they do not share a heartbeat either.
+    val operatorApi: Api by lazy { Api(operatorCookies, { /* not the worker's session */ }) }
 
     /** Encodes and verifies the bytes that go onto a physical card. See nfc/TagWriter.kt. */
     val tagWriter: TagWriter by lazy { TagWriter(tagLink) }

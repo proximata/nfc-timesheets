@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import io.github.qwadratic.nfctimesheets.core.PendingWork
 import io.github.qwadratic.nfctimesheets.core.SyncPlan.QueuedShift
 import io.github.qwadratic.nfctimesheets.core.WireLocation
 import io.github.qwadratic.nfctimesheets.core.WireShift
@@ -26,7 +27,7 @@ import java.util.UUID
  * outside this file talks in [QueuedShift] and [LocalShift]; swapping the implementation
  * is one file.
  */
-class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext, "timesheets.db", null, 2) {
+class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext, "timesheets.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         // client_uuid is the PRIMARY KEY, not an afterthought: it is the idempotency key
@@ -46,7 +47,8 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext
               open_synced_at  TEXT,
               close_synced_at TEXT,
               sync_error      TEXT,
-              sync_blocked    INTEGER NOT NULL DEFAULT 0
+              sync_blocked    INTEGER NOT NULL DEFAULT 0,
+              last_attempt_at TEXT
             )
             """.trimIndent(),
         )
@@ -87,11 +89,20 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext
         // launch after `adb install -r`. Never DROP: these rows are somebody's unpaid
         // hours. version 1 -> 2 only ADDS the zones table; shifts and locations are
         // untouched.
-        if (oldVersion == 1 && newVersion == 2) {
-            createZonesTable(db)
-            return
+        // Sequential and cumulative, not a pair of exact-version arms. The old shape was
+        // `if (oldVersion == 1 && newVersion == 2)` and it would have THROWN on the phone
+        // in the field the moment a second migration existed: that phone is on version 1,
+        // the new app is on version 3, and 1 -> 3 matched nothing. A throw here is a crash
+        // at launch on a device holding somebody's unpaid hours.
+        if (oldVersion < 2) createZonesTable(db)
+        if (oldVersion < 3) {
+            // TASK-225. ADD COLUMN, nullable, no default: every existing row means "never
+            // attempted", which is exactly what NULL says and exactly what the screen
+            // then prints ("noch nicht versucht"), rather than inventing a timestamp.
+            db.execSQL("ALTER TABLE shifts ADD COLUMN last_attempt_at TEXT")
         }
-        throw IllegalStateException("no migration from $oldVersion to $newVersion")
+        // No downgrade arm: SQLiteOpenHelper never calls this for newVersion < oldVersion
+        // (it calls onDowngrade, which throws by default). A branch here could not fire.
     }
 
     // ---- shifts --------------------------------------------------------------------
@@ -104,6 +115,7 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext
             startTime = startTime,
         )
         writableDatabase.insertOrThrow("shifts", null, row.values())
+        invalidatePending()
         return row
     }
 
@@ -118,6 +130,7 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext
             "client_uuid = ?",
             arrayOf(clientUuid),
         )
+        invalidatePending()
     }
 
     fun all(): List<LocalShift> = readableDatabase
@@ -143,6 +156,7 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext
             shift.endTime?.let { put("end_time", it.toString()) }
         }
         writableDatabase.update("shifts", values, "client_uuid = ?", arrayOf(shift.clientUuid ?: return))
+        invalidatePending()
     }
 
     /**
@@ -165,6 +179,17 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext
             openSyncedAt = Instant.now(),
         )
         writableDatabase.insertWithOnConflict("shifts", null, row.values(), SQLiteDatabase.CONFLICT_IGNORE)
+        invalidatePending()
+    }
+
+    /**
+     * "A push was tried for this row, now." Written BEFORE the call goes out and for BOTH
+     * outcomes, which is the only ordering that survives the interesting failure: a
+     * process killed mid-request would otherwise leave a row that has been tried many
+     * times still claiming it was never attempted.
+     */
+    fun markAttempted(clientUuid: String, at: Instant = Instant.now()) = mark(clientUuid) {
+        put("last_attempt_at", at.toString())
     }
 
     fun markOpenSynced(clientUuid: String) = mark(clientUuid) {
@@ -192,7 +217,29 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext
 
     private inline fun mark(clientUuid: String, build: ContentValues.() -> Unit) {
         writableDatabase.update("shifts", ContentValues().apply(build), "client_uuid = ?", arrayOf(clientUuid))
+        invalidatePending()
     }
+
+    // ---- what this phone is still holding ------------------------------------------
+
+    /**
+     * Cached because [io.github.qwadratic.nfctimesheets.net.Api] reads it on EVERY request
+     * to fill the X-Pending-* headers, and the one request that must never get slower is
+     * a clock-in. Recomputed only after a write, so the common path is a field read and
+     * touches neither SQLite nor the disk.
+     *
+     * `@Volatile` and not a lock: the job thread writes, the UI thread and the request
+     * thread read, and the worst a torn read can do is recompute once more than needed.
+     */
+    @Volatile
+    private var cachedPending: PendingWork.Summary? = null
+
+    private fun invalidatePending() {
+        cachedPending = null
+    }
+
+    fun pendingSummary(): PendingWork.Summary =
+        cachedPending ?: PendingWork.summarise(queue()).also { cachedPending = it }
 
     // ---- locations -----------------------------------------------------------------
 
@@ -300,6 +347,8 @@ data class LocalShift(
     val syncError: String? = null,
     /** Terminal rejection: stop retrying, a human must act. */
     val syncBlocked: Boolean = false,
+    /** Last push ATTEMPT, success or failure. Null = never tried. See ShiftStore.markAttempted. */
+    val lastAttemptAt: Instant? = null,
 ) {
     val isOpen: Boolean get() = endTime == null
     val isFullySynced: Boolean get() = openSyncedAt != null && (isOpen || closeSyncedAt != null)
@@ -316,6 +365,7 @@ data class LocalShift(
         openSyncedAt = openSyncedAt,
         closeSyncedAt = closeSyncedAt,
         syncBlocked = syncBlocked,
+        lastAttemptAt = lastAttemptAt,
     )
 
     internal fun values() = ContentValues().apply {
@@ -331,6 +381,7 @@ data class LocalShift(
         put("close_synced_at", closeSyncedAt?.toString())
         put("sync_error", syncError)
         put("sync_blocked", if (syncBlocked) 1 else 0)
+        put("last_attempt_at", lastAttemptAt?.toString())
     }
 }
 
@@ -351,5 +402,6 @@ private fun readShift(c: Cursor): LocalShift {
         closeSyncedAt = time("close_synced_at"),
         syncError = str("sync_error"),
         syncBlocked = (int("sync_blocked") ?: 0) != 0,
+        lastAttemptAt = time("last_attempt_at"),
     )
 }

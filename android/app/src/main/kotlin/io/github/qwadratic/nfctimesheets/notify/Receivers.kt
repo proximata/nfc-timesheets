@@ -6,6 +6,7 @@ import android.content.Intent
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.RunningShift
+import io.github.qwadratic.nfctimesheets.sync.SyncScheduler
 
 /**
  * A rung of the reminder ladder fired. Posts one notification and nothing else — no
@@ -45,6 +46,14 @@ class BootReceiver : BroadcastReceiver() {
         val pending = goAsync()
         Thread {
             try {
+                // TASK-225. The job is setPersisted(true), so the platform restores it
+                // across a reboot on its own and this is belt AND braces — it costs one
+                // binder call and it covers the cases where the platform did not: the job
+                // was dropped by an OEM's boot-time cleanup, or the app was updated between
+                // the shutdown and the boot. `ensure` is a no-op when a job is already
+                // pending, so it cannot reset a backoff that survived.
+                if (app.store.pendingSummary().waiting > 0) SyncScheduler.ensure(app)
+
                 val open = app.store.openShift()
                 ShiftSignals.arm(
                     app,

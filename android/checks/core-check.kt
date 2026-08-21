@@ -27,6 +27,7 @@ import io.github.qwadratic.nfctimesheets.core.MaterialQueue
 import io.github.qwadratic.nfctimesheets.core.MaterialStatus
 import io.github.qwadratic.nfctimesheets.core.QueuedMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
+import io.github.qwadratic.nfctimesheets.core.PendingWork
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
 import io.github.qwadratic.nfctimesheets.core.RemoteRelease
 import io.github.qwadratic.nfctimesheets.core.RunningShift
@@ -102,6 +103,8 @@ fun main() {
     ndefTag()
     theWriteSurface()
     theOverwriteGuard()
+    pendingWork()
+    theBackgroundPush()
 
     if (failed) exitProcess(1)
     println("core-check: OK")
@@ -493,6 +496,7 @@ private fun queued(
     openSyncedAt: Instant? = null,
     closeSyncedAt: Instant? = null,
     syncBlocked: Boolean = false,
+    lastAttemptAt: Instant? = null,
 ) = QueuedShift(
     clientUuid = key,
     workerId = workerId,
@@ -503,6 +507,7 @@ private fun queued(
     openSyncedAt = openSyncedAt,
     closeSyncedAt = closeSyncedAt,
     syncBlocked = syncBlocked,
+    lastAttemptAt = lastAttemptAt,
 )
 
 private fun syncPlan() {
@@ -870,14 +875,38 @@ private fun zones() {
     // THE #1 THING THE OWNER MUST VERIFY BY HAND: this runs against the field phone's
     // real, already-installed SQLite file on its very next launch after `adb install -r`.
     val shiftStore = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/data/ShiftStore.kt").readText()
-    check(shiftStore.contains("null, 2)"), "ShiftStore is on database version 2")
-    check(
-        Regex("""if \(oldVersion == 1 && newVersion == 2\)""").containsMatchIn(shiftStore),
-        "onUpgrade has an explicit 1->2 branch",
+    check(shiftStore.contains("null, 3)"), "ShiftStore is on database version 3")
+    // COMMENTS STRIPPED. The comment inside onUpgrade quotes the old broken arm verbatim,
+    // as the record of what went wrong; grepping the raw text would find that quotation and
+    // report the bug as still live. A check that reads prose is not reading code.
+    val upgrade = strippedOfComments(
+        shiftStore.substringAfter("override fun onUpgrade").substringBefore("\n\n    // ---- shifts"),
     )
-    val upgrade = shiftStore.substringAfter("override fun onUpgrade").substringBefore("\n\n    // ---- shifts")
-    check(!upgrade.contains("DROP TABLE"), "the 1->2 migration never DROPs a table — these rows are unpaid hours")
-    check(upgrade.contains("throw IllegalStateException"), "an unhandled version jump still refuses loudly rather than guessing")
+    check(!upgrade.contains("DROP TABLE"), "the migration never DROPs a table — these rows are unpaid hours")
+
+    // THE BUG THIS REPLACED, and it would have crashed a field phone at launch. The old
+    // arm read `if (oldVersion == 1 && newVersion == 2)` and threw otherwise — so the very
+    // first phone still on version 1, meeting an app on version 3, matched NOTHING and got
+    // an IllegalStateException inside SQLiteOpenHelper.getWritableDatabase(): a crash at
+    // launch on a device holding somebody's unpaid hours. Cumulative `oldVersion < n` steps
+    // are the shape that survives a phone skipping a release.
+    check(
+        !Regex("""oldVersion == 1 && newVersion == 2""").containsMatchIn(upgrade),
+        "onUpgrade must NOT match an exact version PAIR — a phone on 1 meeting an app on 3 matches nothing and crashes",
+    )
+    check(
+        Regex("""if \(oldVersion < 2\)""").containsMatchIn(upgrade) &&
+            Regex("""if \(oldVersion < 3\)""").containsMatchIn(upgrade),
+        "onUpgrade steps are cumulative (oldVersion < n), so 1->3 runs BOTH steps",
+    )
+    check(
+        upgrade.contains("ALTER TABLE shifts ADD COLUMN last_attempt_at"),
+        "the 2->3 step ADDs last_attempt_at rather than recreating the table (TASK-225)",
+    )
+    check(
+        !upgrade.contains("throw IllegalStateException"),
+        "...and there is no throw left in onUpgrade to crash a phone that skipped a version",
+    )
     check(shiftStore.contains("fun replaceRoster("), "the roster cache writes locations AND zones in one call")
     check(shiftStore.contains("fun zones(): List<WireZone>"), "the cached zone table is readable back out")
 
@@ -2183,4 +2212,249 @@ private fun strippedOfComments(source: String): String {
         out.append(raw).append('\n')
     }
     return out.toString()
+}
+
+// ---------------------------------------------------------------------------------
+// 19. WHAT THIS PHONE IS STILL HOLDING (TASK-225).
+//
+//     THE FAILURE THIS SECTION EXISTS FOR, in one sentence: a tap taken with no signal
+//     was written to SQLite and never pushed, because there was no background worker —
+//     so there was no server row, therefore no 8h auto-close, no payroll line, and
+//     NOBODY COULD EVEN ASK whether it had happened. Twenty cleaners across eight
+//     basements is a payroll that is quietly short every month, discovered by an
+//     argument at month end.
+//
+//     core/PendingWork.kt is the DETECTION half and it is the cheaper and the more
+//     important one: delivery can fail for a hundred reasons that are nobody's fault,
+//     and the only unacceptable outcome is that it fails silently.
+// ---------------------------------------------------------------------------------
+private fun pendingWork() {
+    val t1 = Instant.EPOCH.plusSeconds(3_600)
+    val t2 = Instant.EPOCH.plusSeconds(7_200)
+
+    check(PendingWork.summarise(emptyList()) == PendingWork.NOTHING, "an empty queue is nothing pending")
+    check(PendingWork.NOTHING.isEmpty && PendingWork.NOTHING.total == 0, "NOTHING is empty and totals zero")
+
+    // The basement case: tapped in, never delivered.
+    run {
+        val s = PendingWork.summarise(listOf(queued(UUID_B, startsAt = 100)))
+        check(s.waiting == 1 && s.blocked == 0, "an undelivered open shift is waiting: $s")
+        check(s.oldestStart == Instant.EPOCH.plusSeconds(100), "oldestStart is the shift's own start")
+        check(s.lastAttemptAt == null, "never attempted reads as null, NOT as 'just now'")
+        check(!s.isEmpty && s.total == 1, "…and it is not empty")
+    }
+
+    // THE OPPOSITE, and it must not be over-reported: an OPEN shift the server has already
+    // acknowledged is NOT pending. The server has it, the 8h net applies to it, and it is
+    // waiting for a tag tap that has not happened yet — nagging about that would train the
+    // worker to ignore the one banner that matters.
+    run {
+        val s = PendingWork.summarise(listOf(queued(UUID_B, openSyncedAt = t1)))
+        check(s.isEmpty, "an acknowledged running shift is not pending: $s")
+    }
+    run {
+        val s = PendingWork.summarise(listOf(queued(UUID_B, endTime = t1, openSyncedAt = t1, closeSyncedAt = t1)))
+        check(s.isEmpty, "a fully delivered shift is not pending")
+    }
+
+    // Half delivered — the open landed, the close did not. This is the one that costs the
+    // money: the server holds an open shift that the 8h timer will close at start+8h with
+    // a GUESSED end time, while the real end time sits on the phone.
+    run {
+        val s = PendingWork.summarise(listOf(queued(UUID_B, endTime = t1, openSyncedAt = t1)))
+        check(s.waiting == 1, "an undelivered CLOSE is pending too: $s")
+    }
+
+    // Blocked is counted SEPARATELY and never folded into waiting: "wait for a signal" and
+    // "phone the office" are opposite instructions and one sentence cannot be both.
+    run {
+        val s = PendingWork.summarise(listOf(queued(UUID_B, syncBlocked = true)))
+        check(s.blocked == 1 && s.waiting == 0, "a blocked row is blocked, not waiting: $s")
+        check(s.total == 1, "…but it still counts as something this phone is holding")
+    }
+
+    // Oldest and last-attempt across a mixed queue.
+    run {
+        val s = PendingWork.summarise(
+            listOf(
+                queued("newest", startsAt = 900, lastAttemptAt = t2),
+                queued("oldest", startsAt = 100, lastAttemptAt = t1),
+                queued("done", startsAt = 50, openSyncedAt = t1),
+            ),
+        )
+        check(s.waiting == 2, "the delivered row is not counted: $s")
+        check(s.oldestStart == Instant.EPOCH.plusSeconds(100), "oldest UNDELIVERED start, not oldest row: ${s.oldestStart}")
+        check(s.lastAttemptAt == t2, "the MOST RECENT attempt across the queue: ${s.lastAttemptAt}")
+    }
+
+    // THE INVARIANT THAT KEEPS THE TWO HALVES HONEST. Everything SyncPlan has anything to
+    // do with — a step to send, or a block to report — must appear in the count on screen.
+    // If these two ever disagree the app either nags about a shift that is safely filed,
+    // or, far worse, stays quiet about one that is not.
+    run {
+        val queue = listOf(
+            queued("a", startsAt = 100),                                   // open to send
+            queued("b", startsAt = 200, endTime = t1, openSyncedAt = t1),  // close to send
+            queued("c", startsAt = 300, locationId = ""),                  // blocked: no location
+            queued("d", startsAt = 400, workerId = 9),                     // blocked: wrong account
+            queued("e", startsAt = 500, openSyncedAt = t1),                // nothing to do
+        )
+        val plan = SyncPlan.plan(queue, sessionWorkerId = 7)
+        val touched = (plan.steps.map { it.clientUuid } + plan.blocks.map { it.clientUuid }).toSet()
+        check(touched == setOf("a", "b", "c", "d"), "SyncPlan touches exactly the four: $touched")
+        check(
+            PendingWork.summarise(queue).total == touched.size,
+            "every row SyncPlan would send OR block is counted on screen: " +
+                "${PendingWork.summarise(queue).total} counted vs ${touched.size} touched",
+        )
+        check(
+            PendingWork.summarise(queue.filter { it.clientUuid == "e" }).isEmpty,
+            "…and the row SyncPlan ignores is counted by nobody",
+        )
+    }
+
+    // A queue of blocked-only rows must report waiting == 0, because that is precisely
+    // what ShiftSyncJob re-arms on: a job that wakes for ever over a row it can never send
+    // is a battery complaint that ends with the whole app being restricted by the OEM.
+    run {
+        val s = PendingWork.summarise(listOf(queued("x", syncBlocked = true), queued("y", syncBlocked = true)))
+        check(s.waiting == 0 && s.blocked == 2, "blocked-only: nothing for the scheduler to do: $s")
+    }
+}
+
+// ---------------------------------------------------------------------------------
+// 20. THE BACKGROUND PUSH ITSELF (TASK-225), read as text.
+//
+//     sync/ shells out to android.app.job, so it cannot be compiled here. What CAN be
+//     asserted here is every property that would silently un-build the feature: a job
+//     with no network constraint, a job that does not survive a reboot, a `schedule()`
+//     that resets its own backoff on every tap, or a service the platform refuses to
+//     bind. Each of these leaves an app that looks finished and delivers nothing.
+// ---------------------------------------------------------------------------------
+private fun theBackgroundPush() {
+    val scheduler = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/sync/SyncScheduler.kt").readText()
+    val job = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/sync/ShiftSyncJob.kt").readText()
+    val manifest = File("app/src/main/AndroidManifest.xml").readText()
+    val manifestLive = manifest.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+
+    // The three JobInfo properties, each of which IS the feature when present and silently
+    // removes it when absent.
+    check(
+        scheduler.contains("setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)"),
+        "the job runs on ANY network — requiring wifi would be the same bug as having no push at all",
+    )
+    check(
+        !scheduler.contains("NETWORK_TYPE_UNMETERED"),
+        "…and specifically not UNMETERED: a cleaner in a stairwell has mobile data and no wifi",
+    )
+    check(scheduler.contains("setPersisted(true)"), "the job survives a reboot")
+    check(
+        scheduler.contains("BACKOFF_POLICY_EXPONENTIAL"),
+        "retries back off exponentially rather than hammering a dead radio",
+    )
+    check(
+        !Regex("""setPeriodic\(""").containsMatchIn(scheduler),
+        "the job is one-shot and re-arms itself, so an empty queue schedules nothing and costs no battery",
+    )
+
+    // Re-scheduling the same id REPLACES the pending job and RESETS its backoff. Without
+    // this guard a worker tapping every few minutes in a dead spot pins the retry to the
+    // 30s floor for the whole shift.
+    check(
+        Regex("""if \(isScheduled\(scheduler\)\) return""").containsMatchIn(scheduler),
+        "ensure() leaves an already-pending job alone rather than resetting its backoff",
+    )
+
+    // A JobService the platform will not bind is a feature that never runs once.
+    check(
+        Regex("""android:name="\.sync\.ShiftSyncJob"""").containsMatchIn(manifestLive),
+        "ShiftSyncJob is declared in the manifest",
+    )
+    check(
+        manifestLive.contains("android.permission.BIND_JOB_SERVICE"),
+        "…with BIND_JOB_SERVICE, which JobScheduler REQUIRES and which is also what stops " +
+            "anything but the system starting a push",
+    )
+    check(
+        !manifestLive.contains("FOREGROUND_SERVICE"),
+        "a JobService is NOT a foreground service and must not have dragged one in",
+    )
+
+    // What the job must never do. Each of these is a way the same class of bug comes back.
+    check(!job.contains("delete("), "the job never deletes a row — a row that cannot be sent stays, visibly")
+    check(
+        !job.contains("startShift") && !job.contains("closeShift"),
+        "the job never opens or closes a shift of its own accord; it pushes rows a TAP wrote",
+    )
+    check(
+        !job.contains("ShiftSignals"),
+        "the job never touches the notification — THE ONE WIRE has exactly two callers and a " +
+            "third is how a stale 'eingestempelt' notification outlives its shift",
+    )
+    check(
+        job.contains("cookies.header() == null) return false"),
+        "a signed-out phone stops rescheduling rather than retrying a push that cannot succeed",
+    )
+    check(
+        job.contains("pendingSummary().waiting > 0"),
+        "the job re-arms only while something can still MOVE, never over blocked-only rows",
+    )
+    check(
+        Regex("""runCatching \{ pass\(app\) \}""").containsMatchIn(job),
+        "a throw inside a system-started service is a crash in a pocket: the pass is wrapped",
+    )
+
+    // CLOCK-IN MUST NOT GET SLOWER. The scheduling call is one binder call, it happens
+    // AFTER the row is on disk, and it is off the main thread.
+    val model = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetViewModel.kt").readText()
+    val handleTap = model.substringAfter("fun handleTap(locationId: String) {").substringBefore("\n    /** @return the (left, arrived) site names")
+    check(
+        handleTap.contains("SyncScheduler.ensure(app)"),
+        "a tap hands the row to the platform, so it goes out even if the app is never opened again",
+    )
+    check(
+        handleTap.indexOf("writeTap(worker.id, locationId)") < handleTap.indexOf("SyncScheduler.ensure(app)"),
+        "…AFTER the local row is written, never before it: nothing may block or precede a tap",
+    )
+    check(
+        handleTap.substringBefore("SyncScheduler.ensure(app)").contains("io {"),
+        "…and inside io {}, off the main thread",
+    )
+
+    // Sign-out does NOT delete the queue, and the sign-IN screen has to say so — otherwise
+    // somebody hands a phone back believing their hours went with it.
+    val signOut = model.substringAfter("fun signOut() {").substringBefore("\n    private fun adopt(")
+    check(!signOut.contains("store.delete"), "signing out never deletes a queued shift")
+    check(
+        signOut.contains("LogState(pending = io { app.store.pendingSummary() })"),
+        "…and the pending count survives the sign-out so the sign-in screen can show it",
+    )
+    val app = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetApp.kt").readText()
+    check(
+        app.contains("PendingCard(pending.pending, signedOut = true)"),
+        "the SIGN-IN screen shows what is still queued",
+    )
+    check(app.contains("PendingCard(pending)"), "the SHIFT screen shows it — the screen a basement tap lands on")
+    check(app.contains("item { PendingCard(log.pending) }"), "the LOG screen shows it")
+
+    // The ceiling, printed on the screen rather than only in a source comment.
+    check(
+        scheduler.contains("FORCE-STOPPED"),
+        "SyncScheduler names the force-stop ceiling it shares with WorkManager and every other scheduler",
+    )
+    val de = File("app/src/main/res/values/strings.xml").readText()
+    check(
+        de.contains("<string name=\"pending_force_stop_note\">"),
+        "…and the worker is told about it in German, on the screen, not only in a comment",
+    )
+    check(
+        !Regex("""<string name="sync_waiting">Wird gesendet""").containsMatchIn(de),
+        "an undelivered row says it is WAITING, never that it is being sent: with no signal " +
+            "'wird gesendet' is a lie, and it is the lie that hid this bug for six months",
+    )
+    check(
+        de.contains("<string name=\"pending_never_tried\">") && de.contains("<string name=\"pending_last_try\">"),
+        "'never tried' and 'last tried at X' are DIFFERENT sentences — they mean opposite " +
+            "things to somebody deciding whether to walk upstairs for a signal",
+    )
 }

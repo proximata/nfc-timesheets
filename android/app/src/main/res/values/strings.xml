@@ -69,6 +69,54 @@
     <string name="status_corrected">Korrigiert</string>
     <string name="sync_sent">Gesendet</string>
     <string name="sync_sending">Wird gesendet …</string>
+
+    <!-- ================================================================================
+         NOCH NICHT ÜBERTRAGEN (TASK-225). Eine Schicht, die im Keller ohne Empfang
+         gestempelt wurde, liegt auf dem Telefon, bis es wieder Internet hat. Das Telefon
+         sendet sie inzwischen von selbst, auch bei geschlossener App — aber genau deshalb
+         MUSS auf dem Bildschirm stehen, was noch offen ist. Eine wartende Schicht, die
+         nur im Protokoll steht, ist derselbe Fehler an einer anderen Stelle: am Monatsende
+         fehlt Geld auf dem Lohnzettel und niemand konnte vorher danach fragen.
+
+         REGEL FÜR DIESE TEXTE: „wird gesendet" ist gelogen, solange kein Netz da ist.
+         Es heißt „wartet", und es steht dabei, wann es zuletzt versucht wurde.
+         ================================================================================ -->
+    <string name="pending_heading">Noch nicht übertragen</string>
+    <!-- %d = Anzahl der Schichten, die der Server noch nicht hat -->
+    <plurals name="pending_count">
+        <item quantity="one">%d Schicht liegt noch auf diesem Telefon</item>
+        <item quantity="other">%d Schichten liegen noch auf diesem Telefon</item>
+    </plurals>
+    <string name="pending_body">Wird automatisch gesendet, sobald dieses Telefon wieder Internet hat – auch wenn die App geschlossen ist. Es geht nichts verloren.</string>
+    <!-- %1$s = Datum und Uhrzeit des letzten Versuchs -->
+    <string name="pending_last_try">Zuletzt versucht: %1$s</string>
+    <string name="pending_never_tried">Noch kein Sendeversuch – dieses Telefon hatte seither kein Internet.</string>
+    <!-- %1$s = Datum und Uhrzeit der ältesten noch offenen Schicht -->
+    <string name="pending_oldest">Älteste offene Schicht: %1$s</string>
+    <!-- Terminal: niemand versucht das noch einmal, hier muss ein Mensch ran. Steht in der
+         Fehlerfarbe UND sagt es im Text – Farbe ist immer das zweite Signal. -->
+    <plurals name="pending_blocked">
+        <item quantity="one">%d Schicht kann nicht gesendet werden und braucht Ihre Verwaltung.</item>
+        <item quantity="other">%d Schichten können nicht gesendet werden und brauchen Ihre Verwaltung.</item>
+    </plurals>
+    <!-- Abgemeldet: die Zeilen bleiben liegen, sie gehören zu dieser Anmeldung. Das muss
+         auf dem Anmeldebildschirm stehen, sonst gibt jemand das Telefon zurück und glaubt,
+         seine Stunden seien mitgegangen. -->
+    <string name="pending_signed_out">Diese Schichten gehören zu Ihrer Anmeldung. Sie werden gesendet, sobald Sie sich wieder anmelden. Gelöscht wird nichts.</string>
+    <!-- Die EINE Grenze dieser Technik, offen benannt statt verschwiegen: wird die App von
+         Android oder vom Akkusparmodus zwangsweise beendet, ruht die Übertragung, bis
+         jemand die App wieder öffnet. Das gilt für jede Lösung auf Android, auch für die
+         mit Zusatzbibliothek. Siehe sync/SyncScheduler.kt. -->
+    <string name="pending_force_stop_note">Falls dieses Telefon die App zwangsweise beendet (Akku sparen, „App stoppen"), ruht die Übertragung, bis Sie die App wieder öffnen. Öffnen genügt.</string>
+    <string name="sync_waiting">Wartet auf Verbindung</string>
+    <!-- %1$s = Uhrzeit des letzten Versuchs -->
+    <string name="sync_last_try">Zuletzt versucht %1$s</string>
+    <string name="sync_never_tried">Noch kein Sendeversuch</string>
+    <!-- %1$d = Anzahl noch nicht übertragener Schichten -->
+    <plurals name="a11y_pending">
+        <item quantity="one">%d Schicht ist noch nicht an den Server übertragen</item>
+        <item quantity="other">%d Schichten sind noch nicht an den Server übertragen</item>
+    </plurals>
     <!-- %1$s = Objekt der beendeten Schicht, %2$s = Objekt der neuen Schicht -->
     <string name="switch_notice">Ihre offene Schicht bei %1$s wurde beendet und bei %2$s wurde eine neue begonnen. Bitte bestätigen Sie, wann Sie %1$s wirklich verlassen haben – bis dahin wird die Schicht nicht bezahlt.</string>
 

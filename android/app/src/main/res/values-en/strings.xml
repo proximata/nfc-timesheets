@@ -49,6 +49,31 @@
     <string name="status_corrected">Corrected</string>
     <string name="sync_sent">Sent</string>
     <string name="sync_sending">Sending …</string>
+
+    <!-- NOT YET DELIVERED (TASK-225). "Sending" is a lie while there is no signal; it says
+         "waiting", and it says when it last tried. -->
+    <string name="pending_heading">Not yet delivered</string>
+    <plurals name="pending_count">
+        <item quantity="one">%d shift is still on this phone</item>
+        <item quantity="other">%d shifts are still on this phone</item>
+    </plurals>
+    <string name="pending_body">Sent automatically as soon as this phone is back online — even with the app closed. Nothing is lost.</string>
+    <string name="pending_last_try">Last attempt: %1$s</string>
+    <string name="pending_never_tried">Not attempted yet — this phone has had no connection since.</string>
+    <string name="pending_oldest">Oldest outstanding shift: %1$s</string>
+    <plurals name="pending_blocked">
+        <item quantity="one">%d shift cannot be sent and needs the office.</item>
+        <item quantity="other">%d shifts cannot be sent and need the office.</item>
+    </plurals>
+    <string name="pending_signed_out">These shifts belong to your sign-in. They will be sent once you sign in again. Nothing is deleted.</string>
+    <string name="pending_force_stop_note">If this phone force-stops the app (battery saver, “Force stop”), delivery pauses until you open the app again. Opening it is enough.</string>
+    <string name="sync_waiting">Waiting for a connection</string>
+    <string name="sync_last_try">Last tried %1$s</string>
+    <string name="sync_never_tried">Not attempted yet</string>
+    <plurals name="a11y_pending">
+        <item quantity="one">%d shift has not reached the server yet</item>
+        <item quantity="other">%d shifts have not reached the server yet</item>
+    </plurals>
     <string name="switch_notice">Finished your open shift at %1$s and started at %2$s. Confirm when you actually left %1$s — it will not count until you do.</string>
 
     <plurals name="resolve_banner">

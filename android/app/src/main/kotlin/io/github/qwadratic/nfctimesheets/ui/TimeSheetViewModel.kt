@@ -9,6 +9,7 @@ import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
 import io.github.qwadratic.nfctimesheets.core.MaterialEntry
 import io.github.qwadratic.nfctimesheets.core.MaterialQueue
+import io.github.qwadratic.nfctimesheets.core.PendingWork
 import io.github.qwadratic.nfctimesheets.core.RunningShift
 import io.github.qwadratic.nfctimesheets.core.ShiftSignal
 import io.github.qwadratic.nfctimesheets.core.RemoteRelease
@@ -19,6 +20,7 @@ import io.github.qwadratic.nfctimesheets.core.WireWorker
 import io.github.qwadratic.nfctimesheets.core.Zones
 import io.github.qwadratic.nfctimesheets.data.LocalShift
 import io.github.qwadratic.nfctimesheets.notify.ShiftSignals
+import io.github.qwadratic.nfctimesheets.sync.SyncScheduler
 import io.github.qwadratic.nfctimesheets.update.UpdateState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,6 +61,13 @@ data class LogState(
      * notice at all would hide an auto-closed shift.
      */
     val switchNotice: Pair<String?, String?>? = null,
+    /**
+     * WHAT THIS PHONE IS STILL HOLDING (TASK-225). On the screen, in German, with the time
+     * of the last attempt — because a queued tap that only exists in a log is the same bug
+     * in a different place, and because the one thing a cleaner cannot be asked to do is
+     * find out at month end that eight hours were never filed.
+     */
+    val pending: PendingWork.Summary = PendingWork.NOTHING,
 ) {
     val open: LocalShift? get() = shifts.firstOrNull { it.isOpen }
     val recent: List<LocalShift> get() = shifts.filter { !it.isOpen }.take(5)
@@ -163,6 +172,12 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             // that greets a new worker with "Sie wurden abgemeldet" above the code field
             // is telling them something that did not happen, and the 401 it would take to
             // find that out is a round trip we already know the answer to.
+            // WHAT IS STILL ON THIS PHONE, read before anything else and independently of
+            // the session. A signed-out phone that is holding a queued shift must SAY so on
+            // the sign-in screen — signing out does not delete the row, and a person who
+            // thinks it vanished cannot ask anybody about it.
+            _log.value = _log.value.copy(pending = io { app.store.pendingSummary() })
+
             if (app.cookies.header() == null) {
                 _session.value = SessionState.SignedOut()
                 return@launch
@@ -183,6 +198,11 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 }
             }
             if (_session.value is SessionState.SignedIn) {
+                // RE-ARM THE BACKGROUND PUSH AT EVERY LAUNCH. A force-stop cancels every
+                // job the app has (sync/SyncScheduler.kt names that ceiling); this line is
+                // the recovery from it, and it is also what schedules the job for the first
+                // time on a phone updating from a build that had no background push at all.
+                io { SyncScheduler.ensure(app) }
                 refresh()
                 // At LAUNCH, not when the material tab is opened: the tab badge is the
                 // only thing telling a worker something is waiting for them at the
@@ -223,6 +243,11 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             _signingIn.value = true
             try {
                 app.api.enrol(code)
+                // A queued row belonging to THIS worker goes out on its own from here on:
+                // sign-in is the moment the job stops being pointless (ShiftSyncJob returns
+                // "do not reschedule" while there is no cookie), so it is the moment to arm
+                // it again.
+                io { SyncScheduler.ensure(app) }
                 // Second call on purpose: it proves the cookie actually landed in the jar
                 // and will be sent again after the process is killed. Trusting the
                 // enrolment response alone would show a friendly screen over a phone that
@@ -259,7 +284,11 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             app.cookies.clear()
             app.workers.clear()
             _session.value = SessionState.SignedOut()
-            _log.value = LogState()
+            // NOT LogState(): the pending count survives the sign-out, because the queued
+            // rows do. They belong to the worker who logged them and go out when that
+            // worker signs back in — and until then the sign-in screen has to say so, or
+            // somebody hands the phone back believing their hours went with it.
+            _log.value = LogState(pending = io { app.store.pendingSummary() })
             ShiftSignals.arm(app, null)
             // Not the STORE, only the screen. Queued material requests belong to the
             // worker who wrote them; MaterialStore.adopt() deletes them when a DIFFERENT
@@ -282,16 +311,23 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             // Every one of these swallows a network failure by design: refreshing must
             // never be able to lose or hide a queued row. They touch SQLite, so they run
             // off the main thread.
-            withContext(Dispatchers.IO) {
+            val pending = withContext(Dispatchers.IO) {
                 app.sync.refreshRoster()
                 app.sync.adoptServerOpenShift()
-                app.sync.push(worker.id)
+                val remaining = app.sync.push(worker.id)
+                // Anything the foreground pass could not deliver is handed to the platform:
+                // the job wakes when there is a network, with the app closed. Idempotent,
+                // and it deliberately does NOT re-schedule an already-pending job (that
+                // would reset its backoff). Nothing here can fail a refresh.
+                if (remaining.waiting > 0) SyncScheduler.ensure(app)
+                remaining
             }
             val unresolved = runCatching { app.api.unresolvedShifts() }.getOrDefault(_log.value.unresolved)
             _log.value = _log.value.copy(
                 shifts = io { app.store.all() },
                 locationNames = io { app.store.locationNames() },
                 unresolved = unresolved,
+                pending = pending,
                 busy = false,
             )
             // THE RECOVERY HALF OF THE ONE WIRE. adoptServerOpenShift may have just learned
@@ -360,8 +396,22 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
     fun handleTap(locationId: String) {
         val worker = (_session.value as? SessionState.SignedIn)?.worker ?: return
         viewModelScope.launch {
-            val notice = io { writeTap(worker.id, locationId) }
-            _log.value = _log.value.copy(shifts = io { app.store.all() }, switchNotice = notice)
+            val notice = io {
+                val result = writeTap(worker.id, locationId)
+                // AFTER the row is on disk, off the main thread, and swallowing its own
+                // failures (SyncScheduler.ensure wraps the binder call): the platform is now
+                // holding a promise to deliver this tap even if the app is never opened
+                // again. NOTHING HERE MAY BLOCK OR SLOW THE TAP — it is one binder call to
+                // system_server, it happens after the shift already exists locally, and the
+                // push itself is refresh()'s job, below, exactly as before.
+                SyncScheduler.ensure(app)
+                result
+            }
+            _log.value = _log.value.copy(
+                shifts = io { app.store.all() },
+                switchNotice = notice,
+                pending = io { app.store.pendingSummary() },
+            )
             // AFTER the row is written and read back, and never before it. Everything in
             // armSignals is a signal, and a signal may never delay, throw into or fail a
             // clock-in: a denied permission and a dead network are both "arm nothing",

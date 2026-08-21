@@ -196,6 +196,28 @@
         </receiver>
 
         <!--
+          THE OFFLINE PUSH (TASK-225). A JobService, which is NOT a foreground service and
+          needs no FOREGROUND_SERVICE permission: the platform binds it, runs it for a few
+          seconds when there is a network, and unbinds. It holds no process open.
+
+          android:permission="android.permission.BIND_JOB_SERVICE" is REQUIRED by the
+          platform — JobScheduler refuses to schedule against a service without it — and it
+          is also the security property: only the system holds that permission, so nothing
+          on the phone can start a push on our behalf.
+
+          setPersisted(true) in sync/SyncScheduler.kt is why this survives a reboot, and it
+          rides on the RECEIVE_BOOT_COMPLETED permission already declared above for the
+          notification. No new permission was added for this feature.
+
+          exported="false": the system starts it through the job it was handed, and nothing
+          else may.
+        -->
+        <service
+            android:name=".sync.ShiftSyncJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <!--
           Explicit scan, the fallback for phones where the OS never dispatches the tag.
           exported="false": nothing outside this app has any business starting it, and it
           is reached only from a button inside the signed-in log screen.
