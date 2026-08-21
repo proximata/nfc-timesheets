@@ -45,3 +45,5 @@ docs/media/states/
 # rewrite above was paid for by media that reached a commit first and a .gitignore second.
 docs/media/look/
 docs/media/look-phone/
+docs/media/verdict/
+docs/media/break-look/
