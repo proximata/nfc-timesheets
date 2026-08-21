@@ -166,6 +166,25 @@ export type Worker = {
   enrolment_code_expires_at: string | null
   /** When a code was last exchanged for an app sign-in, ISO-8601. Null = never. */
   enrolment_code_redeemed_at: string | null
+  /**
+   * WHAT THAT WORKER'S PHONE IS STILL HOLDING (migration 009, TASK-225).
+   *
+   * A shift tapped with no signal exists on the phone and NOT in `shifts` — so every hour
+   * and every euro on this admin is computed over a set that may be missing somebody's
+   * afternoon. These four columns are how the office finds that out before month end
+   * instead of during an argument about a payslip.
+   *
+   * Null `phone_last_seen_at` means NO PHONE HAS EVER REPORTED, which is not the same fact
+   * as "nothing is pending" and must never be rendered as one. The two counts default to 0
+   * on the server precisely so that distinction lives in ONE column rather than in three.
+   */
+  phone_last_seen_at: string | null
+  /** Waiting for a signal. Arrives on its own; nobody has to do anything. */
+  phone_pending_shifts: number
+  /** Given up on — wrong account, refused location. A human has to act. */
+  phone_pending_blocked: number
+  /** ISO-8601 start of the oldest undelivered shift on that phone. Null = none. */
+  phone_pending_oldest_start: string | null
 }
 
 /** Create (no `id`) or update (`id`). Same route either way. */

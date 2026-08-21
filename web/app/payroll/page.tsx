@@ -22,6 +22,7 @@ import {
   type PayrollLine,
   payrollFor,
   periodExceedsCoverage,
+  phonesHolding,
   reconcile,
   toCsv,
 } from '@/lib/payroll'
@@ -236,6 +237,13 @@ export default function PayrollPage() {
         : payrollFor(snapshot.workers, snapshot.shifts)
   const coverage = snapshot === null ? null : coverageOf(snapshot.shifts, snapshot.shift_limit)
   const incomplete = coverage !== null && periodExceedsCoverage(range, coverage)
+  /**
+   * WHAT IS STILL ON A PHONE (TASK-225). Read from ALL workers, never from `scopedWorkers`,
+   * and deliberately unaffected by the period: a shift the server has never received has no
+   * period on this side to be filtered by, and a worker filter that hid it would hide the
+   * one thing this screen cannot compute around.
+   */
+  const phones = snapshot === null ? null : phonesHolding(snapshot.workers)
   /** null while scoped: not „reconciled", not „failed" — NOT COMPUTED, and stated as such. */
   const reconciliation =
     snapshot === null || scoped
@@ -698,6 +706,40 @@ export default function PayrollPage() {
                 </li>
               ) : null}
               {totals.orphanShifts > 0 ? <li>{t('caveatOrphan')}</li> : null}
+
+              {/* HOURS THAT NEVER REACHED THIS SERVER (TASK-225).
+
+                  Every other caveat above is about a row that IS in the payload and has
+                  been left out of a total. This one is about a row that is not in the
+                  payload at all, because it is on a phone in a basement — so it cannot be
+                  counted, linked or subtracted, and the ONLY honest thing this screen can
+                  do is say the total is provisional and by how much.
+
+                  THREE BRANCHES, and the third is the point. "No phone has ever reported"
+                  is not "nothing is pending": on the day this ships it is true of every
+                  worker, and printing the all-clear over it would be a green light nobody
+                  earned — the same vacuous-check failure /pl/ was fixed for. It says
+                  „nicht bekannt" instead, which is a third answer and not silence. */}
+              {phones !== null && phones.workers > 0 ? (
+                <li>
+                  {t('caveatPhonesHolding', { workers: phones.workers, shifts: phones.shifts })}{' '}
+                  {phones.oldestStart !== null
+                    ? t('caveatPhonesOldest', {
+                        date: format.dateTime(new Date(phones.oldestStart), {
+                          dateStyle: 'medium',
+                          timeStyle: 'short',
+                        }),
+                      })
+                    : null}{' '}
+                  {phones.blocked > 0
+                    ? t('caveatPhonesBlocked', { blocked: phones.blocked })
+                    : null}
+                </li>
+              ) : phones !== null && phones.reported ? (
+                <li>{t('caveatPhonesClear')}</li>
+              ) : (
+                <li>{t('caveatPhonesUnknown')}</li>
+              )}
             </ul>
           </div>
 

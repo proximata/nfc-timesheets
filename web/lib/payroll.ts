@@ -181,6 +181,66 @@ export function reconcile(workers: Worker[], shifts: Shift[], hours: HoursRow[])
 }
 
 /**
+ * HOURS THAT ARE STILL ON A PHONE (TASK-225).
+ *
+ * The whole of payroll below reads `shifts`, and a shift that never reached the server is
+ * not in `shifts` — it is not a small row, it is NO row. So every number on this screen is
+ * silently computed over a set that may be missing somebody's afternoon, and the screen has
+ * no way of knowing unless the phone says so.
+ *
+ * It does now. The Android app attaches what it is still holding to every request it makes,
+ * and the server records it per worker (migration 009). This turns those four columns into
+ * the one sentence payroll needs BEFORE the money goes out: `n` shifts on `workers` phones,
+ * the oldest of them from `oldestStart`.
+ *
+ * THREE ANSWERS, NOT TWO. `reported: false` is not "nothing is pending" — it is "no phone
+ * has ever told us", which on a fresh deployment is every worker, and which must never be
+ * rendered as an all-clear. Same discipline as `Nicht beurteilbar` on the P&L: a claim about
+ * a question nobody has answered is worse than no claim at all.
+ */
+export type PhonesHolding = {
+  /** Waiting for a signal: these will arrive on their own. */
+  shifts: number
+  /** Given up on: a wrong account or a refused location. A human has to act. */
+  blocked: number
+  /** How many PEOPLE are holding something, which is what the sentence counts. */
+  workers: number
+  /** ISO start of the oldest undelivered shift across all phones, or null. */
+  oldestStart: string | null
+  /** False = no phone has ever reported. NOT the same as "nothing pending". */
+  reported: boolean
+}
+
+export function phonesHolding(workers: Worker[]): PhonesHolding {
+  let shifts = 0
+  let blocked = 0
+  let holders = 0
+  let oldestStart: string | null = null
+  let reported = false
+
+  for (const worker of workers) {
+    if (worker.phone_last_seen_at !== null) reported = true
+    const waiting = worker.phone_pending_shifts ?? 0
+    const stuck = worker.phone_pending_blocked ?? 0
+    if (waiting === 0 && stuck === 0) continue
+    shifts += waiting
+    blocked += stuck
+    holders += 1
+    // Compared as INSTANTS, not as strings. Lexical order happens to work for `Z`-suffixed
+    // ISO-8601 and stops working the day one value arrives with an offset instead.
+    const oldest = worker.phone_pending_oldest_start
+    if (
+      oldest !== null &&
+      (oldestStart === null || new Date(oldest).getTime() < new Date(oldestStart).getTime())
+    ) {
+      oldestStart = oldest
+    }
+  }
+
+  return { shifts, blocked, workers: holders, oldestStart, reported }
+}
+
+/**
  * RFC 4180-ish CSV.
  *
  * ponytail: semicolon-separated, because this file is opened in Excel on an Austrian

@@ -648,8 +648,37 @@ export default function WorkersPage() {
                       currency: 'EUR',
                     })}
                   </td>
-                  {/* Text, not a colour: the status has to survive greyscale and a screen reader. */}
-                  <td>{worker.active ? t('statusActive') : t('statusInactive')}</td>
+                  {/* Text, not a colour: the status has to survive greyscale and a screen reader.
+
+                      WHAT THAT PERSON'S PHONE IS STILL HOLDING (TASK-225) goes HERE, as a
+                      second line, and NOT as an eighth column: this table already carries
+                      seven and a phone at 390px cannot take another. It belongs next to
+                      Aktiv/Inaktiv because it is the same kind of fact — the state of that
+                      person's ability to file hours — and because this is the screen with
+                      their telephone number one cell to the left, which is what the director
+                      does about it.
+
+                      "Never reported" is said out loud rather than left blank. A blank cell
+                      reads as "nothing pending", and on a fleet that has not been updated
+                      yet that is a guess wearing the clothes of a measurement. */}
+                  <td>
+                    {worker.active ? t('statusActive') : t('statusInactive')}
+                    {worker.phone_pending_shifts > 0 ? (
+                      <p className="cell-code">
+                        {t('phoneHolding', { shifts: worker.phone_pending_shifts })}
+                      </p>
+                    ) : null}
+                    {worker.phone_pending_blocked > 0 ? (
+                      <p className="cell-code">
+                        {t('phoneBlocked', { blocked: worker.phone_pending_blocked })}
+                      </p>
+                    ) : null}
+                    <p className="cell-muted">
+                      {worker.phone_last_seen_at === null
+                        ? t('phoneNeverSeen')
+                        : t('phoneLastSeen', { date: dayTime(worker.phone_last_seen_at) })}
+                    </p>
+                  </td>
                   {/* Revoke sits in the open next to create, at the same weight. It is the
                       control used when a code went to the wrong person, and burying it in a
                       menu would cost seconds exactly when they matter. */}
