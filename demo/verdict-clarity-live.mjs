@@ -124,23 +124,29 @@ try {
   await viewport(1280, 800, false);
   await page.goto(`${BASE}/`, { settle: 1600 });
   await shoot("1280-dashboard");
+  // `.brand` — the flex container the two spans are items of — NOT `.app-header`. The first
+  // run of this file measured the header and reported U5 red on a box that had the fix: the
+  // header's own `white-space` is untouched and always was `normal`. A wrong selector on the
+  // ancestor of the right one is the quietest way to invent a defect.
   const brand = await page.eval(`(() => {
-    const el = document.querySelector('.app-header') || document.querySelector('.brand-name')?.parentElement
-    if (!el) return null
-    const cs = getComputedStyle(el)
-    const rects = Array.from(el.getClientRects())
+    const el = document.querySelector('.brand')
     const name = document.querySelector('.brand-name')
+    const suffix = document.querySelector('.brand-suffix')
+    if (!el || !name) return null
+    const line = (n) => Math.round(Number.parseFloat(getComputedStyle(n).lineHeight) || 0)
     return {
-      whiteSpace: cs.whiteSpace,
-      lines: name ? name.getClientRects().length : -1,
-      height: Math.round(el.getBoundingClientRect().height),
-      lineHeight: cs.lineHeight,
-      rects: rects.length,
+      whiteSpace: getComputedStyle(el).whiteSpace,
+      nameRects: name.getClientRects().length,
+      // The real symptom U5 named: the brand occupying TWO text lines in the header.
+      brandH: Math.round(el.getBoundingClientRect().height),
+      lineH: line(name),
+      sameRow: suffix ? Math.abs(suffix.getBoundingClientRect().top - name.getBoundingClientRect().top) < 6 : null,
     }
   })()`);
-  if (!brand) bad("live: no .app-header on the page");
-  else if (brand.whiteSpace === "nowrap") ok(`live: .app-header white-space:nowrap, .brand-name is ${brand.lines} client rect(s), header ${brand.height}px`);
-  else bad(`live: .app-header white-space:${brand.whiteSpace} at 1280 — U5 not on the box`);
+  if (!brand) bad("live: no .brand on the page");
+  else if (brand.whiteSpace === "nowrap" && brand.nameRects === 1 && brand.sameRow !== false)
+    ok(`live: .brand white-space:nowrap, .brand-name on 1 line, suffix on the same row, brand box ${brand.brandH}px (line-height ${brand.lineH})`);
+  else bad(`live: brand wraps at 1280: ${JSON.stringify(brand)} — U5 not on the box`);
 
   // -----------------------------------------------------------------------------------
   section("3 · PHONE #7 — a state pill is at least the design system's 12px floor");
@@ -179,13 +185,22 @@ try {
     document.body.appendChild(host)
     const err = getComputedStyle(host.children[0])
     const body = getComputedStyle(host.children[1])
+    const root = getComputedStyle(document.documentElement)
     const r = { err: luma(err.color), errPx: err.fontSize, body: luma(body.color), bodyPx: body.fontSize,
-                errRaw: err.color, bodyRaw: body.color }
+                errRaw: err.color, bodyRaw: body.color,
+                secondary: luma(root.getPropertyValue('--text-secondary').trim()) }
     host.remove(); return r
   })()`);
-  luma.err >= luma.body
-    ? ok(`css: .form-error luma ${luma.err} >= body luma ${luma.body} (${luma.errRaw} vs ${luma.bodyRaw})`)
-    : bad(`css: .form-error luma ${luma.err} < body luma ${luma.body} — still quieter than what it corrects`);
+  // THE BASELINE IS --text-secondary, NOT --text-primary, and getting that wrong is how the
+  // first run of this file reported a red that was not there. LOOK.md's finding, and
+  // STATE-OF-THE-PRODUCT § 1's re-measurement of it, are both about the PROSE BESIDE the
+  // error — a form's hint and label text, which is --text-secondary (luma ~173). Body copy
+  // at --text-primary (luma ~234) is brighter than almost everything on every screen; an
+  // error that had to beat it would have to be white. The gap to primary is REPORTED, not
+  // asserted, so the number stays visible and nobody has to re-derive it.
+  luma.err >= luma.secondary
+    ? ok(`css: .form-error luma ${luma.err} >= the prose beside it (--text-secondary, luma ${luma.secondary}); ${luma.errRaw}. Still ${luma.body - luma.err} below --text-primary (${luma.body}), which is reported, not asserted`)
+    : bad(`css: .form-error luma ${luma.err} < --text-secondary luma ${luma.secondary} — still quieter than the prose it corrects`);
 
   // -----------------------------------------------------------------------------------
   section("6 · C8 — a tapped shift is not typeset as if the value were absent");
@@ -223,13 +238,17 @@ try {
   /Operator(en|s)?\b/.test(opText)
     ? bad(`live: /operators/ still says „${opText.match(/Operator(en|s)?\b/)[0]}" — C2 not on the box`)
     : ok(`live: the word „Operator" does not appear on /operators/`);
-  const navOp = await page.eval(`(() => {
-    const a = document.querySelector('.sidebar a[href="/operators/"]')
+  // /operators/ is OFF-NAV (§ 11 asserts that separately) — the first run of this file looked
+  // for it in the sidebar, found null, and printed a red line about a link that is not
+  // supposed to exist. The inbound link the director actually follows is on /workers/.
+  await page.goto(`${BASE}/workers/`, { settle: 1800 });
+  const inbound = await page.eval(`(() => {
+    const a = document.querySelector('a[href="/operators/"]')
     return a ? a.textContent.trim() : null
   })()`);
-  navOp && !/Operator/.test(navOp)
-    ? ok(`live: the nav entry reads „${navOp}"`)
-    : bad(`live: the nav entry reads „${navOp}"`);
+  inbound && !/Operator/.test(inbound)
+    ? ok(`live: /workers/ links in with „${inbound}"`)
+    : bad(`live: /workers/'s inbound link reads „${inbound}" — C2 not on the box`);
 
   // -----------------------------------------------------------------------------------
   section("8 · C13 — one client, singular");
@@ -261,11 +280,18 @@ try {
   await page.send("Network.setBlockedURLs", { urls: ["*/admin/*"] });
   for (const path of ["/payroll/", "/shifts/", "/pl/", "/locations/"]) {
     await page.goto(`${BASE}${path}`, { settle: 2500 });
+    // EVERY `[role=status]`, not `querySelector`. /locations/ carries FOUR: three empty
+    // drawer/live regions that are always in the DOM (deliberately — an assistive technology
+    // announces a text change in an existing region far more reliably than a node that
+    // appears), and then the load status. The first run of this file took element [0], found
+    // it empty, and reported the retry control missing on all four screens. It is there.
     const r = await page.eval(`(() => {
-      const st = document.querySelector('[role="status"]')
-      if (!st) return { status: null }
+      const all = Array.from(document.querySelectorAll('[role="status"]'))
+      const st = all.find((el) => el.innerText.trim() !== '')
+      if (!st) return { status: null, regions: all.length }
       const btn = st.querySelector('button')
       return {
+        regions: all.length,
         status: st.innerText.trim().slice(0, 120),
         button: btn ? btn.innerText.trim() : null,
         buttonH: btn ? Math.round(btn.getBoundingClientRect().height) : 0,
@@ -280,7 +306,8 @@ try {
   // recover without a page reload.
   await page.send("Network.setBlockedURLs", { urls: [] });
   const recovered = await page.eval(`(() => {
-    const btn = document.querySelector('[role="status"] button')
+    const st = Array.from(document.querySelectorAll('[role="status"]')).find((el) => el.querySelector('button'))
+    const btn = st && st.querySelector('button')
     if (!btn) return 'no button'
     btn.click()
     return 'clicked'
