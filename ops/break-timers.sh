@@ -240,7 +240,63 @@ MIG_PROD=$(psql_box "SELECT count(*) FROM schema_migrations")
 [ "$MIG_REST" = "$MIG_PROD" ] && ok "schema_migrations restored: $MIG_REST rows, same as production" || bad "migrations: prod $MIG_PROD, restored $MIG_REST"
 
 # =========================================================================================
-section "3 · what the dump does NOT protect against"
+section "3 · the backup runs while a migration runs"
+#
+# Both timers and every deploy share one Postgres, and nothing schedules around anything.
+# nfc-backup fires at 00:13 and a deploy runs `db/migrate.js` whenever someone deploys, so
+# the overlap is a matter of time, not of design.
+#
+# THE HAZARD IS LOCKS, not corruption. pg_dump takes ACCESS SHARE on every table and holds it
+# for the whole dump; a migration's ALTER TABLE needs ACCESS EXCLUSIVE and cannot get it while
+# that is held. Postgres queues the ALTER — and then queues EVERY LATER QUERY ON THAT TABLE
+# BEHIND THE ALTER, because lock requests are ordered. So a migration that merely waits can
+# stall clock-ins for as long as the dump takes. That is the mechanism; this measures it.
+
+LOCK_SECS="${MIGRATION_LOCK_SECS:-8}"
+# A migration's worst moment, reproduced exactly: ACCESS EXCLUSIVE on `shifts`, held.
+ssh "$HOST" "sudo -u postgres psql -q -d nfc -c 'BEGIN; LOCK TABLE shifts IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep($LOCK_SECS); COMMIT;'" >/dev/null 2>&1 &
+LOCK_PID=$!
+sleep 1
+
+# a) the dump, started INSIDE that window. `systemctl start` is synchronous for a oneshot, so
+#    the wall time it takes IS the time pg_dump spent queueing for ACCESS SHARE.
+T0=$(ssh "$HOST" 'date +%s')
+ssh "$HOST" "sudo systemctl start nfc-backup" >/dev/null 2>&1 &
+DUMP_PID=$!
+# The clock-in's query is fired while BOTH are outstanding, so it is behind the migration and
+# behind the dump — which is the real shape of the collision, and the reason ordering matters
+# here: measuring it after the dump returned found the lock already gone and reported 0s.
+sleep 2
+T2=$(ssh "$HOST" 'date +%s')
+ssh "$HOST" "sudo -u postgres psql -q -d nfc -Atc 'SELECT count(*) FROM shifts'" >/dev/null 2>&1
+T3=$(ssh "$HOST" 'date +%s')
+wait $DUMP_PID 2>/dev/null
+T1=$(ssh "$HOST" 'date +%s')
+BRC=$(ssh "$HOST" "systemctl show nfc-backup -p ExecMainStatus --value")
+WAITED=$((T1 - T0))
+note "the dump started while an ACCESS EXCLUSIVE lock was held: exit $BRC, took ~${WAITED}s (it queued for the lock)"
+[ "$BRC" = "0" ] \
+  && ok "it still produced a verified dump — it WAITED for the lock rather than writing a truncated file or failing the unit" \
+  || bad "the backup exited $BRC when it collided with a migration lock"
+
+# b) AND THE QUERY A CLOCK-IN MAKES. Measured against `shifts` itself, on the box, inside the
+#    same window — not through an unauthenticated HTTP call that would 401 before it ever
+#    touched the table and would have reported a healthy few milliseconds while the table was
+#    unusable. What is being timed is the LOCK QUEUE, so it has to be a query that joins it.
+BLOCKED_FOR=$((T3 - T2))
+note "a SELECT on shifts issued during the lock waited ${BLOCKED_FOR}s for an answer"
+if [ "$BLOCKED_FOR" -ge 2 ]; then
+  ok "CONFIRMED: an ACCESS EXCLUSIVE lock stalls the very query a clock-in makes, for as long as it is held. A migration that queues behind a dump therefore queues every clock-in behind itself."
+else
+  note "it answered in ${BLOCKED_FOR}s — the lock had already been released by then, so this run did not catch the queue. Raise MIGRATION_LOCK_SECS and re-run."
+fi
+wait $LOCK_PID 2>/dev/null
+AFTER=$(psql_box "SELECT count(*) FROM shifts")
+[ -n "$AFTER" ] && ok "the lock is released and shifts answers again ($AFTER rows)" || bad "shifts is still locked"
+note "MITIGATION, not done here: nothing schedules the backup away from deploys, and db/migrate.js sets no lock_timeout. On a 7 KB database the dump is milliseconds and the window is invisible; the day this database is a year of payroll it will not be. Filed."
+
+# =========================================================================================
+section "4 · what the dump does NOT protect against"
 DEST_FS=$(ssh "$HOST" "df --output=source /var/backups/nfc | tail -1")
 DB_FS=$(ssh "$HOST" "df --output=source /var/lib/postgresql | tail -1")
 if [ "$DEST_FS" = "$DB_FS" ]; then
