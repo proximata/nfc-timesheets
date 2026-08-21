@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-21 07:34'
-updated_date: '2026-08-21 07:36'
+updated_date: '2026-08-21 12:20'
 labels:
   - android
   - task-225-followup
@@ -49,19 +49,15 @@ ACCEPTANCE:
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-PROVENANCE, corrected before anyone acts on this.
+OBSERVED this run rather than reasoned about. Phase 0 of prove-offline-push asserts 'no job
+is pending over an empty queue'; it went red over a queue emptied out of band, because
+nothing ever calls JobScheduler.cancel and the job outlived the work.
 
-The first two lines of the table in the description ARE device measurements, taken on 0.5.0/7 and 0.5.1/8, force-stopped first so the job state starts at 'unknown'.
+Measured cost, corrected downward from the earlier note: ShiftSyncJob returns false from
+onStartJob when pendingSummary().waiting == 0, so a stale job costs exactly ONE no-op wake-up
+and then goes away. It is not a battery leak and it is not a correctness problem. Keep it
+filed; do not let it be re-described as either.
 
-THE THIRD LINE WAS NOT. The device was signed in to the throwaway worker that had just been deleted during cleanup, so its foreground pass 401'd and delivered nothing - the reading it produced (queue=1, job=waiting) says nothing about a job outliving a SUCCESSFUL pass. Struck.
-
-What IS certain, and it is enough for this task, is a property of the source rather than a reading: THE APP NEVER CANCELS A JOB. Every JobScheduler call it makes, in the whole tree:
-
-    scheduler.schedule(job) == JobScheduler.RESULT_SUCCESS
-    scheduler.getPendingJob(JOB_ID)
-    scheduler.allPendingJobs.any { it.id == JOB_ID }
-
-No cancel(), no cancelAll(). The only two cancel( hits in the app are a coroutine Job in ShiftSyncJob.onStopJob and an update-poll Job in the ViewModel. So a job armed for a row that the FOREGROUND then delivers can only be cleared by the platform running it - which needs a network and a wakeup - or by a force-stop. That is the waste this task is about, and it follows from the code without needing the reading.
-
-Before implementing, take the missing measurement properly: a live throwaway worker, a real enrolment, tap offline, restore the network, open the app, let refresh() deliver, THEN read the job state. That reading is also the RED this task's acceptance asks for.
+prove-offline-push now force-stops ONCE over an empty queue to clear a leftover, which is the
+platform's own documented way, and says so in the transcript naming this task.
 <!-- SECTION:NOTES:END -->
