@@ -34,8 +34,9 @@ const PAIRS = [
   ['--accent', '--bg-base', 'a link / .btn-quiet accent text', 'body'],
   ['--accent', '--bg-raised', 'accent text inside a panel', 'body'],
   ['--accent-text', '--accent', 'label inside .btn-primary', 'body'],
-  ['--danger', '--bg-base', '.form-error text', 'body'],
-  ['--danger', '--bg-raised', '.form-error inside a drawer', 'body'],
+  ['--danger-text', '--bg-base', '.form-error / .field-error text (TASK-229)', 'body'],
+  ['--danger-text', '--bg-raised', '.form-error / .field-error inside a drawer', 'body'],
+  ['--danger', '--bg-base', '.btn-danger background / invalid-field border', 'ui'],
   ['--ok', '--bg-base', '.form-status text', 'body'],
   ['--ok', '--bg-raised', '.form-status inside a panel', 'body'],
   // THE THREE STATE TOKENS ARE SCORED AS TEXT, at 4.5:1, and they used to be scored as

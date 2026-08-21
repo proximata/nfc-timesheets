@@ -59,6 +59,15 @@
      shipped #a4262c / #1c6b3c are unreadable on #0B0C0E, and an unreadable error message is
      an error message that did not happen. Both are ≥4.5:1 on --bg-base and --bg-raised. */
   --danger: oklch(0.72 0.16 25);
+  /* TASK-229 / LOOK.md §5: on the desaturated (greyscale) twin of every screenshot,
+     `.form-error` at --danger measured luma ~146 against an ordinary paragraph's
+     --text-primary at luma ~234, and against the --text-secondary prose beside it (luma
+     ~173) it was STILL dimmer — an error message that reads as LESS important than the
+     text it is correcting. Painted into a canvas and read back as rgb, not parsed from the
+     oklch() string. A distinct token, not a brighter --danger outright: --danger also paints
+     .btn-danger's background and an invalid field's 2px border, neither of which had this
+     complaint, and a brighter solid button fill is a different (and untested) trade-off. */
+  --danger-text: oklch(0.84 0.16 25);
   --ok: oklch(0.78 0.14 155);
 
   --r-ctrl: 6px;
@@ -122,6 +131,9 @@
   --state-unres: oklch(0.55 0.11 75);
   --state-corrected: oklch(0.52 0.11 300);
   --danger: oklch(0.5 0.19 25);
+  /* Light theme is dark-on-light: --danger's text already reads DARKER (more ink) than
+     --text-secondary here, the opposite problem from dark mode. Unchanged. */
+  --danger-text: var(--danger);
   --ok: oklch(0.5 0.13 155);
 }
 
@@ -574,7 +586,7 @@ a {
    anyway, so nothing is reserved visually. */
 .form-error {
   margin: 0;
-  color: var(--danger);
+  color: var(--danger-text);
   font-size: 0.875rem;
 }
 
@@ -596,7 +608,7 @@ a {
 }
 
 .field-error {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .form-status {
@@ -2210,6 +2222,7 @@ a {
   --accent-weak: oklch(0.55 0.12 250 / 0.12);
   --accent-text: #fff;
   --danger: oklch(0.5 0.19 25);
+  --danger-text: var(--danger); /* light theme only, see the dark-theme note above */
   --ok: oklch(0.5 0.13 155);
   --bg: var(--bg-base);
   --surface: var(--bg-raised);
@@ -2315,6 +2328,8 @@ a {
     --state-unres: #6b4400;
     --state-corrected: #45297a;
     --danger: #8b1a1a;
+    --danger-text: #8b1a1a; /* print is always light-on-white; the dark-theme brightening
+                              above would be a pale, low-contrast red on paper */
     --ok: #1c6b3c;
   }
 
