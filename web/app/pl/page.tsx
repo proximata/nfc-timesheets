@@ -717,8 +717,19 @@ export default function PlPage() {
         </Field>
       </div>
 
+      {/* A FAILED LOAD MUST NOT GO ON SAYING "loading". This branch is reached whenever the
+          page has no data, and a failed fetch leaves it with no data FOR EVER — so with the
+          database stopped, the director got a red error line and, beneath it, a permanent
+          "Wird geladen …" in brighter and larger type than the error. Two contradicting
+          statements at once, the louder of them false. Desaturated it was worse: the failure
+          read as the LESS important of the two, which is colour carrying the whole signal
+          instead of being the second one. Measured by stopping postgresql on production and
+          photographing this screen (ops/break-infra.sh § 2 puts the box in that state).
+          Saying it HERE, and not only in the alert banner, is what makes it reachable: on
+          /objekte that banner sits ~370px above this table, so a director reading the table
+          never saw it at all. */}
       {report === null || totals === null ? (
-        <p role="status">{t('loading')}</p>
+        <p role="status">{loadError === null ? t('loading') : tError(loadError)}</p>
       ) : (
         <>
           {/* „Nicht gesetzt" is a supported, deliberate state and not a fault. The sentence
