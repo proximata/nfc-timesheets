@@ -36,7 +36,7 @@ them — then counts what is left and fails if a single row survives.
 | 3 | reporting the tag to the office | ✓ | **✓** | ✗ | `POST /operator/tags` → 201, lands UNBOUND; twice → 200, still one row |
 | 4 | admin turning it into a building/zone | ✓ | **✓** | ✗ | resolve-building + resolve-zone → 201; screenshot of the live `/tags/` panel |
 | 5 | a tap opening a shift | ✓ | **✓** | ✗ | old-shape body; zone card → 201 carrying `start_zone_id`; second tap closes it |
-| 6 | a tap on an unbound tag being harmless | ✓ | **✓** | ✗ | 422 `tag_unbound`, no shift row, a German sentence |
+| 6 | a tap on an unbound tag being harmless | ✓ | **✓** | ✗ | 422 `tag_unbound`, no shift row, its OWN German sentence |
 
 **Five of six are now proven in the field.** The sixth is a card in a hand, and the field
 column does not apply to it: no server, no check and no emulator can write an NTAG213.
@@ -254,10 +254,12 @@ Mount the card, or just hold it, and tap as a worker.
 
 Tap the **second** card you wrote, before anybody resolves it in step 5.
 
-- ✓ **`Vom Server abgelehnt. Diese Schicht bitte der Verwaltung melden.`** and **no shift.**
-  The server answered `422 tag_unbound`. The sentence is the generic rejection bucket on
-  purpose — the phone must not guess between six server refusals — and it still says the two
-  things that matter at a door: it did not work, and tell the office.
+- ✓ **`Dieser Tag ist noch keinem Objekt zugeordnet. Bitte bei der Verwaltung melden.`** and
+  **no shift.** The server answered `422 tag_unbound`. This used to fall into the generic
+  `err_rejected` bucket ("report this shift to your admin") — wrong, because there IS no
+  shift, nothing was ever opened, and this is not a rare refusal: a card gets mounted at a
+  door before the office resolves it in step 5, routinely. `err_tag_unbound` names what to
+  do instead: this tag, not a shift.
 - ✗ **a shift opens on a card nobody has claimed → stop and report it.** That is the one
   outcome that must not happen.
 

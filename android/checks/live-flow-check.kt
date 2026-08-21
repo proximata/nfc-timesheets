@@ -400,10 +400,11 @@ private fun theRendererHasNotDriftedFromTheScreen() {
  * § 7 — THE TAP ON AN UNBOUND TAG, IN GERMAN.
  *
  * The server answers 422 `tag_unbound`. core/ApiFailure maps it, and the worker reads a
- * sentence — not a code, not a blank line. It falls into the generic `err_rejected` bucket
- * on purpose (ApiFailure's header: one code in, one string out, and the string must not
- * guess) and that sentence still says the two things a cleaner at a door needs: it was
- * refused, and the office has to be told.
+ * sentence — not a code, not a blank line, and NOT the generic `err_rejected` bucket
+ * either: this WILL happen in real life (a card gets mounted at a door before the office
+ * resolves it in `/tags/`), it is not a rare server refusal, and "report this shift" is the
+ * wrong instruction — there IS no shift, nothing was ever opened. `err_tag_unbound` names
+ * what a cleaner actually has to do: this tag is not assigned yet, tell the office.
  */
 private fun theUnboundTapSpeaksGerman() {
     println("\n== 7 · what a cleaner reads when the card is unbound")
@@ -411,10 +412,13 @@ private fun theUnboundTapSpeaksGerman() {
     val key = failure.messageKey
     fact("unbound_key", key)
     check(!failure.isRetryable, "an unbound tag is NOT retried forever — a human has to act")
+    check(key == "err_tag_unbound", "tag_unbound must map to its OWN key, not fold into err_rejected: got '$key'")
     val sentence = strings[key]
     check(sentence != null, "res/values/strings.xml defines $key")
     if (sentence == null) return
     check(sentence.any { it.isLetter() } && !sentence.contains("tag_unbound"), "it is a sentence, not the error code")
+    val generic = strings["err_rejected"]
+    check(sentence != generic, "must not be word-for-word the generic rejection sentence")
     fact("unbound_de", sentence)
     saveScreen("tap-unbound", sentence)
 }

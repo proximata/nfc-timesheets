@@ -116,6 +116,11 @@
     <string name="err_network">No connection — will send when you\'re back online.</string>
     <string name="err_unknown_worker">Your name is no longer on the roster. Ask your admin.</string>
     <string name="err_unknown_location">This location was removed. Ask your admin.</string>
+    <!-- A card is mounted at a door before the office has assigned it to a location in
+         /tags/. This happens in real operation — it is not a rare server refusal — and
+         must not fall into err_rejected: "report this shift" is the wrong instruction,
+         there is no shift, nothing was ever opened. -->
+    <string name="err_tag_unbound">This tag isn\'t assigned to a location yet. Ask your admin.</string>
     <string name="err_unknown_shift">The server doesn\'t have this shift. Ask your admin.</string>
     <string name="err_shift_already_open">Another shift is still running — finishing it first.</string>
     <string name="err_end_before_start">Finish time is before the start time.</string>

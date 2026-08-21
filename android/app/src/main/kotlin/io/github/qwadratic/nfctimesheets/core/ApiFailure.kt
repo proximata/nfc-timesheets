@@ -81,6 +81,10 @@ data class ApiFailure(
             "network" -> "err_network"
             "unknown_worker" -> "err_unknown_worker"
             "unknown_location" -> "err_unknown_location"
+            // A card mounted at a door before the office resolved it in /tags/. Real,
+            // expected traffic — not the generic "err_rejected" bucket — because "report
+            // this shift" is the wrong instruction: nothing was ever opened.
+            "tag_unbound" -> "err_tag_unbound"
             "unknown_shift" -> "err_unknown_shift"
             "shift_already_open" -> "err_shift_already_open"
             "end_before_start" -> "err_end_before_start"

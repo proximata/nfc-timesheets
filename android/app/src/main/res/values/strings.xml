@@ -151,6 +151,12 @@
     <string name="err_network">Keine Verbindung – wird gesendet, sobald Sie wieder online sind.</string>
     <string name="err_unknown_worker">Ihr Name steht nicht mehr auf der Liste. Bitte bei der Verwaltung melden.</string>
     <string name="err_unknown_location">Dieses Objekt wurde entfernt. Bitte bei der Verwaltung melden.</string>
+    <!-- Eine Karte hängt am Eingang, bevor das Büro sie in /tags/ einem Objekt zugeordnet
+         hat. Das passiert im echten Betrieb (Karten werden vor der Zuordnung montiert), ist
+         also kein seltener Serverfehler und darf nicht in err_rejected verschwinden: "diese
+         Schicht melden" ist die falsche Anweisung, denn es gibt keine Schicht — es wurde nie
+         eine geöffnet. -->
+    <string name="err_tag_unbound">Dieser Tag ist noch keinem Objekt zugeordnet. Bitte bei der Verwaltung melden.</string>
     <string name="err_unknown_shift">Der Server kennt diese Schicht nicht. Bitte bei der Verwaltung melden.</string>
     <string name="err_shift_already_open">Eine andere Schicht läuft noch – sie wird zuerst beendet.</string>
     <string name="err_end_before_start">Die Endzeit liegt vor der Startzeit.</string>

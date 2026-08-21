@@ -622,6 +622,7 @@ fun stringIdFor(key: String): Int = when (key) {
     "err_network" -> R.string.err_network
     "err_unknown_worker" -> R.string.err_unknown_worker
     "err_unknown_location" -> R.string.err_unknown_location
+    "err_tag_unbound" -> R.string.err_tag_unbound
     "err_unknown_shift" -> R.string.err_unknown_shift
     "err_shift_already_open" -> R.string.err_shift_already_open
     "err_end_before_start" -> R.string.err_end_before_start

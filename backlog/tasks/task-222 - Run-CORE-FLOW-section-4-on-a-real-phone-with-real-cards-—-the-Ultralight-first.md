@@ -4,6 +4,7 @@ title: Run CORE-FLOW section 4 on a real phone with real cards — the Ultraligh
 status: To Do
 assignee: []
 created_date: '2026-08-20 22:46'
+updated_date: '2026-08-21 02:00'
 labels:
   - android
   - nfc
@@ -33,7 +34,13 @@ THE SCRIPT IS backlog/docs/CORE-FLOW.md section 4. Do not improvise around it.
 - [ ] #3 Step 3: that same card, presented again while the screen offers a fresh id, is REFUSED as already carrying an ID — the TASK-220 guard, on real hardware for the first time.
 - [ ] #4 Step 4: the report lands by itself — 'An das Buero gemeldet' — and the card shows up in the admin panel's Unzugeordnete Tags with the operator's name.
 - [ ] #5 Step 6: after the office resolves it, a tap opens a shift and a SECOND tap closes it. No in-app button is used, because there is none.
-- [ ] #6 Step 7: a card the office has NOT resolved opens NO shift and shows 'Vom Server abgelehnt. Diese Schicht bitte der Verwaltung melden.'
-- [ ] #7 The existing HOIV wall tag still opens and closes a shift, untouched by the visit.
-- [ ] #8 Every card written is either mounted or binned — no card is left in a pocket in an unknown state.
+- [ ] #6 The existing HOIV wall tag still opens and closes a shift, untouched by the visit.
+- [ ] #7 Every card written is either mounted or binned — no card is left in a pocket in an unknown state.
+- [ ] #8 Step 7: a card the office has NOT resolved opens NO shift and shows 'Dieser Tag ist noch keinem Objekt zugeordnet. Bitte bei der Verwaltung melden.'
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AC updated 2026-08-21 by the Fix run: the unbound-tap sentence changed from the generic err_rejected bucket to a dedicated err_tag_unbound string (owner ask: 'a cleaner tapping a card nobody has resolved yet must get a German sentence telling him what to do, not an error code' — and specifically not 'report this shift', since no shift was ever opened). New sentence to expect on real hardware: 'Dieser Tag ist noch keinem Objekt zugeordnet. Bitte bei der Verwaltung melden.'
+<!-- SECTION:NOTES:END -->

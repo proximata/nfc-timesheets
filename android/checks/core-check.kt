@@ -614,7 +614,7 @@ private fun stringResources() {
 
     // Every code ApiFailure can classify must have a string behind it.
     val codes = listOf(
-        "network", "unknown_worker", "unknown_location", "unknown_shift", "shift_already_open",
+        "network", "unknown_worker", "unknown_location", "tag_unbound", "unknown_shift", "shift_already_open",
         "end_before_start", "timestamp_in_future", "timestamp_out_of_range", "unauthorized",
         "no_session", "invalid_token", "invalid_code", "too_many_attempts",
         "missing_location", "wrong_account",
