@@ -335,6 +335,41 @@ const signedIn = () =>
     .split(/\s+/)
     .includes("session.xml");
 
+/** Which worker the phone thinks it is. `null` when session.xml has no id at all. */
+const phoneWorkerId = () => {
+  const xml = tryShell(`cat /data/data/${PKG}/shared_prefs/session.xml`);
+  const raw = /name="worker_id" value="(\d+)"/.exec(xml)?.[1];
+  return raw === undefined ? null : Number(raw);
+};
+
+/**
+ * IS THAT SESSION STILL WORTH ANYTHING? Asked of the SERVER, because `session.xml`
+ * existing says nothing about whether the row behind it does.
+ *
+ * THIS COST A 40-MINUTE RUN AND 21 RED LINES THAT SAID NOTHING ABOUT THE PRODUCT. The
+ * previous pass cleaned production by deleting its throwaway worker while this emulator
+ * was still enrolled as that worker. The next run found `session.xml` on disk, printed
+ * "already signed in", and every push for the rest of the run answered 401. Nothing was
+ * delivered, so § 2, § 3, § 4, § 5 and § 6 all went red — and every one of those reds
+ * reads exactly like "the offline queue is broken", which it was not. The instrument was
+ * pointed at a dead account.
+ *
+ * A file on disk is not a credential. A 200 from a route that requires a worker session is.
+ */
+const sessionLive = async () => {
+  const cookieValue = workerCookie();
+  if (cookieValue === null) return { live: false, why: "session.xml has no ts_worker cookie" };
+  // `?since=` is REQUIRED by the route (server/routes/app.js), and omitting it answers 400
+  // BEFORE the session is judged — a 400 would read as "dead session" and refuse a run over a
+  // perfectly good one. `now` is deliberate: this asks whether the credential is accepted,
+  // not what it can see, so the emptiest possible answer is the right one.
+  const since = encodeURIComponent(new Date().toISOString());
+  const res = await fetch(`${BASE}/shifts/mine?since=${since}`, {
+    headers: { Cookie: `ts_worker=${cookieValue}`, "X-App-Key": appKey() ?? "" },
+  });
+  return { live: res.status === 200, why: `GET /shifts/mine?since=now -> ${res.status}` };
+};
+
 // ======================================================================================
 
 async function main() {
@@ -357,13 +392,46 @@ async function main() {
   check(reachOnline, `the device can reach ${new URL(BASE).hostname} with the radio ON`);
   check(netOnline !== "none" && netOnline !== "", `dumpsys names a default network: ${netOnline}`);
 
-  // Sign in fresh, so the run does not inherit a session it cannot describe.
-  if (!signedIn()) {
+  // Sign in fresh, so the run does not inherit a session it cannot describe. "Inherit" used
+  // to mean "session.xml is on disk"; it now means "the SERVER accepts it, and it belongs to
+  // the worker this run is about". See sessionLive() for what the weaker test cost.
+  // SHOW THE GATE RED IN ONE COMMAND: GATE_NO_REPAIR=1 skips the re-enrolment, so a stale
+  // session reaches the assertion instead of being fixed on the way past. Seed the condition
+  // the way it really happened — delete the worker's session rows on the box — and this run
+  // must refuse. The OLD gate (`session.xml` exists) printed "already signed in" over that
+  // exact state and then produced 21 red lines about a queue that was working.
+  const heldBy = phoneWorkerId();
+  const held = await sessionLive();
+  if (process.env.GATE_NO_REPAIR === "1") {
+    console.log(`  (GATE_NO_REPAIR: not re-enrolling. phone holds worker ${heldBy}, ${held.why})`);
+  } else if (!signedIn() || !held.live || heldBy !== WORKER_ID) {
+    console.log(`  (re-enrolling: phone holds worker ${heldBy}, run is worker ${WORKER_ID}, ${held.why})`);
+    // A stale session must GO, or the app will keep presenting it: sign-in has no screen to
+    // type into while the app still believes it is somebody.
+    tryShell(`rm -f /data/data/${PKG}/shared_prefs/session.xml`);
+    tryShell(`am force-stop ${PKG}`);
+    await sleep(1500);
     const code = await signIn();
     check(signedIn(), `signed in with a freshly issued code (${code.slice(0, 2)}…)`);
     shot("00-signed-in.png");
-  } else {
-    ok("already signed in");
+  }
+  const now = await sessionLive();
+  check(now.live, `the phone's session is LIVE on the server, not merely a file on disk (${now.why})`);
+  check(
+    phoneWorkerId() === WORKER_ID,
+    `…and it is worker ${WORKER_ID}'s, the one this run measures (phone says ${phoneWorkerId()})`,
+  );
+  if (failed) {
+    console.log("\n  refusing to continue: every later phase would be measuring a dead account, not the queue.");
+    process.exit(1);
+  }
+  // SEE THE GATE WORK WITHOUT PAYING FOR THE WHOLE RUN. Seed a dead session
+  //   ssh <box> "sudo -u postgres psql -d nfc -tAc \\"delete from worker_sessions where worker_id=<id>\\""
+  // then GATE_ONLY=1 here: it must report the 401 and re-enrol. Without GATE_ONLY the same
+  // condition costs 40 minutes before anyone finds out, which is how it was found.
+  if (process.env.GATE_ONLY === "1") {
+    console.log("\n  GATE_ONLY: phase 0's session gate is green; stopping before anything is written.");
+    process.exit(0);
   }
 
   // The phone's queue must be EMPTY, or phase 1's "the server has not got it" is a
