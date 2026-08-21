@@ -10,15 +10,78 @@
 // desktop, no notifications and no other application. That is the point. The previous
 // recording in this repo was made with a desktop screen recorder and leaked a chat list
 // and a banking app into a public README.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Chrome, headless, in a throwaway profile. No profile of a real person is ever opened. */
+/**
+ * Is something ALREADY answering on this debugging port? A leaked Chrome from a run that
+ * was killed before its `finally` — which happens here often enough to be written down in
+ * the house traps — keeps its port open for ever.
+ */
+async function portAnswers(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The pids LISTENING on a TCP port. Empty when nothing holds it.
+ *
+ * `-sTCP:LISTEN` is load-bearing and `process.pid` is excluded for the same reason: without
+ * either, `lsof -ti tcp:<port>` also lists every process with an open CONNECTION to that
+ * port — which includes this run, because `portAnswers()` just fetched it. The first version
+ * SIGKILLed itself and exited 137 with the reap message as its last words.
+ */
+function holders(port) {
+  try {
+    return execFileSync("/usr/sbin/lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" })
+      .split("\n")
+      .map((s) => Number(s.trim()))
+      // `> 0`, NOT `Number.isInteger`: a blank line parses to 0, and `process.kill(0, …)`
+      // signals the whole PROCESS GROUP — i.e. this very run. The first version of this
+      // function killed itself, silently, halfway through reaping.
+      .filter((n) => Number.isInteger(n) && n > 0 && n !== process.pid);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Chrome, headless, in a throwaway profile. No profile of a real person is ever opened.
+ *
+ * A LEAKED CHROME ON THIS PORT IS REAPED FIRST, and this is not tidiness. Without it the
+ * spawn below cannot bind the port, so it exits or runs without a debugging endpoint; the
+ * poll then succeeds against the OLD browser, `attach` hands back the OLD browser's page,
+ * and the check drives a zombie for the rest of the run. That is not hypothetical: the
+ * verdict pass found 141 leaked Chromes on this laptop, one of them holding 9457 on a
+ * months-stale `/`, and `demo/verdict-map.mjs` consequently reported "no map element with a
+ * usable rectangle at all" three runs out of three on a box whose map draws 8 times out of
+ * 8 — a false failure on the client's landing screen, produced by a green-looking tool.
+ */
 export async function launchChrome({ port = 9333, width = 1280, height = 800 } = {}) {
+  if (await portAnswers(port)) {
+    const stale = holders(port);
+    console.warn(`  cdp: reaping a leaked Chrome on ${port} (pid ${stale.join(",") || "unknown"})`);
+    for (const pid of stale) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+    for (let i = 0; i < 50 && (await portAnswers(port)); i++) await sleep(100);
+    if (await portAnswers(port)) {
+      throw new Error(`cdp: port ${port} is held by something this run cannot kill — refusing to drive it`);
+    }
+  }
+
   const profile = `/tmp/ts-demo/chrome-profile-${port}`;
   rmSync(profile, { recursive: true, force: true });
   mkdirSync(profile, { recursive: true });
@@ -44,11 +107,16 @@ export async function launchChrome({ port = 9333, width = 1280, height = 800 } =
   // Chrome writes the port to the profile, but polling /json/version is simpler and is
   // the only thing that actually proves the endpoint is answering.
   for (let i = 0; i < 100; i++) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/json/version`);
-      if (res.ok) return { child, port };
-    } catch {
-      /* not up yet */
+    if (await portAnswers(port)) {
+      // AND IT IS OURS. The reap above should make this impossible, so if the port is held
+      // by a stranger say so instead of silently driving it — the whole point is that a run
+      // never reports on a browser it did not open.
+      const mine = holders(port);
+      if (mine.length > 0 && !mine.includes(child.pid)) {
+        child.kill();
+        throw new Error(`cdp: ${port} is answered by pid ${mine.join(",")}, not our Chrome (${child.pid})`);
+      }
+      return { child, port };
     }
     await sleep(100);
   }
