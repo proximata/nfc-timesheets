@@ -120,7 +120,10 @@
     <string name="err_shift_already_open">Another shift is still running — finishing it first.</string>
     <string name="err_end_before_start">Finish time is before the start time.</string>
     <string name="err_clock">This phone\'s clock looks wrong. Check the date and time.</string>
-    <string name="err_unauthorized">This app version was rejected by the server. Update it.</string>
+    <!-- 401 unauthorized covers TWO situations the server does not distinguish: an expired
+         session, and an app version the server will not accept. One string must be true of
+         both, and must lead with the commoner one. The shift is not lost either way. -->
+    <string name="err_unauthorized">Sign in again — the shift is sent automatically afterwards. If signing in does not help, the app needs updating.</string>
     <string name="err_no_session">You were signed out. Sign in again.</string>
     <string name="err_invalid_token">Sign-in was not accepted. Try again.</string>
     <string name="err_invalid_code">That code wasn\'t accepted. Type it again — if it still doesn\'t work, ask your admin for a new one.</string>

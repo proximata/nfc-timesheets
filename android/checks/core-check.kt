@@ -251,11 +251,29 @@ private fun retryClassification() {
     check(!ApiFailure(400, "invalid_uuid").isRetryable, "400 terminal")
     check(!ApiFailure(422, "unknown_worker").isRetryable, "422 terminal")
     check(!ApiFailure(404, "unknown_shift").isRetryable, "404 terminal")
-    check(!ApiFailure(401, "unauthorized").isRetryable, "401 terminal")
+    // 401 IS RETRYABLE, AND THIS ASSERTION USED TO SAY THE OPPOSITE.
+    //
+    // It was inverted on 2026-08-20 after ops/break-taps.sh section 8 expired a live worker
+    // session on PRODUCTION mid-shift: the clock-out came back 401, the session was restored,
+    // the IDENTICAL request was replayed, and it landed 200. A 401 is a stale credential and
+    // says nothing about the payload. While it was terminal, SyncPlan.blocksRow blocked the
+    // row, nothing anywhere could ever clear sync_blocked again, and hours a cleaner had
+    // worked were lost on the phone with a red line as the only sign. Deactivating and
+    // reactivating a worker in the admin panel is enough to trigger it.
+    check(ApiFailure(401, "unauthorized").isRetryable, "401 unauthorized retryable — a stale session is not a bad payload")
+    check(ApiFailure(401, "no_session").isRetryable, "401 no_session retryable")
+    check(!SyncPlan.blocksRow(ApiFailure(401, "unauthorized")), "a lapsed session NEVER blocks a queued shift")
+    check(
+        MaterialQueue.outcome(ApiFailure(401, "unauthorized")) == MaterialPushOutcome.RETRY_LATER,
+        "a lapsed session leaves a queued material request queued, not blocked",
+    )
     // A rejected enrolment code must NEVER be retried by anything automatic. It is
     // single-use and rate-limited: a retry loop would burn the worker's attempts and
-    // then lock the phone out for 15 minutes.
+    // then lock the phone out for 15 minutes. It is also the one 401 that is about the
+    // PAYLOAD — the code they typed — rather than a credential the app already holds,
+    // which is why it survives the change above as the single carve-out.
     check(!ApiFailure(401, "invalid_code").isRetryable, "401 invalid_code terminal")
+    check(SyncPlan.blocksRow(ApiFailure(401, "invalid_code")), "a rejected enrolment code is still terminal")
 
     // The whole rejection path for a tag the server does not know: 422 -> terminal ->
     // the row is blocked and shown in red with an admin-facing message. There is no
@@ -1273,9 +1291,19 @@ private fun materialRequests() {
         MaterialQueue.outcome(ApiFailure(422, "unknown_location")) == MaterialPushOutcome.BLOCKED,
         "a removed building is terminal",
     )
+    // A DEAD SESSION KEEPS THE ROW QUEUED. This assertion said BLOCKED until 2026-08-20, on
+    // the reasoning that the 401 choke point in TimeSheetViewModel drops the app to signed
+    // out anyway. It does — and that handles the SESSION, not the QUEUE. Signing back in
+    // restored the credential and left every row already marked blocked dead for ever, so a
+    // worker's own words about their own workplace were silently thrown away. Same fault, and
+    // the same fix, as the shift queue: see ApiFailure.isRetryable.
     check(
-        MaterialQueue.outcome(ApiFailure(401, "no_session")) == MaterialPushOutcome.BLOCKED,
-        "a dead session is terminal here; the 401 choke point drops the app to signed out",
+        MaterialQueue.outcome(ApiFailure(401, "no_session")) == MaterialPushOutcome.RETRY_LATER,
+        "a dead session keeps the request queued — signing back in is what sends it",
+    )
+    check(
+        MaterialQueue.outcome(ApiFailure(401, "invalid_code")) == MaterialPushOutcome.BLOCKED,
+        "...but a rejected sign-in code is still terminal, so nothing automatic burns the rate limit",
     )
 
     // Every one of them has words behind it. A blank row is a row that looks sent.

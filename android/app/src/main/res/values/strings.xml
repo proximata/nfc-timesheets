@@ -155,7 +155,14 @@
     <string name="err_shift_already_open">Eine andere Schicht läuft noch – sie wird zuerst beendet.</string>
     <string name="err_end_before_start">Die Endzeit liegt vor der Startzeit.</string>
     <string name="err_clock">Die Uhr dieses Telefons scheint falsch zu gehen. Bitte Datum und Uhrzeit prüfen.</string>
-    <string name="err_unauthorized">Diese App-Version wurde vom Server abgelehnt. Bitte aktualisieren.</string>
+    <!-- Der Server antwortet 401 unauthorized auf ZWEI ganz verschiedene Fälle (lib/auth.js):
+         die Anmeldung ist abgelaufen, ODER diese App-Version wird nicht akzeptiert. Das
+         Telefon kann sie an der Antwort nicht unterscheiden, also muss der Satz für beide
+         stimmen und mit dem häufigeren beginnen. Vorher stand hier nur "Diese App-Version
+         wurde vom Server abgelehnt. Bitte aktualisieren." – das schickt eine Reinigungskraft,
+         deren Sitzung schlicht abgelaufen ist, zu einem Update, das nichts ändert.
+         Die Schicht ist dabei NICHT verloren: sie wird nach dem Anmelden erneut gesendet. -->
+    <string name="err_unauthorized">Bitte erneut anmelden – die Schicht wird danach automatisch gesendet. Falls die Anmeldung nicht hilft, ist ein Update der App nötig.</string>
     <string name="err_no_session">Sie wurden abgemeldet. Bitte erneut anmelden.</string>
     <string name="err_invalid_token">Die Anmeldung wurde nicht akzeptiert. Bitte erneut versuchen.</string>
     <!-- Deckt SECHS Fälle ab, die der Server absichtlich nicht unterscheidet: unbekannt,
