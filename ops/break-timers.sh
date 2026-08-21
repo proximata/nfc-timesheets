@@ -128,7 +128,10 @@ ssh "$HOST" "sudo systemctl start nfc-autoclose" >/dev/null 2>&1
 UNIT_RC=$(ssh "$HOST" "systemctl show nfc-autoclose -p ExecMainStatus --value")
 [ "$UNIT_RC" = "0" ] && ok "nfc-autoclose.service ran and exited 0" || bad "nfc-autoclose exited $UNIT_RC"
 
-TAG=$(ssh "$HOST" "sudo journalctl -u nfc-autoclose --since '@$SINCE' --no-pager -o cat" 2>/dev/null | tail -1)
+# THE UNIT'S OWN OUTPUT, NOT SYSTEMD'S. journald interleaves systemd's "Finished ..." line with
+# the process's stdout, and which lands last is a race — a bare tail -1 read back
+# "Finished nfc-autoclose.service" and called the timer broken. Match the command tag itself.
+TAG=$(ssh "$HOST" "sudo journalctl -u nfc-autoclose --since '@$SINCE' --no-pager -o cat" 2>/dev/null | /usr/bin/grep -E "^(UPDATE [0-9]+|psql:)" | tail -1)
 [ "$TAG" = "UPDATE 1" ] \
   && ok "the unit's own journal line is '$TAG' — it closed exactly one shift" \
   || bad "the unit logged '$TAG', want 'UPDATE 1'"
@@ -150,7 +153,7 @@ NEW_ROW=$(psql_box "SELECT coalesce(end_time::text,'OPEN') || '|' || auto_closed
 # And the same file run twice must be a no-op, which is the claim autoclose.sql makes about
 # itself and which nothing has checked.
 ssh "$HOST" "sudo systemctl start nfc-autoclose" >/dev/null 2>&1
-AGAIN=$(ssh "$HOST" "sudo journalctl -u nfc-autoclose --since '@$SINCE' --no-pager -o cat" 2>/dev/null | tail -1)
+AGAIN=$(ssh "$HOST" "sudo journalctl -u nfc-autoclose --since '@$SINCE' --no-pager -o cat" 2>/dev/null | /usr/bin/grep -E "^(UPDATE [0-9]+|psql:)" | tail -1)
 [ "$AGAIN" = "UPDATE 0" ] \
   && ok "running it again updates 0 rows — idempotent, as the file claims" \
   || bad "the second run said '$AGAIN' — the timer is not idempotent"
@@ -176,7 +179,7 @@ SINCE=$(ssh "$HOST" 'date +%s')
 ssh "$HOST" "sudo systemctl start nfc-backup" >/dev/null 2>&1
 BK_RC=$(ssh "$HOST" "systemctl show nfc-backup -p ExecMainStatus --value")
 [ "$BK_RC" = "0" ] && ok "nfc-backup.service ran and exited 0" || bad "nfc-backup exited $BK_RC"
-BK_LINE=$(ssh "$HOST" "sudo journalctl -u nfc-backup --since '@$SINCE' --no-pager -o cat" 2>/dev/null | tail -1)
+BK_LINE=$(ssh "$HOST" "sudo journalctl -u nfc-backup --since '@$SINCE' --no-pager -o cat" 2>/dev/null | /usr/bin/grep -E "^(backup ok:|FATAL)" | tail -1)
 case "$BK_LINE" in
   "backup ok: "*) ok "the unit's own line: $BK_LINE" ;;
   *) bad "the backup unit logged '$BK_LINE'" ;;
