@@ -58,7 +58,8 @@
 //                       here, together with the case that the fix must NOT break.
 //
 // Destructive by design: it clocks a throwaway worker in and out against production and
-// prints the ids it created. `CLEANUP=1` deletes them again.
+// prints the ids it created. `WORKER_ID=… CLEANUP=1 node demo/prove-offline-push.mjs` deletes
+// them again and DOES NOTHING ELSE — it does not re-run a single phase.
 import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 
@@ -801,15 +802,31 @@ async function main() {
   return final;
 }
 
+/**
+ * CLEANUP=1 CLEANS AND STOPS. It used to be a flag on the END of `main()`, so the only way
+ * to reach it was to re-run all nine destructive phases against production first — about
+ * seven minutes, a fresh enrolment, and three more shift rows. This verdict pass ran it to
+ * tidy up after itself, the second run died at phase 5 on an unrelated error, its `.then`
+ * never fired, and it left MORE rows on the client's box than it was invoked to remove.
+ * A cleanup that has to succeed at everything else first is not a cleanup.
+ */
+if (process.env.CLEANUP === "1") {
+  const before = psql(`SELECT count(*) FROM shifts WHERE worker_id = ${WORKER_ID}`);
+  psql(`DELETE FROM shifts WHERE worker_id = ${WORKER_ID}`);
+  const after = psql(`SELECT count(*) FROM shifts WHERE worker_id = ${WORKER_ID}`);
+  console.log(`cleanup: worker ${WORKER_ID} had ${before} shift(s) on ${SSH}, now ${after}`);
+  if (after !== "0") {
+    console.log("cleanup: FAILED — rows survived the delete");
+    process.exit(1);
+  }
+  console.log("cleanup: OK — the worker row itself is left alone; delete it with the admin API");
+  process.exit(0);
+}
+
 main()
   .then(async (rows) => {
     console.log("\n" + notes.map((n) => `  note  ${n}`).join("\n"));
-    if (process.env.CLEANUP === "1" && rows?.length) {
-      const ids = rows.map((r) => r.id).join(",");
-      console.log(`  cleanup: DELETE FROM shifts WHERE id IN (${ids})`);
-      psql(`DELETE FROM shifts WHERE id IN (${ids})`);
-      console.log(`  cleanup: ${psql(`SELECT count(*) FROM shifts WHERE worker_id = ${WORKER_ID}`)} shift(s) left`);
-    } else if (rows?.length) {
+    if (rows?.length) {
       console.log(`\n  rows left on production: ${rows.map((r) => r.id).join(", ")} — CLEANUP=1 deletes them`);
     }
     console.log(`\nprove-offline-push: ${failed === 0 ? "OK" : `${failed} FAILED`}`);
