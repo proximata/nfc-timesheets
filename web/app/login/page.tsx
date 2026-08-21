@@ -48,13 +48,13 @@ export default function LoginPage() {
   // `router.replace(loginPathWithReturn())` — ended on that exact URL with the sentence
   // ABSENT and then signed him back in to `/`. A `useState` initialiser runs DURING the
   // render that the client-side navigation triggers, and Next commits the new URL to
-  // `window.history` after that render, so `window.location.search` still held the OLD
+  // `window.history` after that render, so the browser's URL still held the OLD
   // screen's query string (`?period=2026-07`, no `returnTo`) and `safeReturnTo` returned
   // null. The bug was invisible to `demo/check-login-return.mjs` because that check calls
   // the two pure functions against a stubbed `window` and greps the screens' source: both
   // halves are correct, and the feature was still broken end to end.
   //
-  // The effect runs after commit, when `window.location` IS the new URL, so it repairs the
+  // The effect runs after commit, when the browser's URL IS the new one, so it repairs the
   // navigated case; the initialiser still covers the direct-load and no-JS-yet case, and
   // keeps the sentence from flashing in one frame late there. Not `useSearchParams()`:
   // this is a static export and that hook forces a Suspense boundary (see the note on
