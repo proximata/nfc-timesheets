@@ -2461,6 +2461,18 @@ a {
      that neither control may be deleted — it moved and, on a phone, it collapsed. */
   .app-shell {
     grid-template-columns: minmax(0, 1fr) auto;
+    /* THE DESKTOP RULE (`.app-shell` above) DECLARES THREE ROWS for three areas-rows.
+       This block redeclares `grid-template-areas` with FOUR — but until this line did
+       not redeclare `grid-template-rows` to match, so the fourth row was implicit
+       (`grid-auto-rows`, default `auto`) and the explicit three-track list still applied
+       IN ORDER to the new four-row layout: header=auto, "sidebar tools"=minmax(0,1fr) —
+       the NAV STRIP — content=auto, footer=auto (implicit). The nav strip inherited the
+       flexible track meant for the content area and grew to fill the screen; content
+       shrank to its own height and was pushed toward the bottom. Measured on /tags/ at
+       390x844: nav strip 526px, content 205px, h1 at y=587 — 465px recovered by this one
+       line (LOOK-PHONE.md #1, the finding ranked highest cost: a blank-looking screen on
+       every phone load). */
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     grid-template-areas:
       "header  header"
       "sidebar tools"
