@@ -4,6 +4,7 @@ title: 'Redesign /shifts/: read-only log, two drawers, filters stay client-side'
 status: To Do
 assignee: []
 created_date: '2026-08-17 13:23'
+updated_date: '2026-08-21 08:21'
 labels:
   - ux
   - redesign
@@ -60,3 +61,9 @@ RULES FOR EVERY SCREEN AGENT (REDESIGN-PLAN.md section 4.1):
 - [ ] #13 390px screenshot LOOKED AT and attached - no horizontal page scroll, card captions match the correct columns; 1440px dark screenshot attached
 - [ ] #14 de.json, en.json, globals.css, lib/nav.ts and components/* untouched; cd web && pnpm lint && pnpm typecheck green
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+SUPERSEDED PREMISE (TASK-235, commit cf9e102): fetchShiftSnapshot no longer fetches /admin/data unbounded-by-date. At 20 workers/8 buildings the unbounded fetch was itself the bug -- proven against a grown nfc_demo (backlog/docs/SCALE-PROOF.md section 1): the newest-2000-rows-sitewide fetch returned ZERO of 410 real March shifts, an empty table for a real month. GET /admin/data now accepts optional worker/location/state alongside from/to, and a new shift_outside_count field (server-computed) answers exactly the 'nichts im August - 5 Schichten liegen in fruheren Zeitraumen' distinction this task's trap warns about, WITHOUT holding the whole ledger client-side. AC#3 as written ('filtering is still CLIENT-SIDE over the unbounded payload... fetchShiftSnapshot is called with no from/to') is now WRONG and must not be re-implemented -- read TASK-235 and backlog/docs/SCALE-PROOF.md before touching this screen's data-fetch shape again. The DRAWER/UX scope of this task (two permanently-open forms -> Drawers) is untouched and still applies.
+<!-- SECTION:NOTES:END -->
