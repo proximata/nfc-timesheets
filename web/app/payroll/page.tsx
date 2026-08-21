@@ -612,6 +612,15 @@ export default function PayrollPage() {
           <div className="callout">
             <h3>{t('caveatHeading')}</h3>
             <ul>
+              {/* UNCONDITIONAL, on every load, in every branch (task-148 AC4). It used to
+                  ship inside the collapsed `<details>` below — the one caveat that changes
+                  what the total MEANS, filed next to ones that only say what it excludes,
+                  and closed by default. A caveat may shrink, never disappear; a closed
+                  disclosure a director has no reason to open is a disappearance in
+                  practice. Mirrored, permanently visible, on /contracts/ as
+                  noteLabourNoHistory — both copies must survive; they are read by
+                  different people at different moments. */}
+              <li>{t('caveatRateHistory')}</li>
               {/* EVERY caveat link now carries THIS screen's period and the condition it is
                   about. It used to point at a bare `/shifts/`, which opens on the last 30
                   days while payroll runs last month: the three shifts named here were
@@ -793,13 +802,12 @@ export default function PayrollPage() {
           </ListPanel>
 
           {/*
-            The two standing limitations. Collapsible and under the table, never hover-only:
-            they are true in every period, and they may not be deleted to make the screen
-            lighter. They now ship CLOSED — the only change is disclosure, not content. Open
-            they put the prose this redesign removed from the top of the screen back at the
-            bottom of it, which is why /payroll/ came out at +1% instead of lighter
-            (REDESIGN-VISUAL.md D8). Nothing above this line folds: the reconciliation
-            sentence and the counted, named exclusions stay in view, always.
+            Explanatory, not a caveat: HOW the numbers are computed, not what they exclude
+            or what they might be wrong about. Collapsible and under the table, never
+            hover-only. caveatRateHistory USED to be in here too — moved above, permanently
+            visible, because it is unconditional and this ships CLOSED (REDESIGN-VISUAL.md
+            D8). Nothing above this line folds: the reconciliation sentence, the counted
+            named exclusions and the rate-history caveat all stay in view, always.
           */}
           <details className="callout">
             <summary>{t('howHeading')}</summary>
@@ -808,7 +816,6 @@ export default function PayrollPage() {
                   sentence it carried is a fact about where these numbers come from, so it is
                   kept here rather than deleted with the paragraph it used to live in. */}
               <li>{t('intro')}</li>
-              <li>{t('caveatRateHistory')}</li>
               <li>{t('attributionHint')}</li>
             </ul>
           </details>

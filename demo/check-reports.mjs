@@ -212,21 +212,36 @@ async function main() {
 
     // 2. The caveats.
     //
-    // THESE TWO MOVED, AND THE CHECK DID NOT FOLLOW. app/payroll/page.tsx ships the two
-    // standing limitations inside a `<details class="callout">` that is CLOSED on load —
-    // deliberately, and its own comment says why: open, they put the prose the redesign
-    // took off the top of the screen back at the bottom of it. So a plain „is this string
-    // among the visible text" assertion has been red since the redesign, for a screen that
-    // is behaving as designed, which is how a check stops being read.
-    //
-    // Reconciled rather than deleted, because the fact is still load-bearing: past hours
-    // are priced at TODAY's rate, and a payslip dispute turns on it. What the design
-    // actually promises is ONE PRESS, so that is what is measured — the disclosure is a
-    // real control that names itself, the sentence is inside it, and after a real press it
-    // is on the screen. A tooltip, a `title=`, or a deleted <li> all fail this.
+    // caveatRateHistory (past hours priced at TODAY's rate) IS UNCONDITIONAL — task-148
+    // AC4, restated in REDESIGN-INVENTORY.md and JOURNEYS.md as "ALWAYS, unconditional",
+    // and mirrored permanently visible on /contracts/ as noteLabourNoHistory. It briefly
+    // shipped inside the CLOSED `<details class="callout">` that holds the "how this page
+    // works" prose (a caveat that changes what the TOTAL MEANS, filed next to a paragraph
+    // nobody has a reason to open) — found by LOOK.md W2, and this check was reconciled to
+    // the wrong thing when that happened: it required ONE PRESS for a fact that must need
+    // NONE. Fixed back: the caveat is asserted visible with NOTHING pressed, and the
+    // `<details>` — which still exists, for `intro` and `attributionHint` — is asserted
+    // CLOSED and NOT carrying it.
+    const asDelivered = await page.eval(VISIBLE_TEXT);
+    assert(
+      "payroll: the rate-history caveat needs NO press — unconditional, task-148 AC4",
+      asDelivered.includes("vergangene Stunden werden daher zum heutigen Satz bewertet"),
+      "not visible with nothing pressed",
+    );
+    // …and what may NOT be folded either is the money. The counted, named exclusion and
+    // the reconciliation sentence are visible with nothing pressed, or this screen is
+    // lying by omission about a bank transfer.
+    assert(
+      "payroll: the reconciliation sentence is NOT behind the disclosure",
+      asDelivered.includes("auf dieser Seite fehlt nichts") ||
+        asDelivered.includes("Die Summe des Servers für diesen Zeitraum beträgt"),
+      "not visible with the callout closed",
+    );
+    // The "how this page works" disclosure — intro + the attribution rule — located by
+    // `attributionHint`'s text now that caveatRateHistory has moved out of it.
     const disclosure = await page.eval(`(() => {
       const d = [...document.querySelectorAll('details.callout')]
-        .find((x) => /zum heutigen Satz bewertet/.test(x.textContent || ''))
+        .find((x) => /Eine Schicht zählt in dem Zeitraum, in dem sie begonnen hat/.test(x.textContent || ''))
       if (!d) return { found: false }
       const s = d.querySelector('summary')
       const r = s ? s.getBoundingClientRect() : null
@@ -236,53 +251,38 @@ async function main() {
         summary: s ? s.textContent.replace(/\\s+/g, ' ').trim() : null,
         summaryShown: !!(s && s.offsetParent !== null && r.height > 0),
         summaryH: r ? Math.round(r.height) : null,
+        carriesRateHistory: /zum heutigen Satz bewertet/.test(d.textContent || ''),
       }
     })()`);
     assert(
-      "payroll: the rate-history caveat is on the page, inside a disclosure that names itself",
-      disclosure.found === true && disclosure.summaryShown === true && (disclosure.summary ?? "") !== "",
-      `found=${disclosure.found} summary=„${disclosure.summary ?? ""}" ${disclosure.summaryH}px`,
+      "payroll: the how-it-works disclosure is on the page, closed, and names itself",
+      disclosure.found === true &&
+        disclosure.openOnLoad === false &&
+        disclosure.summaryShown === true &&
+        (disclosure.summary ?? "") !== "",
+      `found=${disclosure.found} open=${disclosure.openOnLoad} summary=„${disclosure.summary ?? ""}" ${disclosure.summaryH}px`,
     );
-    // Read the screen AS DELIVERED, before anything is pressed. Reading it after a press
-    // and a re-close was the first version of this block, and it made the twin below
-    // untestable: `details open` in the markup still measured as folded, because the probe
-    // had closed it itself. The state that matters is the one on load.
-    const asDelivered = await page.eval(VISIBLE_TEXT);
     assert(
-      "payroll: the disclosure ships CLOSED — the caveat is folded until pressed",
-      disclosure.openOnLoad === false &&
-        !asDelivered.includes("vergangene Stunden werden daher zum heutigen Satz bewertet"),
-      `open on load=${disclosure.openOnLoad}`,
+      "payroll: …and it no longer carries the rate-history caveat — that would be TWO copies",
+      disclosure.carriesRateHistory === false,
+      "found inside the closed disclosure as well as outside it",
     );
-    // …and what may NOT be folded is the money. The counted, named exclusion and the
-    // reconciliation sentence are visible with nothing pressed, or this screen is lying by
-    // omission about a bank transfer.
-    assert(
-      "payroll: the reconciliation sentence is NOT behind the disclosure",
-      asDelivered.includes("auf dieser Seite fehlt nichts") ||
-        asDelivered.includes("Die Summe des Servers für diesen Zeitraum beträgt"),
-      "not visible with the callout closed",
-    );
-    // Open it the way a reader does, then require BOTH sentences to be visible text.
+    // Open it the way a reader does, then require the explanatory text to be visible.
     await page.eval(`(() => {
       const d = [...document.querySelectorAll('details.callout')]
-        .find((x) => /zum heutigen Satz bewertet/.test(x.textContent || ''))
+        .find((x) => /Eine Schicht zählt in dem Zeitraum, in dem sie begonnen hat/.test(x.textContent || ''))
       if (d) d.open = true
       return !!d
     })()`);
     await sleep(250);
     const openedText = await page.eval(VISIBLE_TEXT);
     assert(
-      "payroll: …and one press puts the rate-history caveat on the screen",
-      openedText.includes("vergangene Stunden werden daher zum heutigen Satz bewertet"),
-    );
-    assert(
-      "payroll: …and the attribution rule with it",
+      "payroll: …and one press puts the attribution rule on the screen",
       openedText.includes("Eine Schicht zählt in dem Zeitraum, in dem sie begonnen hat"),
     );
     await page.eval(`(() => {
       const d = [...document.querySelectorAll('details.callout')]
-        .find((x) => /zum heutigen Satz bewertet/.test(x.textContent || ''))
+        .find((x) => /Eine Schicht zählt in dem Zeitraum, in dem sie begonnen hat/.test(x.textContent || ''))
       if (d) d.open = false
       return true
     })()`);
