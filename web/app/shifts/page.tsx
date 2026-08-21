@@ -25,14 +25,7 @@ import {
 import { type AdminFilters, filterHref, useFilters } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
 import { LOGIN_PATH } from '@/lib/nav'
-import {
-  isPeriod,
-  PERIODS,
-  type Period,
-  periodContaining,
-  periodRange,
-  withinRange,
-} from '@/lib/period'
+import { isPeriod, PERIODS, type Period, periodContaining, periodRange } from '@/lib/period'
 import {
   BUSINESS_TIME_ZONE,
   blocksPayroll,
@@ -260,6 +253,22 @@ export default function ShiftsPage() {
   const period: Period = filters.period ?? 'last30Days'
   const locationFilter = filters.location ?? LOCATION_ALL
   const workerFilter = filters.worker === null ? WORKER_ALL : String(filters.worker)
+  const range = useMemo(() => periodRange(period, now), [period, now])
+
+  /**
+   * `?state=` — the condition the link was ABOUT. Payroll says „3 Schichten sind nicht
+   * bestätigt" and links here; without this the director arrives at a log of everything and
+   * has to find those three by eye, which is the work this contract removes.
+   *
+   * `noEmail` and `noTag` belong to other screens and are ignored here, silently, as
+   * decision-38 §4 requires: a parameter a screen does not understand is not an error. Only
+   * the three this screen understands are sent to the server (TASK-235) — the other two
+   * fall through to `null`, i.e. no state filter, exactly the old client-side default branch.
+   */
+  const serverState: 'open' | 'unresolved' | 'manual' | null =
+    filters.state === 'open' || filters.state === 'unresolved' || filters.state === 'manual'
+      ? filters.state
+      : null
 
   /**
    * Every filter write is a 'replace'. These are CONTROLS on the screen you are already
@@ -282,10 +291,21 @@ export default function ShiftsPage() {
     [router],
   )
 
+  /**
+   * THE PAYLOAD IS THE PERIOD AND THE FILTER (TASK-235). `?from=&to=&worker=&location=&state=`
+   * go on the SAME `/admin/data` request `/payroll/` already windows by period — see the file
+   * header for why the old "fetch everything up to `shift_limit`, filter in the browser"
+   * design stopped being honest at scale. Changing any of the four REFETCHES, same as payroll.
+   */
   const load = useCallback(
     async (signal?: AbortSignal) => {
       try {
-        setSnapshot(await fetchShiftSnapshot(signal))
+        setSnapshot(
+          await fetchShiftSnapshot(
+            { range, worker: filters.worker, location: filters.location, state: serverState },
+            signal,
+          ),
+        )
         setLoadError(null)
       } catch (cause) {
         if (cause instanceof DOMException && cause.name === 'AbortError') return
@@ -293,70 +313,44 @@ export default function ShiftsPage() {
         setLoadError(cause instanceof ApiError ? cause.messageKey : 'server')
       }
     },
-    [handleAuthLoss],
+    [handleAuthLoss, range, filters.worker, filters.location, serverState],
   )
 
   useEffect(() => {
     const controller = new AbortController()
+    // The payload IS the selection. Clear it first, or the previous filter's rows stay on
+    // screen under the new heading while the request is in flight — the same reason
+    // /payroll/ clears its snapshot on every period change.
+    setSnapshot(null)
     void load(controller.signal)
     return () => controller.abort()
   }, [load])
 
   const shifts = snapshot?.shifts ?? []
 
-  const range = useMemo(() => periodRange(period, now), [period, now])
-
-  /** Everything the worker/building filters keep, before the period is applied. */
-  const matching = useMemo(
-    () =>
-      shifts
-        .filter((shift) => {
-          if (workerFilter !== WORKER_ALL && String(shift.worker_id) !== workerFilter) return false
-          if (locationFilter !== LOCATION_ALL && shift.location_id !== locationFilter) return false
-          return true
-        })
-        .sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime()),
-    [shifts, workerFilter, locationFilter],
-  )
-
   /**
-   * `?state=` — the condition the link was ABOUT. Payroll says „3 Schichten sind nicht
-   * bestätigt" and links here; without this the director arrives at a log of everything and
-   * has to find those three by eye, which is the work this contract removes.
-   *
-   * `noEmail` and `noTag` belong to other screens and are ignored here, silently, as
-   * decision-38 §4 requires: a parameter a screen does not understand is not an error.
-   * Applied BEFORE the period, so `outsideCount` still counts rows this state filter keeps.
+   * The rows on screen. Already windowed by the period AND narrowed by the worker/building/
+   * state filters — the server applied all four to the same query that produced `shifts`, in
+   * the same order (`ORDER BY start_time DESC`), so no client-side re-filtering or re-sorting
+   * is needed or safe to duplicate: a second opinion here is exactly the kind of drift that
+   * put July money beside an empty August table on 3 August 2026 (see /payroll/'s header).
    */
-  const stateFiltered = useMemo(() => {
-    switch (filters.state) {
-      case 'open':
-        return matching.filter((shift) => shift.end_time === null)
-      case 'unresolved':
-        return matching.filter((shift) => shiftState(shift) === 'unresolved')
-      case 'manual':
-        return matching.filter((shift) => isManualEntry(shift))
-      default:
-        return matching
-    }
-  }, [matching, filters.state])
-
-  const visible = useMemo(
-    () => stateFiltered.filter((shift) => withinRange(shift.start_time, range)),
-    [stateFiltered, range],
-  )
+  const visible = shifts
 
   /**
-   * Shifts this worker/building filter keeps that the PERIOD is hiding. The number the
-   * screen was missing: without it "no rows" cannot be told apart from "everything is gone",
-   * and the director has no reason to prefer the harmless reading.
+   * Shifts this worker/building/state filter keeps OUTSIDE the selected period — the number
+   * the screen was missing: without it "no rows" cannot be told apart from "everything is
+   * gone", and the director has no reason to prefer the harmless reading. Computed by the
+   * SERVER now (TASK-235), because the browser no longer holds those rows to count — it asked
+   * for the period, not the ledger. See `shift_outside_count` in server/routes/admin.js.
    */
-  const outsideCount = stateFiltered.length - visible.length
+  const outsideCount = snapshot?.shift_outside_count ?? 0
 
   /**
-   * The newest shift in the WHOLE ledger — not bounded by this period and not capped by the
-   * row limit — and the period that would show it. The one-click escape from an empty
-   * table, and the sentence that proves the records are still there.
+   * The newest shift in the WHOLE ledger — not bounded by this period, not narrowed by any
+   * filter, and not capped by the row limit — and the period that would show it. The
+   * one-click escape from an empty table, and the sentence that proves the records are still
+   * there.
    */
   const latestStart = snapshot?.shift_bounds.latest ?? null
   const latest = latestStart === null ? null : periodContaining(latestStart, now)
@@ -365,7 +359,8 @@ export default function ShiftsPage() {
   /** The shifts on screen the payroll total will silently leave out — the whole point. */
   const blocked = visible.filter((shift) => blocksPayroll(shiftState(shift)))
 
-  // The server LIMITs the shift list. Hitting that limit means older shifts exist and are
+  // The server LIMITs the shift list, now to the WINDOW this request asked for rather than to
+  // the whole ledger. Hitting that limit means older shifts WITHIN THIS PERIOD exist and are
   // NOT on this screen; saying nothing would present a truncated month as a complete one.
   const truncated = snapshot !== null && snapshot.shifts.length >= snapshot.shift_limit
 

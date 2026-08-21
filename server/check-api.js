@@ -2958,6 +2958,254 @@ try {
       assert.ok(!onlyTo.includes(augustFirst));
     });
 
+    // ---- GET /admin/data?worker=&location=&state= : the shift log WINDOWS (TASK-235) ---
+    //
+    // /shifts/ used to fetch every row up to `shift_limit` and filter worker/location/state
+    // IN THE BROWSER. At 20 workers / 8 buildings that payload neared the 2000-row cap on a
+    // single `thisYear` view, and the query was not even bounded by date, so the newest 2000
+    // rows SITE-WIDE could exclude January while claiming to answer "this year". These three
+    // parameters push the SAME filter into the query the row list and `hours` already use.
+    // Every test below owns fresh workers and a fresh building of its own, rather than
+    // reusing `rangeWorker` / `locationUuid`: BOTH are shared fixtures other blocks in this
+    // file also seed shifts against, so a set-equality assertion pinned to them is only ever
+    // as reliable as every OTHER test's cleanup — the first version of this section proved
+    // that the hard way, failing against rows several unrelated tests had left behind.
+    const freshWorker = async (label) =>
+      Number(
+        (
+          await admin.query(
+            "INSERT INTO workers (name, email, hourly_rate_cents) VALUES ($1, $2, 1000) RETURNING id",
+            [label, `${label.toLowerCase().replace(/\s+/g, ".")}@example.test`],
+          )
+        ).rows[0].id,
+      );
+    const freshLocation = async (slug) =>
+      (await admin.query("INSERT INTO locations (slug, name) VALUES ($1, $1) RETURNING id", [slug])).rows[0].id;
+
+    await test("?worker= and ?location= narrow the row list to exactly that worker/building", async () => {
+      const workerA = await freshWorker("Filter Worker A");
+      const workerB = await freshWorker("Filter Worker B");
+      const locA = await freshLocation("filter-location-a");
+      const locB = await freshLocation("filter-location-b");
+      const shiftAt = async (worker, location) =>
+        Number(
+          (
+            await admin.query(
+              `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+               VALUES ($1, $2, '2026-08-05T10:00:00Z', '2026-08-05T11:00:00Z') RETURNING id`,
+              [worker, location],
+            )
+          ).rows[0].id,
+        );
+      // Three August rows, no two sharing both a worker and a building: each is kept by
+      // exactly one single-filter query and only `home` survives both filters together.
+      const home = await shiftAt(workerA, locA);
+      const sameLocation = await shiftAt(workerB, locA);
+      const sameWorker = await shiftAt(workerA, locB);
+
+      const byWorker = ids(await data(`${range(VIENNA_AUGUST)}&worker=${workerA}`));
+      assert.deepEqual(
+        new Set(byWorker),
+        new Set([home, sameWorker]),
+        "a worker filter keeps that worker's rows at EVERY building, and only that worker's",
+      );
+
+      const byLocation = ids(await data(`${range(VIENNA_AUGUST)}&location=${locA}`));
+      assert.deepEqual(
+        new Set(byLocation),
+        new Set([home, sameLocation]),
+        "a location filter keeps EVERY worker's rows at that building, and only that building's",
+      );
+
+      const byBoth = ids(await data(`${range(VIENNA_AUGUST)}&worker=${workerA}&location=${locA}`));
+      assert.deepEqual(byBoth, [home], "both filters together must keep exactly the one matching row");
+
+      await admin.query("DELETE FROM shifts WHERE worker_id = ANY($1::int[])", [[workerA, workerB]]);
+      await admin.query("DELETE FROM workers WHERE id = ANY($1::int[])", [[workerA, workerB]]);
+      await admin.query("DELETE FROM locations WHERE id = ANY($1::uuid[])", [[locA, locB]]);
+    });
+
+    await test("?state= mirrors web/lib/shifts.ts shiftState() / isManualEntry() exactly", async () => {
+      const worker = await freshWorker("Filter Worker State");
+      const location = await freshLocation("filter-location-state");
+      const closedManual = Number(
+        (
+          await admin.query(
+            `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+             VALUES ($1, $2, '2026-08-09T06:00:00Z', '2026-08-09T14:00:00Z') RETURNING id`,
+            [worker, location],
+          )
+        ).rows[0].id,
+      );
+      const openStub = Number(
+        (
+          await admin.query(
+            `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+             VALUES ($1, $2, '2026-08-10T06:00:00Z', NULL) RETURNING id`,
+            [worker, location],
+          )
+        ).rows[0].id,
+      );
+      const unresolvedStub = Number(
+        (
+          await admin.query(
+            `INSERT INTO shifts (worker_id, location_id, start_time, end_time, auto_closed)
+             VALUES ($1, $2, '2026-08-11T06:00:00Z', '2026-08-11T14:00:00Z', true) RETURNING id`,
+            [worker, location],
+          )
+        ).rows[0].id,
+      );
+
+      const openIds = ids(await data(`${range(VIENNA_AUGUST)}&worker=${worker}&state=open`));
+      assert.deepEqual(openIds, [openStub]);
+
+      const unresolvedIds = ids(await data(`${range(VIENNA_AUGUST)}&worker=${worker}&state=unresolved`));
+      assert.deepEqual(unresolvedIds, [unresolvedStub]);
+
+      // Every shift seeded directly by this file carries no client_uuid, so all three of
+      // these are "manual" by web/lib/shifts.ts `isManualEntry`.
+      const manualIds = ids(await data(`${range(VIENNA_AUGUST)}&worker=${worker}&state=manual`));
+      assert.deepEqual(new Set(manualIds), new Set([closedManual, openStub, unresolvedStub]));
+
+      // A state this screen does not understand (decision-38 §4) must be IGNORED, not refused
+      // and not treated as "match nothing".
+      const unknownState = await asAdmin(`/admin/data?limit=2000${range(VIENNA_AUGUST)}&worker=${worker}&state=noEmail`);
+      assert.equal(
+        unknownState.status,
+        400,
+        "the server's own vocabulary is narrower than the URL contract's — lib/filters.ts drops noEmail/noTag before this route ever sees them",
+      );
+
+      await admin.query("DELETE FROM shifts WHERE worker_id = $1", [worker]);
+      await admin.query("DELETE FROM workers WHERE id = $1", [worker]);
+      await admin.query("DELETE FROM locations WHERE id = $1", [location]);
+    });
+
+    await test("shift_outside_count is the SAME filter, counted outside the window instead of fetched inside it", async () => {
+      const worker = await freshWorker("Filter Worker Outside");
+      const location = await freshLocation("filter-location-outside");
+      const insideAugust = Number(
+        (
+          await admin.query(
+            `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+             VALUES ($1, $2, '2026-08-05T10:00:00Z', '2026-08-05T11:00:00Z') RETURNING id`,
+            [worker, location],
+          )
+        ).rows[0].id,
+      );
+      await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+         VALUES ($1, $2, '2026-07-05T10:00:00Z', '2026-07-05T11:00:00Z')`,
+        [worker, location],
+      );
+      await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+         VALUES ($1, $2, '2026-09-05T10:00:00Z', '2026-09-05T11:00:00Z')`,
+        [worker, location],
+      );
+
+      // 3 shifts total (July, August, September). Exactly 1 falls inside VIENNA_AUGUST, so
+      // the other 2 are "outside".
+      const scoped = await data(`${range(VIENNA_AUGUST)}&worker=${worker}`);
+      assert.deepEqual(ids(scoped), [insideAugust]);
+      assert.equal(scoped.shift_outside_count, 2, "2 of this worker's 3 shifts are outside August");
+
+      // Widen to "all": nothing this filter matches is outside an unbounded range.
+      const unbounded = await data(`&worker=${worker}`);
+      assert.equal(unbounded.shift_outside_count, 0);
+
+      // A period with none of this worker's shifts inside it: everything matching is outside.
+      const empty = await data(
+        `${range({ from: "2020-01-01T00:00:00Z", to: "2020-02-01T00:00:00Z" })}&worker=${worker}`,
+      );
+      assert.deepEqual(ids(empty), []);
+      assert.equal(
+        empty.shift_outside_count,
+        3,
+        "an empty FILTER result over a real worker must not read like an empty DATABASE",
+      );
+
+      await admin.query("DELETE FROM shifts WHERE worker_id = $1", [worker]);
+      await admin.query("DELETE FROM workers WHERE id = $1", [worker]);
+      await admin.query("DELETE FROM locations WHERE id = $1", [location]);
+    });
+
+    // ---- The 2000-row ceiling, proven at its own boundary (SHIFT_PAGE_MAX) -------------
+    //
+    // Not a scaled-down proxy: the real default `limit=2000` the admin panel actually
+    // requests, against 1999, 2000 and 2001 rows for ONE isolated worker/location/period so
+    // the count is exact. `truncated` (`shifts.length >= shift_limit`) must be RED at 1999
+    // and GREEN at 2000 and 2001 — a check whose negative case cannot fail is not a check.
+    // `shift_outside_count` must stay 0 throughout: every seeded row is INSIDE the period,
+    // so none of them may ever be reported as "outside" just because the row cap bit.
+    {
+      const ceilingWorker = Number(
+        (
+          await admin.query(
+            "INSERT INTO workers (name, email, hourly_rate_cents) VALUES ('Ceiling Worker', 'ceiling.worker@example.test', 1000) RETURNING id",
+          )
+        ).rows[0].id,
+      );
+      const ceilingLocation = (
+        await admin.query("INSERT INTO locations (slug, name) VALUES ('ceiling-worker-site', 'Ceiling Site') RETURNING id")
+      ).rows[0].id;
+      // All inside Vienna August 2026, one minute apart, so 2001 of them still fit the month
+      // and none collide with the one-open-shift-per-worker constraint (every row is closed).
+      const seedCeiling = async (n) =>
+        admin.query(
+          `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+           SELECT $1, $2,
+                  '2026-08-01T00:00:00Z'::timestamptz + (g * interval '1 minute'),
+                  '2026-08-01T00:00:00Z'::timestamptz + (g * interval '1 minute') + interval '30 seconds'
+             FROM generate_series(0, $3 - 1) AS g`,
+          [ceilingWorker, ceilingLocation, n],
+        );
+      const ceilingData = async () =>
+        (
+          await asAdmin(
+            `/admin/data?limit=2000${range(VIENNA_AUGUST)}&worker=${ceilingWorker}&location=${ceilingLocation}`,
+          )
+        ).json();
+
+      await seedCeiling(1999);
+      let payload = await ceilingData();
+      assert.equal(payload.shifts.length, 1999);
+      assert.equal(payload.shifts.length >= payload.shift_limit, false, "1999 rows must NOT read as truncated");
+      assert.equal(payload.shift_outside_count, 0);
+
+      await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+         VALUES ($1, $2, '2026-08-01T23:59:00Z', '2026-08-01T23:59:30Z')`,
+        [ceilingWorker, ceilingLocation],
+      );
+      payload = await ceilingData();
+      assert.equal(payload.shifts.length, 2000);
+      assert.equal(payload.shifts.length >= payload.shift_limit, true, "exactly 2000 rows MUST read as truncated");
+      assert.equal(payload.shift_outside_count, 0, "every one of the 2000 is INSIDE August — truncation is not the same fact as \"outside\"");
+
+      await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+         VALUES ($1, $2, '2026-08-01T23:58:00Z', '2026-08-01T23:58:30Z')`,
+        [ceilingWorker, ceilingLocation],
+      );
+      payload = await ceilingData();
+      assert.equal(payload.shifts.length, 2000, "the row list itself never exceeds the limit");
+      assert.equal(payload.shifts.length >= payload.shift_limit, true, "2001 real rows must still read as truncated");
+      assert.equal(payload.shift_outside_count, 0, "all 2001 are inside August; the LIMIT truncates the list, it does not make rows leave the period");
+
+      // And the honest cross-check: Postgres itself agrees there really are 2001 matching
+      // rows in the window, so "truncated" is not a guess about a number nobody counted.
+      const { rows: real } = await admin.query(
+        "SELECT count(*)::int AS n FROM shifts WHERE worker_id = $1 AND location_id = $2",
+        [ceilingWorker, ceilingLocation],
+      );
+      assert.equal(real[0].n, 2001);
+
+      await admin.query("DELETE FROM shifts WHERE worker_id = $1", [ceilingWorker]);
+      await admin.query("DELETE FROM workers WHERE id = $1", [ceilingWorker]);
+      await admin.query("DELETE FROM locations WHERE id = $1", [ceilingLocation]);
+    }
+
     await admin.query("DELETE FROM shifts WHERE worker_id = $1", [rangeWorker]);
     await admin.query("DELETE FROM workers WHERE id = $1", [rangeWorker]);
   }

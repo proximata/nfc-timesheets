@@ -292,8 +292,27 @@ async function adminData({ query }) {
   const { from, to } = v.optionalRange(query.get("from"), query.get("to"));
   // Cast once: a NULL parameter has no type of its own, and `$1 IS NULL` on an untyped
   // parameter is a 42P08 from Postgres.
-  const inRange =
-    "($1::timestamptz IS NULL OR s.start_time >= $1) AND ($2::timestamptz IS NULL OR s.start_time < $2)";
+  const inRangeFor = (f, t) =>
+    `($${f}::timestamptz IS NULL OR s.start_time >= $${f}) AND ($${t}::timestamptz IS NULL OR s.start_time < $${t})`;
+  const inRange = inRangeFor(1, 2);
+
+  // /shifts/ WINDOWS by period (TASK-235): the same optional `?worker=` / `?location=` /
+  // `?state=` the shift log already applies IN THE BROWSER are now accepted here too, so a
+  // filtered screen is bounded by Postgres before the row ever crosses the wire, not after.
+  // Omitted (the dashboard's and payroll's own calls to this same route never send them)
+  // means "any", so nothing changes for a caller that does not ask.
+  const shiftWorkerId = v.optionalId(query.get("worker"), "worker");
+  const shiftLocationId = v.optionalUuid(query.get("location"), "location");
+  const rawState = query.get("state");
+  const shiftStateFilter = rawState === null ? null : v.oneOf(rawState, "state", ["open", "unresolved", "manual"]);
+  // Mirrors web/lib/shifts.ts `shiftState` / `isManualEntry` exactly — one rule, stated in
+  // both places, or the two disagree about which rows a filter keeps.
+  const filterPredicate = (w, l, st) =>
+    `($${w}::bigint IS NULL OR s.worker_id = $${w}) AND ($${l}::uuid IS NULL OR s.location_id = $${l}) AND ` +
+    `($${st}::text IS NULL OR ` +
+    `($${st} = 'open' AND s.end_time IS NULL) OR ` +
+    `($${st} = 'unresolved' AND s.end_time IS NOT NULL AND s.auto_closed AND s.corrected_at IS NULL) OR ` +
+    `($${st} = 'manual' AND s.client_uuid IS NULL))`;
 
   const [
     workers,
@@ -302,6 +321,8 @@ async function adminData({ query }) {
     zones,
     reportedTags,
     shifts,
+    shiftMatchingInRange,
+    shiftMatchingTotal,
     hours,
     clients,
     contacts,
@@ -369,11 +390,32 @@ async function adminData({ query }) {
        JOIN locations l ON l.id = s.location_id
        LEFT JOIN zones sz ON sz.id = s.start_zone_id
        LEFT JOIN zones ez ON ez.id = s.end_zone_id
-       WHERE ${inRange}
+       WHERE ${inRange} AND ${filterPredicate(4, 5, 6)}
        ORDER BY s.start_time DESC
        LIMIT $3`,
-      [from, to, limit],
+      [from, to, limit, shiftWorkerId, shiftLocationId, shiftStateFilter],
     ),
+    // Same worker/location/state predicate as the row query above, but counted rather than
+    // fetched, so a filtered screen can say what it is showing without paying for rows it
+    // will discard. Two counts, not one: `matchingInRange` is the true row count for the
+    // window the row query above just applied its LIMIT to — it can legitimately exceed
+    // `shifts.length` when the LIMIT bit, and `shifts.length >= limit` is still exactly the
+    // truncation signal the shift log has always used. `matchingTotal` drops the date bound
+    // entirely, so `matchingTotal - matchingInRange` is the count of rows the SAME filter
+    // keeps in every OTHER period — the number `/shifts/` needs to tell "nothing here" apart
+    // from "nothing anywhere".
+    one(`SELECT count(*)::int AS n FROM shifts s WHERE ${inRangeFor(1, 2)} AND ${filterPredicate(3, 4, 5)}`, [
+      from,
+      to,
+      shiftWorkerId,
+      shiftLocationId,
+      shiftStateFilter,
+    ]),
+    one(`SELECT count(*)::int AS n FROM shifts s WHERE ${filterPredicate(1, 2, 3)}`, [
+      shiftWorkerId,
+      shiftLocationId,
+      shiftStateFilter,
+    ]),
     // Payroll excludes open shifts (no end_time yet) and unresolved auto-closed ones
     // (decision-10): a start+8h stub is a placeholder, not hours worked. Once a human
     // stamps corrected_at the shift counts again, auto_closed or not.
@@ -454,6 +496,11 @@ async function adminData({ query }) {
         earliest: bounds.earliest === null ? null : bounds.earliest.toISOString(),
         latest: bounds.latest === null ? null : bounds.latest.toISOString(),
       },
+      // The SAME worker/location/state filter the row query above just applied, counted
+      // rather than fetched: how many rows that filter keeps OUTSIDE the requested
+      // `[from, to)` window. `/shifts/` reports this next to the period so "no rows" and
+      // "no rows anywhere" never render the same way (TASK-235).
+      shift_outside_count: shiftMatchingTotal.n - shiftMatchingInRange.n,
     },
   };
 }

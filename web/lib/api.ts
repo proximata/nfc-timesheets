@@ -800,22 +800,62 @@ export type ShiftSnapshot = {
   shift_limit: number
   shift_range: { from: string | null; to: string | null }
   shift_bounds: ShiftBounds
+  /**
+   * Rows the CURRENT `worker`/`location`/`state` request would also match in every OTHER
+   * period — the server's own count, not the browser's, because the browser no longer holds
+   * those rows (see `fetchShiftSnapshot`). `/shifts/` reports this so "no rows" and "no rows
+   * anywhere" never look the same (TASK-235).
+   */
+  shift_outside_count: number
 }
 
 /**
- * The shift log deliberately fetches UNBOUNDED and filters in the browser.
- *
- * That is not an oversight now that `?from=&to=` exists: this screen has to be able to say
- * "no shifts in August — 5 exist in earlier periods", and it can only count what it holds.
- * A server-bounded fetch would answer the period question and lose the only fact that
- * distinguishes an empty filter from an empty database. Payroll, whose totals must match
- * its rows, does the opposite — see `fetchPayrollSnapshot`.
+ * What `/shifts/` currently has selected. Every field is optional/nullable because "any" is
+ * a real, common choice — the browsing default has no worker, no building and no state.
  */
-export function fetchShiftSnapshot(signal?: AbortSignal): Promise<ShiftSnapshot> {
+export type ShiftQuery = {
+  range: PeriodRange
+  /** `workers.id`, or `null` for every worker. */
+  worker?: number | null
+  /** Building uuid, or `null` for every building. */
+  location?: string | null
+  /**
+   * Only the three values `server/routes/admin.js` understands narrow the request.
+   * `noEmail` / `noTag` belong to other screens (decision-38 §4) and must never reach here —
+   * callers translate them to `null` before calling this, exactly as the old client-side
+   * `switch` did.
+   */
+  state?: 'open' | 'unresolved' | 'manual' | null
+}
+
+/**
+ * THE SHIFT LOG IS WINDOWED BY THE SAME `?from=&to=` PAYROLL USES, PLUS `?worker=&location=
+ * &state=` (TASK-235). It used to fetch UNBOUNDED and filter in the browser, on the theory
+ * that only the browser could say "no shifts in August — 5 exist in earlier periods". That
+ * theory stopped being true the day `/admin/data` learned to count what it did NOT return:
+ * `shift_outside_count` is the server's own answer to exactly that question, over the SAME
+ * filter this request already carries, so the distinction survives without the browser
+ * having to hold every row ever recorded. At 20 workers / 8 buildings the old design was
+ * the whole product's ceiling — a `thisYear` view neared 10 000 rows against a hard 2000-row
+ * cap, and the query was not even bounded by date, so the newest 2000 rows SITE-WIDE could
+ * exclude January entirely while claiming to answer "this year". A date-bounded query does
+ * not have that failure mode: it is wrong only about ITS OWN period, and says so
+ * (`shift_limit`, checked by the caller exactly as before).
+ */
+export function fetchShiftSnapshot(
+  query: ShiftQuery,
+  signal?: AbortSignal,
+): Promise<ShiftSnapshot> {
   // Same page size as `fetchAdminSnapshot`. If the shift log asked for the server's 500
   // default while payroll asked for 2000, payroll would count shifts the log cannot show —
   // so "3 shifts need confirming" would link to a screen where they are not there.
-  return apiFetch<ShiftSnapshot>(`/admin/data?limit=${ADMIN_SHIFT_LIMIT}`, { signal })
+  const parts = [`limit=${ADMIN_SHIFT_LIMIT}`]
+  const range = rangeQuery(query.range)
+  if (range !== '') parts.push(range)
+  if (query.worker != null) parts.push(`worker=${query.worker}`)
+  if (query.location != null) parts.push(`location=${encodeURIComponent(query.location)}`)
+  if (query.state != null) parts.push(`state=${query.state}`)
+  return apiFetch<ShiftSnapshot>(`/admin/data?${parts.join('&')}`, { signal })
 }
 
 /**
