@@ -19,7 +19,7 @@ import {
 } from '@/lib/api'
 import type { ErrorKey } from '@/lib/locale'
 import { centsToPlainEuros, parseEuroToCents } from '@/lib/money'
-import { LOGIN_PATH } from '@/lib/nav'
+import { loginPathWithReturn } from '@/lib/nav'
 
 /**
  * Inventory — the cleaning products and the equipment, with what each one costs.
@@ -92,7 +92,7 @@ export default function InventoryPage() {
   const handleAuthLoss = useCallback(
     (cause: unknown): boolean => {
       if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
-        router.replace(LOGIN_PATH)
+        router.replace(loginPathWithReturn())
         return true
       }
       return false

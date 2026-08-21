@@ -24,7 +24,7 @@ import {
 } from '@/lib/api'
 import { type AdminFilters, filterHref, useFilters } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
-import { LOGIN_PATH } from '@/lib/nav'
+import { loginPathWithReturn } from '@/lib/nav'
 import { isPeriod, PERIODS, type Period, periodContaining, periodRange } from '@/lib/period'
 import {
   BUSINESS_TIME_ZONE,
@@ -283,7 +283,7 @@ export default function ShiftsPage() {
   const handleAuthLoss = useCallback(
     (cause: unknown): boolean => {
       if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
-        router.replace(LOGIN_PATH)
+        router.replace(loginPathWithReturn())
         return true
       }
       return false

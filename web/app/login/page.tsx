@@ -6,6 +6,7 @@ import { type FormEvent, useId, useState } from 'react'
 import { Field } from '@/components/Field'
 import { ApiError, login } from '@/lib/api'
 import type { ErrorKey } from '@/lib/locale'
+import { returnToFromLocation } from '@/lib/nav'
 
 /** `null` = no error. `'failed'` = bad credentials, deliberately indistinguishable causes. */
 type LoginError = { kind: 'failed' } | { kind: 'api'; key: ErrorKey } | null
@@ -37,6 +38,9 @@ export default function LoginPage() {
 
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<LoginError>(null)
+  // Set once, on mount: the screen he was reading and its filters (C6, LOOK.md) - so a
+  // successful sign-in returns him to the period he lost, not to the dashboard.
+  const [returnTo] = useState<string | null>(() => returnToFromLocation())
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -48,7 +52,7 @@ export default function LoginPage() {
     setError(null)
     try {
       await login(email, password)
-      router.push('/')
+      router.push(returnTo ?? '/')
     } catch (cause) {
       // One message for every rejected credential — no "unknown user" vs "wrong password"
       // oracle. Only transport/server faults, which say nothing about the account, differ.
@@ -72,6 +76,9 @@ export default function LoginPage() {
       </p>
 
       <h1>{t('heading')}</h1>
+      {/* Only when a 401/403 sent him here (loginPathWithReturn) - never on a first, cold
+          visit, where it would be a lie. */}
+      {returnTo !== null && <p className="lede">{t('sessionExpired')}</p>}
       <p className="lede">{t('intro')}</p>
 
       <form className="auth-form" onSubmit={onSubmit}>

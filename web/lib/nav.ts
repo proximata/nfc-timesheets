@@ -121,6 +121,43 @@ export const FUTURE_NAV: readonly NavKey[] = []
 export const LOGIN_PATH = '/login/'
 
 /**
+ * Where a 401/403 sends the director: `/login/`, carrying the screen and filters he was on
+ * (C6, LOOK.md). Before this, every `handleAuthLoss` sent him to a bare `LOGIN_PATH` and the
+ * period he had open — payroll's month, shifts' filters — was gone once he signed back in.
+ *
+ * `window.location`, not `usePathname`/`useSearchParams`: this is a static export
+ * (decision-16) and the latter forces a Suspense boundary on every screen that calls it
+ * (lib/filters.ts already made this call for the filter params themselves).
+ */
+export function loginPathWithReturn(): string {
+  if (typeof window === 'undefined') return LOGIN_PATH
+  const here = window.location.pathname + window.location.search
+  if (!here || here === LOGIN_PATH) return LOGIN_PATH
+  return `${LOGIN_PATH}?returnTo=${encodeURIComponent(here)}`
+}
+
+/**
+ * Only a same-origin, path-absolute return target is honoured (`/payroll/?period=lastMonth`,
+ * never `//evil.example/` or a bare `evil.example`, which a browser treats as protocol-
+ * relative) - this value comes off the URL bar, which is not a trusted input.
+ */
+function safeReturnTo(raw: string | null): string | null {
+  if (!raw?.startsWith('/') || raw.startsWith('//')) return null
+  return raw
+}
+
+/**
+ * The other end of `loginPathWithReturn`: what `/login/` reads back off its own URL.
+ * Lives here, not on the login page, so "read the query string directly" stays a violation
+ * `pnpm check` catches on every `app/*` page (decision-38/39) without an exception carved
+ * out for this one screen.
+ */
+export function returnToFromLocation(): string | null {
+  if (typeof window === 'undefined') return null
+  return safeReturnTo(new URLSearchParams(window.location.search).get('returnTo'))
+}
+
+/**
  * The one page a NON-EMPLOYEE ever opens: a client's point of contact reading their own
  * building's cleaning record. It is deliberately NOT in PRIMARY_NAV and there is no link to
  * it from the admin app — it is reached only through the link the director sends.

@@ -23,7 +23,7 @@ import {
 import { codeStateOf } from '@/lib/enrolment'
 import { filterHref } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
-import { LOGIN_PATH } from '@/lib/nav'
+import { loginPathWithReturn } from '@/lib/nav'
 import { normaliseIdentityPhone } from '@/lib/phone'
 import { BUSINESS_TIME_ZONE } from '@/lib/shifts'
 
@@ -104,7 +104,7 @@ export default function OperatorsPage() {
   const handleAuthLoss = useCallback(
     (cause: unknown): boolean => {
       if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
-        router.replace(LOGIN_PATH)
+        router.replace(loginPathWithReturn())
         return true
       }
       return false

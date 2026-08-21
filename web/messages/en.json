@@ -245,6 +245,7 @@
   "login": {
     "heading": "Sign in",
     "intro": "Enter your administrator credentials to continue.",
+    "sessionExpired": "Your session has expired. You will return to where you were after signing in.",
     "email": "Username",
     "password": "Password",
     "submit": "Sign in",

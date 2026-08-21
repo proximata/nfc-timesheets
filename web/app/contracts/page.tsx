@@ -24,7 +24,7 @@ import {
 import { useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { parseEuroToCents } from '@/lib/money'
-import { LOGIN_PATH } from '@/lib/nav'
+import { loginPathWithReturn } from '@/lib/nav'
 import { BUSINESS_TIME_ZONE, formatDuration } from '@/lib/shifts'
 
 /**
@@ -152,7 +152,7 @@ export default function ContractsPage() {
   const handleAuthLoss = useCallback(
     (cause: unknown): boolean => {
       if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
-        router.replace(LOGIN_PATH)
+        router.replace(loginPathWithReturn())
         return true
       }
       return false

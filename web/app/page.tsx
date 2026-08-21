@@ -27,7 +27,7 @@ import { filterHref, useFilters } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
 import { isPinned } from '@/lib/map'
 import { isOpen as isOpenMaterial } from '@/lib/materials'
-import { LOGIN_PATH } from '@/lib/nav'
+import { loginPathWithReturn } from '@/lib/nav'
 import { summariseBuildings } from '@/lib/objects'
 import {
   BUSINESS_TIME_ZONE,
@@ -149,7 +149,7 @@ export default function DashboardPage() {
   const handleAuthLoss = useCallback(
     (cause: unknown): boolean => {
       if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
-        router.replace(LOGIN_PATH)
+        router.replace(loginPathWithReturn())
         return true
       }
       return false

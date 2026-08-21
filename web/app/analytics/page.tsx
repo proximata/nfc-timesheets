@@ -24,7 +24,7 @@ import {
 import { filterHref, useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { isPinned, MAPS_API_KEY, streetViewUrl } from '@/lib/map'
-import { LOGIN_PATH } from '@/lib/nav'
+import { loginPathWithReturn } from '@/lib/nav'
 import {
   futureDays,
   isPartElapsed,
@@ -146,7 +146,7 @@ export default function AnalyticsPage() {
   const handleAuthLoss = useCallback(
     (cause: unknown): boolean => {
       if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
-        router.replace(LOGIN_PATH)
+        router.replace(loginPathWithReturn())
         return true
       }
       return false

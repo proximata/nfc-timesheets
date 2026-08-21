@@ -14,7 +14,7 @@ import { type AdminSnapshot, ApiError, fetchPayrollSnapshot } from '@/lib/api'
 import { filterHref, useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { centsToPlainEuros } from '@/lib/money'
-import { LOGIN_PATH } from '@/lib/nav'
+import { loginPathWithReturn } from '@/lib/nav'
 import {
   coverageOf,
   decimalComma,
@@ -160,7 +160,7 @@ export default function PayrollPage() {
   const handleAuthLoss = useCallback(
     (cause: unknown): boolean => {
       if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
-        router.replace(LOGIN_PATH)
+        router.replace(loginPathWithReturn())
         return true
       }
       return false

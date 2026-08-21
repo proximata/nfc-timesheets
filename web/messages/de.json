@@ -245,6 +245,7 @@
   "login": {
     "heading": "Anmelden",
     "intro": "Bitte melden Sie sich mit Ihren Administrator-Zugangsdaten an.",
+    "sessionExpired": "Ihre Sitzung ist abgelaufen. Nach der Anmeldung geht es dort weiter, wo Sie waren.",
     "email": "Benutzername",
     "password": "Passwort",
     "submit": "Anmelden",
