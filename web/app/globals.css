@@ -922,6 +922,16 @@ a {
   font-weight: 600;
 }
 
+/* C8 (LOOK.md): `.cell-muted` (italic + --text-muted) means "there is nothing here"
+   everywhere else in this product ("Noch kein Ende", "Läuft noch", "Keine Nummer…") -
+   except this one cell, where it was typeset over a REAL value: the whole audit
+   distinction this column exists for ("Am Tag gescannt", `client_uuid IS NOT NULL`).
+   Plain, not muted, not italic, not bold: a tapped shift is the ORDINARY case, so it gets
+   the row's own colour - `.shift-origin-manual`'s weight stays reserved for the exception. */
+.shift-origin-tap {
+  color: var(--text-secondary);
+}
+
 .shift-state-note {
   display: block;
   margin-top: var(--s1);

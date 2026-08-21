@@ -1010,7 +1010,7 @@ export default function ShiftsPage() {
                           {isManualEntry(shift) ? (
                             <span className="shift-origin-manual">{t('originManual')}</span>
                           ) : (
-                            <span className="cell-muted">{t('originTap')}</span>
+                            <span className="shift-origin-tap">{t('originTap')}</span>
                           )}
                         </td>
                         <td className="cell-actions">
