@@ -395,6 +395,7 @@
     "loading": "Loading buildings…",
     "tableCaption": "Buildings, active ones first, then by name.",
     "clientsLink": "Edit companies and points of contact",
+    "tagsLink": "Unassigned tags",
     "truncatedNote": "Only the {limit} most recent shifts were loaded, so the time for the selected month can be too low for a building with a long history.",
     "fieldMonth": "Month",
     "monthHint": "The month the time column reports on, in YYYY-MM form (for example 2026-07). Vienna local time. The agreed target is a monthly figure, so it is compared against this month only.",

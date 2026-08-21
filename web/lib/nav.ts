@@ -91,6 +91,13 @@ export const OFF_NAV_ROUTES: readonly string[] = [
   '/analytics/',
   '/inventory/',
   '/operators/',
+  /**
+   * Was reachable by URL only (LOOK.md C1 / LOOK-PHONE.md #2): named in neither this list
+   * nor NAV_GROUPS, so `pnpm check`'s "every non-nav route keeps a way in" guard never
+   * looked at it — a vacuous check, the fifth one this project has shipped. Way in:
+   * /locations/ panel header, same treatment as /operators/ on /workers/.
+   */
+  '/tags/',
 ]
 
 /**

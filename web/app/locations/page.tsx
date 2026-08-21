@@ -77,6 +77,9 @@ import { tagUri } from '@/lib/tag'
  */
 
 /** Mirrors v.slug() in server/lib/validate.js. The server decides for real. */
+/** Off-nav (decision-39) — same treatment as OPERATORS_PATH on /workers/. */
+const TAGS_PATH = '/tags/'
+
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/
 /** Shape check only, mirroring v.optionalEmail(). */
 const EMAIL_RE = /^[^\s@,]+@[^\s@,.]+(\.[^\s@,.]+)+$/
@@ -1193,9 +1196,20 @@ export default function LocationsPage() {
         title={t('heading')}
         question={t('question')}
         action={
-          <button type="button" className="btn btn-primary" onClick={openCreate}>
-            {t('createHeading')}
-          </button>
+          <div className="form-actions">
+            {/* /tags/ was reachable by URL only (LOOK.md C1 / LOOK-PHONE.md #2): not in
+                PRIMARY_NAV, not in OFF_NAV_ROUTES, so the reachability guard in
+                web/check.mjs never looked at it either — CORE-FLOW §4 step 5 sends the
+                director there ("Admin panel → Unzugeordnete Tags") and there was no
+                admin panel path that led him to it. This is the way in; OFF_NAV_ROUTES
+                names it now, so the guard actually checks. */}
+            <Link className="btn btn-quiet" href={TAGS_PATH}>
+              {t('tagsLink')}
+            </Link>
+            <button type="button" className="btn btn-primary" onClick={openCreate}>
+              {t('createHeading')}
+            </button>
+          </div>
         }
       />
 

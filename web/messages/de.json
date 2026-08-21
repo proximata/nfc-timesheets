@@ -395,6 +395,7 @@
     "loading": "Objekte werden geladen …",
     "tableCaption": "Objekte, aktive zuerst, danach nach Name.",
     "clientsLink": "Kunden und Ansprechpersonen bearbeiten",
+    "tagsLink": "Unzugeordnete Tags",
     "truncatedNote": "Es wurden nur die {limit} neuesten Schichten geladen. Bei Objekten mit langer Historie kann die Zeit im gewählten Monat daher zu niedrig sein.",
     "fieldMonth": "Monat",
     "monthHint": "Der Monat, auf den sich die Zeitspalte bezieht, im Format JJJJ-MM (zum Beispiel 2026-07). Wiener Ortszeit. Die Sollzeit ist ein Monatswert und wird daher nur mit diesem Monat verglichen.",
