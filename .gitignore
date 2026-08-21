@@ -57,3 +57,6 @@ docs/media/break-look/
 #     that deleting the file does not undo. Ignored here BEFORE any of it was committed,
 #     which is the lesson docs/media above was already paid for once.
 .field-recordings/
+
+# every screenshot is regenerable; none of them are worth a public blob
+docs/media/
