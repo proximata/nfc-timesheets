@@ -174,6 +174,11 @@
     <string name="settings_push_title">Automatische Übertragung</string>
     <string name="settings_push_armed">Eingeplant. Wartende Schichten gehen von selbst hinaus, sobald es Internet gibt – auch bei geschlossener App.</string>
     <string name="settings_push_not_armed">Nicht eingeplant. Wartende Schichten gehen erst hinaus, wenn Sie die App öffnen.</string>
+    <!-- Der Normalfall auf einem gesunden Telefon: nichts offen, also ist auch nichts
+         eingeplant. Bewusst eine EIGENE Zeile und ohne Warnfarbe — vorher stand hier
+         „Nicht eingeplant" in Rot über einem Telefon, dem gar nichts fehlt, und eine
+         Warnung, die immer leuchtet, wird nicht mehr gelesen. -->
+    <string name="settings_push_idle">Nichts zu senden. Sobald eine Schicht wartet, wird die Übertragung automatisch eingeplant.</string>
     <!-- %1$s = die technische Antwort des Systems, unformatiert. Bewusst nicht übersetzt:
          diese Zeile liest niemand zum Vergnügen, sie wird weitergegeben. -->
     <string name="settings_push_reason">Antwort des Systems: %1$s</string>

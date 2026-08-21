@@ -1542,10 +1542,20 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
  * `lastArmed` is in memory, so it is empty after a cold start until something arms the
  * job. That is correct and is why the STATE line is read from JobScheduler and only the
  * REASON comes from our own record.
+ *
+ * THREE STATES, NOT TWO, and the third one is why this was wrong. The app arms a job only
+ * while there is something to deliver, so a healthy idle phone holds no job — and the two
+ * -state version printed „NICHT EINGEPLANT. Wartende Schichten gehen erst hinaus, wenn Sie
+ * die App öffnen" over it, in the error colour, describing waiting shifts that do not
+ * exist. An alarm that is on whenever nothing is wrong is how the real one gets ignored.
  */
 @Composable
 private fun PushSection(model: TimeSheetViewModel) {
-    val armed = model.log.collectAsStateWithLifecycle().value.pushArmed
+    val state = model.log.collectAsStateWithLifecycle().value
+    val armed = state.pushArmed
+    // The queue, not the clock: „not scheduled" is only a fault when there is a row that
+    // scheduling would have moved. Same predicate the ViewModel arms on, deliberately.
+    val waiting = state.pending.waiting > 0
     val refusal = SyncScheduler.lastArmed?.first as? SyncScheduler.Armed.Refused
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -1553,14 +1563,26 @@ private fun PushSection(model: TimeSheetViewModel) {
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.semantics { heading() },
         )
+        val faulted = waiting && !armed
         Text(
-            stringResource(if (armed) R.string.settings_push_armed else R.string.settings_push_not_armed),
+            stringResource(
+                when {
+                    !waiting -> R.string.settings_push_idle
+                    armed -> R.string.settings_push_armed
+                    else -> R.string.settings_push_not_armed
+                },
+            ),
             style = MaterialTheme.typography.bodyMedium,
             // Colour SECOND: „Nicht eingeplant" is already the first two words.
-            color = if (armed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+            color = if (faulted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
         )
         // Only when there IS one, and only the platform's own words. Never a worker name,
         // never a code, never a cookie — see SyncScheduler.Armed.Refused.
+        //
+        // SHOWN EVEN WHEN THE QUEUE IS NOW EMPTY, on purpose. A refusal that happened while
+        // a row was waiting is the single fact this screen exists to surface; hiding it the
+        // moment the row drains would erase the evidence of the handset problem exactly
+        // when somebody has finally gone looking for it.
         refusal?.let {
             Text(
                 stringResource(R.string.settings_push_reason, it.why),

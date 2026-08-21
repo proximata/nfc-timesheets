@@ -213,11 +213,27 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 }
             }
             if (_session.value is SessionState.SignedIn) {
-                // RE-ARM THE BACKGROUND PUSH AT EVERY LAUNCH. A force-stop cancels every
-                // job the app has (sync/SyncScheduler.kt names that ceiling); this line is
-                // the recovery from it, and it is also what schedules the job for the first
-                // time on a phone updating from a build that had no background push at all.
-                io { SyncScheduler.ensure(app) }
+                // RE-ARM THE BACKGROUND PUSH AT LAUNCH, BUT ONLY IF THERE IS SOMETHING TO
+                // DELIVER. A force-stop cancels every job the app has (sync/SyncScheduler.kt
+                // names that ceiling); this is the recovery from it, and it is also what
+                // schedules the job for the first time on a phone updating from a build that
+                // had no background push at all.
+                //
+                // THE GUARD IS NOT A TIDY-UP. Unconditional, this armed a job on every
+                // single launch of a phone with an empty queue — which contradicts
+                // SyncScheduler's own contract („a phone with an empty queue schedules
+                // nothing at all and costs no battery") and costs something real: a job
+                // that wakes on a network and finds nothing to do, several times a day,
+                // twenty phones, is exactly the profile EMUI and MIUI put in the
+                // RESTRICTED bucket — and a restricted app runs no jobs at all, which
+                // would take the delivery this whole iteration is about down with it.
+                //
+                // Nothing is lost by the guard: refresh() below re-arms whatever its
+                // foreground pass could not deliver, on the same predicate, and the boot
+                // receiver already used it. Caught by demo/prove-offline-push.mjs § 0,
+                // whose baseline is „no job is pending over an empty queue" and which had
+                // to be run twice, on a launched app, before it could say so.
+                io { if (app.store.pendingSummary().waiting > 0) SyncScheduler.ensure(app) }
                 refresh()
                 // At LAUNCH, not when the material tab is opened: the tab badge is the
                 // only thing telling a worker something is waiting for them at the
@@ -261,8 +277,10 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 // A queued row belonging to THIS worker goes out on its own from here on:
                 // sign-in is the moment the job stops being pointless (ShiftSyncJob returns
                 // "do not reschedule" while there is no cookie), so it is the moment to arm
-                // it again.
-                io { SyncScheduler.ensure(app) }
+                // it again — IF there is a row. The overwhelmingly common sign-in is a new
+                // worker with an empty queue, and that phone must schedule nothing; see
+                // restoreSession above for what an unconditional arm costs.
+                io { if (app.store.pendingSummary().waiting > 0) SyncScheduler.ensure(app) }
                 // Second call on purpose: it proves the cookie actually landed in the jar
                 // and will be sent again after the process is killed. Trusting the
                 // enrolment response alone would show a friendly screen over a phone that

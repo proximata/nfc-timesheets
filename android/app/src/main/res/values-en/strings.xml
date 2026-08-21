@@ -117,6 +117,10 @@
     <string name="settings_push_title">Automatic delivery</string>
     <string name="settings_push_armed">Scheduled. Waiting shifts go out on their own as soon as there is a connection — even with the app closed.</string>
     <string name="settings_push_not_armed">Not scheduled. Waiting shifts only go out when you open the app.</string>
+    <!-- The ordinary state of a healthy phone: nothing outstanding, so nothing scheduled.
+         Its OWN line and no warning colour — this used to read "Not scheduled" in red over
+         a phone with nothing wrong with it, and an alarm that is always on is not read. -->
+    <string name="settings_push_idle">Nothing to send. As soon as a shift is waiting, delivery is scheduled automatically.</string>
     <!-- %1$s = the system's own technical answer, unformatted and untranslated: this line
          is not read for pleasure, it is passed on. -->
     <string name="settings_push_reason">System answer: %1$s</string>

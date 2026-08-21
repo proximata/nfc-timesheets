@@ -2454,6 +2454,49 @@ private fun theBackgroundPush() {
         "…and that answer is ASKED of JobScheduler, never remembered by us",
     )
 
+    // AN EMPTY QUEUE MUST SCHEDULE NOTHING, and this counts the call sites rather than
+    // naming them, for the same reason the PendingCard check above does.
+    //
+    // SyncScheduler's contract says it in one sentence — "a phone with an empty queue
+    // schedules nothing at all and costs no battery" — and two call sites broke it:
+    // restoreSession() and signIn() armed a job on EVERY launch and EVERY enrolment,
+    // including the overwhelmingly common case of a phone with nothing outstanding. It is
+    // not free. A job that wakes on a network and finds nothing to do, several times a day,
+    // across twenty phones, is the profile EMUI and MIUI move into the RESTRICTED bucket —
+    // and a restricted app runs no jobs at all, which takes the delivery down with it.
+    //
+    // EXACTLY ONE unguarded site is legal: the tap, which has just written the row and
+    // therefore cannot have an empty queue. Everything else asks first.
+    val ensureLines = vm.lines().filter { it.contains("SyncScheduler.ensure(app)") }
+    val guarded = ensureLines.filter { it.contains("waiting > 0") }
+    check(
+        ensureLines.size == 4 && guarded.size == 3,
+        "${ensureLines.size} SyncScheduler.ensure sites, ${guarded.size} of them ask the queue first — an " +
+            "empty queue must arm nothing (SyncScheduler's own contract), and only the TAP may skip the check",
+    )
+    check(
+        handleTap.contains("SyncScheduler.ensure(app)") && !handleTap.contains("waiting > 0"),
+        "…and the one unguarded site is the TAP, whose row is already on disk — never a launch",
+    )
+
+    // THE ALARM MUST NOT BE ON WHEN NOTHING IS WRONG. Once an idle phone holds no job,
+    // a two-state Settings line printed „Nicht eingeplant. Wartende Schichten gehen erst
+    // hinaus, wenn Sie die App öffnen" in the ERROR colour over a phone with no waiting
+    // shifts at all — describing rows that do not exist, in red, permanently.
+    val push = app.substringAfter("private fun PushSection").substringBefore("\n// ----")
+    check(
+        push.contains("R.string.settings_push_idle"),
+        "Settings has a THIRD state for the healthy idle phone, not just armed/not-armed",
+    )
+    check(
+        push.contains("state.pending.waiting > 0"),
+        "…decided by the QUEUE, on the same predicate the ViewModel arms on",
+    )
+    check(
+        push.contains("val faulted = waiting && !armed") && push.contains("if (faulted)"),
+        "…and the error colour is reserved for the case where a row exists that scheduling would have moved",
+    )
+
     // The ceiling, printed on the screen rather than only in a source comment.
     check(
         scheduler.contains("FORCE-STOPPED"),
