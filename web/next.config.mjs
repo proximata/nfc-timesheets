@@ -25,7 +25,8 @@ import { execFileSync } from 'node:child_process'
  */
 function buildIdFromGit() {
   try {
-    const git = (...args) => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    const git = (...args) =>
+      execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
     const sha = git('rev-parse', 'HEAD')
     const dirty = git('status', '--porcelain', '--', '.').length > 0
     return dirty ? `${sha.slice(0, 12)}-dirty` : sha.slice(0, 12)
