@@ -108,6 +108,13 @@
          jemand die App wieder öffnet. Das gilt für jede Lösung auf Android, auch für die
          mit Zusatzbibliothek. Siehe sync/SyncScheduler.kt. -->
     <string name="pending_force_stop_note">Falls dieses Telefon die App zwangsweise beendet (Akku sparen, „App stoppen"), ruht die Übertragung, bis Sie die App wieder öffnen. Öffnen genügt.</string>
+    <!-- DIE ZUSAGE WIRD ZURÜCKGENOMMEN, wenn sie nicht mehr gilt. pending_body verspricht
+         „auch wenn die App geschlossen ist" — das stimmt nur, solange das Betriebssystem
+         den Sendeauftrag wirklich hält. Genau das war einmal NICHT so: der Auftrag wurde
+         wegen einer fehlenden Berechtigung stillschweigend abgelehnt, und der Bildschirm
+         hat trotzdem weiter automatische Übertragung versprochen. Lieber ein Satz, der
+         zum Handeln auffordert, als ein Versprechen, das dieses Telefon nicht hält. -->
+    <string name="pending_not_armed">Die automatische Übertragung ist auf diesem Telefon gerade nicht eingeplant. Öffnen Sie die App, sobald Sie wieder Internet haben – dann wird gesendet. Es geht nichts verloren.</string>
     <string name="sync_waiting">Wartet auf Verbindung</string>
     <!-- %1$s = Uhrzeit des letzten Versuchs -->
     <string name="sync_last_try">Zuletzt versucht %1$s</string>
@@ -157,6 +164,19 @@
     <string name="settings_signed_in_as">Angemeldet als</string>
     <string name="settings_name">Name</string>
     <string name="settings_admin_note">Stunden, Objekte und Lohnabrechnung verwaltet Ihre Verwaltung im Web.</string>
+    <!-- ================================================================================
+         AUTOMATISCHE ÜBERTRAGUNG, in den Einstellungen (TASK-225). Nicht für die
+         Reinigungskraft gedacht, sondern für die Person, die das Telefon einrichtet und
+         der man am Telefon eine Frage stellen kann: „Was steht bei Ihnen unter
+         Einstellungen?" Ohne diese zwei Zeilen ist der einzige Weg zu dieser Antwort ein
+         Kabel und ein Rechner — und die App schreibt bewusst kein Protokoll.
+         ================================================================================ -->
+    <string name="settings_push_title">Automatische Übertragung</string>
+    <string name="settings_push_armed">Eingeplant. Wartende Schichten gehen von selbst hinaus, sobald es Internet gibt – auch bei geschlossener App.</string>
+    <string name="settings_push_not_armed">Nicht eingeplant. Wartende Schichten gehen erst hinaus, wenn Sie die App öffnen.</string>
+    <!-- %1$s = die technische Antwort des Systems, unformatiert. Bewusst nicht übersetzt:
+         diese Zeile liest niemand zum Vergnügen, sie wird weitergegeben. -->
+    <string name="settings_push_reason">Antwort des Systems: %1$s</string>
     <string name="settings_sign_out_note">Bereits gesendete Schichten bleiben auf dem Server. Was noch nicht gesendet wurde, bleibt liegen, bis Sie sich wieder anmelden. Zum erneuten Anmelden brauchen Sie einen neuen Anmeldecode von Ihrer Verwaltung – der alte gilt nicht mehr.</string>
 
     <!-- Selbst-Update (dieses Kapitel). Läuft ausschließlich über einen Knopfdruck in

@@ -68,6 +68,18 @@ data class LogState(
      * find out at month end that eight hours were never filed.
      */
     val pending: PendingWork.Summary = PendingWork.NOTHING,
+    /**
+     * Whether the PLATFORM is currently holding the delivery job — asked of JobScheduler
+     * every time [pending] is recomputed, never remembered by us.
+     *
+     * It defaults to true because "nothing is waiting" is the ordinary state and the card
+     * that reads this is hidden then anyway. It matters only when something IS waiting:
+     * false there means the sentence „wird automatisch gesendet … auch wenn die App
+     * geschlossen ist" is a LIE on this phone, and [PendingCard] must print the other
+     * sentence instead. The app shipped once with every schedule() silently refused for a
+     * missing permission, and no screen and no check could say so.
+     */
+    val pushArmed: Boolean = true,
 ) {
     val open: LocalShift? get() = shifts.firstOrNull { it.isOpen }
     val recent: List<LocalShift> get() = shifts.filter { !it.isOpen }.take(5)
@@ -176,7 +188,10 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             // the session. A signed-out phone that is holding a queued shift must SAY so on
             // the sign-in screen — signing out does not delete the row, and a person who
             // thinks it vanished cannot ask anybody about it.
-            _log.value = _log.value.copy(pending = io { app.store.pendingSummary() })
+            _log.value = _log.value.copy(
+                pending = io { app.store.pendingSummary() },
+                pushArmed = io { SyncScheduler.isScheduled(app) },
+            )
 
             if (app.cookies.header() == null) {
                 _session.value = SessionState.SignedOut()
@@ -288,7 +303,14 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             // rows do. They belong to the worker who logged them and go out when that
             // worker signs back in — and until then the sign-in screen has to say so, or
             // somebody hands the phone back believing their hours went with it.
-            _log.value = LogState(pending = io { app.store.pendingSummary() })
+            _log.value = LogState(
+                pending = io { app.store.pendingSummary() },
+                // A signed-out phone schedules nothing on purpose (ShiftSyncJob returns
+                // "do not reschedule" without a cookie), so this is FALSE here — and the
+                // sign-in card says „goes out when you sign in again", not „not armed":
+                // signed-out is the more specific and more useful of the two truths.
+                pushArmed = io { SyncScheduler.isScheduled(app) },
+            )
             ShiftSignals.arm(app, null)
             // Not the STORE, only the screen. Queued material requests belong to the
             // worker who wrote them; MaterialStore.adopt() deletes them when a DIFFERENT
@@ -320,14 +342,19 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 // and it deliberately does NOT re-schedule an already-pending job (that
                 // would reset its backoff). Nothing here can fail a refresh.
                 if (remaining.waiting > 0) SyncScheduler.ensure(app)
-                remaining
+                // ASKED, not assumed, and asked AFTER ensure() so the answer describes the
+                // state the worker is about to be shown. `ensure` returning Scheduled and
+                // the platform holding nothing would be a contradiction; this reads the
+                // platform, which is the side that gets to be right.
+                remaining to SyncScheduler.isScheduled(app)
             }
             val unresolved = runCatching { app.api.unresolvedShifts() }.getOrDefault(_log.value.unresolved)
             _log.value = _log.value.copy(
                 shifts = io { app.store.all() },
                 locationNames = io { app.store.locationNames() },
                 unresolved = unresolved,
-                pending = pending,
+                pending = pending.first,
+                pushArmed = pending.second,
                 busy = false,
             )
             // THE RECOVERY HALF OF THE ONE WIRE. adoptServerOpenShift may have just learned
@@ -411,6 +438,7 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 shifts = io { app.store.all() },
                 switchNotice = notice,
                 pending = io { app.store.pendingSummary() },
+                pushArmed = io { SyncScheduler.isScheduled(app) },
             )
             // AFTER the row is written and read back, and never before it. Everything in
             // armSignals is a signal, and a signal may never delay, throw into or fail a

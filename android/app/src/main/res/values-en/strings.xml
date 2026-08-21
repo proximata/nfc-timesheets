@@ -105,6 +105,16 @@
     <string name="settings_signed_in_as">Signed in as</string>
     <string name="settings_name">Name</string>
     <string name="settings_admin_note">Hours, locations and payroll are managed by your admin on the web.</string>
+    <!-- Automatic delivery, in Settings (TASK-225). For whoever sets the phone up, not for
+         the cleaner: "what does yours say under Settings?" is answerable over the phone.
+         Without these lines the only route to that answer is a cable and a computer — this
+         app deliberately writes no log at all. -->
+    <string name="settings_push_title">Automatic delivery</string>
+    <string name="settings_push_armed">Scheduled. Waiting shifts go out on their own as soon as there is a connection — even with the app closed.</string>
+    <string name="settings_push_not_armed">Not scheduled. Waiting shifts only go out when you open the app.</string>
+    <!-- %1$s = the system's own technical answer, unformatted and untranslated: this line
+         is not read for pleasure, it is passed on. -->
+    <string name="settings_push_reason">System answer: %1$s</string>
     <string name="settings_sign_out_note">Shifts already sent stay on the server. Anything still waiting to send will be blocked until you sign back in. Signing back in needs a NEW code from your admin — the old one no longer works.</string>
 
     <string name="update_title">App version</string>

@@ -90,6 +90,7 @@ import io.github.qwadratic.nfctimesheets.data.LocalShift
 import io.github.qwadratic.nfctimesheets.nfc.NfcReadiness
 import io.github.qwadratic.nfctimesheets.nfc.ScanActivity
 import io.github.qwadratic.nfctimesheets.nfc.WriteTagActivity
+import io.github.qwadratic.nfctimesheets.sync.SyncScheduler
 import io.github.qwadratic.nfctimesheets.update.UpdateReadiness
 import io.github.qwadratic.nfctimesheets.update.UpdateState
 import java.time.Instant
@@ -177,7 +178,7 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?) {
         )
         Text(stringResource(R.string.signin_code_intro), style = MaterialTheme.typography.bodyLarge)
 
-        PendingCard(pending.pending, signedOut = true)
+        PendingCard(pending.pending, signedOut = true, armed = pending.pushArmed)
 
         OutlinedTextField(
             value = typed,
@@ -396,6 +397,7 @@ private fun LogScreen(
             notice = log.switchNotice,
             onDismissNotice = model::dismissSwitchNotice,
             pending = log.pending,
+            pushArmed = log.pushArmed,
             readiness = readiness,
             openIntent = openIntent,
         )
@@ -427,7 +429,7 @@ private fun LogScreen(
         // ABOVE the buttons and above the recent list: this is unpaid work that the server
         // has never heard of, and it outranks everything else on the screen.
         if (!log.pending.isEmpty) {
-            item { PendingCard(log.pending) }
+            item { PendingCard(log.pending, armed = log.pushArmed) }
         }
 
         // MANUAL FALLBACK, deliberately secondary. The product is the passive tap: hold the
@@ -551,6 +553,8 @@ private fun ShiftRunningScreen(
     onDismissNotice: () -> Unit,
     /** What this phone is still holding (TASK-225). Usually zero; never hidden when not. */
     pending: PendingWork.Summary,
+    /** Whether the platform is holding the delivery job. See [PendingCard]. */
+    pushArmed: Boolean,
     readiness: NfcReadiness,
     openIntent: (Intent) -> Unit,
 ) {
@@ -722,7 +726,7 @@ private fun ShiftRunningScreen(
         // A shift tapped in a basement is EXACTLY the shift that is on this screen, so this
         // is the most important of the three places the pending card appears — not the
         // afterthought at the bottom of a list.
-        PendingCard(pending)
+        PendingCard(pending, armed = pushArmed)
 
         notice?.let { (from, to) ->
             val unknown = stringResource(R.string.unknown_location)
@@ -851,9 +855,16 @@ private fun NfcBanner(readiness: NfcReadiness, openIntent: (Intent) -> Unit) {
  *
  * Colour is the SECOND signal, never the first: the blocked line says "braucht Ihre
  * Verwaltung" in words and is additionally tinted, and everything else is ordinary text.
+ *
+ * @param armed whether the PLATFORM is currently holding the delivery job — asked of
+ *        JobScheduler, never remembered by us. When it is false the card must NOT print
+ *        „wird automatisch gesendet … auch wenn die App geschlossen ist", because on this
+ *        phone, right now, that sentence is false: this app shipped once with the job
+ *        silently refused for a missing permission, and a screen that keeps promising
+ *        automatic delivery over a dead scheduler is worse than no screen at all.
  */
 @Composable
-private fun PendingCard(pending: PendingWork.Summary, signedOut: Boolean = false) {
+private fun PendingCard(pending: PendingWork.Summary, signedOut: Boolean = false, armed: Boolean = true) {
     if (pending.isEmpty) return
     val spoken = pluralStringResource(R.plurals.a11y_pending, pending.total, pending.total)
     Card(
@@ -893,10 +904,29 @@ private fun PendingCard(pending: PendingWork.Summary, signedOut: Boolean = false
                 )
             }
 
+            // THE PROMISE, AND ONLY WHEN IT IS TRUE. Three situations, three sentences,
+            // and none of them may stand in for another:
+            //   signed out  — the rows are kept and go out on the next sign-in
+            //   not armed   — the platform is NOT holding a job, so nothing happens by
+            //                 itself; opening the app is what sends them
+            //   otherwise   — the ordinary case: it goes out on its own
+            val notArmed = !signedOut && !armed && pending.waiting > 0
             Text(
-                stringResource(if (signedOut) R.string.pending_signed_out else R.string.pending_body),
+                stringResource(
+                    when {
+                        signedOut -> R.string.pending_signed_out
+                        notArmed -> R.string.pending_not_armed
+                        else -> R.string.pending_body
+                    },
+                ),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // Colour SECOND: the sentence already says the delivery is not scheduled.
+                // The tint only makes it findable on a busy screen.
+                color = if (notArmed) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
 
             // The ceiling, printed. A force-stopped app runs no jobs at all until a human
@@ -1492,7 +1522,52 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
         )
 
         HorizontalDivider()
+        PushSection(model)
+
+        HorizontalDivider()
         UpdateSection(model, shiftRunning, openIntent)
+    }
+}
+
+/**
+ * IS THE BACKGROUND PUSH ACTUALLY ARMED (TASK-225)? Asked of the platform, printed here.
+ *
+ * Not for the cleaner — the cleaner gets [PendingCard], which says what is waiting and
+ * what will happen to it. This is for whoever sets the phone up, and it exists because
+ * this app deliberately writes no log at all: without these two lines the only way to
+ * learn that `JobScheduler.schedule()` is being refused on a particular handset is a cable
+ * and a computer. It shipped refused once, for a missing `ACCESS_NETWORK_STATE`, and
+ * nothing anywhere could say so.
+ *
+ * `lastArmed` is in memory, so it is empty after a cold start until something arms the
+ * job. That is correct and is why the STATE line is read from JobScheduler and only the
+ * REASON comes from our own record.
+ */
+@Composable
+private fun PushSection(model: TimeSheetViewModel) {
+    val armed = model.log.collectAsStateWithLifecycle().value.pushArmed
+    val refusal = SyncScheduler.lastArmed?.first as? SyncScheduler.Armed.Refused
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            stringResource(R.string.settings_push_title),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.semantics { heading() },
+        )
+        Text(
+            stringResource(if (armed) R.string.settings_push_armed else R.string.settings_push_not_armed),
+            style = MaterialTheme.typography.bodyMedium,
+            // Colour SECOND: „Nicht eingeplant" is already the first two words.
+            color = if (armed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+        )
+        // Only when there IS one, and only the platform's own words. Never a worker name,
+        // never a code, never a cookie — see SyncScheduler.Armed.Refused.
+        refusal?.let {
+            Text(
+                stringResource(R.string.settings_push_reason, it.why),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
