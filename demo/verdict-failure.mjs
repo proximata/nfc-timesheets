@@ -85,16 +85,31 @@ try {
 
     const seen = await page.eval(`(() => {
       const vis = (el) => !!(el && el.offsetParent !== null)
+      // PAINT THE COLOUR AND READ IT BACK, never parse the computed string. Chrome returns
+      // this project's --danger as \`lab(65.95 50.13 28.69)\`, and a regex for numbers turns
+      // that into 'r=65.95, g=50.13, b=28.69' — a plausible-looking luma of 52 for a colour
+      // whose real luma is 151. The first version of this file printed that 52 into a JSON
+      // file, which is how a wrong number becomes a quoted finding.
+      const probe = document.createElement('canvas')
+      probe.width = probe.height = 1
+      const pctx = probe.getContext('2d', { willReadFrequently: true })
       const lum = (el) => {
-        const c = getComputedStyle(el).color.match(/[\\d.]+/g).map(Number)
-        // Rec. 601 luma — the same weighting sips uses for a greyscale conversion.
-        return Math.round(0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2])
+        pctx.clearRect(0, 0, 1, 1)
+        pctx.fillStyle = getComputedStyle(el).color
+        pctx.fillRect(0, 0, 1, 1)
+        const [r, g, b] = pctx.getImageData(0, 0, 1, 1).data
+        // Rec. 601 luma — the same weighting a greyscale conversion uses.
+        return Math.round(0.299 * r + 0.587 * g + 0.114 * b)
       }
       const all = Array.from(document.querySelectorAll('body *'))
         .filter((el) => vis(el) && el.children.length === 0 && el.textContent.trim().length > 3)
       const errEl = all.find((el) =>
         /nicht funktioniert|nicht erreichbar|fehlgeschlagen|Fehler/i.test(el.textContent))
       const loadEl = all.find((el) => /Wird geladen|Wird berechnet|werden geladen/i.test(el.textContent))
+      const bodyEl = all.find((el) => el.tagName === 'P' && el !== errEl && el.textContent.trim().length > 20)
+      const echoEl = errEl
+        ? all.find((el) => el !== errEl && el.textContent.trim() === errEl.textContent.trim())
+        : null
       const retry = Array.from(document.querySelectorAll('button, a'))
         .filter(vis)
         .find((el) => /erneut|nochmal|noch einmal|Aktualisieren|neu laden/i.test(el.textContent))
@@ -106,6 +121,13 @@ try {
         loadingLum: loadEl ? lum(loadEl) : null,
         loadingSize: loadEl ? Math.round(Number.parseFloat(getComputedStyle(loadEl).fontSize)) : null,
         retry: retry ? retry.textContent.trim().slice(0, 40) : null,
+        // The loudest ordinary sentence: the biggest visible paragraph that is not the
+        // error and not a heading. That is what the error has to out-rank without colour.
+        bodyLum: bodyEl ? lum(bodyEl) : null,
+        bodySize: bodyEl ? Math.round(Number.parseFloat(getComputedStyle(bodyEl).fontSize)) : null,
+        // A screen that says the same thing twice, in two weights, is not wrong — but it is
+        // worth knowing about, and no report in this repo mentions it.
+        echo: echoEl ? echoEl.textContent.trim().slice(0, 60) : null,
       }
     })()`);
     writeFileSync(`${OUT}/${name}.json`, JSON.stringify(seen, null, 2));
@@ -122,7 +144,20 @@ try {
           : bad(`${path}: greyscale — the error is DIMMER than the loading line (${seen.errorLum} vs ${seen.loadingLum})`);
       }
     } else {
-      ok(`${path}: no „loading" line contradicting the error`);
+      ok(`${path}: no „loading“ line contradicting the error`);
+    }
+    // THE ERROR AGAINST THE LOUDEST ORDINARY SENTENCE ON THE SAME SCREEN. This is
+    // TASK-229 (1) measured rather than described: .form-error is colour and nothing else,
+    // so with colour removed it must not rank BELOW the body copy beside it.
+    if (seen.errorLum !== null && seen.bodyLum !== null) {
+      console.log(
+        `        greyscale: error luma ${seen.errorLum} @${seen.errorSize}px` +
+          ` vs body copy ${seen.bodyLum} @${seen.bodySize}px` +
+          `${seen.errorLum < seen.bodyLum ? "  <- the error is the DIMMER of the two (TASK-229)" : ""}`,
+      );
+    }
+    if (seen.echo) {
+      console.log(`        note: the same sentence is also printed as plain body copy — „${seen.echo}"`);
     }
     console.log(`        retry control: ${seen.retry ? `„${seen.retry}"` : "NONE — the only way back is a page reload"}`);
   }
