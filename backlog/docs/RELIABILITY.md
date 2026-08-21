@@ -30,7 +30,7 @@ Ordered by **what it costs the person who meets it**, not by how interesting it 
 
 | # | Failure | The cleaner | The director | Recovers alone? | Anyone told? |
 |---|---|---|---|---|---|
-| 1 | shift stranded on a phone | nothing — it looks sent | hours simply absent | ✗ never | **nobody, ever** |
+| 1 | shift stranded on a phone | nothing — it looks sent | hours simply absent | ~~✗ never~~ **✓ on its own** | ~~nobody, ever~~ **worker + office** |
 | 2 | worker session lapses mid-queue | red line, hours gone | short payroll | ~~✗~~ **fixed** | phone only |
 | 3 | Sentry blind | — | — | n/a | **nobody** |
 | 4 | 8h net dies silently | unbounded shift | wrong hours | ✗ | **nobody** (6 days) |
@@ -43,7 +43,12 @@ Ordered by **what it costs the person who meets it**, not by how interesting it 
 
 ---
 
-## 1 · A shift stranded on a phone — TASK-225
+## 1 · A shift stranded on a phone — TASK-225 — **FIXED AND PUBLISHED, 0.5.1 / 8**
+
+**The finding below stands as written; everything it describes was true of 0.4.1 / 6 and
+is no longer true of the build the box now serves.** What changed, and where the evidence
+is, is at the end of this section — read the finding first, because the shape of the bug is
+why the fix is built the way it is.
 
 **Nobody can find out. That is the whole finding.**
 
@@ -71,6 +76,79 @@ The cheap half of the fix is *detection*, not delivery: stamp a last-seen on
 `worker_sessions` and put "Telefon zuletzt gesehen: vor 3 Tagen" on the Workers screen.
 WorkManager makes it rare; the timestamp makes it **visible**, and a fix nobody can observe
 is a fix nobody can trust.
+
+### What shipped, and what it is measured against
+
+Both halves, and the detection half went in first for exactly the reason above.
+
+| | what | where |
+|---|---|---|
+| delivery | JobScheduler job 225, `NETWORK_TYPE_ANY`, `setPersisted(true)`, exponential backoff from 30s | `sync/SyncScheduler.kt`, `sync/ShiftSyncJob.kt` |
+| order | oldest first, OPEN before CLOSE, a failed OPEN drops its own CLOSE from the pass; idempotent on the **existing** `client_uuid` | `core/SyncPlan.kt`, pure |
+| the worker sees it | shift screen, log screen **and the sign-in screen**, German, with the time of the last attempt — "never tried" is its own sentence | `core/PendingWork.kt` |
+| the office sees it | three `X-Pending-*` headers on requests already being made → four `workers` columns | migration 009, `server/lib/phones.js`, `/workers/`, `/payroll/` |
+
+**Not WorkManager, and the reason is written down** — it is a wrapper over `JobScheduler`
+on API 23+ and buys chained and observable work, of which this app needs none.
+
+**The ceiling is printed on the worker's screen, not just in a comment.** A force-stopped
+app runs no jobs until a human opens it; Doze can delay by hours; backoff caps at 5h. None
+of it costs money — `start_time` and `end_time` are stamped **on the phone at the tap**, and
+the proof asserts a late row against the tap's own clock.
+
+**Proven by taking the network away, on a real Android instance, against production.**
+`demo/prove-offline-push.mjs` — 9 phases, radio off with `svc`, the queue read out of the
+phone's own SQLite, the rows counted in production Postgres. Final run **OK with 6
+assertions observed RED in the same run**: no job over an empty queue; a signed-in close for
+an unknown shift → `404 unknown_shift`; the phone rewound to 'never delivered'; force-stop
+cancelling the job; the session deleted server-side. Reproduce:
+
+```
+ADMIN_EMAIL=… ADMIN_PASSWORD=… WORKER_ID=… node demo/prove-offline-push.mjs
+```
+
+**Three defects this run found that no amount of reading the source could have.**
+
+1. **The ordering RED was an auth failure in an ordering costume.** § 3 sent its bogus
+   close with no credentials and accepted `404 || 401`. It got 401 from `requireAppKey`,
+   *before the route ever looked for a shift* — so it printed RED while proving nothing.
+   Delete `unknown_shift` from `routes/app.js` and the run stayed green. Now sent with the
+   phone's own cookie **and** app key, required to be 404 **and** `unknown_shift`.
+2. **An empty queue armed a job — but only OFFLINE**, which is the only case this feature
+   exists for. Force-stopped first, so the state starts at `unknown`:
+
+   | build | launch ONLINE, empty queue | launch OFFLINE, empty queue | offline TAP |
+   |---|---|---|---|
+   | 0.5.0 / 7 | `unknown` | **`waiting`** ← armed for nothing | `waiting` |
+   | 0.5.1 / 8 | `unknown` | `unknown` ← nothing armed | `waiting` |
+
+   Online the platform runs the job at once, finds nothing and clears it, so the defect is
+   invisible. Offline it waits for a signal that will give it nothing to do. That is the
+   profile EMUI and MIUI move to **RESTRICTED**, and a restricted app runs no jobs at all —
+   it would have taken this whole feature down on exactly the handsets a cleaning company
+   buys. The last column is the half that matters as much: **0.5.1 still arms when there IS
+   work.**
+3. **Settings cried wolf.** Once an idle phone holds no job, the two-state line printed
+   „Nicht eingeplant. Wartende Schichten gehen erst hinaus, wenn Sie die App öffnen" in the
+   **error colour** over a phone with no waiting shifts — rows that do not exist, in red,
+   permanently. A third, uncoloured sentence now covers the healthy phone; the platform's
+   refusal reason is still shown after the queue drains, because that is the evidence.
+
+**It is in the field's reach, which is a separate claim from "it is fixed".** The box was
+still serving 0.4.1 / 6 while all of this sat in git. Now: versionCode **8**, versionName
+**0.5.1**, signer SHA-256 `6c786899…2c42996c` (matches the live `assetlinks.json` on the tag
+host, so App Links still verify). A phone was driven through the whole path on the **field**
+build — clean install of 0.4.1 / 6, signed in, Settings reads „Installiert: 0.4.1 (6)" and
+**„Version 0.5.1 ist verfügbar."** with a Herunterladen button.
+
+**Still open, filed:** TASK-233 (the force-stop caveat is below the fold at 1080×2400 —
+moved, never deleted) and TASK-234 (a job armed for real work is not cancelled when the
+foreground pass delivers it instead; the app calls `schedule`/`getPendingJob` and never
+`cancel`).
+
+**Still not knowable from here:** a real radio in a real basement. `svc wifi disable` is a
+clean, instant loss of connectivity; a basement is a slow, flapping one. And no card has
+ever been written on real hardware (TASK-222, the owner's).
 
 ---
 
