@@ -1402,8 +1402,18 @@ a {
   }
 }
 
-/* A code read aloud over the phone: big, spaced, and selectable in one gesture. */
+/* A code read aloud over the phone: big, spaced, and selectable in one gesture.
+   `<code>` is INLINE by default, and `display` was never set here — so `margin` (meant to
+   separate it from the heading above and the expiry line below) had NO EFFECT on layout,
+   and `padding-top`/`padding-bottom` painted the box's own background and border OUTSIDE
+   its line box without pushing the surrounding paragraphs away. Measured at 390px: the box
+   reported bottom=90, the expiry paragraph right after it reported top=81 — a 9px overlap,
+   with the box's own bottom border running straight across "Gültig bis …", reading exactly
+   like a strikethrough on the line that says when the code stops working (LOOK-PHONE.md
+   #4). `display: block` is the whole fix: the same margin and padding that were already
+   declared now actually reserve the space they were written to reserve. */
 .code {
+  display: block;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 1.5rem;
   letter-spacing: 0.12em;
