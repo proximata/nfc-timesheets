@@ -284,6 +284,15 @@ a {
   /* It is a link home in a header, not a link inside a sentence, so WCAG 2.5.8's inline
      exception does not cover it. It measured 23px — one pixel under. */
   min-height: 24px;
+  /* U5 (LOOK.md): `.app-header` sits in the SAME grid column as the sidebar
+     (`var(--sidebar-w)`, `clamp(13rem, 16vw, 19rem)`), which is 208px at 1280 - a 13"
+     MacBook Air's default. `.brand-name` and `.brand-suffix` are flex items of THIS
+     container, so each is blockified (CSS Flexbox §2) and wraps its own text independently
+     of the header's width; "NFC TimeSheets" does not fit 208px minus padding, so it broke
+     into "NFC" / "TimeSheets" with "Admin" floating beside the first line. `white-space` is
+     inherited, so setting it here reaches both spans' text in one place: the brand is three
+     short words and is never going to need to wrap, on any screen this product ships to. */
+  white-space: nowrap;
 }
 
 .brand-suffix {
@@ -769,16 +778,25 @@ a {
 }
 
 /* Amounts and durations line up on the decimal so a column can be scanned and totalled by
-   eye. Header and cell share the class, otherwise the heading drifts off its column. */
-.col-numeric {
+   eye. Header and cell share the class, otherwise the heading drifts off its column.
+
+   U1 (LOOK.md): this used to be beaten on specificity by `.data-table th, .data-table td
+   { text-align: left }` above — (0,1,1), a class plus a type selector, outranks a bare
+   class at (0,1,0), so every `.col-numeric` cell computed `text-align: left` regardless of
+   this rule, and `236,25 €` / `3.874,51 €` shared a left edge on /payroll/. The two extra,
+   scoped selectors below win on specificity without an !important and without touching the
+   left-aligned default every other column still needs. Guard: demo/check-clients-contracts-inventory.mjs
+   asserts `td.col-numeric` computes `text-align: right` in a real browser. */
+.data-table th.col-numeric,
+.data-table td.col-numeric {
   text-align: right;
 }
 
 /* An inline money field INSIDE a numeric table cell (TASK-236: the /pl/ revenue ledger's
-   bulk-entry grid). Right-aligned explicitly rather than inherited, so it stays correct
-   even where U1's `.data-table td { text-align: left }` beats `.col-numeric` on
-   specificity — an <input> is not itself a td and would otherwise default to the
-   browser's own left alignment, which is a second, worse wrong. 44px tall: the same
+   bulk-entry grid). Right-aligned explicitly rather than inherited, because form controls
+   do not reliably inherit a `text-align` from their cell in every browser — an <input> is
+   not itself a td and would otherwise default to the browser's own left alignment, a
+   second, worse wrong, independent of the td/th fix above (U1). 44px tall: the same
    touch-target floor every other control on this page holds to, not the compact size a
    spreadsheet cell would use, because a director on a phone is exactly who this exists
    for (LOOK-PHONE.md, 390px must work). */

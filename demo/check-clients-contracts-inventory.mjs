@@ -235,14 +235,15 @@ async function main() {
     await press(page, "Escape", "Escape");
     await setViewport(page, 1680, 1050);
 
-    // A note, not an assertion: `.data-table td` (0,1,1) outranks `.col-numeric` (0,1,0) in
-    // web/app/globals.css, which is NOT this batch's file. Printed so the number is in the
-    // report rather than in an opinion.
+    // U1 (LOOK.md): `.data-table td` used to outrank `.col-numeric` on specificity in
+    // web/app/globals.css, so every money/duration cell computed text-align: left despite
+    // the rule that says otherwise. Fixed by scoping the right-align rule to
+    // `.data-table td.col-numeric` / `.data-table th.col-numeric`, which outranks it.
     await page.goto(`${BASE}/inventory/`, { settle: 900 });
-    console.log(
-      `  note col-numeric computes text-align: ${await page.eval(
-        `getComputedStyle(document.querySelector('td.col-numeric')).textAlign`,
-      )}`,
+    assert(
+      "inventory: a .col-numeric cell computes text-align: right, not left (U1)",
+      (await page.eval(`getComputedStyle(document.querySelector('td.col-numeric')).textAlign`)) === "right",
+      await page.eval(`getComputedStyle(document.querySelector('td.col-numeric')).textAlign`),
     );
 
     // ---- 4. the confirmation names the consequence --------------------------------------
