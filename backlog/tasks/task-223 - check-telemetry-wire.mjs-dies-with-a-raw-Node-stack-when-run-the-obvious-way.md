@@ -4,6 +4,7 @@ title: check-telemetry-wire.mjs dies with a raw Node stack when run the obvious 
 status: To Do
 assignee: []
 created_date: '2026-08-20 22:46'
+updated_date: '2026-08-21 00:23'
 labels:
   - server
   - checks
@@ -30,3 +31,28 @@ Same shape as TASK-218 (migrate.js burying a refusal under a stack trace): the c
 - [ ] #2 The correct invocation still passes unchanged, and is written next to the checks in server/README.md.
 - [ ] #3 Shown red: the guard's own message is asserted, so deleting the guard fails the check rather than producing a stack again.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+SECOND HALF OF THE SAME PAPERCUT, found 2026-08-21 during the break run: fixing the --import half is not enough.
+
+  cd server && node --import ./instrument.mjs check-telemetry-wire.mjs
+
+does NOT stack-trace. It prints four FAIL lines and exits 1:
+
+  FAIL the SDK produced payloads at all (an empty check passes for the wrong reason)
+  FAIL a rejected clock-in still produces a server transaction (401 is not dropped)
+  FAIL the transaction is named by ROUTE PATTERN, not by a concrete URL
+  FAIL scrubbing did not empty the payload out - it is still diagnosable
+       Cannot read properties of undefined (reading 'contexts')
+
+Every one of those is the SAME cause -- SENTRY_DSN is unset, so the SDK is disabled and emits nothing -- and the first line is the anti-vacuity guard doing its job. But four reds and a TypeError read as four broken assertions, not as one missing variable, which is exactly the failure mode AC #1 is written against.
+
+So the guard AC #1 asks for has to cover BOTH halves: no loader, and no DSN. With the DSN the same command passes:
+
+  cd server && SENTRY_DSN='https://check@o4509000000000000.ingest.de.sentry.io/451' node --import ./instrument.mjs check-telemetry-wire.mjs
+  -> check-telemetry-wire: PASS
+
+RELATED, and it changes the priority argument: ops/deploy.sh now installs the systemd unit and the deployed API really does run with --import (commit f5c53ed). Before that the flag was missing in production, so this check was guarding a property the box did not have. It now guards a real one. TASK-224 is the remaining half -- there is still no DSN in production.
+<!-- SECTION:NOTES:END -->
