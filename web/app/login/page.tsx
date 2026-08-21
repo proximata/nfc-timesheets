@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { type FormEvent, useId, useState } from 'react'
+import { type FormEvent, useEffect, useId, useState } from 'react'
 import { Field } from '@/components/Field'
 import { ApiError, login } from '@/lib/api'
 import type { ErrorKey } from '@/lib/locale'
@@ -38,9 +38,32 @@ export default function LoginPage() {
 
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<LoginError>(null)
-  // Set once, on mount: the screen he was reading and its filters (C6, LOOK.md) - so a
-  // successful sign-in returns him to the period he lost, not to the dashboard.
-  const [returnTo] = useState<string | null>(() => returnToFromLocation())
+  // The screen he was reading and its filters (C6, LOOK.md) - so a successful sign-in
+  // returns him to the period he lost, not to the dashboard.
+  //
+  // TWO READS, NOT ONE, AND THE SECOND IS THE LOAD-BEARING ONE. The initialiser alone was
+  // what shipped, and it is WRONG on the only path a director ever takes. Measured on the
+  // live box (demo/probe-c6-c5.mjs): a DIRECT load of `/login/?returnTo=…` showed the
+  // sentence, and a 401 on `/payroll/?period=2026-07` — whose `handleAuthLoss` calls
+  // `router.replace(loginPathWithReturn())` — ended on that exact URL with the sentence
+  // ABSENT and then signed him back in to `/`. A `useState` initialiser runs DURING the
+  // render that the client-side navigation triggers, and Next commits the new URL to
+  // `window.history` after that render, so `window.location.search` still held the OLD
+  // screen's query string (`?period=2026-07`, no `returnTo`) and `safeReturnTo` returned
+  // null. The bug was invisible to `demo/check-login-return.mjs` because that check calls
+  // the two pure functions against a stubbed `window` and greps the screens' source: both
+  // halves are correct, and the feature was still broken end to end.
+  //
+  // The effect runs after commit, when `window.location` IS the new URL, so it repairs the
+  // navigated case; the initialiser still covers the direct-load and no-JS-yet case, and
+  // keeps the sentence from flashing in one frame late there. Not `useSearchParams()`:
+  // this is a static export and that hook forces a Suspense boundary (see the note on
+  // `loginPathWithReturn` in lib/nav.ts).
+  const [returnTo, setReturnTo] = useState<string | null>(() => returnToFromLocation())
+  useEffect(() => {
+    const fromUrl = returnToFromLocation()
+    if (fromUrl !== null) setReturnTo(fromUrl)
+  }, [])
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()

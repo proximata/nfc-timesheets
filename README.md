@@ -326,6 +326,13 @@ AUDIT_BASE=http://127.0.0.1:8080 node demo/audit-german.mjs
 DEMO_BASE=http://127.0.0.1:8080 node demo/check-worker-form.mjs
                                       # required vs optional on the worker form, and the wage:
                                       # marked, explained, and refused when empty. Read-only.
+DEMO_BASE=http://127.0.0.1:8080 node demo/check-login-return-browser.mjs
+                                      # C6 END TO END: a session that dies on a filtered
+                                      # screen says so and gives the screen back. Its pure-
+                                      # function twin (demo/check-login-return.mjs) was GREEN
+                                      # over a feature that was broken for every real user -
+                                      # the defect was React commit ORDER, which no stubbed
+                                      # `window` can have. Read-only.
 
 # THESE WRITE to nfc_demo. Reseed before re-running check-ia-greyscale.
 DEMO_BASE=http://127.0.0.1:8080 node demo/check-operators.mjs
