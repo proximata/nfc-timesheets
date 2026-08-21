@@ -60,7 +60,7 @@
 // Destructive by design: it clocks a throwaway worker in and out against production and
 // prints the ids it created. `CLEANUP=1` deletes them again.
 import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 
 const BASE = process.env.API_BASE ?? "https://schimmer-glanz.exe.xyz";
 const PKG = "io.github.qwadratic.NFCTimeSheets";
@@ -147,6 +147,39 @@ const localShifts = () => {
       };
     });
 };
+
+/**
+ * THE PHONE'S OWN WORKER CREDENTIALS, read out of its shared_prefs and its build.
+ *
+ * WHY THIS EXISTS, and it is the same bug as TASK-225 one layer down. § 3 opens by proving
+ * that the hazard the ordering rule avoids is REAL: a close for a shift the server has
+ * never heard of is refused. The first revision sent that request with NO credentials at
+ * all and accepted `404 || 401`. It got 401 — from the auth layer, before the route ever
+ * looked for a shift. So the line printed RED while demonstrating NOTHING about ordering:
+ * delete `unknown_shift` from routes/app.js entirely, or rename the route, and the
+ * unauthenticated call still answers 401 and this run still prints the same green summary.
+ * A negative case that fires for the wrong reason is not a negative case.
+ *
+ * Authenticated, the same request answers `404 unknown_shift` — which is the actual thing
+ * that would strand a cleaner's shift open for ever if a close ever overtook its own open.
+ */
+const workerCookie = () => {
+  const xml = tryShell(`cat /data/data/${PKG}/shared_prefs/session.xml`);
+  // SessionCookie.NAME. Anchored on the exact key: `worker_name` and `worker_id` live in
+  // the same file and a loose match would hand back a display name as a token.
+  return /name="ts_worker">([^<]+)</.exec(xml)?.[1] ?? null;
+};
+/**
+ * ts.appKey — requireAppKey rejects before the session is even looked at.
+ *
+ * Resolved against THIS FILE, not the cwd: run from android/ or from a shell whose cwd
+ * drifted, a cwd-relative read throws ENOENT, and the phase would report "credentials
+ * unreadable" for a reason that has nothing to do with the product.
+ */
+const appKey = () =>
+  /^ts\.appKey=(.+)$/m
+    .exec(readFileSync(new URL("../android/branding.properties", import.meta.url), "utf8"))?.[1]
+    .trim() ?? null;
 
 /** "unknown(u0aNNN/jid225)" when the platform holds nothing for us. */
 const jobState = () => tryShell(`cmd jobscheduler get-job-state ${PKG} ${JOB_ID}`).split("\n")[0] ?? "";
@@ -415,12 +448,23 @@ async function main() {
 
   // First, prove the hazard is real rather than theoretical: closing a shift the server
   // has never heard of is a 404, and a 404 here would strand the shift open for ever.
+  //
+  // FULLY CREDENTIALLED, exactly as the phone sends it — cookie AND app key. Anything less
+  // is refused by the auth layer before the route looks for a shift, which is a 401 that
+  // says nothing at all about ordering. See workerCookie() for what that cost.
+  const cookieValue = workerCookie();
+  const key = appKey();
+  check(cookieValue !== null && key !== null, "the phone's own worker credentials are readable, so the next line is about ORDERING and not about auth");
   const bogus = await fetch(`${BASE}/shifts/close`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", Cookie: `ts_worker=${cookieValue}`, "X-App-Key": key },
     body: JSON.stringify({ client_uuid: "00000000-0000-4000-8000-000000000000", end_time: new Date().toISOString() }),
   });
-  red(bogus.status === 404 || bogus.status === 401, `a close for an unknown shift is refused (${bogus.status}) — this is what ordering avoids`);
+  const refusal = await bogus.json().catch(() => ({}));
+  red(
+    bogus.status === 404 && refusal.error === "unknown_shift",
+    `a SIGNED-IN close for an unknown shift is refused (${bogus.status} ${refusal.error}) — this is what ordering avoids`,
+  );
 
   // Both halves offline this time: the server sees the OPEN and the CLOSE for the first
   // time in the same drain, which is the case SyncPlan's ordering exists for.
