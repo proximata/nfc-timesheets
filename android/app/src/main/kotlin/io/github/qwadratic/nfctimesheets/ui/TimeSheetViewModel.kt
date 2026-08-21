@@ -219,14 +219,24 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 // schedules the job for the first time on a phone updating from a build that
                 // had no background push at all.
                 //
-                // THE GUARD IS NOT A TIDY-UP. Unconditional, this armed a job on every
-                // single launch of a phone with an empty queue — which contradicts
-                // SyncScheduler's own contract („a phone with an empty queue schedules
-                // nothing at all and costs no battery") and costs something real: a job
-                // that wakes on a network and finds nothing to do, several times a day,
-                // twenty phones, is exactly the profile EMUI and MIUI put in the
-                // RESTRICTED bucket — and a restricted app runs no jobs at all, which
-                // would take the delivery this whole iteration is about down with it.
+                // THE GUARD IS NOT A TIDY-UP, and the case it fixes is the OFFLINE one —
+                // which is the only case this whole feature exists for. Measured on a
+                // device, force-stopped first so the job state starts at "unknown":
+                //
+                //   build      launch ONLINE, empty queue   launch OFFLINE, empty queue
+                //   0.5.0 / 7  unknown                      WAITING ← armed for nothing
+                //   0.5.1 / 8  unknown                      unknown ← nothing armed
+                //
+                // Online the unconditional arm is invisible: the job's only constraint is
+                // already met, so the platform runs it immediately, it finds an empty queue
+                // and finishes. OFFLINE nothing runs it, so it sits waiting for a signal
+                // that will give it nothing to do — and a basement is where this app gets
+                // opened. It contradicts SyncScheduler's own contract („a phone with an
+                // empty queue schedules nothing at all and costs no battery") and it costs
+                // something real: a job that wakes on a network and finds nothing to do,
+                // several times a day, across twenty phones, is the profile EMUI and MIUI
+                // put in the RESTRICTED bucket — and a restricted app runs no jobs at all,
+                // which would take the delivery this iteration is about down with it.
                 //
                 // Nothing is lost by the guard: refresh() below re-arms whatever its
                 // foreground pass could not deliver, on the same predicate, and the boot
