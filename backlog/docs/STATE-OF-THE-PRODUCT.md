@@ -231,3 +231,32 @@ is the full list. The load-bearing ones:
   connectivity. A basement is a slow, flapping one: a radio that holds a dead association,
   a TCP connect that hangs rather than refuses, captive-portal wifi in a lobby. The queue
   and the ordering are proven; the timing against a real radio is not.
+
+---
+
+## 7 · Addendum — the second-client ceiling (TASK-235/236, 2026-08-21)
+
+This document's own §3 named the first thing to break at 20 workers / 8 buildings:
+`/shifts/` at 39.7 phone screens with no server-side windowing, and `/pl/` permanently
+"nicht beurteilbar" because `app_settings` and `location_revenue` both ship empty and the
+only write path was a 96-times-over drawer. Both are fixed and deployed; full measurement
+is `backlog/docs/SCALE-PROOF.md`, not repeated here. The headline:
+
+- `/shifts/` now WINDOWS `GET /admin/data` by period/worker/location/state instead of
+  fetching the whole ledger up to `shift_limit`. Reproduced against a grown `nfc_demo`
+  (8 buildings, 20 workers, 2862 shifts): the OLD unbounded request returned **0 of 410**
+  real March rows (the newest-2000-rows-sitewide window started in April) — a real month
+  reading as empty. The NEW windowed request answers it correctly regardless of ledger
+  size, and the 2000-row ceiling is truthful at 1999/2000/2001 rows, with truncation and
+  "outside the period" proven to never be conflated.
+- `/pl/` gained `POST /admin/revenue`, a bulk write: 8 buildings x 12 months = 96 cells
+  saved in one 42ms request instead of 96 drawer submissions, scoped to blank cells only
+  so a mistake can create a wrong new row but never silently overwrite a correct one, with
+  a review step before anything is sent. The baseline gained a `0%` SUGGESTED placeholder
+  (never auto-saved) so the screen is not permanently inert on a fresh box.
+- **Not fixed, stated plainly**: a full month's ledger at 20-worker density is still
+  ~229 phone screens rendered. Windowing fixed the fetch and the truncation message, not
+  the row-count-on-screen UX — that is LOOK-PHONE.md finding #3 and was out of scope here.
+- Deployed: `./ops/deploy.sh` clean, `check-unit-drift` OK, association files verified on
+  both hosts, `./ops/smoke-live.sh` 82/82, production left exactly as found (0 workers,
+  0 shifts, HOIV pinned).
