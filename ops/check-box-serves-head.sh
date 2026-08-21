@@ -123,7 +123,11 @@ else
   # Name the files, not just the verdict: 'something differs' is not actionable at 3am.
   local_list=$(cd "${mutant_dir:-web/out}" && find . -type f | LC_ALL=C sort | xargs shasum -a 256 | sed 's/^\([0-9a-f]*\)  /\1 /')
   remote_list=$(ssh "$HOST" "cd /srv/nfc/public && find . -type f | LC_ALL=C sort | xargs sha256sum | sed 's/^\([0-9a-f]*\)  /\1 /'")
-  diff <(echo "$local_list") <(echo "$remote_list") | head -20 | sed 's/^/        /'
+  # `| head -20` closes the pipe on a long diff; diff dies of SIGPIPE, pipefail turns that
+  # into 141 and `set -e` killed the script HERE, so under --mutate nothing after this line
+  # had ever run. The mutant still exited 1, for the right reason, which is exactly why
+  # nobody noticed that sections 2, 3, 3a and 4 were never exercised by it.
+  { diff <(echo "$local_list") <(echo "$remote_list") || true; } | head -20 | sed 's/^/        /' || true
 fi
 
 
@@ -159,6 +163,39 @@ else
   bad "the newest local APK is $newest_apk but the box publishes $apk_file (versionCode $apk_code) — run ./ops/publish-apk.sh"
 fi
 
+# ---- 3a · WHICH COMMIT was the bundle on the box built from? ----------------------------
+# Now that web/next.config.mjs derives the build id from the commit, the box TELLS US this
+# instead of us having to infer it. That answers the real question directly:
+#
+#   "is every web/ change that is in git also on the box?"
+#
+# and it answers it WITHOUT requiring a redeploy after every commit that does not touch web/.
+# The §1 hash comparison alone cannot: it compares the box against whatever `web/out` last
+# held, and web/out is not rebuilt by this script.
+box_build_id=$(ssh "$HOST" "cd /srv/nfc/public/_next/static && ls -d */ 2>/dev/null | grep -v '^chunks/\|^css/\|^media/' | head -1 | tr -d /")
+if [ "$MUTATE" = "1" ]; then
+  # Seed the condition this assertion exists for: a box built one web/ commit ago. Taken
+  # from history rather than invented, so the RED below is the real sentence a real stale
+  # box would produce, naming real files.
+  box_build_id=$(git log -1 --format=%H --skip=1 -- web | cut -c1-12)
+  echo "  (mutant: pretending the box was built at $box_build_id, the previous web/ commit)"
+fi
+if [ -z "$box_build_id" ]; then
+  bad "could not read a build id from the box — an export older than the derived-build-id change?"
+elif [ "${box_build_id%-dirty}" != "$box_build_id" ]; then
+  bad "the box serves a bundle built from a DIRTY tree ($box_build_id) — no commit describes what the director is looking at"
+elif ! git cat-file -e "$box_build_id" 2>/dev/null; then
+  bad "the box's build id $box_build_id is not a commit in this repository"
+else
+  changed=$(git diff --name-only "$box_build_id" HEAD -- web | head -5)
+  if [ -z "$changed" ]; then
+    ok "the bundle on the box was built at $box_build_id, and nothing under web/ has changed since"
+  else
+    bad "the box serves web/ as of $box_build_id, and these have changed since — run ./ops/deploy.sh:"
+    echo "$changed" | sed 's/^/        /'
+  fi
+fi
+
 # ---- 4 · and is that tree committed? -----------------------------------------------------
 # A box that matches an UNCOMMITTED working tree is not reproducible: nobody else can rebuild
 # what it serves. Reported, not fatal — deploying from a dirty tree is sometimes deliberate.
@@ -167,7 +204,7 @@ if [ -n "$(git status --porcelain -- web server android/dist ops)" ]; then
   git status --porcelain -- web server android/dist ops | head -8 | sed 's/^/        /'
   echo "        the box may match this tree, but no commit describes what it serves."
 else
-  ok "the tree that matches the box is committed ($(git rev-parse --short HEAD))"
+  ok "the tree this ran against is committed ($(git rev-parse --short HEAD))"
 fi
 
 echo
