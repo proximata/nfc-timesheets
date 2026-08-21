@@ -91,12 +91,34 @@ bytes, so a card left holding half a message reported `mismatch` — where the p
 what counts as one of ours. Both fixed; `live-flow-check` § 2 now replays every scenario
 through the real `TagWriter` and requires the same screen, word for word.
 
-**b. The map is intermittent, and it is not a code fault.** Five identical loads of the live
-home screen: **4 drew, 1 came back `RefererNotAllowedMapError`**, Google naming
-`https://schimmer-glanz.exe.xyz/` as the URL to authorise. The referrer IS on the key — a
-key without it fails every time — so this is upstream flake, or a stale edge cache, and the
-director sees a grey box some fraction of the time. TASK-206. Measured through headless
-Chrome with a cold profile; **whether a warm human browser sees the same is unproven.**
+**b. The map WAS intermittent, and it WAS a config fault — CLOSED.** Two rounds of "the
+referrer is authorised" turned out false, in both directions. `demo/check-map-key.mjs`
+tests the browser key by ASKING GOOGLE, over a real hostname, rather than by reading a
+console screenshot from memory — and that is what finally settled it:
+
+```
+gcloud services api-keys describe <browser key> --project=nfc-timesheets
+  allowedReferrers BEFORE: https://timesheets.exe.xyz/*, http://localhost:3000/*,
+                           http://127.0.0.1:8080/*        <- NOT schimmer-glanz.exe.xyz
+```
+
+`https://timesheets.exe.xyz/*` is the TAG host (decision-40) — it has served no admin
+panel since the two-host split. The API host the admin panel actually runs on was never on
+the allowlist at all, only the box's PRE-RENAME name. Every fresh load from
+`https://schimmer-glanz.exe.xyz/` should therefore have failed every time — and mostly
+didn't, because Google's edge network appears to cache a validated script response for a
+referrer it has already approved once, and does not re-validate on every hit; only a
+cache-miss edge enforces the (wrong) config. That is the mechanism behind "4 drew, 1
+`RefererNotAllowedMapError`, same minute, same key, same referrer" — a real, config-caused
+defect, made to LOOK like flake by a caching layer neither app owns.
+
+FIXED 2026-08-21: `gcloud services api-keys update` added
+`https://schimmer-glanz.exe.xyz/*` to the allowlist (kept everything already there,
+including `http://127.0.0.1:8080/*` — every local map check in this repo runs against
+it). `node demo/check-map-key.mjs` — OK on both `apiHost` and `tagHost`.
+`ops/prove-live.sh` re-run against production with `MAP_SAMPLES=10`: **the map drew
+10/10**, up from the 4/5 that was actually "sometimes hits the one edge that checks."
+TASK-206 closed.
 
 **c. The closing count caught a row this work itself left behind** — a throwaway admin from
 a debugging session — and blamed the run for it. `admins` is now in the START guard too: a
@@ -306,9 +328,10 @@ closed from a laptop, and production has nothing to say about any of it.
 - Whether the overwrite guard fires against a real mounted card (§ 4 step 3).
 - Tag pulled mid-write, NFC toggled off mid-write, screen locked, app force-stopped mid-write.
 - Android 9 vs 16. One phone has been used.
-- Whether a warm, human browser sees the map flake in § 2b, or only headless Chrome does.
-  (2026-08-20: five consecutive loads all drew — 5/5 — so the flake is not constant and a
-  clean sample is not evidence of a fix. TASK-206 stands.)
+- Whether a warm, human browser would have seen the map flake in § 2b — moot now: § 2b's
+  flake had a config cause (the referrer allowlist never named the API host), it is fixed,
+  and `ops/prove-live.sh MAP_SAMPLES=10` against production reads 10/10 post-fix. TASK-206
+  closed 2026-08-21.
 - **Everything in `backlog/docs/RELIABILITY.md` § "What this run did NOT test"**: a real
   phone losing signal in a real basement, Postgres corrupting itself rather than merely
   running out of disk, and more than one worker tapping at once.
