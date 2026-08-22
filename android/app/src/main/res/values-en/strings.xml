@@ -165,6 +165,10 @@
          must not fall into err_rejected: "report this shift" is the wrong instruction,
          there is no shift, nothing was ever opened. -->
     <string name="err_tag_unbound">This tag isn\'t assigned to a location yet. Ask your admin.</string>
+    <!-- decision-47. The zone is real, but no operator has proved the physical card on
+         site yet. Unlike err_tag_unbound, the shift stays queued and is sent automatically
+         once the zone goes live (ApiFailure.isRetryable). -->
+    <string name="err_zone_unverified">This tag hasn\'t been activated yet. No shift was started. Ask your admin.</string>
     <string name="err_unknown_shift">The server doesn\'t have this shift. Ask your admin.</string>
     <string name="err_shift_already_open">Another shift is still running — finishing it first.</string>
     <string name="err_end_before_start">Finish time is before the start time.</string>
@@ -281,4 +285,36 @@
     <string name="write_confirm_armed">Overwrite allowed — for the card carrying id %1$s only. Present that card again now. The permission is spent once it is written.</string>
     <string name="write_replaced_ours">WARNING: this card previously carried our id %1$s. That id is gone. If the card was mounted at a door, the office has to assign the new id to that door.</string>
     <string name="write_replaced_foreign">Note: the card was not empty, but what it held was not ours (%1$s) and has been overwritten.</string>
+
+    <!-- TEST SCAN (operator), decision-47. A zone is not a valid clock-in target until an
+         operator has proved the mounted card here once. This screen NEVER OPENS OR CLOSES
+         A SHIFT: it only ever speaks over the operator session (ts_operator), and no shift
+         route accepts that cookie. -->
+    <string name="verify_open">Test tag</string>
+    <string name="verify_title">Test tag</string>
+    <string name="verify_hint">Pick a zone, then hold the card to the phone. This test scan never starts or closes a shift — it only checks whether the card opens the chosen zone.</string>
+    <string name="verify_needs_operator">This phone is not signed in as an operator. Only operators can verify zones. Enter the operator code. Until you do, this screen does not read a card at all.</string>
+    <string name="verify_zones_loading">Loading the zone list …</string>
+    <string name="verify_zones_error">Could not reload the zone list. Showing the last saved list, if there is one.</string>
+    <string name="verify_zones_empty">No active zone found. Create one under “Locations” first.</string>
+    <string name="verify_pick_zone_hint">Which zone is being tested now?</string>
+    <string name="verify_zone_status_pending">Waiting for a test scan</string>
+    <!-- %1$s = when it was activated -->
+    <string name="verify_zone_status_verified">Activated %1$s</string>
+    <string name="verify_selected">Testing: %1$s, %2$s</string>
+    <string name="verify_change_zone">Choose a different zone</string>
+    <string name="verify_waiting">Waiting for a tag …</string>
+    <string name="verify_checking">Checking the card …</string>
+    <string name="verify_ok">Zone activated. Cleaners can clock in here now.</string>
+    <!-- %1$s = when it was (previously) activated -->
+    <string name="verify_already">This zone was already activated (%1$s). Nothing changed.</string>
+    <!-- %1$s = the selected zone's name, which this card does NOT match -->
+    <string name="verify_mismatch">This card does not belong to the selected zone (%1$s). Check that the right card is on the right door, or pick the matching zone.</string>
+    <string name="verify_unbound">This card isn\'t assigned to the office yet. Ask your admin.</string>
+    <string name="verify_unknown_location">This card does not belong to this system.</string>
+    <string name="verify_unknown_zone">This zone has since been removed. Please reload the list.</string>
+    <string name="verify_no_uri">Card read, but it carries no web address and no known serial number.\n\nTechnologies: %1$s\nUID: %2$s</string>
+    <string name="verify_network_error">No connection to the server. Please check and try again.</string>
+    <string name="verify_server_error">Server problem. Please try again.</string>
+    <string name="verify_scan_again">Test again</string>
 </resources>

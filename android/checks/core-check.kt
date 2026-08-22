@@ -252,6 +252,12 @@ private fun retryClassification() {
     // The one non-obvious rule: an OLDER shift of ours is still open on the server. The
     // next pass closes it first (SyncPlan is start-time ordered) and this open then lands.
     check(ApiFailure(409, "shift_already_open").isRetryable, "409 already-open retryable")
+    // decision-47. Structurally the same shape as shift_already_open: the ROW is fine, the
+    // server's own configuration is what is temporarily wrong, and it self-heals the moment
+    // an operator test-scans the card. Terminal here would strand an offline tap taken
+    // before that scan, exactly as 401 once did (see below).
+    check(ApiFailure(422, "zone_unverified").isRetryable, "422 zone_unverified retryable")
+    check(!SyncPlan.blocksRow(ApiFailure(422, "zone_unverified")), "an unverified zone NEVER blocks a queued shift")
     check(!ApiFailure(400, "invalid_uuid").isRetryable, "400 terminal")
     check(!ApiFailure(422, "unknown_worker").isRetryable, "422 terminal")
     check(!ApiFailure(404, "unknown_shift").isRetryable, "404 terminal")
@@ -620,7 +626,8 @@ private fun stringResources() {
 
     // Every code ApiFailure can classify must have a string behind it.
     val codes = listOf(
-        "network", "unknown_worker", "unknown_location", "tag_unbound", "unknown_shift", "shift_already_open",
+        "network", "unknown_worker", "unknown_location", "tag_unbound", "zone_unverified", "unknown_shift",
+        "shift_already_open",
         "end_before_start", "timestamp_in_future", "timestamp_out_of_range", "unauthorized",
         "no_session", "invalid_token", "invalid_code", "too_many_attempts",
         "missing_location", "wrong_account",

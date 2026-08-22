@@ -68,6 +68,14 @@ data class ApiFailure(
      */
     val isRetryable: Boolean
         get() = code == "shift_already_open" ||
+            // decision-47. A zone that exists but has not yet been test-scanned by an
+            // operator holding the physical card is a TEMPORARY state of the SERVER's
+            // configuration, not a defect in this payload: the identical bytes succeed
+            // the moment the zone goes live. Treating this as terminal reopens the exact
+            // 401 payroll-loss class documented below — a tap taken offline, queued, and
+            // pushed only after the zone was verified would be hours a cleaner worked
+            // that the phone would never send.
+            code == "zone_unverified" ||
             (status == 401 && code != "invalid_code") ||
             status == 0 || status == 408 || status == 429 || status >= 500
 
@@ -85,6 +93,9 @@ data class ApiFailure(
             // expected traffic — not the generic "err_rejected" bucket — because "report
             // this shift" is the wrong instruction: nothing was ever opened.
             "tag_unbound" -> "err_tag_unbound"
+            // decision-47. The zone this tag names is real, but no operator has proved
+            // the physical card yet — see [isRetryable] for why this must stay retryable.
+            "zone_unverified" -> "err_zone_unverified"
             "unknown_shift" -> "err_unknown_shift"
             "shift_already_open" -> "err_shift_already_open"
             "end_before_start" -> "err_end_before_start"

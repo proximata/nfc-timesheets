@@ -230,6 +230,10 @@
          Schicht melden" ist die falsche Anweisung, denn es gibt keine Schicht — es wurde nie
          eine geöffnet. -->
     <string name="err_tag_unbound">Dieser Tag ist noch keinem Objekt zugeordnet. Bitte bei der Verwaltung melden.</string>
+    <!-- decision-47. Die Zone existiert, aber noch kein Betreiber hat die Karte vor Ort
+         geprueft. Anders als err_tag_unbound bleibt die Schicht in der Warteschlange und
+         wird automatisch gesendet, sobald die Zone freigeschaltet ist (ApiFailure.isRetryable). -->
+    <string name="err_zone_unverified">Dieser Tag ist noch nicht freigeschaltet. Es wurde keine Schicht gestartet. Bitte bei der Verwaltung melden.</string>
     <string name="err_unknown_shift">Der Server kennt diese Schicht nicht. Bitte bei der Verwaltung melden.</string>
     <string name="err_shift_already_open">Eine andere Schicht läuft noch – sie wird zuerst beendet.</string>
     <string name="err_end_before_start">Die Endzeit liegt vor der Startzeit.</string>
@@ -384,4 +388,36 @@
     <string name="write_confirm_armed">Ueberschreiben freigegeben — nur fuer die Karte mit der ID %1$s. Karte jetzt erneut anhalten. Nach dem Schreiben gilt die Freigabe nicht mehr.</string>
     <string name="write_replaced_ours">ACHTUNG: Diese Karte trug vorher unsere ID %1$s. Diese ID ist jetzt weg. Falls die Karte an einer Tuer montiert war, muss das Buero die neue ID dieser Tuer zuordnen.</string>
     <string name="write_replaced_foreign">Hinweis: Die Karte war nicht leer, der Inhalt war aber keiner von uns (%1$s) und wurde ueberschrieben.</string>
+
+    <!-- TESTSCAN (Betreiber), decision-47. Eine Zone ist erst ein gueltiges Einstempelziel,
+         nachdem ein Betreiber die montierte Karte hier einmal geprueft hat. Dieser Bildschirm
+         OEFFNET UND SCHLIESST NIEMALS EINE SCHICHT: er spricht ausschliesslich ueber die
+         Betreiber-Sitzung (ts_operator), und keine Schicht-Route akzeptiert dieses Cookie. -->
+    <string name="verify_open">Tag pruefen</string>
+    <string name="verify_title">Tag pruefen</string>
+    <string name="verify_hint">Zone auswaehlen, dann die Karte an das Telefon halten. Dieser Testscan startet und beendet niemals eine Schicht — er prueft nur, ob die Karte die gewaehlte Zone oeffnet.</string>
+    <string name="verify_needs_operator">Dieses Telefon ist nicht als Betreiber angemeldet. Nur Betreiber koennen Zonen pruefen. Bitte den Betreiber-Code eingeben. Solange kein Code eingegeben ist, liest dieser Bildschirm gar keine Karte.</string>
+    <string name="verify_zones_loading">Zonenliste wird geladen …</string>
+    <string name="verify_zones_error">Zonenliste konnte nicht neu geladen werden. Letzte gespeicherte Liste wird angezeigt, falls vorhanden.</string>
+    <string name="verify_zones_empty">Keine aktive Zone gefunden. Erst in „Objekte“ eine Zone anlegen.</string>
+    <string name="verify_pick_zone_hint">Welche Zone wird jetzt geprueft?</string>
+    <string name="verify_zone_status_pending">Wartet auf Testscan</string>
+    <!-- %1$s = Datum/Uhrzeit der Freischaltung -->
+    <string name="verify_zone_status_verified">Freigeschaltet am %1$s</string>
+    <string name="verify_selected">Pruefe: %1$s, %2$s</string>
+    <string name="verify_change_zone">Andere Zone waehlen</string>
+    <string name="verify_waiting">Warte auf Tag …</string>
+    <string name="verify_checking">Karte wird geprueft …</string>
+    <string name="verify_ok">Zone freigeschaltet. Reinigungskraefte koennen hier jetzt einstempeln.</string>
+    <!-- %1$s = Datum/Uhrzeit der (fruehreren) Freischaltung -->
+    <string name="verify_already">Diese Zone war bereits freigeschaltet (%1$s). Nichts wurde veraendert.</string>
+    <!-- %1$s = Name der gewaehlten Zone, die NICHT zu dieser Karte passt -->
+    <string name="verify_mismatch">Diese Karte gehoert nicht zur gewaehlten Zone (%1$s). Bitte pruefen, ob die richtige Karte an der richtigen Tuer haengt, oder die passende Zone auswaehlen.</string>
+    <string name="verify_unbound">Diese Karte ist dem Buero noch nicht zugeordnet. Bitte bei der Verwaltung melden.</string>
+    <string name="verify_unknown_location">Diese Karte gehoert nicht zu diesem System.</string>
+    <string name="verify_unknown_zone">Diese Zone wurde inzwischen entfernt. Bitte Liste neu laden.</string>
+    <string name="verify_no_uri">Karte gelesen, aber ohne Web-Adresse und ohne bekannte Seriennummer.\n\nTechnologien: %1$s\nUID: %2$s</string>
+    <string name="verify_network_error">Keine Verbindung zum Server. Bitte pruefen und erneut versuchen.</string>
+    <string name="verify_server_error">Serverproblem. Bitte erneut versuchen.</string>
+    <string name="verify_scan_again">Nochmal pruefen</string>
 </resources>
