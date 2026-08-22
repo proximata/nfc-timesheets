@@ -122,8 +122,9 @@ req POST /auth/code --key --jar "$WORKER_JAR" --data "$(node -e 'process.stdout.
 # A SECOND BUILDING, so "a tap at a different building" is a real different building and not
 # a re-tap of the same one wearing a different variable name.
 # NO `id` IN THE BODY. On POST /admin/locations a supplied `id` means UPDATE THAT ROW, and an
-# id that does not exist is 404 unknown_location — it is not "create with this uuid". (That
-# path is /admin/tags/:id/resolve-building, where the id comes off a card.)
+# id that does not exist is 404 unknown_location — it is not "create with this uuid". Since
+# decision-47 there is NO route anywhere that creates a building at a caller-chosen id: a
+# building's id always comes from the database, and a card becomes a ZONE.
 req POST "/admin/locations" --jar "$ADMIN_JAR" \
   --data "{\"name\":\"$MARK zweites Haus\",\"slug\":\"break-delete-me-zwei\",\"active\":true}" >/dev/null
 SECOND_ID=$(jget location.id)

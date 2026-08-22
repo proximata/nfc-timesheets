@@ -6,7 +6,6 @@ import {
   ApiError,
   fetchTagsSnapshot,
   type ReportedTag,
-  resolveTagToBuilding,
   resolveTagToExistingZone,
   resolveTagToZone,
   type TagsSnapshot,
@@ -41,16 +40,19 @@ const REPORTED_AT_FORMAT = new Intl.DateTimeFormat('de-AT', {
  * Not in the sidebar. Reached by URL (`/tags/`) until it earns a place in lib/nav.ts.
  */
 
-type Action = 'building' | 'zone' | 'existing'
+/**
+ * decision-47 — „Neues Gebäude" IS GONE, and with it POST /admin/tags/:id/resolve-building.
+ * A card can no longer become a BUILDING's own tap surface: a new building is created
+ * tag-free under „Objekte", and the reported card then becomes its FIRST ZONE. The
+ * capability is not deleted, it moved — the sentence under the radios says where.
+ */
+type Action = 'zone' | 'existing'
 
-type Drafts = Record<
-  string,
-  { action: Action; name: string; slug: string; locationId: string; zoneId: string }
->
+type Drafts = Record<string, { action: Action; name: string; locationId: string; zoneId: string }>
 
 /**
- * Every code the three resolve routes can answer (server/routes/admin.js
- * resolveTagToBuilding / resolveTagToZone / resolveTagToExistingZone), as a sentence that
+ * Every code the two resolve routes can answer (server/routes/admin.js
+ * resolveTagToZone / resolveTagToExistingZone), as a sentence that
  * says what to DO — never the code itself. This screen carries no next-intl (see the file
  * header), so the map lives here rather than in a message catalogue; the rule it follows
  * is the same one every other screen's ApiFailure/messageKey mapping follows (LOOK.md C4:
@@ -60,7 +62,6 @@ const RESOLVE_ERROR_SENTENCES: Record<string, string> = {
   invalid_field: 'Mindestens ein Feld ist ungültig oder fehlt. Bitte prüfen und erneut versuchen.',
   invalid_uuid: 'Eine der IDs ist ungültig. Bitte die Seite neu laden und erneut versuchen.',
   id_in_use: 'Diese ID wird bereits verwendet. Bitte bei der Verwaltung melden.',
-  slug_taken: 'Dieser Kurzname ist schon vergeben. Bitte einen anderen wählen.',
   duplicate_zone_name:
     'In diesem Gebäude gibt es schon eine Zone mit diesem Namen. Bitte einen anderen Namen wählen.',
   unknown_location:
@@ -76,14 +77,6 @@ const RESOLVE_ERROR_SENTENCES: Record<string, string> = {
 function resolveErrorSentence(code: string | null): string {
   if (code === null) return 'Abgelehnt vom Server. Bitte erneut versuchen.'
   return RESOLVE_ERROR_SENTENCES[code] ?? 'Abgelehnt vom Server. Bitte erneut versuchen.'
-}
-
-function slugify(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
 }
 
 export default function TagsPage() {
@@ -127,9 +120,8 @@ export default function TagsPage() {
   }, [load])
 
   const EMPTY_DRAFT: Drafts[string] = {
-    action: 'building',
+    action: 'zone',
     name: '',
-    slug: '',
     locationId: '',
     zoneId: '',
   }
@@ -148,16 +140,7 @@ export default function TagsPage() {
     setBusyId(tag.id)
     setNotice(null)
     try {
-      if (draft.action === 'building') {
-        const name = draft.name.trim()
-        const slug = draft.slug.trim() || slugify(name)
-        if (name === '' || slug === '') {
-          setRowError((prev) => ({ ...prev, [tag.id]: 'Name und Slug sind erforderlich.' }))
-          return
-        }
-        await resolveTagToBuilding(tag.id, { name, slug })
-        setNotice(`Tag ${tag.id} ist jetzt das Gebäude „${name}".`)
-      } else if (draft.action === 'zone') {
+      if (draft.action === 'zone') {
         const name = draft.name.trim()
         if (draft.locationId === '' || name === '') {
           setRowError((prev) => ({ ...prev, [tag.id]: 'Gebäude und Name sind erforderlich.' }))
@@ -242,16 +225,6 @@ export default function TagsPage() {
                         <input
                           type="radio"
                           name={`action-${tag.id}`}
-                          checked={draft.action === 'building'}
-                          onChange={() => setDraft(tag.id, { action: 'building' })}
-                          disabled={busy}
-                        />
-                        Neues Gebäude
-                      </label>
-                      <label>
-                        <input
-                          type="radio"
-                          name={`action-${tag.id}`}
                           checked={draft.action === 'zone'}
                           onChange={() => setDraft(tag.id, { action: 'zone' })}
                           disabled={busy}
@@ -268,33 +241,17 @@ export default function TagsPage() {
                         />
                         Bestehende Zone (zweiter Tag)
                       </label>
+                      {/* NOTHING TRUE IS DELETED TO LIGHTEN A SCREEN: the capability the
+                          „Neues Gebäude" radio used to offer still exists, it just does not
+                          start with a card any more (decision-47). Say where it went, on the
+                          screen where somebody would look for it. */}
+                      <p>
+                        Ein NEUES Gebäude wird zuerst unter „Objekte" angelegt — ohne Tag. Danach
+                        kann dieser Tag hier als erste Zone darin zugeordnet werden.
+                      </p>
                     </div>
 
-                    {draft.action === 'building' ? (
-                      <div>
-                        <label>
-                          Name{' '}
-                          <input
-                            value={draft.name}
-                            onChange={(e) =>
-                              setDraft(tag.id, {
-                                name: e.target.value,
-                                slug: draft.slug === '' ? slugify(e.target.value) : draft.slug,
-                              })
-                            }
-                            disabled={busy}
-                          />
-                        </label>
-                        <label>
-                          Slug{' '}
-                          <input
-                            value={draft.slug}
-                            onChange={(e) => setDraft(tag.id, { slug: e.target.value })}
-                            disabled={busy}
-                          />
-                        </label>
-                      </div>
-                    ) : draft.action === 'zone' ? (
+                    {draft.action === 'zone' ? (
                       <div>
                         <label>
                           Gebäude{' '}

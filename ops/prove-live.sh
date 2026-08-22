@@ -80,7 +80,7 @@ psql_box() { ssh "$HOST" "sudo -u postgres psql -d nfc -v ON_ERROR_STOP=1 -Atc \
 # than from memory — the same posture ops/delete-worker.sql takes. A migration that adds a
 # child table nobody updated this script for would otherwise leave rows behind AND still let
 # the closing count pass, because the count only looks at the tables it already knows about.
-KNOWN_CHILDREN="location_contracts.location_id location_revenue.location_id material_requests.location_id portal_grants.location_id shifts.location_id shifts.start_zone_id shifts.end_zone_id zones.location_id tag_aliases.zone_id tag_aliases.id material_requests.worker_id shifts.worker_id worker_sessions.worker_id phone_identities.worker_id phone_identities.operator_id operator_sessions.operator_id reported_tags.reported_by_operator_id"
+KNOWN_CHILDREN="location_contracts.location_id location_revenue.location_id material_requests.location_id portal_grants.location_id shifts.location_id shifts.start_zone_id shifts.end_zone_id zones.location_id zones.verified_by_operator_id tag_aliases.zone_id tag_aliases.id material_requests.worker_id shifts.worker_id worker_sessions.worker_id phone_identities.worker_id phone_identities.operator_id operator_sessions.operator_id reported_tags.reported_by_operator_id"
 
 cleanup() {
   local rc=$?
@@ -409,14 +409,32 @@ NAMED=$(node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const t
 shot "/tags/" "01-tags-unbound.png" "$TAG_BUILDING"
 
 # =========================================================================================
-section "5 · the admin decides what the cards ARE — a building, and a zone in it"
-expect 201 POST "/admin/tags/$TAG_BUILDING/resolve-building" --jar "$ADMIN_JAR" \
-  --data "{\"name\":\"$MARK Haus\",\"slug\":\"$PROVE_SLUG\",\"address\":\"Arsenalstrasse 11, 1030 Wien\",\"lat\":48.1761151,\"lng\":16.3953038}"
+section "5 · the admin decides what the cards ARE — a TAG-FREE building, and two zones in it"
+# decision-47 — MINTING A NEW BUILDING-LEVEL TAG IS RETIRED. A card can no longer become a
+# building's own tap surface. The building is created TAG-FREE (its id comes from the
+# DATABASE, never from a card), and the reported cards become ZONES in it.
+expect 404 POST "/admin/tags/$TAG_BUILDING/resolve-building" --jar "$ADMIN_JAR" \
+  --data "{\"name\":\"$MARK Haus\",\"slug\":\"$PROVE_SLUG\"}"
+[ "$(jget error)" = "not_found" ] \
+  && ok "POST /admin/tags/:id/resolve-building is GONE — the ROUTER answers, no handler exists" \
+  || bad "resolve-building answered '$(jget error)' — it must not exist at all"
+
+expect 201 POST /admin/locations --jar "$ADMIN_JAR" \
+  --data "{\"slug\":\"$PROVE_SLUG\",\"name\":\"$MARK Haus\",\"address\":\"Arsenalstrasse 11, 1030 Wien\",\"lat\":48.1761151,\"lng\":16.3953038}"
 NEW_LOCATION=$(jget location.id)
-[ "$NEW_LOCATION" = "$TAG_BUILDING" ] \
-  && ok "the building IS the card — no second id space, the bytes never change (decision-21/44)" \
-  || bad "the new building got id $NEW_LOCATION, not the card's $TAG_BUILDING"
-logline "POST /admin/tags/$TAG_BUILDING/resolve-building 201"
+[ -n "$NEW_LOCATION" ] && [ "$NEW_LOCATION" != "$TAG_BUILDING" ] \
+  && ok "the building's id came from the DATABASE ($NEW_LOCATION) and is not any card's" \
+  || bad "the new building's id is '$NEW_LOCATION' — a caller must never choose it"
+
+# The card that used to become a BUILDING becomes that building's FIRST ZONE instead. Same
+# physical bytes, same id, never rewritten (decision-21/44).
+expect 201 POST "/admin/tags/$TAG_BUILDING/resolve-zone" --jar "$ADMIN_JAR" \
+  --data "{\"location_id\":\"$NEW_LOCATION\",\"name\":\"$MARK Erste Zone\"}"
+FIRST_ZONE=$(jget zone.id)
+[ "$FIRST_ZONE" = "$TAG_BUILDING" ] \
+  && ok "the first zone IS the card — the bytes on it never change" \
+  || bad "first zone id $FIRST_ZONE != card $TAG_BUILDING"
+logline "POST /admin/tags/$TAG_BUILDING/resolve-zone 201"
 
 expect 201 POST "/admin/tags/$TAG_ZONE/resolve-zone" --jar "$ADMIN_JAR" \
   --data "{\"location_id\":\"$NEW_LOCATION\",\"name\":\"$MARK Stiege A\",\"area_sqm\":120}"
@@ -424,13 +442,47 @@ NEW_ZONE=$(jget zone.id)
 [ "$NEW_ZONE" = "$TAG_ZONE" ] && ok "the zone IS the second card ($NEW_ZONE)" || bad "zone id $NEW_ZONE != card $TAG_ZONE"
 
 # Resolved once, and only once: a second admin clicking the same row is refused, not
-# silently given a second building.
-expect 409 POST "/admin/tags/$TAG_BUILDING/resolve-building" --jar "$ADMIN_JAR" \
-  --data "{\"name\":\"$MARK zweites Haus\",\"slug\":\"$PROVE_SLUG-again\"}"
+# silently given a second zone.
+expect 409 POST "/admin/tags/$TAG_ZONE/resolve-zone" --jar "$ADMIN_JAR" \
+  --data "{\"location_id\":\"$NEW_LOCATION\",\"name\":\"$MARK Stiege A zweiter Versuch\"}"
 LEFT=$(psql_box "SELECT count(*) FROM reported_tags WHERE resolved_at IS NULL")
 [ "$LEFT" = "0" ] && ok "the admin's worklist is empty again — both cards resolved" || bad "$LEFT tags still unresolved"
-row "the new zone" "SELECT l.slug || ' | zone ' || z.name || ' | ' || coalesce(z.area_sqm::text,'-') || ' m2 | tag_deployed_at=' || coalesce(z.tag_deployed_at::text,'NULL') FROM zones z JOIN locations l ON l.id = z.location_id WHERE z.id = '$NEW_ZONE'"
+row "the new zone" "SELECT l.slug || ' | zone ' || z.name || ' | ' || coalesce(z.area_sqm::text,'-') || ' m2 | tag_deployed_at=' || coalesce(z.tag_deployed_at::text,'NULL') || ' | verified_at=' || coalesce(z.verified_at::text,'NULL') FROM zones z JOIN locations l ON l.id = z.location_id WHERE z.id = '$NEW_ZONE'"
 shot "/locations/" "02-building-created.png" "$MARK Haus"
+
+# =========================================================================================
+section "5b · the zone is NOT live until an operator test-scans the card (decision-47)"
+# A zone an admin typed at a desk has proved NOTHING about a card on a wall. Until an
+# operator, in the building, with the card in hand, has scanned it, a tap is refused BY NAME
+# and NO shift row is created — which matters because shifts are never deleted. That refusal
+# is asserted in § 6, with a real worker session and against the zone left UNVERIFIED here.
+#
+# THE TEST SCAN itself, on the OPERATOR's session. It cannot open a shift: no shift route
+# accepts a ts_operator cookie, so this is structural rather than a rule a handler remembers.
+expect 200 GET /operator/zones --key --jar "$OP_JAR"
+ON_WORKLIST=$(node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const z=(JSON.parse(s).zones||[]).find(z=>z.id===process.argv[1]);process.stdout.write(String(z?.verified_at===null))})' "$TAG_ZONE" < "$TMP/body")
+[ "$ON_WORKLIST" = "true" ] && ok "the unverified zone is on the operator's worklist" || bad "the zone is not on the worklist as unverified"
+
+SHIFTS_BEFORE_VERIFY=$(psql_box "SELECT count(*) FROM shifts")
+expect 200 POST "/operator/zones/$TAG_ZONE/verify" --key --jar "$OP_JAR" --data "{\"place_uuid\":\"$TAG_ZONE\"}"
+[ "$(jget zone.already_verified)" = "false" ] && ok "the test scan stamped it" || bad "already_verified=$(jget zone.already_verified) on the first scan"
+SHIFTS_AFTER_VERIFY=$(psql_box "SELECT count(*) FROM shifts")
+[ "$SHIFTS_BEFORE_VERIFY" = "$SHIFTS_AFTER_VERIFY" ] \
+  && ok "A TEST SCAN CREATED NO SHIFT ($SHIFTS_BEFORE_VERIFY = $SHIFTS_AFTER_VERIFY) — the whole reason it is not a tap" \
+  || bad "the shift count moved $SHIFTS_BEFORE_VERIFY -> $SHIFTS_AFTER_VERIFY during a TEST SCAN"
+
+# A card that names the OTHER zone must not verify this one — a card mounted at the wrong
+# door is the most likely honest mistake on a field visit.
+expect 422 POST "/operator/zones/$TAG_ZONE/verify" --key --jar "$OP_JAR" --data "{\"place_uuid\":\"$TAG_BUILDING\"}"
+[ "$(jget error)" = "zone_mismatch" ] && ok "a card from another door is refused: zone_mismatch" || bad "refused as '$(jget error)'"
+
+# Idempotent: a second scan of an already-verified zone is a harmless 200 that moves nothing.
+STAMP_BEFORE=$(psql_box "SELECT verified_at FROM zones WHERE id = '$TAG_ZONE'")
+expect 200 POST "/operator/zones/$TAG_ZONE/verify" --key --jar "$OP_JAR" --data "{\"place_uuid\":\"$TAG_ZONE\"}"
+[ "$(jget zone.already_verified)" = "true" ] && ok "a re-scan says so instead of erroring" || bad "a re-scan answered already_verified=$(jget zone.already_verified)"
+STAMP_AFTER=$(psql_box "SELECT verified_at FROM zones WHERE id = '$TAG_ZONE'")
+[ "$STAMP_BEFORE" = "$STAMP_AFTER" ] && ok "…and the timestamp did not move" || bad "verified_at moved: $STAMP_BEFORE -> $STAMP_AFTER"
+row "the verified zone" "SELECT z.name || ' | verified_at=' || coalesce(z.verified_at::text,'NULL') || ' | by ' || coalesce(o.name,'NULL') FROM zones z LEFT JOIN operators o ON o.id = z.verified_by_operator_id WHERE z.id = '$TAG_ZONE'"
 
 # =========================================================================================
 section "6 · a cleaner taps — the card opens a shift, and a second tap closes it"
@@ -441,9 +493,25 @@ W_CODE=$(jget code)
 expect 200 POST /auth/code --key --jar "$WORKER_JAR" --data "$(node -e 'process.stdout.write(JSON.stringify({code:process.argv[1]}))' "$W_CODE")"
 /usr/bin/grep -q ts_worker "$WORKER_JAR" && ok "the cleaner's phone holds a worker session" || bad "no ts_worker cookie"
 
+# THE UNVERIFIED DOOR FIRST (decision-47). $TAG_BUILDING is a real, ACTIVE zone of this same
+# building that no operator has test-scanned. A tap on it is refused BY NAME and, the part
+# that actually costs money if it is wrong, WRITES NO SHIFT ROW — there is no
+# DELETE /admin/shifts/:id anywhere in this codebase.
+UNVERIFIED_BEFORE=$(psql_box "SELECT count(*) FROM shifts")
+expect 422 POST /shifts/open --key --jar "$WORKER_JAR" \
+  --data "{\"client_uuid\":\"$(uuid)\",\"location_uuid\":\"$TAG_BUILDING\",\"start_time\":\"$(now)\"}"
+[ "$(jget error)" = "zone_unverified" ] \
+  && ok "an unproven card is refused as zone_unverified — its own code, not 'this building was removed'" \
+  || bad "refused as '$(jget error)'"
+UNVERIFIED_AFTER=$(psql_box "SELECT count(*) FROM shifts")
+[ "$UNVERIFIED_BEFORE" = "$UNVERIFIED_AFTER" ] \
+  && ok "NO shift row was created ($UNVERIFIED_BEFORE = $UNVERIFIED_AFTER)" \
+  || bad "the shift count moved $UNVERIFIED_BEFORE -> $UNVERIFIED_AFTER on a REFUSED tap"
+logline "POST /shifts/open 422 .* err=zone_unverified" "the refusal, in the log"
+
 # THE TAP. The body is the OLD SHAPE the APK in the field sends — client_uuid, location_uuid,
-# start_time, and no zone field anywhere — posted at the ZONE card, which the server resolves
-# to its building. § 9 proves that shape is the one the field APK actually carries.
+# start_time, and no zone field anywhere — posted at the VERIFIED ZONE card, which the server
+# resolves to its building. § 9 proves that shape is the one the field APK actually carries.
 TAP1=$(uuid)
 expect 201 POST /shifts/open --key --jar "$WORKER_JAR" \
   --data "{\"client_uuid\":\"$TAP1\",\"location_uuid\":\"$TAG_ZONE\",\"start_time\":\"$(ago 45)\"}"
@@ -459,6 +527,18 @@ expect 200 POST /shifts/close --key --jar "$WORKER_JAR" \
   --data "{\"client_uuid\":\"$TAP1\",\"location_uuid\":\"$TAG_ZONE\",\"end_time\":\"$(now)\"}"
 CLOSED=$(psql_box "SELECT end_time IS NOT NULL FROM shifts WHERE id = $SHIFT_ID")
 [ "$CLOSED" = "t" ] && ok "the second tap closed it" || bad "the shift is still open"
+
+# AND A CLOCK-OUT IS NEVER GATED (INCIDENT 1). A worker who is clocked in must always be able
+# to clock out, including through the unproven back door — the gate is on OPEN only.
+TAP_OUT=$(uuid)
+expect 201 POST /shifts/open --key --jar "$WORKER_JAR" \
+  --data "{\"client_uuid\":\"$TAP_OUT\",\"location_uuid\":\"$TAG_ZONE\",\"start_time\":\"$(ago 10)\"}"
+expect 200 POST /shifts/close --key --jar "$WORKER_JAR" \
+  --data "{\"client_uuid\":\"$TAP_OUT\",\"location_uuid\":\"$TAG_BUILDING\",\"end_time\":\"$(now)\"}"
+OUT_ZONE=$(psql_box "SELECT coalesce(end_zone_id::text,'NULL') || '|' || auto_closed FROM shifts WHERE client_uuid = '$TAP_OUT'")
+[ "$OUT_ZONE" = "$TAG_BUILDING|f" ] \
+  && ok "a clock-out through an UNVERIFIED door closes normally and records it — never gated" \
+  || bad "the unverified clock-out recorded '$OUT_ZONE' (want $TAG_BUILDING|f)"
 logline "POST /shifts/close 200 .* w=$WORKER_ID" "the clock-out"
 row "the closed shift" "SELECT 'end_zone=' || coalesce(end_zone_id::text,'NULL') || ' auto_closed=' || auto_closed || ' minutes=' || round(extract(epoch from (end_time - start_time))/60) FROM shifts WHERE id = $SHIFT_ID"
 shot "/shifts/" "03-shift-closed.png" "$MARK worker"

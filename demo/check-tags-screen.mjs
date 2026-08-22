@@ -8,14 +8,21 @@
 //   C3  the admin sees a 36-character UUID; the operator's phone shows only the last six
 //       (core/WriteGuard.kt token). The two humans in this procedure had no shared handle.
 //   C4  a refused resolve showed the server's own machine code verbatim — 'Abgelehnt:
-//       slug_taken' — snake_case English in a German admin panel.
+//       duplicate_zone_name' — snake_case English in a German admin panel.
+//
+// decision-47 changed WHICH refusal C4 drives: the „Neues Gebäude" radio and its Name/Slug
+// fields are gone with POST /admin/tags/:id/resolve-building, so the collision this screen is
+// pushed into is now a zone name that already exists in the chosen building (409
+// duplicate_zone_name) rather than a slug that already names a building (409 slug_taken).
+// Same finding, same assertion shape, a refusal that still exists.
 //
 //   «stack»  seeded nfc_demo + the API serving a build of these screens (loopback only)
 //   DEMO_BASE=http://127.0.0.1:8092 node demo/check-tags-screen.mjs
 //
 // THE DATABASE IS MUTATED: one throwaway reported_tags row, deleted in a `finally` by its
 // own id — no dump/restore needed, nothing else is touched. The C4 case resolves the row
-// against a slug that ALREADY exists in nfc_demo, so nothing new is created there either.
+// against a zone name that ALREADY exists in nfc_demo, so nothing new is created there
+// either — the refusal is the point.
 //
 // No new dependency: demo/cdp.mjs, Node, the Chrome already on the machine.
 import { execFileSync } from "node:child_process";
@@ -54,8 +61,17 @@ const assert = (name, cond, detail) => {
 const TAG_ID = "b6f2a8e1-4c73-4a1e-9d2a-7e6c8f1a2b3d";
 const REPORTED_AT_UTC = "2026-08-17T22:30:00.000Z";
 const OP1 = sql("SELECT id FROM operators WHERE active ORDER BY id LIMIT 1");
-// C4: a slug that already names a real building, so resolve-building answers 409 slug_taken.
-const EXISTING_SLUG = sql("SELECT slug FROM locations ORDER BY slug LIMIT 1");
+// C4: a LIVE zone name that already exists in a LIVE building, so resolve-zone answers
+// 409 duplicate_zone_name. Both halves come out of the seed rather than being typed here,
+// so a reseed cannot leave this check asserting against a row that is gone.
+const COLLIDING = sql(
+  "SELECT z.location_id || '|' || z.name FROM zones z JOIN locations l ON l.id = z.location_id WHERE z.active AND l.active ORDER BY l.name, z.name LIMIT 1",
+);
+const [COLLIDING_LOCATION_ID, COLLIDING_ZONE_NAME] = COLLIDING.split("|");
+if (!COLLIDING_LOCATION_ID || !COLLIDING_ZONE_NAME) {
+  console.error("check-tags-screen: nfc_demo has no live zone to collide with — reseed it first.");
+  process.exit(1);
+}
 
 exec(`DELETE FROM reported_tags WHERE id = '${TAG_ID}'`);
 exec(
@@ -122,25 +138,41 @@ async function main() {
     );
 
     // ---- C4: a raw server code must never reach the screen -----------------------------
-    // The two text inputs in the 'Neues Gebäude' branch are Name then Slug, in DOM order —
-    // addressed positionally through the row, since both share the same type/no id.
+    // The „Neue Zone in bestehendem Gebäude" branch is the DEFAULT one now (decision-47
+    // deleted the building branch): a <select> of buildings, then one text input for the
+    // name. Both are addressed positionally through the row, since neither carries an id.
     const filledBoth = await page.eval(`(() => {
       const row = [...document.querySelectorAll('tr')].find((r) => r.textContent.includes('${TAG_ID}'))
       if (!row) return false
-      // The Name/Slug inputs carry no explicit type= attribute in the JSX (defaults to
-      // text via the DOM property, not the markup) — an attribute selector for
-      // input[type="text"] matches zero. Select everything that is not one of the three
-      // radios instead.
-      const inputs = [...row.querySelectorAll('input:not([type="radio"])')]
-      if (inputs.length < 2) return false
+      const select = row.querySelector('select')
+      // The Name input carries no explicit type= attribute in the JSX (it defaults to text
+      // via the DOM property, not the markup) — an attribute selector for input[type="text"]
+      // matches zero. Select everything that is not one of the two radios instead.
+      const input = row.querySelector('input:not([type="radio"])')
+      if (!select || !input) return false
+      const selectSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+      selectSetter.call(select, ${JSON.stringify(COLLIDING_LOCATION_ID)})
+      select.dispatchEvent(new Event('change', { bubbles: true }))
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-      setter.call(inputs[0], 'Kollisionstest')
-      inputs[0].dispatchEvent(new Event('input', { bubbles: true }))
-      setter.call(inputs[1], ${JSON.stringify(EXISTING_SLUG)})
-      inputs[1].dispatchEvent(new Event('input', { bubbles: true }))
-      return true
+      setter.call(input, ${JSON.stringify(COLLIDING_ZONE_NAME)})
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      return select.value === ${JSON.stringify(COLLIDING_LOCATION_ID)}
     })()`);
-    assert("tags: the resolve form's Name and Slug fields were reachable", filledBoth === true);
+    assert("tags: the resolve form's building picker and Name field were reachable", filledBoth === true);
+
+    // The retired capability is NAMED on the screen, not silently missing (decision-47:
+    // nothing true is deleted to lighten a screen).
+    const noBuildingRadio = await page.eval(
+      `!document.body.textContent.includes('Neues Geb\u00e4ude')`,
+    );
+    assert("tags: the ‚Neues Gebäude' radio is GONE", noBuildingRadio === true);
+    const saysWhereItWent = await page.eval(
+      `document.body.textContent.includes('zuerst unter \u201eObjekte\u201c angelegt')`,
+    );
+    assert(
+      "tags: …and the screen says where a new building is created instead",
+      saysWhereItWent === true,
+    );
 
     await page.eval(`(() => {
       const row = [...document.querySelectorAll('tr')].find((r) => r.textContent.includes('${TAG_ID}'))
@@ -164,12 +196,14 @@ async function main() {
     console.log(`  row error -> "${rowErrorText}"`);
     assert(
       "tags: a refused resolve does NOT show the server's raw machine code",
-      rowErrorText !== null && !rowErrorText.includes("slug_taken") && !rowErrorText.includes("Abgelehnt: "),
+      rowErrorText !== null &&
+        !rowErrorText.includes("duplicate_zone_name") &&
+        !rowErrorText.includes("Abgelehnt: "),
       rowErrorText ?? "no error text found",
     );
     assert(
       "tags: …it shows a real German sentence instead",
-      rowErrorText !== null && rowErrorText.includes("Kurzname") && rowErrorText.includes("vergeben"),
+      rowErrorText !== null && rowErrorText.includes("Zone") && rowErrorText.includes("Namen"),
       rowErrorText ?? "no error text found",
     );
   } finally {
