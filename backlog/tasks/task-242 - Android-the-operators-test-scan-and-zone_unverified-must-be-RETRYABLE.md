@@ -1,9 +1,10 @@
 ---
 id: TASK-242
 title: 'Android: the operator''s test scan, and zone_unverified must be RETRYABLE'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-22 13:37'
+updated_date: '2026-08-22 20:48'
 labels:
   - android
   - zones
@@ -31,3 +32,9 @@ SEQUENCING, from ZONE-VERIFICATION.md §9: until this ships, DO NOT create a zon
 
 MUST NOT REGRESS: KnownTags.kt stays (decision-44 step 5 now reads: delete it only after a zone carries the HOIV serial AND that zone is VERIFIED). /roster already NULLs an unverified zone's tag_serial so the compiled fallback keeps winning.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Shipped across App-phase commits 31e42cf/299483a/a52b7e5/19681ff/f7e5c92, which landed before the phase died. Verified by reading source, not by trusting the report: ApiFailure.isRetryable=true for zone_unverified with a core-check assertion pinning it (android/checks/core-check.kt:259-260), VerifyZoneActivity wired into TimeSheetApp.kt's real onClick and AndroidManifest.xml, gated on the operator cookie. Not verified on hardware - no card, no device; that stays the owner's.
+<!-- SECTION:NOTES:END -->

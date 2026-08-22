@@ -1,11 +1,11 @@
 ---
 id: TASK-241
 title: 'Admin: an unverified zone is VISIBLY waiting for a test scan'
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-08-22 13:36'
-updated_date: '2026-08-22 15:41'
+updated_date: '2026-08-22 20:48'
 labels:
   - web
   - zones
@@ -35,3 +35,9 @@ ACCEPTANCE EVIDENCE: a check that RENDERS the screen through demo/cdp.mjs at 390
 
 MUST NOT REGRESS: /locations/'s collapsed read-only 'Gebäude-Tag (Bestand)' disclosure (decision-43 §7) is what keeps HOIV's mounted card visible and explained. It stays exactly as it is.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Deployed e0c5a5a. Confirmed served: badge string present in the live production bundle (ssh grep on /srv/nfc/public). Confirmed API-side gate this UI describes proven live 20/20 via ops/prove-zone-verification.sh, re-run independently against production.
+<!-- SECTION:NOTES:END -->
