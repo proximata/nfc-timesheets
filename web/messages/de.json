@@ -352,7 +352,14 @@
     "filterNoEmail": "Nur Mitarbeiter ohne E-Mail-Adresse.",
     "rateRequiredHint": "Pflichtfeld und größer als null: Ohne Stundensatz lässt sich keine Stunde dieser Person abrechnen, und ein Satz von 0,00 € wäre kein vereinbarter Lohn, sondern ein fehlender. Steht der Satz noch nicht fest, legen Sie die Person erst an, wenn er feststeht.",
     "errorRateRequired": "Bitte einen Stundensatz eingeben, zum Beispiel 14,50. Ein Stundensatz ist Pflicht – ohne ihn kann keine Stunde dieser Person abgerechnet werden.",
-    "operatorsLink": "Betreiber verwalten"
+    "operatorsLink": "Betreiber verwalten",
+    "smsSend": "SMS senden",
+    "smsNotConfigured": "SMS ist nicht eingerichtet. Code vorlesen oder kopieren.",
+    "smsNoPhone": "Keine Login-Nummer hinterlegt. Zugangscode direkt weitergeben.",
+    "smsHandedOver": "SMS an {phone} übergeben ({time}).",
+    "smsFailed": "SMS nicht gesendet ({reason}). Der Zugangscode oben gilt trotzdem.",
+    "smsTooMany": "SMS-Limit erreicht. Bitte kurz warten oder den Zugangscode direkt weitergeben.",
+    "smsSendFailed": "SMS konnte nicht gesendet werden. Bitte erneut versuchen oder den Zugangscode direkt weitergeben."
   },
   "locations": {
     "heading": "Objekte",

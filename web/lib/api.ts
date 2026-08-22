@@ -185,6 +185,25 @@ export type Worker = {
   phone_pending_blocked: number
   /** ISO-8601 start of the oldest undelivered shift on that phone. Null = none. */
   phone_pending_oldest_start: string | null
+  /**
+   * THE LOGIN NUMBER (`phone_identities`, decision-45) — a DIFFERENT fact from `phone`
+   * above, which is free text the director typed and is never normalised (decision-48 §2).
+   * The two are allowed to disagree. Null = nobody has claimed a login number for this
+   * worker yet, which is also why an SMS can never be sent: see `smsNoPhone`.
+   */
+  phone_e164: string | null
+  /**
+   * WHAT THE LAST SMS ATTEMPT DID (append-only `sms_deliveries`, decision-48 §2.2). This is
+   * what makes a stored "preferred channel" unnecessary: it is a FACT about what happened,
+   * not an intention. Null on all three = no attempt has ever been made for this worker.
+   */
+  sms_last_status: 'sent' | 'failed' | null
+  /** A fixed-vocabulary word (`timeout`, `network:<code>`, `rejected`, `http_<n>`, …). `failed` only. */
+  sms_last_reason: string | null
+  /** ISO-8601 of the last attempt, whatever it did. */
+  sms_last_at: string | null
+  /** How many attempts, ever — including failed ones. */
+  sms_count: number
 }
 
 /** Create (no `id`) or update (`id`). Same route either way. */
@@ -592,6 +611,64 @@ export function issueEnrolmentCode(
 export function revokeEnrolmentCode(workerId: number, signal?: AbortSignal): Promise<void> {
   return apiFetch<void>(`/admin/workers/${workerId}/enrolment-code`, {
     method: 'DELETE',
+    signal,
+  })
+}
+
+/* --- SMS: a SECOND delivery channel for the SAME enrolment code (decision-48) -----------
+ *
+ * THE OWNER, VERBATIM: "in admin there must be an option to choose how to onboard a
+ * worker, so if sms didnt work, there is always a fallback."
+ *
+ * Onboarding is an ACTION, not a stored preference: this is a SEPARATE route from
+ * `issueEnrolmentCode` above, never a `{deliver:"sms"}` option on it, so the fallback can
+ * never end up hidden behind a parameter — and `issueEnrolmentCode` above is byte-for-byte
+ * unchanged by any of this.
+ */
+
+/**
+ * `GET /admin/sms-status` — names only, never a credential (server/lib/sms.js `smsStatus`).
+ * The panel fetches this once alongside the worker list so the "SMS senden" button's
+ * disabled state is a FACT FROM THE SERVER, not a guess baked into the static bundle
+ * (decision-16: this is a static export).
+ */
+export type SmsStatus = {
+  configured: boolean
+  /** Exactly: 'account_sid' | 'auth' | 'sender'. Never surfaced verbatim — see `smsNotConfigured`. */
+  missing: string[]
+  sender_kind: 'number' | 'messaging_service' | null
+}
+
+export function fetchSmsStatus(signal?: AbortSignal): Promise<SmsStatus> {
+  return apiFetch<SmsStatus>('/admin/sms-status', { signal })
+}
+
+/**
+ * ONE delivery attempt, exactly as `POST .../enrolment-code/sms` returns it
+ * (server/routes/admin.js `sendEnrolmentCodeBySms`). There is no third value: the flag is
+ * checked before anything is minted, so a misconfigured box never reaches this type at all
+ * — it throws `ApiError` with status 503 instead, same as every other refusal here.
+ */
+export type SmsDeliveryResult =
+  | { status: 'sent'; phone_e164: string; provider_sid: string }
+  | { status: 'failed'; phone_e164: string; reason: string; provider_code: number | null }
+
+/**
+ * `POST /admin/workers/:id/enrolment-code/sms` response. Same three fields as
+ * `FreshEnrolmentCode` plus `delivery` — because a FAILED send is STILL a 200 carrying a
+ * working code (decision-48 §5.1): the code half of this response is built before Twilio is
+ * ever contacted, so there is no error case here for "SMS did not go out". `409
+ * no_phone_identity`, `503 sms_not_configured` and `429 too_many_attempts` all throw
+ * `ApiError` before anything is minted, exactly like every other route in this file.
+ */
+export type SmsEnrolmentCode = FreshEnrolmentCode & { delivery: SmsDeliveryResult }
+
+export function sendEnrolmentCodeBySms(
+  workerId: number,
+  signal?: AbortSignal,
+): Promise<SmsEnrolmentCode> {
+  return apiFetch<SmsEnrolmentCode>(`/admin/workers/${workerId}/enrolment-code/sms`, {
+    method: 'POST',
     signal,
   })
 }

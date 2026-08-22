@@ -352,7 +352,14 @@
     "filterNoEmail": "Only workers without an email address.",
     "rateRequiredHint": "Required, and greater than zero: without an hourly rate not one of this person’s hours can be paid, and a rate of 0.00 EUR would not be an agreed wage but a missing one. If the rate is not settled yet, file the person once it is.",
     "errorRateRequired": "Please enter an hourly rate, for example 14.50. A rate is required – without one, none of this person’s hours can be paid.",
-    "operatorsLink": "Manage operators"
+    "operatorsLink": "Manage operators",
+    "smsSend": "Send SMS",
+    "smsNotConfigured": "SMS is not set up. Read the code out or copy it.",
+    "smsNoPhone": "No login number on file. Share the enrolment code directly.",
+    "smsHandedOver": "SMS handed to the carrier for {phone} ({time}).",
+    "smsFailed": "SMS not sent ({reason}). The enrolment code above is valid anyway.",
+    "smsTooMany": "SMS limit reached. Please wait a moment or share the enrolment code directly.",
+    "smsSendFailed": "The SMS could not be sent. Please try again or share the enrolment code directly."
   },
   "locations": {
     "heading": "Locations",

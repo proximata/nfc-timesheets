@@ -15,10 +15,13 @@ import { WorkerPanel } from '@/components/WorkerPanel'
 import {
   ApiError,
   type FreshEnrolmentCode,
+  fetchSmsStatus,
   fetchWorkerSnapshot,
   issueEnrolmentCode,
   revokeEnrolmentCode,
+  type SmsStatus,
   saveWorker,
+  sendEnrolmentCodeBySms,
   type Worker,
   type WorkerSnapshot,
 } from '@/lib/api'
@@ -156,6 +159,13 @@ export default function WorkersPage() {
   const [pending, setPending] = useState<Pending | null>(null)
   /** The code just created, shown once. Unrecoverable afterwards — see `issueEnrolmentCode`. */
   const [freshCode, setFreshCode] = useState<FreshEnrolmentCode | null>(null)
+  /**
+   * `GET /admin/sms-status`, decision-48's picker. Null = not loaded yet (the SMS button
+   * stays disabled until it is — fail closed, same posture as a real 503). Fetched once
+   * alongside the worker list, never guessed from the bundle: a static export cannot know
+   * whether Twilio is configured on the box that happens to be serving it today.
+   */
+  const [smsInfo, setSmsInfo] = useState<SmsStatus | null>(null)
   /** Result of the last write, announced in the page's permanent live region. */
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   /** Ticks so an expiry that has passed stops being reported as a live code. */
@@ -188,7 +198,18 @@ export default function WorkersPage() {
   const load = useCallback(
     async (signal?: AbortSignal) => {
       try {
-        setSnapshot(await fetchWorkerSnapshot(signal))
+        const [snap, sms] = await Promise.all([
+          fetchWorkerSnapshot(signal),
+          // FAILS CLOSED. An old server, a proxy hiccup, offline — none of it may stop the
+          // worker list from loading, and none of it may be mistaken for "configured": the
+          // button ends up disabled with the same sentence a real 503 would produce.
+          fetchSmsStatus(signal).catch((cause) => {
+            if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+            return { configured: false, missing: [], sender_kind: null } as SmsStatus
+          }),
+        ])
+        setSnapshot(snap)
+        setSmsInfo(sms)
         setLoadError(null)
       } catch (cause) {
         if (cause instanceof DOMException && cause.name === 'AbortError') return
@@ -345,6 +366,50 @@ export default function WorkersPage() {
     }
   }
 
+  /**
+   * "SMS senden" — decision-48's second onboarding ACTION, never a replacement for the one
+   * above: it calls the SAME mint on the server (`mintEnrolmentCode`) and then attempts one
+   * delivery. The server's own guarantee is that the `{code, expires_at}` half of the
+   * response is built BEFORE Twilio is ever contacted, so a FAILED send still lands a
+   * working code here — shown in the SAME standing panel `issueCode` uses above, never a
+   * second UI for the same fact.
+   */
+  async function sendCodeBySms(worker: Worker) {
+    if (busy) return
+    setBusy(true)
+    setNotice(null)
+    setFreshCode(null)
+    try {
+      const result = await sendEnrolmentCodeBySms(worker.id)
+      setFreshCode({ worker: result.worker, code: result.code, expires_at: result.expires_at })
+      setNotice(
+        result.delivery.status === 'sent'
+          ? {
+              ok: true,
+              text: t('smsHandedOver', {
+                phone: result.delivery.phone_e164,
+                time: dayTime(new Date().toISOString()),
+              }),
+            }
+          : { ok: false, text: t('smsFailed', { reason: result.delivery.reason }) },
+      )
+      await load()
+    } catch (cause) {
+      if (handleAuthLoss(cause)) return
+      if (cause instanceof ApiError && cause.code === 'no_phone_identity') {
+        setNotice({ ok: false, text: t('smsNoPhone') })
+      } else if (cause instanceof ApiError && cause.status === 503) {
+        setNotice({ ok: false, text: t('smsNotConfigured') })
+      } else if (cause instanceof ApiError && cause.status === 429) {
+        setNotice({ ok: false, text: t('smsTooMany') })
+      } else {
+        setNotice({ ok: false, text: t('smsSendFailed') })
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
   /** The control for a code that reached the wrong person. Immediate, and idempotent. */
   async function revokeCode(worker: Worker) {
     if (busy) return
@@ -413,6 +478,43 @@ export default function WorkersPage() {
       timeStyle: 'short',
       timeZone: BUSINESS_TIME_ZONE,
     })
+
+  /**
+   * decision-48's picker, second half: is "SMS senden" usable right now? False for EVERY
+   * reason it might not be — the flag off (today's real state), the status not loaded yet
+   * (fail closed), or this worker having no login number — and `smsCellNote` below states
+   * the reason IN WORDS beside the button. The button is never hidden for any of these; it
+   * is disabled, which is not the same thing (NOTHING TRUE may be deleted to lighten a
+   * screen).
+   */
+  function smsButtonDisabled(worker: Worker, sms: SmsStatus | null): boolean {
+    return sms === null || !sms.configured || worker.phone_e164 === null
+  }
+
+  /**
+   * The sentence beside the SMS button — colour is always the SECOND signal, so this is
+   * what actually carries "why". Three reasons, in the order a director hits them: the
+   * feature is off on this box, this person has no login number yet, or (once both of
+   * those are fine) what the LAST attempt did — read from the append-only `sms_deliveries`
+   * log `/admin/data` joins on (decision-48 §2.2: a fact about what happened, never a
+   * stored preference about what to do next time). Null = nothing worth a line, exactly
+   * like the code column says nothing extra while a code is simply live.
+   */
+  function smsCellNote(worker: Worker, sms: SmsStatus | null): string | null {
+    if (sms === null) return null
+    if (!sms.configured) return t('smsNotConfigured')
+    if (worker.phone_e164 === null) return t('smsNoPhone')
+    if (worker.sms_last_status === 'sent') {
+      return t('smsHandedOver', {
+        phone: worker.phone_e164,
+        time: dayTime(worker.sms_last_at ?? ''),
+      })
+    }
+    if (worker.sms_last_status === 'failed') {
+      return t('smsFailed', { reason: worker.sms_last_reason ?? '—' })
+    }
+    return null
+  }
 
   /** Words, never a colour: this has to survive greyscale and a screen reader. */
   function codeStatusText(worker: Worker): string {
@@ -715,7 +817,31 @@ export default function WorkersPage() {
                           </span>
                         </button>
                       ) : null}
+                      {/* THE PICKER (decision-48): a SECOND onboarding action, at the SAME
+                          weight as "Zugangscode erzeugen" and never a mode switch — both are
+                          live for every active worker, both usable any number of times, in
+                          any order, for ever. Disabled with the reason IN WORDS beside it
+                          when it cannot work today, because a director staring at one
+                          working button with no explanation for the missing second one is
+                          exactly the gap decision-48 exists to close. */}
+                      {worker.active ? (
+                        <button
+                          type="button"
+                          className="btn btn-quiet"
+                          disabled={smsButtonDisabled(worker, smsInfo)}
+                          aria-disabled={smsButtonDisabled(worker, smsInfo)}
+                          onClick={() => sendCodeBySms(worker)}
+                        >
+                          {t('smsSend')}
+                          <span className="visually-hidden">
+                            {t('forWorker', { name: worker.name })}
+                          </span>
+                        </button>
+                      ) : null}
                     </div>
+                    {worker.active && smsCellNote(worker, smsInfo) !== null ? (
+                      <p className="cell-muted">{smsCellNote(worker, smsInfo)}</p>
+                    ) : null}
                   </td>
                   <td className="cell-actions">
                     <button
