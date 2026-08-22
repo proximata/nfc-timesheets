@@ -6,6 +6,16 @@ title: >-
 date: '2026-08-19 13:48'
 status: accepted
 ---
+> **AMENDED by decision-47 (2026-08-22), NOT superseded.** This record stands in full. Two
+> clauses are amended **for tags created from that date forward**: a NEW building-level tag can
+> no longer be minted (`POST /admin/tags/:id/resolve-building` is deleted), and §7's tag
+> walkthrough gains a second half — a zone is a clock-in target only after an operator has
+> test-scanned its card in the field (`zones.verified_at`).
+>
+> **§2's building branch is UNCHANGED and the HOIV card is grandfathered BY NAME.** It carries a
+> BUILDING uuid, it keeps resolving for ever, it is not legacy and it is not deprecated. The
+> verification gate is a ZONE-only concept and no query path connects it to a building tap.
+
 **ACCEPTED 2026-08-19 by the owner.** Implemented by `006_zones_revenue_rates.sql` §3.
 
 decision-37 now carries `status: superseded` and a banner at the top of its own file naming

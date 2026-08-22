@@ -1001,6 +1001,12 @@ reachable resting state.
 
 # 5 · The verification tap, again
 
+> **ANSWERED 2026-08-22 by decision-47 / `backlog/docs/ZONE-VERIFICATION.md`.** The choice below
+> is settled as option **(c)**: a read-only test scan on an OPERATOR session that posts no shift
+> and cannot (no shift route accepts `ts_operator`). `zonesTestTapWarning` — the prose workaround
+> this section names — is deleted, because it stops being true. The paragraphs below are kept as
+> the record of why the problem was deferred and what its trigger was.
+
 D1 step 9 and IA-PLAN §8.4: a test tap creates a permanent, undeletable payroll row, and
 there is no `DELETE /admin/shifts/:id` anywhere. The owner **deferred** this in IA-PLAN §9,
 with a trigger: *"revisit when tags are deployed in bulk (more than one building, or zones

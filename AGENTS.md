@@ -102,7 +102,15 @@ Decision checklist (keep updated as decisions are added):
   the portal: an unzoned building clocks workers in exactly as before, and a BUILDING UUID on a
   card resolves to the BUILDING for ever (decision-43, SUPERSEDES decision-37)
 - A tag serial is a column on a zone delivered through the roster; `KnownTags.kt` is deleted
-  only AFTER a zone row carries the serial (decision-44)
+  only AFTER a zone row carries the serial (decision-44) — and, per decision-47, only after that
+  zone is VERIFIED
+- A zone is NOT a clock-in target until an OPERATOR test-scans its card in the field
+  (`zones.verified_at`, `POST /operator/zones/:id/verify`, which posts no shift and cannot).
+  Minting a NEW building-level tag is retired: `POST /admin/tags/:id/resolve-building` is DELETED
+  and a new building is created tag-free via `POST /admin/locations`, then the reported card
+  becomes its first zone. **The HOIV building card is grandfathered BY NAME and is not
+  deprecated** — the gate is ZONE-only and `activePlace`'s building branch is untouched
+  (decision-47, AMENDS decision-43; `backlog/docs/ZONE-VERIFICATION.md`)
 
 ~~decision-37~~ (zones, no area) is SUPERSEDED by decision-43 and nothing from it shipped.
 
