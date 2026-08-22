@@ -31,6 +31,7 @@
 //   receipts, no inbound SMS, no STOP handling beyond whatever Twilio does for us.
 //   UPGRADE PATH: a POST /sms/status webhook with Twilio signature validation writing a
 //   `delivered_at` onto sms_deliveries — its own decision, because it opens a public route.
+import { randomInt } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -275,6 +276,63 @@ export function renderEnrolmentSms({ name, display, expiresAt }) {
 /** The OTP message. No expiry timestamp: ten minutes is easier to act on than a clock time. */
 export function renderOtpSms({ name, code, ttlMinutes }) {
   return `${name}: Ihr Anmeldecode lautet ${code}. Gültig ${ttlMinutes} Minuten. Nicht weitergeben.`;
+}
+
+// ---- the one-time code (decision-48 §6) --------------------------------------------
+//
+// SIX DIGITS, AND DELIBERATELY NOT THE ENROLMENT CODE'S ALPHABET. They are different
+// objects and the difference is the CHANNEL: an enrolment code is SPOKEN ALOUD to a tired
+// cleaner in a stairwell, so it is Crockford base32 with the misread pairs removed and
+// aliased. An OTP is COPIED OFF A NOTIFICATION and never spoken, so digits give a numeric
+// keypad, work with Android's autofill heuristics, and have no alphabet to explain.
+//
+// SIX IS SAFE HERE AND FORTY BITS WAS NEEDED THERE, for one structural reason: an enrolment
+// code guess is checked against EVERY LIVE CODE IN THE SYSTEM, so the attacker's odds scale
+// with how many are outstanding. An OTP guess is checked against THE ONE CHALLENGE minted
+// for the phone number in the same request. There is no union to attack.
+//
+//   keyspace                                    10^6 = 1_000_000
+//   attempts per challenge                      5, then it is burned
+//   p(hit | one challenge)                      5 / 10^6            = 5.0e-6
+//   requests per phone (lib/auth.js)            3 / rolling hour, 10 / rolling 24h
+//   guesses per phone per day, saturated        10 * 5 = 50 against 10 DISTINCT secrets
+//   p(hit | one phone, one day, saturated)      50 / 10^6           = 5.0e-5
+//   expected days to a first hit, saturated     ~20_000 days (~55 years)
+//
+// and every one of those days the victim's handset rings with ten texts they did not ask
+// for, so the attack is LOUD as well as slow — unlike an enrolment code, which can be
+// attacked silently for five days. If the length, the TTL, the attempt cap or either rate
+// limit changes, REDO THIS BLOCK.
+//
+// TEN MINUTES, not five and not an hour. Five is the textbook number and is wrong for this
+// user: a cleaner is in a basement, Austrian carrier delivery is usually seconds but not
+// always, and an OTP that expires in flight costs a second SMS — the exact failure that
+// made decision-26 raise its own TTL from 60 minutes to 5 days after a real incident. An
+// hour is wrong the other way: the code sits readable on a lock screen on a table. The
+// arithmetic above is bounded by ATTEMPTS, not by time, so the TTL does not move it.
+export const OTP_TTL_MS = 10 * 60_000;
+export const OTP_TTL_MINUTES = OTP_TTL_MS / 60_000;
+export const OTP_MAX_ATTEMPTS = 5;
+
+const OTP_RE = /^[0-9]{6}$/;
+
+/** A fresh 6-digit code. `randomInt` is uniform over the range — no modulo bias. */
+export function newOtpCode() {
+  return String(randomInt(0, 1_000_000)).padStart(6, "0");
+}
+
+/**
+ * Whatever the worker typed -> the canonical 6 digits, or null.
+ *
+ * null is the ONLY failure signal, and the caller must treat it exactly like a code that is
+ * unknown, expired or already used — "your code is the wrong shape" is still information
+ * about our codes. Spaces and separators are stripped because people paste, and a phone's
+ * autofill sometimes hands over "123 456".
+ */
+export function normaliseOtp(input) {
+  if (typeof input !== "string" || input.length > 32) return null;
+  const canonical = input.replace(/[^0-9]/g, "");
+  return OTP_RE.test(canonical) ? canonical : null;
 }
 
 // ---- the wire ---------------------------------------------------------------------

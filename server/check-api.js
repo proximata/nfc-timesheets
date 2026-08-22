@@ -147,6 +147,33 @@ CREATE TABLE phone_identities (
 );
 CREATE INDEX phone_identities_worker_idx ON phone_identities (worker_id) WHERE worker_id IS NOT NULL;
 CREATE INDEX phone_identities_operator_idx ON phone_identities (operator_id) WHERE operator_id IS NOT NULL;
+-- decision-48 / 011_sms_onboarding.sql + 012_sms_otp.sql, transcribed verbatim.
+CREATE TABLE sms_deliveries (
+  id BIGSERIAL PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('enrolment_code', 'otp')),
+  worker_id BIGINT REFERENCES workers(id) ON DELETE SET NULL,
+  operator_id BIGINT REFERENCES operators(id) ON DELETE SET NULL,
+  phone_e164 TEXT NOT NULL CHECK (phone_e164 ~ '^\\+[1-9][0-9]{7,14}$'),
+  status TEXT NOT NULL CHECK (status IN ('sent', 'failed')),
+  reason TEXT,
+  provider_sid TEXT,
+  provider_code INTEGER,
+  requested_by BIGINT REFERENCES admins(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX sms_deliveries_worker_idx ON sms_deliveries (worker_id, created_at DESC) WHERE worker_id IS NOT NULL;
+CREATE INDEX sms_deliveries_created_idx ON sms_deliveries (created_at DESC);
+CREATE TABLE otp_challenges (
+  id BIGSERIAL PRIMARY KEY,
+  phone_e164 TEXT NOT NULL REFERENCES phone_identities(phone_e164) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  attempts SMALLINT NOT NULL DEFAULT 0,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX otp_challenges_phone_idx ON otp_challenges (phone_e164, created_at DESC);
+CREATE INDEX otp_challenges_expires_idx ON otp_challenges (expires_at);
 CREATE TABLE operator_sessions (
   token TEXT PRIMARY KEY,
   operator_id BIGINT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,

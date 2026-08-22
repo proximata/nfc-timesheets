@@ -5,6 +5,7 @@
 // limit is not defensible on a host that has to be publicly reachable for AASA.
 // /admin/login is the only route here that is NOT behind a session.
 import {
+  checkGlobalSmsSpend,
   checkLoginRate,
   clearLoginFailures,
   clearedSessionCookie,
@@ -23,6 +24,7 @@ import { all, one, query } from "../lib/db.js";
 import { CODE_TTL_MS, newEnrolmentCode } from "../lib/enrolment.js";
 import { geocode } from "../lib/geocode.js";
 import { fail } from "../lib/http.js";
+import { renderEnrolmentSms, senderName, sendSms, smsConfigured, smsStatus } from "../lib/sms.js";
 import {
   assertTransition,
   M_MATERIAL_REQUEST_COLS,
@@ -339,7 +341,36 @@ async function adminData({ query }) {
     materialRequests,
     settings,
   ] = await Promise.all([
-    all(`SELECT ${WORKER_COLS} FROM workers ORDER BY active DESC, name`),
+    // The two SMS columns are decision-48 and are ADDITIVE: every field the panel read
+    // before this join existed is still here, in the same place, under the same name.
+    //
+    // `phone_e164` is the LOGIN number (phone_identities, decision-45) and is a DIFFERENT
+    // fact from `workers.phone`, which is free text the director typed and which is never
+    // normalised. Both are returned, and they are allowed to disagree — decision-45 §4
+    // forbids silently reformatting the free-text column, so the panel shows both rather
+    // than pretending one is the other.
+    //
+    // `sms_last_*` is the LAST ATTEMPT, from the append-only log (011). It is what makes a
+    // stored "preferred channel" column unnecessary (decision-48 §2.2): this records what
+    // HAPPENED, per attempt, instead of what somebody once intended.
+    all(
+      `SELECT ${WORKER_COLS.split(", ").map((c) => `w.${c}`).join(", ")},
+              pi.phone_e164,
+              s.status     AS sms_last_status,
+              s.reason     AS sms_last_reason,
+              s.created_at AS sms_last_at,
+              COALESCE(t.n, 0)::int AS sms_count
+         FROM workers w
+         LEFT JOIN phone_identities pi ON pi.worker_id = w.id
+         LEFT JOIN LATERAL (
+           SELECT status, reason, created_at FROM sms_deliveries
+            WHERE worker_id = w.id ORDER BY created_at DESC LIMIT 1
+         ) s ON true
+         LEFT JOIN LATERAL (
+           SELECT count(*) AS n FROM sms_deliveries WHERE worker_id = w.id
+         ) t ON true
+        ORDER BY w.active DESC, w.name`,
+    ),
     // decision-45. `enrolment_code_hash` never selected, mirroring WORKER_COLS's existing
     // omission exactly. No `to_regclass` guard: matches the existing (unguarded) `zones`
     // query below — adding one here and not there would be a new inconsistency, not a fix.
@@ -604,10 +635,32 @@ async function issueEnrolmentCode({ params, session }) {
   const worker = await one("SELECT id, name FROM workers WHERE id = $1 AND active", [v.id(params.id, "id")]);
   if (!worker) fail(404, "unknown_worker");
 
+  const minted = await mintEnrolmentCode(worker.id, session.adminId);
+  return {
+    status: 201,
+    body: {
+      worker: { id: worker.id, name: worker.name },
+      code: minted.display,
+      expires_at: minted.expiresAt.toISOString(),
+    },
+  };
+}
+
+/**
+ * Mint one code onto one worker row. EXTRACTED, NOT REWRITTEN (decision-48 §5.1): the SMS
+ * route and the „Zugangscode erzeugen" button call THIS function, so the two cannot drift
+ * apart — a bug fixed in one is fixed in both, and there is no version of the fallback that
+ * is a slightly different credential from the one it falls back from.
+ *
+ * The response bytes of POST /admin/workers/:id/enrolment-code are unchanged by the
+ * extraction: same 201, same three fields, same display form, same 5-day CODE_TTL_MS.
+ *
+ * workers.enrolment_code_hash is UNIQUE so a code can never name two workers. A collision
+ * is ~1 in 2^40 per issue; retrying is two lines and removes the case where the director's
+ * button answers 500 for a reason nobody could ever reproduce.
+ */
+async function mintEnrolmentCode(workerId, adminId) {
   const expiresAt = new Date(Date.now() + CODE_TTL_MS);
-  // workers.enrolment_code_hash is UNIQUE so a code can never name two workers. A
-  // collision is ~1 in 2^40 per issue; retrying is two lines and removes the case where
-  // the director's button answers 500 for a reason nobody could ever reproduce.
   for (let attempt = 0; attempt < 3; attempt++) {
     const { code, display } = newEnrolmentCode();
     try {
@@ -619,21 +672,218 @@ async function issueEnrolmentCode({ params, session }) {
                 enrolment_code_issued_by = $4,
                 enrolment_code_redeemed_at = NULL
           WHERE id = $1`,
-        [worker.id, hashToken(code), expiresAt, session.adminId],
+        [workerId, hashToken(code), expiresAt, adminId],
       );
-      return {
-        status: 201,
-        body: {
-          worker: { id: worker.id, name: worker.name },
-          code: display,
-          expires_at: expiresAt.toISOString(),
-        },
-      };
+      return { display, expiresAt };
     } catch (err) {
       if (err?.code !== "23505") throw err;
     }
   }
   fail(503, "code_unavailable");
+}
+
+// ---- SMS as a SECOND DELIVERY CHANNEL for the SAME code (decision-48) --------------
+//
+// THE OWNER, VERBATIM: "in admin there must be an option to choose how to onboard a worker,
+// so if sms didnt work, there is always a fallback."
+//
+// ONBOARDING IS AN ACTION, NOT A SETTING. There is no `workers.onboarding_method` column and
+// there never will be (decision-48 §2): two buttons on one row, both live for every active
+// worker, both usable any number of times in any order, for ever. „Zugangscode erzeugen" is
+// never disabled, hidden or made conditional by anything here.
+//
+// A SEPARATE ROUTE, NOT A `{deliver:"sms"}` FLAG on the existing one. An option on an
+// existing route would put the fallback BEHIND A PARAMETER; a new route cannot. It also
+// means POST /admin/workers/:id/enrolment-code keeps its current bytes, which is what
+// ops/check-fallback-reachable.mjs asserts.
+
+/**
+ * POST /admin/workers/:id/enrolment-code/sms -> the SAME code, delivered by SMS.
+ *
+ *   200 {worker, code, expires_at, delivery:{status:"sent",   provider_sid, phone_e164}}
+ *   200 {worker, code, expires_at, delivery:{status:"failed", reason, provider_code, phone_e164}}
+ *   409 {error:"no_phone_identity"}   no login number on file  -> PUT .../phone first
+ *   503 {error:"sms_not_configured"}  NOTHING minted, NOTHING written, NO budget spent
+ *   429 {error:"too_many_attempts"}   over the rolling spend cap; nothing minted
+ *   404 {error:"unknown_worker"}      unknown or inactive, exactly as the existing route
+ *
+ * A FAILED SEND IS A 200. That is not sloppiness, it is the whole design: the code was
+ * minted, it is in the body, it is on the admin's screen and it works. A 4xx/5xx would let
+ * the panel's error path swallow the body and destroy the fallback.
+ *
+ * THE ORDER BELOW IS THE GUARANTEE, and it is why "there is always a fallback" is
+ * structural here rather than asserted:
+ *
+ *   1  smsConfigured()          false -> 503. Nothing has happened yet.
+ *   2  resolve phone_identities none  -> 409. Nothing has happened yet.
+ *   3  checkGlobalSmsSpend()    over  -> 429. Nothing has happened yet.
+ *   4  mintEnrolmentCode()      the SAME helper the existing button calls
+ *   5  BUILD THE 200 BODY       <- the fallback exists from this line onward
+ *   6  await sendSms()          never throws; returns {status, reason?, provider_*?}
+ *   7  INSERT sms_deliveries    one row, always, whatever step 6 said
+ *   8  return body + delivery   the code is in it on EVERY path through 6 and 7
+ *
+ * Steps 1-3 all precede the mint, so a misconfigured or rate-limited box can never spend a
+ * worker's code, and never leaves a row behind claiming a delivery that did not happen.
+ */
+async function sendEnrolmentCodeBySms({ params, session }) {
+  const workerId = v.id(params.id, "id");
+
+  // 1. THE FLAG, FIRST AND BEFORE EVERYTHING. 503 and never 202: the route exists and is
+  // correct, the DEPENDENCY is unavailable, and 503 is the one status that can never be
+  // read as "accepted". Checked before the limiter so a box with no credentials cannot
+  // burn the hour's budget on refusals.
+  if (!smsConfigured()) fail(503, "sms_not_configured");
+
+  const worker = await one(
+    `SELECT w.id, w.name, pi.phone_e164
+       FROM workers w
+       LEFT JOIN phone_identities pi ON pi.worker_id = w.id
+      WHERE w.id = $1 AND w.active`,
+    [workerId],
+  );
+  if (!worker) fail(404, "unknown_worker");
+  // 2. No canonical number, no message. NOT an error the admin cannot act on: the panel
+  // offers „Nummer hinterlegen" (PUT .../phone) beside it, and the code button is right
+  // there and unaffected.
+  if (!worker.phone_e164) fail(409, "no_phone_identity");
+
+  // 3. THE BILL. The caller is an authenticated admin so there is no search space to
+  // protect — but there IS money, and a stuck panel retrying in a loop is the way it gets
+  // spent. Over the ceiling -> 429 BEFORE the mint, so nothing is issued and nothing is
+  // charged.
+  checkGlobalSmsSpend();
+
+  // 4 + 5. THE CODE EXISTS AND THE BODY IS BUILT BEFORE TWILIO IS EVER CONTACTED.
+  const minted = await mintEnrolmentCode(worker.id, session.adminId);
+  const body = {
+    worker: { id: worker.id, name: worker.name },
+    code: minted.display,
+    expires_at: minted.expiresAt.toISOString(),
+  };
+
+  // 6. Never throws. A timeout, a DNS failure, a 401 from Twilio and an unsubscribed
+  // handset all arrive here as {status:"failed", reason}.
+  const result = await sendSms(
+    worker.phone_e164,
+    renderEnrolmentSms({ name: senderName(), display: minted.display, expiresAt: minted.expiresAt }),
+  );
+
+  // 7. One row, always. Append-only: nothing in this tree updates or deletes it.
+  await query(
+    `INSERT INTO sms_deliveries (kind, worker_id, phone_e164, status, reason, provider_sid, provider_code, requested_by)
+     VALUES ('enrolment_code', $1, $2, $3, $4, $5, $6, $7)`,
+    [
+      worker.id,
+      worker.phone_e164,
+      result.status,
+      result.reason ?? null,
+      result.provider_sid ?? null,
+      result.provider_code ?? null,
+      session.adminId,
+    ],
+  );
+
+  // 8. „übergeben", never „zugestellt" (decision-48 §5.5): Twilio answering 2xx means it
+  // accepted the message, not that she read it. The panel's wording follows from this
+  // field and there is no third value that could be mistaken for a delivery receipt.
+  return {
+    status: 200,
+    body: {
+      ...body,
+      delivery: {
+        status: result.status,
+        phone_e164: worker.phone_e164,
+        ...(result.status === "sent" ?
+          { provider_sid: result.provider_sid }
+        : { reason: result.reason, provider_code: result.provider_code ?? null }),
+      },
+    },
+  };
+}
+
+/**
+ * PUT /admin/workers/:id/phone {phone} -> 200 {worker:{id}, phone_e164}
+ *
+ * THE ONE-CLICK PROMOTION decision-45 NAMED AND DID NOT BUILD: "Promotion of existing rows
+ * is a named, future, one-click admin action, not built here." Without it, SMS to a worker
+ * is unreachable — `POST /admin/workers` writes free-text `workers.phone` and claims
+ * nothing in the registry (check-phone-namespace.mjs §3 asserts exactly that ceiling).
+ *
+ * IT DOES NOT TOUCH `workers.phone`. decision-45 §4 forbids reformatting the free-text
+ * column, so the two are allowed to disagree from this moment on and the panel shows both.
+ * This is a deliberate claim the admin makes, not a silent normalisation of what was typed.
+ *
+ *   409 phone_claimed names NOBODY — anti-enumeration, the same posture createOperator
+ *   already takes and decision-22's 403 takes for a claimed email.
+ */
+async function putWorkerPhone({ params, body }) {
+  const workerId = v.id(params.id, "id");
+  const phone = v.identityPhone(body.phone, "phone");
+
+  const worker = await one("SELECT id FROM workers WHERE id = $1 AND active", [workerId]);
+  if (!worker) fail(404, "unknown_worker");
+
+  try {
+    // ONE STATEMENT, and the WHERE is what makes it safe. `worker_id IS NULL` on the
+    // conflict branch lets a row an OPERATOR already holds ADOPT its worker half — one
+    // human, one telephone, two roles, which is precisely what 007's table is for — while
+    // making it impossible to STEAL a number from another worker: that row has a non-NULL
+    // worker_id, the UPDATE matches nothing, and 0 rows come back.
+    const claimed = await one(
+      `INSERT INTO phone_identities (phone_e164, worker_id) VALUES ($1, $2)
+         ON CONFLICT (phone_e164) DO UPDATE SET worker_id = $2
+            WHERE phone_identities.worker_id IS NULL
+       RETURNING phone_e164`,
+      [phone, workerId],
+    );
+    if (!claimed) fail(409, "phone_claimed");
+
+    // The worker's PREVIOUS claim, if any, is released in the same call — otherwise
+    // changing a number would leave the old one claimed for ever and an OTP to it would
+    // still resolve to this worker.
+    await query("UPDATE phone_identities SET worker_id = NULL WHERE worker_id = $1 AND phone_e164 <> $2", [
+      workerId,
+      phone,
+    ]);
+    await query("DELETE FROM phone_identities WHERE worker_id IS NULL AND operator_id IS NULL");
+
+    return { status: 200, body: { worker: { id: workerId }, phone_e164: phone } };
+  } catch (err) {
+    // phone_identities_worker_id_key: this number is free, but the worker already holds a
+    // different one and the UPDATE above has not run yet. Same opaque answer.
+    if (err?.code === "23505") fail(409, "phone_claimed");
+    throw err;
+  }
+}
+
+/**
+ * DELETE /admin/workers/:id/phone -> 200. Releases the claim, and runs decision-45's named
+ * cleanup: a row owned by nobody is not a reservation, it is litter, and leaving it would
+ * make the number permanently unclaimable by anyone.
+ *
+ * Idempotent and 200 whether or not there was a claim — same posture as revokeEnrolmentCode.
+ */
+async function deleteWorkerPhone({ params }) {
+  const workerId = v.id(params.id, "id");
+  await query("UPDATE phone_identities SET worker_id = NULL WHERE worker_id = $1", [workerId]);
+  await query("DELETE FROM phone_identities WHERE worker_id IS NULL AND operator_id IS NULL");
+  return { status: 200, body: { worker: { id: workerId }, phone_e164: null } };
+}
+
+/**
+ * GET /admin/sms-status -> {configured, missing[], sender_kind}
+ *
+ * NAMES ONLY, never a value, never a prefix, never a length. The panel fetches this beside
+ * the worker list so the „SMS senden" button's state is a FACT FROM THE SERVER rather than
+ * a guess baked into a static bundle (the admin is a static export, decision-16).
+ *
+ * The button is RENDERED EITHER WAY. When this says `configured: false` it is disabled with
+ * the reason beside it in words — never hidden, because hiding it would delete something
+ * true: this system has an SMS path and it is switched off.
+ */
+async function smsStatusRoute() {
+  return { status: 200, body: smsStatus() };
 }
 
 /**
@@ -2139,6 +2389,12 @@ export const adminRoutes = [
   { method: "DELETE", path: "/admin/workers/:id", auth: "admin", handler: deleteWorker },
   { method: "POST", path: "/admin/workers/:id/enrolment-code", auth: "admin", handler: issueEnrolmentCode },
   { method: "DELETE", path: "/admin/workers/:id/enrolment-code", auth: "admin", handler: revokeEnrolmentCode },
+  // decision-48. A SEPARATE route, deliberately: the two lines above keep their exact
+  // current shape, so the fallback can never end up behind a parameter on a shared route.
+  { method: "POST", path: "/admin/workers/:id/enrolment-code/sms", auth: "admin", handler: sendEnrolmentCodeBySms },
+  { method: "PUT", path: "/admin/workers/:id/phone", auth: "admin", handler: putWorkerPhone },
+  { method: "DELETE", path: "/admin/workers/:id/phone", auth: "admin", handler: deleteWorkerPhone },
+  { method: "GET", path: "/admin/sms-status", auth: "admin", handler: smsStatusRoute },
   // decision-45. POST /operator/workers is deliberately NOT in this list — see the
   // comment above createOperator.
   { method: "POST", path: "/admin/operators", auth: "admin", handler: createOperator },

@@ -11,6 +11,7 @@ import { pool } from "./lib/db.js";
 import { HttpError, readJson, sendFile, sendJson } from "./lib/http.js";
 import { recordPhoneHeartbeat } from "./lib/phones.js";
 import { redactUrl } from "./lib/scrub.js";
+import { logSmsConfig } from "./lib/sms.js";
 import { adminRoutes } from "./routes/admin.js";
 import { appRoutes } from "./routes/app.js";
 import { authRoutes } from "./routes/auth.js";
@@ -372,6 +373,12 @@ if (isMain) {
   const server = createServer();
   server.listen(Number(process.env.PORT), () => {
     console.log(`timesheets api listening on :${process.env.PORT} (static root ${PUBLIC_DIR})`);
+    // decision-48. SMS is not in REQUIRED_ENV and never will be: a box with no Twilio
+    // credentials is a SUPPORTED configuration, exactly as a box with no Maps key
+    // (lib/geocode.js) and no Sentry DSN (decision-23) is. One line naming WHICH pieces are
+    // absent — never a value, never a prefix, never a length — so "why did the button say
+    // it is not set up" is answerable from journalctl instead of from a guess.
+    logSmsConfig();
   });
 
   for (const signal of ["SIGTERM", "SIGINT"]) {

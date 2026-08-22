@@ -373,9 +373,94 @@ export function checkGlobalEnrolmentRate() {
   }
 }
 
+// ---- SMS ceilings (decision-48) ---------------------------------------------------
+// SEPARATE FROM checkGlobalEnrolmentRate ON PURPOSE, and this is load-bearing rather than
+// tidiness: that counter is sized against a SHARED 40-bit search space (lib/enrolment.js's
+// own arithmetic). These are sized against a TELEPHONE BILL and against one phone's
+// patience. Sharing them would silently re-tune the enrolment arithmetic, and a stranger
+// guessing OTPs must never be able to lock a worker out of typing an enrolment code.
+//
+// ROLLING MILLISECOND WINDOWS, NEVER A CALENDAR DAY. A calendar day in Vienna is 23 or 25
+// hours twice a year, and a spend cap must not breathe with the clocks.
+//
+// ponytail: in-memory, per process — the same ceiling and the same upgrade path as the two
+//   limiters above (a table, same three call sites). CEILING: a restart forgets the spend,
+//   so a crash-looping box could in principle send more than 20/h. Accepted: the box is one
+//   systemd unit and a crash loop is a bigger problem than an SMS bill.
+const MAX_TRACKED_BUCKETS = 10_000;
+const rolling = new Map();
+
+/**
+ * Spend one unit against every rule for a bucket, or 429. Rules are
+ * `[{windowMs, limit}]` and ALL must pass. `retry-after` is computed from the rule that
+ * actually bit, so a caller over the daily cap is not told to come back in a minute.
+ */
+function spendRolling(bucket, rules) {
+  const now = Date.now();
+  const widest = Math.max(...rules.map((r) => r.windowMs));
+  const hits = (rolling.get(bucket) ?? []).filter((t) => now - t < widest);
+
+  for (const rule of rules) {
+    const inWindow = hits.filter((t) => now - t < rule.windowMs);
+    if (inWindow.length >= rule.limit) {
+      rolling.set(bucket, hits); // keep the pruned list; a refusal is not a spend
+      const oldest = inWindow[0];
+      const retryAfter = Math.max(1, Math.ceil((oldest + rule.windowMs - now) / 1000));
+      fail(429, "too_many_attempts", undefined, { "retry-after": String(retryAfter) });
+    }
+  }
+
+  if (!rolling.has(bucket) && rolling.size >= MAX_TRACKED_BUCKETS) {
+    for (const [key, list] of rolling) if (list.length === 0 || now - list[list.length - 1] > widest) rolling.delete(key);
+    // Still full => every bucket is live. Refuse to track more rather than evict, for the
+    // same reason recordLoginFailure refuses: eviction would hand a flood the ability to
+    // clear real limits.
+    if (rolling.size >= MAX_TRACKED_BUCKETS) return;
+  }
+  hits.push(now);
+  rolling.set(bucket, hits);
+}
+
+// THE BILL. Process-wide, counted on every route that can cause an outbound message.
+const SMS_SPEND_RULES = [
+  { windowMs: 60 * 60_000, limit: 20 },
+  { windowMs: 24 * 60 * 60_000, limit: 100 },
+];
+
+// ONE PERSON'S HANDSET. Bucketed on the NORMALISED number and spent for UNKNOWN numbers
+// too — if it only counted real workers, a number that starts answering 429 after three
+// tries would confirm that number is on file, which is exactly the enumeration oracle the
+// identical 202 exists to prevent.
+const OTP_REQUEST_RULES = [
+  { windowMs: 60 * 60_000, limit: 3 },
+  { windowMs: 24 * 60 * 60_000, limit: 10 },
+];
+
+// A VERIFY FLOOD MUST NOT SPEND THE SEND BUDGET. Verifying costs nothing and sends nothing,
+// so it gets its own ceiling: sharing SMS_SPEND_RULES would let a stranger exhaust the hour's
+// messages by guessing, and a real worker would then be unable to receive one — the same
+// species of failure as a misconfigured box locking someone out of the code path.
+const OTP_VERIFY_RULES = [{ windowMs: 60_000, limit: 60 }];
+
+/** Throws 429 once the process has spent its rolling SMS budget. Call BEFORE minting. */
+export function checkGlobalSmsSpend() {
+  spendRolling("sms:spend", SMS_SPEND_RULES);
+}
+
+/** Throws 429 once this phone number has asked for too many codes. */
+export function checkOtpRequestRate(phoneE164) {
+  spendRolling(`otp:req:${phoneE164}`, OTP_REQUEST_RULES);
+}
+
+/** Throws 429 once the process has spent its per-minute OTP verification budget. */
+export function checkGlobalOtpVerifyRate() {
+  spendRolling("otp:verify", OTP_VERIFY_RULES);
+}
+
 /** Test seam only — check-api.js resets between cases. */
 export function resetLoginRate() {
   attempts.clear();
   globalWindowStart = 0;
   globalCount = 0;
+  rolling.clear();
 }
