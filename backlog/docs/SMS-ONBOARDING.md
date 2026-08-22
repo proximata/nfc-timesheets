@@ -878,6 +878,12 @@ wrong route and reporting ALIVE.
 
 ### 13.3 · Still not done, and not pretended otherwise
 
+> **Superseded within the same day by §14.** The first two bullets below were true when the
+> server half landed and are NOT true any more: the panel and the Android screen both shipped
+> a few hours later, in the same iteration. They are left standing rather than edited because
+> a document that quietly rewrites what it said is a document nobody can date. §14 is the
+> state of the box.
+
 - **The panel.** No `SMS senden` button, no `Login-Nummer` cell, no i18n key. §8's table is
   still a proposal. The server contract it needs is in the run store under `server`.
 - **Android.** Nothing, deliberately (§6.6).
@@ -886,3 +892,205 @@ wrong route and reporting ALIVE.
 - **Credentials.** `TWILIO_ACCOUNT_SID` and a sender still do not exist. The day they are put
   in the vault and synced, the feature turns itself on with a `systemctl restart` and nothing
   else — the flag is re-read per request, never cached at boot.
+
+---
+
+## 14 · FINAL STATE, re-derived against the live box — 2026-08-23
+
+Written by the verification pass, which trusted none of §13 and measured the box instead.
+Everything in this section was observed on `schimmer-glanz.exe.xyz` after a full
+`ops/deploy.sh`, and every row it created was deleted again.
+
+### 14.1 · What is live
+
+```
+box serves HEAD, file for file        ops/check-box-serves-head.sh   OK
+  admin bundle                        eee7b85d… local == box
+  browser JS/CSS                      b165726d… local == box
+  server.js, instrument.mjs, lib/, routes/, wellknown/
+  published APK                       nfc-timesheets-0.5.5-12-release.apk (versionCode 12)
+schema_migrations                     012_sms_otp.sql is the top row; 011 below it
+/etc/nfc/env                          APP_KEY, DATABASE_URL, GOOGLE_GEOCODING_KEY, PORT
+                                      -- and NO TWILIO_* of any kind
+```
+
+The deploy that put it there ran every gate in `ops/deploy.sh`, including step 0's
+`check-fallback-reachable` + `check-sms-message`, the migration dry run, `check-unit-drift`,
+both `wellknown/verify.sh` runs (API host and TAG host) and `publish-apk --verify`.
+
+### 14.2 · The two live proofs, both with the negative case SEEDED first
+
+**`ops/prove-sms-live.sh`** — the server, end to end, on production.
+
+```
+1  the flag is OFF, in words, at every layer
+     journalctl              sms: not configured (missing: account_sid, auth, sender)
+     GET  /admin/sms-status  200 {"configured":false,"missing":[…],"sender_kind":null}
+     GET  /auth/capabilities 200 {"sms":false}
+2  a REAL worker, and the code that must never regress
+     POST /admin/workers                       201
+     POST …/enrolment-code                     201  FNHJ-8Z84
+     POST …/enrolment-code/sms                 503  sms_not_configured
+       -> the live code was NOT re-minted (the 503 precedes the mint)
+       -> NO sms_deliveries row for a delivery that never happened
+     POST /auth/code {FNHJ-8Z84}               200 + Set-Cookie ts_worker … 90 days
+       *** the code still works AFTER the SMS attempt failed ***
+     POST /auth/code {FNHJ-8Z84} again         401   (single use, unchanged)
+3  the 503 is the FLAG, not a missing number
+     PUT  …/phone                              200 +436609900148
+     POST …/enrolment-code/sms                 503  -- with a number on file
+4  POST /auth/sms/request                      503;  /auth/sms/verify 503;  otp_challenges 0
+5  THE NEGATIVE CASE, SEEDED ON THIS BOX
+     /etc/nfc/env gets a complete, correctly SHAPED, entirely FAKE credential set whose
+     TWILIO_API_BASE is http://127.0.0.1:9099 -- a port with nothing on it, so the only
+     possible outcome of a send is ECONNREFUSED and no message can leave the machine.
+     RED  /auth/capabilities now {"sms":true}          -- §1 would FAIL
+     RED  …/enrolment-code/sms now 200, not 503        -- §2 would FAIL
+     RED  /auth/sms/request now 202                    -- §4 would FAIL
+     ok   the 200 CARRIES A WORKING CODE, delivery.status="failed",
+          reason network:ECONNREFUSED, and that code redeems at /auth/code -> 200
+     ok   sms_deliveries row reads  failed|network:ECONNREFUSED|-  -- one vocabulary word,
+          no recipient, no body, no credential, and never 'sent'
+6  env restored and compared: sha256 ce6030bc…, identical; the 503s came back
+```
+
+**`ops/prove-sms-panel-live.mjs`** — the screen the director actually opens, driven with a
+real headless Chrome against the live host and a database-minted admin cookie.
+
+```
+1+2  „SMS senden" is RENDERED for the active worker, disabled + aria-disabled, and the
+     reason stands beside it IN WORDS: „SMS ist nicht eingerichtet. Code vorlesen oder
+     kopieren."  „Zugangscode erstellen" sits in the SAME cell, ENABLED, one click away.
+3    THE SABOTAGE SELF-TEST. The live DOM is mutated into the exact regression this
+     document warns about — `disabled` stripped, the reason paragraph deleted — and the
+     SAME oracle is re-run:
+       RED  „SMS senden" is not disabled while SMS is off
+       RED  aria-disabled is null, not "true"
+       RED  the reason sentence is not beside the button
+     Reload -> GREEN again. The oracle can fail, so its green means something.
+4    the button is PRESSED: the standing code panel opens with 01AR-JWT6, and that code
+     redeems at POST /auth/code -> 200. The fallback is a credential, not a rendering.
+5    390px: both buttons, the sentence, and no horizontal overflow.
+```
+
+Screenshots stay on disk (`/tmp/ts-prove/sms-panel-live/`) — `docs/media` is gitignored
+wholesale and nothing here is committed.
+
+### 14.3 · decision-47 did not regress — and how that was established
+
+`ops/prove-zone-verification.sh` **failed on its first run**, and the honest reading is that
+its FIXTURE was gone, not that zone verification broke: production was wiped to zero
+locations, and every section of that script hangs off the one real HOIV building whose uuid
+is written on a card in Arsenalstrasse. §2's first `INSERT INTO zones` died on the foreign
+key and nothing after it ran.
+
+Two defects were found and fixed while establishing that, both of which had been hiding the
+truth rather than causing it:
+
+- **The cleanup report was going to `/dev/null` on exactly the path that needs it.** Measured
+  in bash 3.2: when `set -e` fires inside `box "…" >/dev/null`, the EXIT trap runs with that
+  redirection still in effect, so the cleanup header, the row counts and the verdict are all
+  discarded. The run printed a psql error and nothing else — the rows really were deleted,
+  and the proof that they were was thrown away. Fixed by saving the real stdout as fd 3
+  before anything can redirect it. `ops/prove-sms-live.sh` had inherited the same idiom and
+  was fixed with it.
+- **It could not run against a wiped database at all.** It now refuses BY DEFAULT with a
+  named reason, because on a box that is supposed to have the wall card, "the wall card is
+  missing" is the most important thing this script could ever say and a script that silently
+  repairs it would delete the finding. `PROVE47_SEED_WALL=1` is the deliberate way past it:
+  it creates the building, runs, and removes it again.
+
+With the fixture seeded, **every assertion passed**:
+
+```
+1  POST /admin/tags/:id/resolve-building        404 at the ROUTER — still retired
+2  an UNVERIFIED zone: tap 422 zone_unverified, NO shift row
+   *** THE CARD ON THE WALL STILL CLOCKS A WORKER IN (201) ***  start_zone_id NULL
+   a clock-OUT through the unverified door closes normally — never gated
+3  the operator worklist; a BUILDING card cannot verify a zone (422 zone_mismatch) and
+   stamps nothing; the real card verifies (200); *** A TEST SCAN CREATED NO SHIFT ***;
+   a re-scan is idempotent and verified_at does not move
+4  the same tap that was refused: 201, billed to the BUILDING, door recorded as a fact
+PROVE-47 OK
+```
+
+### 14.4 · Production, left exactly where it started
+
+```
+locations 0   zones 0   clients 0   contacts 0   workers 0   shifts 0
+operators 0   phone_identities 0   sms_deliveries 0   otp_challenges 0
+worker_sessions 0   operator_sessions 0   inventory_items 0   material_requests 0
+location_revenue 0   location_contracts 0   reported_tags 0   tag_aliases 0
+portal_grants 0   app_settings 0
+admins 1  (id 2, "schimmer")          schema_migrations 12
+sessions 2  -- both PRE-EXISTING browser sessions, created 19 and 21 August, untouched
+```
+
+Every admin session this pass minted (20 minutes each, straight into `sessions`, never a
+guessed password) was deleted by hash. `/etc/nfc/env` is byte-identical to how it was found.
+
+### 14.5 · What the owner must supply for a single SMS to ever be sent
+
+Nothing in this repository is waiting on code. Two values are missing and both are
+credentials:
+
+1. **`TWILIO_ACCOUNT_SID`** — the `AC…` one, 32 hex. It is a **URL PATH SEGMENT** under every
+   Twilio auth scheme, so the `SK…` API Key SID already in the vault cannot stand in for it.
+2. **A sender, exactly one** — `TWILIO_FROM` (a real number in E.164, e.g. `+43720…`) **or**
+   `TWILIO_MESSAGING_SERVICE_SID` (`MG…`, which wins if both are set).
+
+And one operational step that is not a credential: **the two secrets already in the vault
+(`TWILIO_SID`, `TWILIO_SECRET`) are not on the box.** `/etc/nfc/env` carries four keys and
+none of them is Twilio.
+
+**There is no sync script, and the env file's own header says there is.** `/etc/nfc/env`
+begins `# GENERATED by ops/sync-secrets.sh from the psst vault (tag: server). Do not
+hand-edit`, and `ops/sync-secrets.sh` **does not exist** — not in this repository and not in
+`/srv/nfc/ops/` on the box. Whatever wrote that header was never committed. So today the file
+IS hand-maintained, and following its own instruction not to hand-edit it leaves you with
+nowhere to put the credentials. Vault them anyway (the vault is where the next person will
+look), then append them:
+
+```
+psst set TWILIO_ACCOUNT_SID <AC…>     --tag server
+psst set TWILIO_FROM        <+43…>    --tag server   # or TWILIO_MESSAGING_SERVICE_SID <MG…>
+psst set TWILIO_SID / TWILIO_SECRET   already vaulted, just not on the box
+
+ssh schimmer-glanz.exe.xyz
+sudo tee -a /etc/nfc/env >/dev/null <<'EOF'
+TWILIO_ACCOUNT_SID=AC…
+TWILIO_SID=SK…
+TWILIO_SECRET=…
+TWILIO_FROM=+43…
+EOF
+sudo chown root:app /etc/nfc/env && sudo chmod 0640 /etc/nfc/env
+sudo systemctl restart nfc-api
+```
+
+No deploy, no code change, no version gate: the flag is derived from the credentials and
+re-read **per request**, so the next call after the restart is the one that works.
+`sh ops/prove-sms-live.sh` re-run afterwards is what says so — its §5 will then be exercising
+the real client against a real Account SID rather than a seeded fake, and §1's `503`
+assertions will correctly go RED, which is the point at which somebody must decide whether
+those assertions become "configured" assertions instead.
+
+(A committed `ops/sync-secrets.sh` that renders `/etc/nfc/env` from the vault is worth
+having and is NOT in scope here — filed rather than half-built.)
+
+### 14.6 · What is STILL not observed, stated as a negative so it cannot read as a positive
+
+- **No real SMS has ever been sent by this system, and none could be.** Every send in every
+  check went to loopback or to a stub. Twilio has never been contacted. The first real
+  message will be the first time this code meets a carrier.
+- **`sent` would still mean Twilio ACCEPTED it, not that she read it.** There are no delivery
+  receipts (that needs a public webhook with signature validation — its own decision), which
+  is why `sms_deliveries` has no `delivered_at` column and the panel says „übergeben".
+- **The Android SMS sign-in screen has not been seen on a phone.** versionCode 12 is built,
+  signed and published to the self-update surface, but no `adb install` and no on-device
+  render happened. Its capability guard is proven only by the JVM text-read check and by
+  `GET /auth/capabilities` answering `{"sms":false}` live.
+- **`PUT /admin/workers/:id/phone` has no UI.** It is proven over HTTP, live, but the panel
+  has no `Login-Nummer` editor — so even with credentials in place, an admin cannot give a
+  worker a login number without curl. That is TASK-244's remainder.
+- **The rate limiters were exercised locally, never on production.** Deliberately: hammering
+  a live limiter to watch it trip spends the same budget a real admin would need.
