@@ -28,6 +28,7 @@
 // It also pins the other half of the owner's ask — that a `sentry-trace` header from the
 // phone produces ONE trace, not two.
 import assert from "node:assert/strict";
+import { createServer as createHttpServer } from "node:http";
 import * as Sentry from "@sentry/node";
 import { createServer } from "./server.js";
 
@@ -40,6 +41,13 @@ const SECRETS = {
   email: "ivan.kotelnikov@example.test",
   portalToken: "Zm9vYmFyTElWRUNSRURFTlRJQUxfNDNjaGFyc19hYWFh",
   enrolmentCode: "K7QF-3MZ2", // decision-26: redeeming one mints a worker session
+  // decision-48. A telephone number is personal data under any reading, and the Twilio
+  // secret is a credential that can send messages on the operator's bill. Both travel on
+  // the SMS routes: the number in a request BODY, the secret in an Authorization header
+  // this process builds itself.
+  workerPhone: "+436649001234",
+  twilioSecret: "wire-check-twilio-secret-abcdefgh",
+  twilioApiKeySid: "SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
 };
 
 const IOS_TRACE_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -126,6 +134,42 @@ await fetch(`${base}/auth/code`, {
   body: JSON.stringify({ code: SECRETS.enrolmentCode }),
 });
 
+// An SMS sign-in request. The phone number is in the BODY, which is where the SDK's
+// requestDataIntegration goes looking, and the route answers 503 (SMS is not configured in
+// this process, which is also production's state) — so it needs no database and no carrier.
+await fetch(`${base}/auth/sms/request`, {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    "x-app-key": SECRETS.appKey,
+    "sentry-trace": `${IOS_TRACE_ID}-${IOS_SPAN_ID}-1`,
+    baggage: `sentry-trace_id=${IOS_TRACE_ID},sentry-public_key=abc123,sentry-sample_rate=1`,
+  },
+  body: JSON.stringify({ phone: SECRETS.workerPhone }),
+});
+
+// A FAILED SEND, captured by lib/sms.js's own error path. This is the one place in the
+// system that holds a Twilio credential and a recipient's number in the same function, and
+// `captureSendFault` is the only thing standing between them and an event. Pointed at a
+// port with nothing on it, so it fails in milliseconds and contacts no carrier.
+{
+  const dead = createHttpServer(() => {});
+  await new Promise((r) => dead.listen(0, "127.0.0.1", r));
+  const deadBase = `http://127.0.0.1:${dead.address().port}`;
+  await new Promise((r) => dead.close(r));
+
+  process.env.TWILIO_ACCOUNT_SID = "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+  process.env.TWILIO_SID = SECRETS.twilioApiKeySid;
+  process.env.TWILIO_SECRET = SECRETS.twilioSecret;
+  process.env.TWILIO_FROM = "+43720123456";
+  process.env.TWILIO_API_BASE = deadBase;
+
+  const { sendSms } = await import("./lib/sms.js");
+  const result = await sendSms(SECRETS.workerPhone, `Ihr Zugangscode lautet ${SECRETS.enrolmentCode}.`);
+  assert.equal(result.status, "failed", "the send must fail against a dead port");
+  for (const k of ["TWILIO_ACCOUNT_SID", "TWILIO_SID", "TWILIO_SECRET", "TWILIO_FROM", "TWILIO_API_BASE"]) delete process.env[k];
+}
+
 await Sentry.flush(5000); // deterministic: assert on a settled queue, never on a sleep
 server.close();
 
@@ -159,10 +203,43 @@ t("a rejected clock-in still produces a server transaction (401 is not dropped)"
 });
 
 t("the phone's trace is CONTINUED, so one tap is one trace and not two", () => {
-  for (const event of wire) {
+  // TRANSACTIONS ONLY. decision-48's sendSms failure is captured OUTSIDE any request (it is
+  // called here directly, and on the box it can also be reached from a route), so it is an
+  // error event with a trace of its own. Asserting over every payload would fail on the one
+  // event that is correct — and the case below is what keeps that from becoming a loophole.
+  const transactions = wire.filter((e) => e.type === "transaction");
+  assert.ok(transactions.length >= 2, `expected transactions, got ${wire.map((e) => e.type).join(", ")}`);
+  for (const event of transactions) {
     assert.equal(event.contexts.trace.trace_id, IOS_TRACE_ID, `${event.transaction} started its own trace`);
     assert.equal(event.contexts.trace.parent_span_id, IOS_SPAN_ID, `${event.transaction} lost its parent`);
   }
+});
+
+t("a failed SMS reports the VOCABULARY WORD and nothing else — no recipient, no credential", () => {
+  // decision-48 §5.4 / lib/geocode.js's rule, applied to the one function in this system
+  // that holds a Twilio credential and a person's telephone number at the same moment.
+  const fault = wire.find((e) => e.type !== "transaction" && JSON.stringify(e).includes("ts.sms.reason"));
+  assert.ok(fault, `no sms failure event reached the wire: ${wire.map((e) => e.type).join(", ")}`);
+  assert.match(fault.tags["ts.sms.reason"], /^(timeout|network(:[A-Z_]+)?|rejected|auth|unknown|malformed_response)$/);
+
+  // The whole event, serialised, must contain none of: the number, the message, the code,
+  // the API key sid, the secret, the Authorization header, or the URL we built.
+  const raw = JSON.stringify(fault);
+  for (const [name, value] of Object.entries(SECRETS)) {
+    assert.ok(!raw.includes(value), `the sms failure event carries ${name}`);
+  }
+  // The URL and the Authorization header are BUILT in lib/sms.js and are the two things a
+  // naive `captureException(err)` would drag along inside a fetch error's `cause`.
+  for (const forbidden of ["Basic ", "/2010-04-01/", "api.twilio.com", "Messages.json"]) {
+    assert.ok(!raw.includes(forbidden), `the sms failure event carries ${JSON.stringify(forbidden)}: ${raw.slice(0, 400)}`);
+  }
+  // MEASURED CEILING, stated rather than discovered later: the SDK's contextLines
+  // integration attaches SOURCE LINES around each stack frame, so the German message
+  // TEMPLATE in lib/sms.js can appear in a frame's pre_context. That is source, not data —
+  // the assertions above are what keep the VALUES (the number, the code, the secret) out,
+  // and they are the ones that matter. If a credential ever moves from process.env into a
+  // source literal, this stops being harmless and check-branding/psst would catch it first.
+  assert.ok(!("data" in (fault.request ?? {})), "a request body rode along on the failure event");
 });
 
 t("the transaction is named by ROUTE PATTERN, not by a concrete URL", () => {
