@@ -8,6 +8,8 @@ import io.github.qwadratic.nfctimesheets.core.EnrolmentRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
 import io.github.qwadratic.nfctimesheets.core.PendingWork
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
+import io.github.qwadratic.nfctimesheets.core.SmsRequestBody
+import io.github.qwadratic.nfctimesheets.core.SmsVerifyBody
 import io.github.qwadratic.nfctimesheets.core.VerifyZoneRequest
 import io.github.qwadratic.nfctimesheets.core.Wire
 import io.github.qwadratic.nfctimesheets.core.WireRoster
@@ -93,6 +95,59 @@ class Api(
     suspend fun logout() {
         post("/auth/logout", "{}")
         cookies.clear()
+    }
+
+    /**
+     * GET /auth/capabilities — auth: "app" only, no session, exactly like [appVersion]: the
+     * sign-in screen has to ask this BEFORE it has drawn anything, so a phone that has never
+     * enrolled must still be able to call it. `sessionBearing = false` for the same reason
+     * as [appVersion] — a 401 here means a bad X-App-Key, never a dead session.
+     *
+     * ONE FIELD (server/routes/auth.js): `{sms: boolean}`. A failure of ANY kind — offline,
+     * an old server that predates this route, a timeout — is swallowed by the caller
+     * (TimeSheetViewModel), which defaults to false: the sign-in screen fails CLOSED, the
+     * same direction the server itself fails in when Twilio is unconfigured. Showing a
+     * button on a guess would be exactly the broken control this route exists to prevent.
+     */
+    suspend fun capabilities(): Boolean = get("/auth/capabilities", sessionBearing = false).optBoolean("sms", false)
+
+    /**
+     * POST /auth/sms/request {phone} — decision-48 §6. `sessionBearing = false`: there is no
+     * session yet, same reasoning as [enrol].
+     *
+     *   202 always, for a resolvable shape — IDENTICAL for a known and an unknown number,
+     *       by server design; there is nothing to read out of a successful response
+     *   422 {"error":"invalid_phone"}   shape only, never existence
+     *   429 {"error":"too_many_attempts"}
+     *   503 {"error":"sms_not_configured"}
+     *
+     * @param phone raw keystrokes. The server normalises (lib/validate.js identityPhone);
+     *        this client does not reimplement that parser.
+     */
+    suspend fun smsRequest(phone: String) {
+        post("/auth/sms/request", SmsRequestBody(phone).toJson(), sessionBearing = false)
+    }
+
+    /**
+     * POST /auth/sms/verify {phone, code} — worker session cookie, BYTE-IDENTICAL to
+     * [enrol]'s (decision-48 §6): the same createWorkerSession() call, the same ts_worker
+     * cookie. The return value is discarded for the same reason [enrol]'s is: the caller
+     * re-asks GET /auth/session straight afterwards, which is what proves the cookie
+     * actually reached the jar and will be sent again after the process is killed.
+     *
+     *   200 -> Set-Cookie: ts_worker, absorbed by the choke point like any other
+     *   401 {"error":"invalid_code"}   EVERY other outcome — unknown, wrong, expired, the
+     *       five attempts spent — byte-identical, deliberately (mirrors [enrol]'s own note)
+     *   429 {"error":"too_many_attempts"}
+     *   503 {"error":"sms_not_configured"}
+     *
+     * @param code the 6 digits as typed. There is no EnrolmentCode-style normaliser for an
+     *        OTP: it has no alphabet to alias (decision-48 §6's own reasoning — digits only,
+     *        copied off a notification, never spoken aloud) so the screen strips non-digits
+     *        itself before this is called.
+     */
+    suspend fun smsVerify(phone: String, code: String) {
+        post("/auth/sms/verify", SmsVerifyBody(phone, code).toJson(), sessionBearing = false)
     }
 
     /**

@@ -18,6 +18,21 @@
     <string name="signin_submit">Sign in</string>
     <string name="signin_submitting">Signing in …</string>
 
+    <string name="signin_sms_intro">Your admin has a phone number on file for you? You can also sign in with it by SMS.</string>
+    <string name="signin_sms_phone_label">Phone number</string>
+    <string name="signin_sms_phone_hint">For example 0664 1234567.</string>
+    <string name="signin_sms_send">Send code by SMS</string>
+    <string name="signin_sms_sending">Sending …</string>
+    <string name="signin_sms_code_intro">We sent a 6-digit code to %1$s.</string>
+    <string name="signin_sms_code_label">SMS code</string>
+    <string name="signin_sms_code_hint">6 digits, from the text message.</string>
+    <string name="signin_sms_verify">Confirm</string>
+    <string name="signin_sms_verifying">Checking …</string>
+    <string name="signin_sms_change_number">Use a different number</string>
+    <string name="sms_not_configured_note">SMS isn\'t set up on this server. Ask your admin for a sign-in code instead.</string>
+    <string name="sms_invalid_phone">That phone number doesn\'t look right. Please check and try again.</string>
+    <string name="sms_invalid_code">That code wasn\'t accepted. Type it again, or request a new one.</string>
+
     <string name="sign_out">Sign out</string>
 
     <string name="tab_log">Log</string>

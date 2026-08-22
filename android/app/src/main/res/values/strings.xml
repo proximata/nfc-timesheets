@@ -31,6 +31,28 @@
     <string name="signin_submit">Anmelden</string>
     <string name="signin_submitting">Anmeldung läuft …</string>
 
+    <!-- Anmeldung per SMS (decision-48 §6.6, additive: das Feld für den Anmeldecode oben
+         bleibt unverändert und ist immer da). Dieser Abschnitt wird nur angezeigt, wenn
+         der Server bestätigt, dass SMS eingerichtet ist — sonst erscheint hier nichts. -->
+    <string name="signin_sms_intro">Ihre Verwaltung hat eine Telefonnummer für Sie hinterlegt? Sie können sich damit auch per SMS anmelden.</string>
+    <string name="signin_sms_phone_label">Telefonnummer</string>
+    <string name="signin_sms_phone_hint">Zum Beispiel 0664 1234567.</string>
+    <string name="signin_sms_send">Code per SMS senden</string>
+    <string name="signin_sms_sending">Wird gesendet …</string>
+    <string name="signin_sms_code_intro">Wir haben einen 6-stelligen Code an %1$s geschickt.</string>
+    <string name="signin_sms_code_label">SMS-Code</string>
+    <string name="signin_sms_code_hint">6 Ziffern aus der SMS.</string>
+    <string name="signin_sms_verify">Bestätigen</string>
+    <string name="signin_sms_verifying">Wird geprüft …</string>
+    <string name="signin_sms_change_number">Andere Nummer verwenden</string>
+    <!-- Fehlertexte nur für den SMS-Weg (core-check.kt: absichtlich NICHT über
+         stringIdFor(), siehe ui/TimeSheetApp.kt smsErrorText()). Der geteilte Text für
+         err_invalid_code sagt „fragen Sie Ihre Verwaltung nach einem neuen“ — das stimmt
+         beim Anmeldecode, aber ein SMS-Code wird von der Person selbst neu angefordert. -->
+    <string name="sms_not_configured_note">SMS ist auf diesem Server nicht eingerichtet. Bitten Sie Ihre Verwaltung um einen Anmeldecode.</string>
+    <string name="sms_invalid_phone">Diese Telefonnummer sieht nicht richtig aus. Bitte prüfen und erneut versuchen.</string>
+    <string name="sms_invalid_code">Der Code wurde nicht angenommen. Bitte erneut eingeben, oder fordern Sie einen neuen an.</string>
+
     <string name="sign_out">Abmelden</string>
 
     <!-- Tabs -->

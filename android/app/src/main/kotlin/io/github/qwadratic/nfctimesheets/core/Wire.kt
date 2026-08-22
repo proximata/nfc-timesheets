@@ -341,3 +341,23 @@ data class EnrolmentRequest(val code: String) {
 data class VerifyZoneRequest(val placeUuid: String) {
     fun toJson(): String = Wire.obj("place_uuid" to placeUuid)
 }
+
+/**
+ * POST /auth/sms/request — the phone as typed, and NOTHING else (decision-48 §6). The
+ * server normalises it (lib/validate.js identityPhone, the same shape PUT
+ * /admin/workers/:id/phone uses); this client sends raw keystrokes, exactly like
+ * [EnrolmentRequest] sends the raw code and lets the server be the one normaliser.
+ */
+data class SmsRequestBody(val phone: String) {
+    fun toJson(): String = Wire.obj("phone" to phone)
+}
+
+/**
+ * POST /auth/sms/verify — the phone AND the 6 digits from the SMS. Both fields, because
+ * unlike [EnrolmentRequest]'s single code (unique across every worker) an OTP is unique
+ * only per phone number (server/lib/sms.js § the one-time code) — the server cannot look
+ * one up without knowing which challenge to check it against.
+ */
+data class SmsVerifyBody(val phone: String, val code: String) {
+    fun toJson(): String = Wire.obj("phone" to phone, "code" to code)
+}

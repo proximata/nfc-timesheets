@@ -108,6 +108,18 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
         viewModelScope.launch {
             app.sessionRejected.collect { rejected -> if (rejected) dropToSignedOut() }
         }
+        // THE APP'S ONE PUBLIC CAPABILITY READ, at launch, silently — same idiom as
+        // checkForUpdateSilently(): no spinner, no screen anywhere waits on it. Runs
+        // regardless of session state because the ONE screen that needs the answer,
+        // SignInScreen, is exactly the screen a phone with no session yet is showing.
+        //
+        // ANY FAILURE — offline, an old server that predates the route, a timeout — is
+        // swallowed here and read as false. This is the fail-closed half of the flag:
+        // a phone that could not confirm SMS is configured must behave exactly like a
+        // phone on a build where the flag is off, never like one where it is on.
+        viewModelScope.launch {
+            _smsAvailable.value = runCatching { app.api.capabilities() }.getOrDefault(false)
+        }
     }
 
     /** One mailbox for every way a tap can arrive. See core/TapInbox.kt. */
@@ -151,6 +163,28 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
     /** Drives the sign-in button's disabled/busy state. Not persisted: it is one call. */
     val signingIn: StateFlow<Boolean> = _signingIn.asStateFlow()
+
+    // ---- SMS sign-in (decision-48 §6.6, this iteration) ----------------------------
+    //
+    // A SECOND FRONT DOOR ONTO THE SAME SESSION, never a parallel screen architecture: a
+    // successful [verifySmsCode] calls the exact same [adopt] + [refresh] + [startMaterials]
+    // sequence [signIn] does, below, because POST /auth/sms/verify mints the identical
+    // worker_sessions row POST /auth/code does (server/routes/auth.js's own note).
+
+    private val _smsAvailable = MutableStateFlow(false)
+
+    /**
+     * False until the launch-time capability read answers true. THE SIGN-IN SCREEN MUST
+     * NOT COMPOSE THE SMS SECTION AT ALL WHILE THIS IS FALSE — not disabled, not hidden by
+     * styling, not present. See ui/TimeSheetApp.kt's SignInScreen.
+     */
+    val smsAvailable: StateFlow<Boolean> = _smsAvailable.asStateFlow()
+
+    private val _smsBusy = MutableStateFlow(false)
+
+    /** Drives the SMS section's disabled/busy state. Own flag: sending a code and typing
+     *  an enrolment code above it are unrelated actions and must not disable each other. */
+    val smsBusy: StateFlow<Boolean> = _smsBusy.asStateFlow()
 
     // ---- self-update (this iteration) -----------------------------------------------
     //
@@ -308,6 +342,60 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 )
             } finally {
                 _signingIn.value = false
+            }
+        }
+    }
+
+    /**
+     * decision-48 §6.6. „SMS senden": the admin already put this worker's number on file
+     * (PUT /admin/workers/:id/phone); the worker types it back and the server texts a
+     * 6-digit code. Never called unless [smsAvailable] is true — [SmsSignInSection] in
+     * ui/TimeSheetApp.kt is not composed otherwise, so this never fires against a build
+     * that would 503.
+     *
+     * @param onResult the failure to show, or null on success — mirrors [resolve]'s own
+     *        callback shape. Kept OUT of [_session] deliberately: that flow drives the
+     *        enrolment-code field above this section, and a phone-request failure must
+     *        not paint a message under a field the worker never touched.
+     */
+    fun requestSmsCode(typedPhone: String, onResult: (ApiFailure?) -> Unit) {
+        viewModelScope.launch {
+            _smsBusy.value = true
+            try {
+                app.api.smsRequest(typedPhone)
+                onResult(null)
+            } catch (failure: ApiFailure) {
+                onResult(failure)
+            } finally {
+                _smsBusy.value = false
+            }
+        }
+    }
+
+    /**
+     * „Bestätigen": the 6 digits from the SMS. On success this runs the IDENTICAL tail
+     * [signIn] runs — [adopt] then a second [app.api.session] call (proves the cookie
+     * landed), [refresh], [startMaterials] — because POST /auth/sms/verify mints the same
+     * worker_sessions row POST /auth/code does; nothing downstream may be able to tell
+     * which door was used.
+     *
+     * @param phone the SAME string [requestSmsCode] was called with — the challenge is
+     *        keyed on it server-side.
+     */
+    fun verifySmsCode(phone: String, typedCode: String, onResult: (ApiFailure?) -> Unit) {
+        viewModelScope.launch {
+            _smsBusy.value = true
+            try {
+                app.api.smsVerify(phone, typedCode)
+                io { if (app.store.pendingSummary().waiting > 0) SyncScheduler.ensure(app) }
+                adopt(app.api.session())
+                refresh()
+                startMaterials()
+                onResult(null)
+            } catch (failure: ApiFailure) {
+                onResult(failure)
+            } finally {
+                _smsBusy.value = false
             }
         }
     }

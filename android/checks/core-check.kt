@@ -33,6 +33,8 @@ import io.github.qwadratic.nfctimesheets.core.RemoteRelease
 import io.github.qwadratic.nfctimesheets.core.RunningShift
 import io.github.qwadratic.nfctimesheets.core.SessionCookie
 import io.github.qwadratic.nfctimesheets.core.ShiftSignal
+import io.github.qwadratic.nfctimesheets.core.SmsRequestBody
+import io.github.qwadratic.nfctimesheets.core.SmsVerifyBody
 import io.github.qwadratic.nfctimesheets.core.SyncPlan
 import io.github.qwadratic.nfctimesheets.core.UpdateCheck
 import io.github.qwadratic.nfctimesheets.core.SyncPlan.QueuedShift
@@ -96,6 +98,7 @@ fun main() {
     zones()
     enrolmentCode()
     enrolmentAgainstServer()
+    smsSignIn()
     sessionPersistence()
     materialRequests()
     shiftSignal()
@@ -340,6 +343,21 @@ private fun wireBytes() {
         OpenShiftRequest("a\"b\\c", UUID_A, start).toJson().contains("""a\"b\\c"""),
         "quotes and backslashes are escaped",
     )
+
+    // POST /auth/sms/request and POST /auth/sms/verify (decision-48 §6.6, this iteration).
+    // Pinned exactly like every other body in this file: a server change to
+    // server/routes/auth.js is exactly the kind of drift this whole section exists to
+    // catch before a device does.
+    val smsReq = SmsRequestBody("+436641234567").toJson()
+    check(smsReq == """{"phone":"+436641234567"}""", "POST /auth/sms/request body: $smsReq")
+    check(!smsReq.contains("worker"), "no worker identity may ride in the sms/request body")
+
+    val smsVer = SmsVerifyBody("+436641234567", "482913").toJson()
+    check(
+        smsVer == """{"phone":"+436641234567","code":"482913"}""",
+        "POST /auth/sms/verify body: $smsVer",
+    )
+    check(!smsVer.contains("worker"), "no worker identity may ride in the sms/verify body either (decision-22)")
 }
 
 // ---------------------------------------------------------------------------------
@@ -1087,6 +1105,102 @@ private fun enrolmentAgainstServer() {
     // the only thing that survives a failed attempt, and it carries a status and a code.
     val failure = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/core/ApiFailure.kt").readText()
     check(!failure.contains("enrol", ignoreCase = true), "ApiFailure carries nothing enrolment-specific")
+}
+
+// ---------------------------------------------------------------------------------
+// 10b. SMS SIGN-IN (decision-48 §6.6, this iteration). A SECOND FRONT DOOR onto the SAME
+//      worker_sessions row the enrolment code already reaches, composed on the phone ONLY
+//      when GET /auth/capabilities says the door exists. Compose imports Android and
+//      cannot run in this JVM checker (see the file header), so — the same convention
+//      section 8 already uses for the manifest and TimeSheetViewModel — the client's own
+//      source is read as TEXT here, against the server's real routes, never against a
+//      copy of either.
+// ---------------------------------------------------------------------------------
+private fun smsSignIn() {
+    check(serverAuthRoute.exists(), "server/routes/auth.js is readable from android/")
+    if (serverAuthRoute.exists()) {
+        val route = serverAuthRoute.readText()
+        for (line in listOf(
+            """{ method: "GET", path: "/auth/capabilities", auth: "app", handler: capabilities },""",
+            """{ method: "POST", path: "/auth/sms/request", auth: "app", handler: smsRequest },""",
+            """{ method: "POST", path: "/auth/sms/verify", auth: "app", handler: smsVerify },""",
+        )) {
+            check(route.contains(line), "server/routes/auth.js no longer serves: $line")
+        }
+    }
+
+    val api = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/net/Api.kt").readText()
+    // sessionBearing = false on all three, same reasoning as enrol(): there is no session
+    // yet, so a 401 here means a bad X-App-Key, never a dead session — firing
+    // onSessionRejected over it would be wrong before the worker has ever signed in once.
+    for (line in listOf(
+        """suspend fun capabilities(): Boolean = get("/auth/capabilities", sessionBearing = false).optBoolean("sms", false)""",
+        """post("/auth/sms/request", SmsRequestBody(phone).toJson(), sessionBearing = false)""",
+        """post("/auth/sms/verify", SmsVerifyBody(phone, code).toJson(), sessionBearing = false)""",
+    )) {
+        check(api.contains(line), "net/Api.kt no longer has: $line")
+    }
+
+    val vm = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetViewModel.kt").readText()
+    check(
+        vm.contains("private val _smsAvailable = MutableStateFlow(false)"),
+        "smsAvailable must default to false, so a slow or stuck launch never shows a broken door",
+    )
+    check(
+        vm.contains("_smsAvailable.value = runCatching { app.api.capabilities() }.getOrDefault(false)"),
+        "ANY capability-read failure — offline, an old server, a timeout — must be read as false: fail CLOSED",
+    )
+
+    val app = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetApp.kt").readText()
+    val signInScreen = app.substringAfter("private fun SignInScreen(").substringBefore("\n@Composable")
+
+    // THE RED CASE, shown RED before it was fixed: this assertion was written FIRST
+    // against a version of SignInScreen that called `SmsSignInSection(model)` with no
+    // guard at all — composed unconditionally, on every build, including one whose server
+    // has never heard of the route. It failed exactly as intended (`if (model.smsAvailable`
+    // was absent from signInScreen), which is what makes the assertion below evidence and
+    // not decoration.
+    check(
+        signInScreen.contains("if (model.smsAvailable.collectAsStateWithLifecycle().value) {") &&
+            signInScreen.indexOf("if (model.smsAvailable") < signInScreen.indexOf("SmsSignInSection(model)"),
+        "the SMS section must be behind an if on the capability flag, guard textually BEFORE the call — " +
+            "not merely styled invisible (alpha, visibility=Gone, an empty string swapped in)",
+    )
+    // EXACTLY TWO occurrences in the whole file: the function's own declaration, and the
+    // ONE guarded call site just proven above. A third would be a second, unconditional door.
+    val callSites = Regex("""SmsSignInSection\(""").findAll(app).count()
+    check(callSites == 2, "SmsSignInSection( appears $callSites times — expected exactly 2 (declaration + the one guarded call)")
+
+    // THE ENROLMENT-CODE FIELD IS UNTOUCHED (decision-26). Nothing about the SMS section
+    // may be read, or composed, before it — the code path must not even glance at the flag.
+    check(signInScreen.contains("R.string.signin_code_intro"), "the enrolment-code intro is still there, unmoved")
+    check(signInScreen.contains("model.signIn(typed)"), "the code field still calls signIn() directly, untouched")
+    check(
+        !signInScreen.substringBefore("if (model.smsAvailable").contains("smsAvailable"),
+        "nothing above the SMS section's own guard may reference smsAvailable — the code path stays oblivious to it",
+    )
+
+    // NO RAW ERROR CODE reaches this screen (decision-8's own rule, every screen in this
+    // app). smsErrorText() is the one place an SMS-flow failure becomes a sentence, and
+    // every branch must resolve through a string resource — never interpolate the code.
+    val smsError = app.substringAfter("private fun smsErrorText(failure: ApiFailure): String = when {").substringBefore("\n}")
+    check(
+        !smsError.contains("\${failure.code}") && !smsError.contains("\${failure.status}"),
+        "smsErrorText must never interpolate the raw code or status into a sentence",
+    )
+    for (branch in listOf(
+        "stringResource(R.string.err_signin_offline)",
+        "stringResource(R.string.sms_not_configured_note)",
+        "stringResource(R.string.sms_invalid_phone)",
+        "stringResource(R.string.sms_invalid_code)",
+        "stringResource(R.string.err_too_many_attempts)",
+    )) {
+        check(smsError.contains(branch), "smsErrorText is missing the branch: $branch")
+    }
+    check(
+        smsError.trim().endsWith("else -> stringResource(stringIdFor(failure.messageKey))"),
+        "every OTHER outcome still falls back to the shared, exhaustive mapper — never a blank line at a door in the dark",
+    )
 }
 
 // ---------------------------------------------------------------------------------
@@ -2475,10 +2589,16 @@ private fun theBackgroundPush() {
     //
     // EXACTLY ONE unguarded site is legal: the tap, which has just written the row and
     // therefore cannot have an empty queue. Everything else asks first.
+    //
+    // 5 SITES, 4 GUARDED (this iteration): decision-48 §6.6 added [TimeSheetViewModel.
+    // verifySmsCode], which arms exactly like [signIn] does — same `waiting > 0` guard,
+    // same reasoning, because POST /auth/sms/verify mints the identical worker_sessions
+    // row POST /auth/code does. A magic number is the point: if a SIXTH site appears,
+    // somebody must come back here and say whether it may skip the check.
     val ensureLines = vm.lines().filter { it.contains("SyncScheduler.ensure(app)") }
     val guarded = ensureLines.filter { it.contains("waiting > 0") }
     check(
-        ensureLines.size == 4 && guarded.size == 3,
+        ensureLines.size == 5 && guarded.size == 4,
         "${ensureLines.size} SyncScheduler.ensure sites, ${guarded.size} of them ask the queue first — an " +
             "empty queue must arm nothing (SyncScheduler's own contract), and only the TAP may skip the check",
     )

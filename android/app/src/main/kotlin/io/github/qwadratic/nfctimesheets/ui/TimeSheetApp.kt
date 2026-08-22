@@ -76,6 +76,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import io.github.qwadratic.nfctimesheets.BuildConfig
 import io.github.qwadratic.nfctimesheets.R
+import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
 import io.github.qwadratic.nfctimesheets.core.MaterialEntry
 import io.github.qwadratic.nfctimesheets.core.MaterialQueue
@@ -254,7 +255,160 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        // decision-48 §6.6, this iteration. ALWAYS the fallback's own condition, never the
+        // other way round: the code field above is complete and correct with or without
+        // this `if`. THE SERVER'S ANSWER DECIDES WHETHER THIS COMPOSES AT ALL — not a
+        // disabled button, not an alpha, not a null string swapped in for a real one. A
+        // build whose capability read is false, still pending, or failed offline draws
+        // nothing past the line above.
+        if (model.smsAvailable.collectAsStateWithLifecycle().value) {
+            SmsSignInSection(model)
+        }
     }
+}
+
+// -------------------------------------------------------------------------------------
+// SMS sign-in (decision-48 §6.6). A SECOND, entirely independent way to reach the SAME
+// worker_sessions row [SignInScreen]'s code field reaches — never a preference, never a
+// replacement: decision-48 answered the owner's own question ("choose how to onboard") by
+// making onboarding a repeatable ACTION, and this is that action's Android half. The admin
+// puts a worker's login number on file (PUT /admin/workers/:id/phone, web/app/workers);
+// this screen is what lets that worker use it.
+//
+// ONLY EVER COMPOSED BEHIND `if (model.smsAvailable...)` above — see that call site. This
+// function does not re-check the flag: it exists to be absent, not to render its own
+// "unavailable" state, because a server that has never heard of SMS must look IDENTICAL to
+// today, and a section that renders itself as a grey noticed absence is still a section.
+// -------------------------------------------------------------------------------------
+@Composable
+private fun SmsSignInSection(model: TimeSheetViewModel) {
+    var phone by rememberSaveable { mutableStateOf("") }
+    // Non-null once a request has been ACCEPTED for this exact string. Clearing it (typing
+    // a different number, or pressing "change number") is the only way back to phone entry,
+    // so the code field can never be shown next to a number nothing was sent to.
+    var sentTo by rememberSaveable { mutableStateOf<String?>(null) }
+    var otp by rememberSaveable { mutableStateOf("") }
+    var phoneFailure by rememberSaveable { mutableStateOf<ApiFailure?>(null) }
+    var codeFailure by rememberSaveable { mutableStateOf<ApiFailure?>(null) }
+    val busy by model.smsBusy.collectAsStateWithLifecycle()
+
+    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+    Text(stringResource(R.string.signin_sms_intro), style = MaterialTheme.typography.bodyLarge)
+
+    val target = sentTo
+    if (target == null) {
+        val send = {
+            if (!busy && phone.isNotBlank()) {
+                model.requestSmsCode(phone) { failure ->
+                    if (failure == null) {
+                        sentTo = phone
+                        phoneFailure = null
+                    } else {
+                        phoneFailure = failure
+                    }
+                }
+            }
+        }
+        OutlinedTextField(
+            value = phone,
+            onValueChange = { phone = it; phoneFailure = null },
+            singleLine = true,
+            isError = phoneFailure != null,
+            label = { Text(stringResource(R.string.signin_sms_phone_label)) },
+            // Same rule as the code field above: ONE message, in words, associated with the
+            // field for TalkBack, colour never the only signal.
+            supportingText = {
+                val failure = phoneFailure
+                if (failure != null) {
+                    Text(smsErrorText(failure), modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive })
+                } else {
+                    Text(stringResource(R.string.signin_sms_phone_hint))
+                }
+            },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = { send() }),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 56.dp),
+        )
+        Button(
+            onClick = send,
+            enabled = !busy && phone.isNotBlank(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
+        ) {
+            Text(stringResource(if (busy) R.string.signin_sms_sending else R.string.signin_sms_send))
+        }
+    } else {
+        val verify = {
+            if (!busy && otp.length == 6) {
+                model.verifySmsCode(target, otp) { failure -> if (failure != null) codeFailure = failure }
+            }
+        }
+        Text(
+            stringResource(R.string.signin_sms_code_intro, target),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        OutlinedTextField(
+            value = otp,
+            // Digits only, capped at 6 — an OTP has no alphabet to alias (decision-48 §6:
+            // copied off a notification, never spoken aloud), so there is nothing here for
+            // an EnrolmentCode-style normaliser to do.
+            onValueChange = { otp = it.filter(Char::isDigit).take(6); codeFailure = null },
+            singleLine = true,
+            isError = codeFailure != null,
+            label = { Text(stringResource(R.string.signin_sms_code_label)) },
+            supportingText = {
+                val failure = codeFailure
+                if (failure != null) {
+                    Text(smsErrorText(failure), modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive })
+                } else {
+                    Text(stringResource(R.string.signin_sms_code_hint))
+                }
+            },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = { verify() }),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 56.dp),
+        )
+        Button(
+            onClick = verify,
+            enabled = !busy && otp.length == 6,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
+        ) {
+            Text(stringResource(if (busy) R.string.signin_sms_verifying else R.string.signin_sms_verify))
+        }
+        TextButton(onClick = { sentTo = null; otp = ""; codeFailure = null }, enabled = !busy) {
+            Text(stringResource(R.string.signin_sms_change_number))
+        }
+    }
+}
+
+/**
+ * Every ApiFailure [requestSmsCode]/[verifySmsCode][TimeSheetViewModel] can produce, mapped
+ * to a sentence that is honest about THIS flow — never a raw code, and never the code
+ * field's own copy, which names an admin-ISSUED credential this screen does not use.
+ *
+ * `invalid_code` and `invalid_phone` deliberately do NOT go through [stringIdFor]/
+ * [ApiFailure.messageKey]: that shared mapper answers the SAME server code for the
+ * enrolment-code field's own wrong-code case with "ask your admin for a new one", which is
+ * wrong advice here — an OTP is requested again by the WORKER, not reissued by an admin.
+ * `too_many_attempts` and a transport failure ARE the same words in both flows, so those
+ * two reuse the shared resources directly rather than forking a duplicate string.
+ */
+@Composable
+private fun smsErrorText(failure: ApiFailure): String = when {
+    failure.status == 0 -> stringResource(R.string.err_signin_offline)
+    failure.code == "sms_not_configured" -> stringResource(R.string.sms_not_configured_note)
+    failure.code == "invalid_phone" -> stringResource(R.string.sms_invalid_phone)
+    failure.code == "invalid_code" -> stringResource(R.string.sms_invalid_code)
+    failure.code == "too_many_attempts" -> stringResource(R.string.err_too_many_attempts)
+    else -> stringResource(stringIdFor(failure.messageKey))
 }
 
 // -------------------------------------------------------------------------------------
