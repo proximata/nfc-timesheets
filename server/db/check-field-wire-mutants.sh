@@ -101,11 +101,16 @@ mutate "the building branch of activePlace demands a zone" \
 # 3 · a building tag silently resolves to "the first zone" — the fabrication decision-43
 #     names and refuses. It would look green in every screen and put a door on a tap that
 #     never touched one.
+#     THE SITE MOVED WITH decision-47 (the branch now also selects a literal
+#     `NULL::timestamptz AS zone_verified_at`), AND THE HARNESS DID NOT SAY SO. `grep -F`
+#     with a multi-line pattern matches if ANY ONE line matches, so the second line of the
+#     old pattern (`FROM locations l`) kept the site "found" while `perl` replaced nothing —
+#     the mutant then ran against UNMUTATED source and was reported ALIVE. Reported ALIVE is
+#     a failure either way, so the harness stayed honest, but the message pointed at the
+#     wrong thing. Keep this pattern anchored on a line that is unique BY ITSELF.
 mutate "a building tag is widened to its first zone" \
-  "$VAL" "SELECT l.id AS location_id, NULL::uuid AS zone_id, l.slug, l.name, NULL::text AS zone_name
-       FROM locations l" \
-  "SELECT l.id AS location_id, (SELECT z3.id FROM zones z3 WHERE z3.location_id = l.id AND z3.active ORDER BY z3.created_at LIMIT 1) AS zone_id, l.slug, l.name, NULL::text AS zone_name
-       FROM locations l"
+  "$VAL" "SELECT l.id AS location_id, NULL::uuid AS zone_id, l.slug, l.name, NULL::text AS zone_name," \
+  "SELECT l.id AS location_id, (SELECT z3.id FROM zones z3 WHERE z3.location_id = l.id AND z3.active ORDER BY z3.created_at LIMIT 1) AS zone_id, l.slug, l.name, NULL::text AS zone_name,"
 
 # 4 · the DEFAULT survives the migration. `NOT NULL` alone still lands a silent 0 on every
 #     INSERT that omits the column, which is the shape of seed.sql and of every fixture in
@@ -138,9 +143,19 @@ mutate "/roster drops zones[]" \
   "$APP" "return { status: 200, body: { worker: { id: session.workerId, name: session.name }, locations, zones } };" \
   "return { status: 200, body: { worker: { id: session.workerId, name: session.name }, locations } };"
 
+# 9 · /roster publishes an UNVERIFIED zone's serial (decision-47 §6.3). This is the mutant
+#     that costs the client's only working tap: the mounted EV1 at HOIV carries no URL and
+#     resolves today only through KnownTags.kt's compiled table, to the BUILDING id. Publish
+#     its serial on an unverified zone and Zones.zonePlaceIdForSerial takes priority over
+#     that fallback, the phone posts a ZONE id, and the gate refuses it — at the one building
+#     where anybody actually works.
+mutate "/roster publishes an UNVERIFIED zone's serial" \
+  "$APP" "CASE WHEN z.verified_at IS NULL THEN NULL ELSE z.tag_serial END AS tag_serial" \
+  "z.tag_serial"
+
 restore_all
 echo
-echo "mutants: $pass red, $fail alive-or-dead   (8 mutants; mutant 1 carries 3 edits)"
+echo "mutants: $pass red, $fail alive-or-dead   (9 mutants; mutant 1 carries 3 edits)"
 if [ "$fail" -ne 0 ]; then exit 1; fi
 
 echo "== the tree is restored; re-running the check must be GREEN again"

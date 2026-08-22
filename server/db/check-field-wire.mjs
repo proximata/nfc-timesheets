@@ -430,10 +430,40 @@ try {
   const zoneId = q(MIG_DB, `SELECT id FROM zones WHERE tag_serial = '${MOUNTED_SERIAL}'`);
   assert.match(zoneId, /^[0-9a-f-]{36}$/, "the mounted serial must be storable on a zone");
 
+  // decision-47 — AND THIS IS THE SEQUENCING RULE THAT PROTECTS THE ONE WORKING TAP.
+  // The zone above is UNVERIFIED, because that is what any zone is until an operator scans
+  // its card. While it is, /roster ships the ROW but NOT the SERIAL: a published serial takes
+  // priority over KnownTags.kt's compiled fallback on the phone, so the mounted card would
+  // start posting this ZONE's id, which the gate refuses — i.e. publishing it early is
+  // precisely how the wall card dies. The phone therefore keeps falling back to the compiled
+  // table and the BUILDING id, which is exactly today's behaviour.
+  const unverifiedRoster = (await call("/roster")).body;
+  const unverifiedRow = unverifiedRoster.zones.find((z) => z.id === zoneId);
+  assert.ok(unverifiedRow, "the ROW must ship even unverified — buildingIdOf() reads it to recognise a clock-out");
+  assert.equal(unverifiedRow.tag_serial, null, "an UNVERIFIED zone must NOT publish its serial");
+  const unverifiedTap = await open("c0000000-0000-4000-8000-000000000017", zoneId, t0);
+  assert.equal(unverifiedTap.status, 422, "an unverified zone must not open a shift");
+  assert.equal(unverifiedTap.body.error, "zone_unverified", "…and must say so by name");
+  // THE WALL CARD, WITH AN UNVERIFIED ZONE UNDER IT. This is the state production takes the
+  // moment somebody creates HOIV's first zone, and the building tap must be untouched by it.
+  const duringUnverified = await open("c0000000-0000-4000-8000-000000000018", WALL_TAG_UUID, t0);
+  assert.equal(
+    duringUnverified.status,
+    201,
+    `*** the wall card must keep working while an UNVERIFIED zone sits under it: ${JSON.stringify(duringUnverified.body)} ***`,
+  );
+  assert.equal(duringUnverified.body.shift.start_zone_id, null);
+  assert.equal((await close("c0000000-0000-4000-8000-000000000018", t0 + 30_000, false)).status, 200);
+  ok("UNVERIFIED: no serial on the wire, the zone refuses a tap, and the WALL CARD is unaffected");
+
+  // The operator's test scan, stamped in SQL here — the route itself is pinned in
+  // check-api.js and driven live in ops/prove-live.sh; what this file is for is the WIRE.
+  q(MIG_DB, `UPDATE zones SET verified_at = now() WHERE id = '${zoneId}'`);
+
   const roster = (await call("/roster")).body;
   const shipped = roster.zones.find((z) => z.id === zoneId);
   assert.ok(shipped, "GET /roster must ship the zone — there is no other route a serial arrives on");
-  assert.equal(shipped.tag_serial, MOUNTED_SERIAL, "…carrying the serial verbatim");
+  assert.equal(shipped.tag_serial, MOUNTED_SERIAL, "…carrying the serial verbatim, ONCE VERIFIED");
 
   const c4 = "c0000000-0000-4000-8000-000000000014";
   const zoneOpen = await open(c4, zoneId, t0);

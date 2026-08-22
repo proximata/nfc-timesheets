@@ -213,17 +213,27 @@ try {
   // they do not apply at all, and the runner's lexical ordering is the only thing enforcing
   // it. Asserted as POSITIONS in the transcript, not as three independent matches.
   const applyOutput = migrate();
-  const order = ["006_zones_revenue_rates.sql", "007_operator_identity.sql", "008_reported_tags.sql"].map((f) => {
+  const PENDING = [
+    "006_zones_revenue_rates.sql",
+    "007_operator_identity.sql",
+    "008_reported_tags.sql",
+    "009_phone_pending.sql",
+    "010_zone_verification.sql",
+  ];
+  const order = PENDING.map((f) => {
     const at = applyOutput.indexOf(`applied ${f}`);
     assert.notEqual(at, -1, `${f} must apply — transcript: ${applyOutput.trim().split("\n").join(" / ")}`);
     return at;
   });
-  assert.ok(order[0] < order[1] && order[1] < order[2], "006 -> 007 -> 008, in that order");
+  assert.ok(
+    order.every((at, i) => i === 0 || order[i - 1] < at),
+    "006 -> 007 -> 008 -> 009 -> 010, in that order",
+  );
   assert.match(migrate(), /up to date/, "and re-running must be a no-op");
-  assert.equal(psql("SELECT count(*) FROM schema_migrations"), "8", "exactly 8 migrations recorded, none twice");
+  assert.equal(psql("SELECT count(*) FROM schema_migrations"), "10", "exactly 10 migrations recorded, none twice");
   assert.equal(
     psql("SELECT string_agg(filename, ',' ORDER BY applied_at, filename) FROM schema_migrations WHERE filename >= '006'"),
-    "006_zones_revenue_rates.sql,007_operator_identity.sql,008_reported_tags.sql",
+    PENDING.join(","),
     "...and the RECORDED order matches the applied order",
   );
   // 007 and 008 must also create nothing. An operator, a phone identity or a reported tag
@@ -233,12 +243,24 @@ try {
   }
   assert.equal(psql("SELECT count(*) FROM zones"), "0", "006 must invent no zone");
   assert.equal(psql("SELECT count(*) FROM location_revenue"), "0", "006 must invent no revenue row");
+  // 010 (decision-47): NO BACKFILL and NO DEFAULT. With zero zones on this database there is
+  // nothing it could have verified, and that is the claim — but the DEFAULT is the half a
+  // migration could get wrong silently, so it is read out of the catalogue rather than
+  // inferred. RED case: `ADD COLUMN verified_at TIMESTAMPTZ DEFAULT now()`.
+  assert.equal(
+    psql(
+      "SELECT count(*) FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum WHERE d.adrelid = 'public.zones'::regclass AND a.attname = 'verified_at'",
+    ),
+    "0",
+    "010 must give verified_at NO DEFAULT — a default silently verifies every zone anybody ever creates",
+  );
+  assert.equal(psql("SELECT count(*) FROM zones WHERE verified_at IS NOT NULL"), "0", "010 must verify nobody");
   assert.equal(
     psql("SELECT count(*) FROM shifts WHERE start_zone_id IS NOT NULL OR end_zone_id IS NOT NULL"),
     "0",
     "006 must backfill no zone onto any existing shift",
   );
-  ok("006 -> 007 -> 008 apply to the real database, in order, twice, creating ZERO rows");
+  ok("006 -> 007 -> 008 -> 009 -> 010 apply to the real database, in order, twice, creating ZERO rows");
 
   // ---- 3a · 007's whole point: a worker's phone and an operator's phone CANNOT COLLIDE.
   //
@@ -411,6 +433,34 @@ try {
   const zoneId = psql(`SELECT id FROM zones WHERE tag_serial = '${MOUNTED_SERIAL}'`);
   assert.match(zoneId, /^[0-9a-f-]{36}$/, "the mounted serial must be storable on a zone at all");
 
+  // *** UNVERIFIED FIRST, AND THIS ORDER IS THE POINT (decision-47 §6.3). ***
+  // The zone above is exactly what an admin produces at a desk: real, active, and proved by
+  // nobody. Until an operator test-scans the card, /roster must publish the zone's ROW and
+  // NOT its serial — because a published serial takes priority over KnownTags.kt's compiled
+  // fallback on the phone, so the mounted card would start posting a ZONE id, which the gate
+  // would refuse. That is how this change could break the ONE tap that works at the ONLY
+  // live building, and it is the reason the CASE expression in roster() exists.
+  const beforeVerify = await (await call("/roster")).json();
+  const rowWhileUnverified = beforeVerify.zones.find((z) => z.id === zoneId);
+  assert.ok(rowWhileUnverified, "the zone's ROW must be published even unverified — buildingIdOf() needs it to recognise a clock-out");
+  assert.equal(rowWhileUnverified.tag_serial, null, "...but its SERIAL must not be, or it shadows the compiled fallback the wall card depends on");
+  const shiftsBeforeUnverified = psql("SELECT count(*) FROM shifts");
+  const unverifiedTap = await call("/shifts/open", {
+    method: "POST",
+    body: { client_uuid: "11111111-2222-4333-8444-555555559005", location_uuid: zoneId, start_time: new Date().toISOString() },
+  });
+  assert.equal(unverifiedTap.status, 422, "an UNVERIFIED zone must not open a shift");
+  assert.equal((await unverifiedTap.json()).error, "zone_unverified", "...and must say so by name");
+  assert.equal(psql("SELECT count(*) FROM shifts"), shiftsBeforeUnverified, "...and must create no row (shifts are never deleted)");
+  ok("UNVERIFIED: the row ships, the serial does not, and a tap is refused as zone_unverified with no shift");
+
+  // THE TEST SCAN, stamped here in SQL rather than through POST /operator/zones/:id/verify:
+  // this file holds only a WORKER cookie, and the route itself (including its refusal of a
+  // mismatched card, and that it opens no shift) is pinned in check-api.js and driven live
+  // in ops/prove-live.sh. What THIS file uniquely proves is what the column does to the real
+  // database the client actually has.
+  psql(`UPDATE zones SET verified_at = now() WHERE id = '${zoneId}'`);
+
   const zoned = await (await call("/roster")).json();
   const shipped = zoned.zones.find((z) => z.id === zoneId);
   assert.ok(shipped, "GET /roster must SHIP the zone — there is no other route a serial arrives on");
@@ -462,8 +512,9 @@ try {
   assert.equal(psql("SELECT count(*) FROM zones"), "0", "the scratch zone must not outlive this check");
 
   console.log(
-    "\nOK check-prod-restore: 006 -> 007 -> 008 apply to the real database in order and twice,\n" +
-      "the API boots on it, and the card on the wall at HOIV still clocks a worker in.",
+    "\nOK check-prod-restore: 006 -> 007 -> 008 -> 009 -> 010 apply to the real database in order\n" +
+      "and twice, the API boots on it, an unverified zone refuses a tap while publishing its row\n" +
+      "without its serial, and the card on the wall at HOIV still clocks a worker in.",
   );
 } finally {
   if (server) await new Promise((r) => server.close(r));
