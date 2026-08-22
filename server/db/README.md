@@ -20,7 +20,12 @@ migrations/007_operator_identity.sql   operators, phone_identities (the cross-ta
                           untouched (decision-45)
 migrations/008_reported_tags.sql   reported_tags (an UNBOUND tag an operator wrote and
                           reported, before any zone or building claims it) and tag_aliases
-                          (an existing zone adopting a SECOND physical tag) — this iteration
+                          (an existing zone adopting a SECOND physical tag)
+migrations/009_phone_pending.sql   workers.phone_last_seen_at + the three pending counters
+                          a phone attaches to every call (TASK-225)
+migrations/010_zone_verification.sql   zones.verified_at / verified_by_operator_id — a zone
+                          is not a clock-in target until an OPERATOR test-scanned its card
+                          in the field (decision-47) — this iteration
 migrate.js                runner: applies migrations/*.sql once each, in lexical order
 seed.sql                  DEV ONLY sample data
 check-migrate.js          runnable check (see bottom)
@@ -153,6 +158,19 @@ so it can never reach production by accident.
   shifts in them. `check-migrate.js` proves 005 lands on a database that already holds a
   worker, a building with a contract figure, a building without one, a closed shift and an
   open one.
+- **010 adds `zones.verified_at` and `zones.verified_by_operator_id`, both NULLable, with NO
+  DEFAULT** (decision-47). `active` keeps its meaning byte for byte — it is the
+  ADMINISTRATIVE word ("this tag came off the wall"); `verified_at` is the FIELD word ("a
+  human held the card to a phone and the real server named the real zone"). All four
+  combinations are meaningful and the director's next action differs for each, which is why
+  this is not a third value on `active`. `DEFAULT now()` was refused for 006 §1's reason: a
+  default silently verifies every INSERT that omits the column, exactly as `NOT NULL
+  DEFAULT 0` silently paid every worker nothing. It is **never cleared** by any route —
+  reactivating a deactivated zone must not make a working door untappable. The gate itself
+  lives in `POST /shifts/open` (`v.requireVerifiedPlace`) and **nowhere else**: a clock-OUT
+  is never gated (INCIDENT 1), and the BUILDING branch of `activePlace` does not read the
+  `zones` table at all, so the card on the wall at HOIV cannot be reached by any value of
+  this column — proved, with two seeded mutants, by `ops/check-hoiv-survives-006.mjs`.
 - `material_requests` is the worker's own words plus an explicit lifecycle
   (`submitted -> approved -> ordered -> arrived`, with `rejected` reachable from the first
   two; `arrived` and `rejected` are terminal). `ordered_at` **pins the period a cost belongs

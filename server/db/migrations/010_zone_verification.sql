@@ -1,0 +1,64 @@
+-- 010_zone_verification.sql — a zone is not a clock-in target until a human proved the card.
+--
+-- decision-47, which AMENDS decision-43 for tags created from this point forward and
+-- GRANDFATHERS the building card mounted at HOIV by name. That card carries a BUILDING uuid,
+-- it has no zone, and NOTHING in this file can reach it: verification is a ZONE-only concept
+-- and the building branch of `activePlace` does not read this table at all — it emits
+-- `NULL::uuid AS zone_id` and `NULL::timestamptz AS zone_verified_at` as SQL LITERALS, and
+-- the gate returns unconditionally on a NULL zone_id. There is no query path between the
+-- column added below and what a BUILDING uuid resolves to. Proved, with two seeded RED
+-- cases, by ops/check-hoiv-survives-006.mjs.
+--
+-- THE DEFECT THIS CLOSES. `zones.active` DEFAULTs true (006 §3), so the instant an admin
+-- types a zone — or resolves a reported card into one — that zone is a valid clock-in target,
+-- with nobody having held the physical card to a phone and watched the real server name the
+-- real zone. Verifying by TAPPING was refused once already, for a good reason: a tap opens a
+-- real shift and there is no DELETE /admin/shifts/:id anywhere. decision-47 takes the
+-- read-only third option — POST /operator/zones/:id/verify, on an operator session, which no
+-- shift route accepts — and that is what makes this gate affordable at all.
+--
+-- ADDITIVE ONLY. 001-009 are applied on the live box and are not editable (db/README.md).
+-- No column is dropped, no column changes type, both added columns are NULLable.
+-- NO BEGIN/COMMIT — migrate.js already runs each file with `psql -1`.
+--
+-- ZERO ROWS CREATED, ZERO ROWS UPDATED, AND NO BACKFILL — a measured claim, not a
+-- convenience. Production on 2026-08-22: 1 building (HOIV), 0 shifts, 0 workers, 0 reported
+-- tags, 0 aliases, 0 operators, and exactly ONE zone — a leftover row named 'test' with no
+-- serial and no tag_deployed_at, left by a previous run's own testing, DELETED as an ops step
+-- before this file was applied (backup nfc-20260822T125655Z.sql.gz, restore-tested first).
+-- There is no real zone anywhere to backfill, so this file invents no verification for
+-- anyone, exactly as 006 refused to invent a wage. In a DEV or DEMO database every existing
+-- zone becomes unverified on contact with this file; that is correct, and every seed or
+-- fixture that expects a tappable zone must stamp `verified_at` explicitly.
+--
+-- NOT A FOURTH VALUE ON `active`, and not `active DEFAULT false`. `active` is the
+-- ADMINISTRATIVE word ("this tag came off the wall"); `verified_at` is the FIELD word ("a
+-- human proved this card"). All four combinations are meaningful and the director's next
+-- action differs for each, so merging them would make "reactivate it" and "send the operator
+-- back" indistinguishable — and would silently change the meaning of every query that already
+-- reads `z.active`. Every existing consumer of `zones.active` keeps reading exactly that.
+
+-- NO DEFAULT ON verified_at, deliberately. `DEFAULT now()` would silently land a VERIFIED
+-- zone on every INSERT that omits the column — the identical failure `NOT NULL DEFAULT 0`
+-- produced for workers.hourly_rate_cents, which 006 §1 exists to undo. Without a default, a
+-- seed or a fixture that forgets it reproduces the production refusal instead of hiding it.
+--
+-- A TIMESTAMP AND NOT A BOOLEAN, the same idiom as tag_deployed_at / resolved_at /
+-- corrected_at: "verified in March, before the renovation" is a question the director will
+-- ask, and a boolean cannot answer it.
+--
+-- NEVER CLEARED, by any route, ever. It is a historical fact. Clearing it when a deactivated
+-- zone is reactivated would silently make a working door untappable, which nobody asked for.
+ALTER TABLE zones ADD COLUMN verified_at TIMESTAMPTZ;
+
+-- WHO proved it, for the same reason reported_tags keeps reported_by_operator_id: this fact
+-- is created in the field, by a person, and "who was at that door" is worth keeping.
+-- ON DELETE SET NULL, never CASCADE: a deactivated operator's past verifications are not
+-- deleted history, and a zone must never lose its live status because a person left.
+ALTER TABLE zones ADD COLUMN verified_by_operator_id BIGINT REFERENCES operators(id) ON DELETE SET NULL;
+
+-- "Which zones still need somebody to walk to a door" — the operator's worklist
+-- (GET /operator/zones) and the director's badge, one WHERE clause. Partial, so it stays the
+-- size of the problem rather than the size of the estate, exactly like
+-- reported_tags_unresolved_idx.
+CREATE INDEX zones_unverified_idx ON zones (location_id) WHERE verified_at IS NULL AND active;

@@ -639,6 +639,67 @@ try {
     }
   })();
 
+  // --- 010 spot-checks: the verification gate's two columns (decision-47) ------------
+  //
+  // The whole design rests on one property of the SCHEMA rather than of any handler: a zone
+  // that nobody stamped is NULL, and stays NULL, no matter which INSERT created it. Every
+  // assertion below is about that, and each names the mutation of 010 that turns it red.
+  {
+    // NO DEFAULT is the load-bearing half, exactly as `DROP DEFAULT` was in 006 §1. RED
+    // case: `ALTER TABLE zones ADD COLUMN verified_at TIMESTAMPTZ DEFAULT now()` — every
+    // fixture that forgets the column silently becomes a VERIFIED zone and the gate is
+    // decorative.
+    assert.equal(
+      query(
+        "SELECT count(*) FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum WHERE d.adrelid = 'public.zones'::regclass AND a.attname = 'verified_at';",
+      ),
+      "0",
+      "zones.verified_at must have NO DEFAULT — a DEFAULT now() lands a VERIFIED zone on every INSERT that omits it (006 §1's failure, wearing a different hat)",
+    );
+    assert.equal(
+      query(
+        "SELECT attnotnull FROM pg_attribute WHERE attrelid = 'public.zones'::regclass AND attname = 'verified_at';",
+      ),
+      "f",
+      "zones.verified_at must be NULLable — 'nobody has proved this card yet' is the state every new zone starts in",
+    );
+
+    // The property, demonstrated rather than inferred from the catalogue: an INSERT that
+    // says nothing about verification produces an UNVERIFIED zone.
+    query("INSERT INTO zones (location_id, name) SELECT id, 'Ungeprüfte Stiege' FROM locations ORDER BY slug LIMIT 1;");
+    assert.equal(
+      query("SELECT verified_at IS NULL AND verified_by_operator_id IS NULL FROM zones WHERE name = 'Ungeprüfte Stiege';"),
+      "t",
+      "a zone created without saying anything about verification must land UNVERIFIED",
+    );
+
+    // ON DELETE SET NULL, never CASCADE: an operator leaving must not delete the zones they
+    // proved. RED case: change the FK to ON DELETE CASCADE and the row count below drops.
+    query("INSERT INTO operators (name) VALUES ('Prüfender Feldleiter');");
+    query(
+      "UPDATE zones SET verified_at = now(), verified_by_operator_id = (SELECT id FROM operators WHERE name = 'Prüfender Feldleiter') WHERE name = 'Ungeprüfte Stiege';",
+    );
+    query("DELETE FROM operators WHERE name = 'Prüfender Feldleiter';");
+    assert.equal(
+      query("SELECT count(*) FROM zones WHERE name = 'Ungeprüfte Stiege';"),
+      "1",
+      "deleting the operator must NOT delete the zone they verified — ON DELETE SET NULL, never CASCADE",
+    );
+    assert.equal(
+      query("SELECT verified_by_operator_id IS NULL AND verified_at IS NOT NULL FROM zones WHERE name = 'Ungeprüfte Stiege';"),
+      "t",
+      "the operator reference is cleared and the FACT of verification survives — a zone must never go dark because a person left",
+    );
+
+    // The worklist index, PARTIAL, so it stays the size of the problem.
+    assert.equal(
+      query("SELECT indpred IS NOT NULL FROM pg_index WHERE indexrelid = 'public.zones_unverified_idx'::regclass;"),
+      "t",
+      "zones_unverified_idx must be PARTIAL — it answers 'which doors still need somebody to walk to them'",
+    );
+    query("DELETE FROM zones WHERE name = 'Ungeprüfte Stiege';");
+  }
+
   // --- 003 + 004 on top of an ALREADY MIGRATED database that holds real rows -
   try {
     run("createdb", [LIVE_DB_NAME]);

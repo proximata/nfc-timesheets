@@ -257,9 +257,15 @@ CREATE TABLE zones (
   tag_serial TEXT CHECK (tag_serial ~ '^[0-9A-F]{2}(:[0-9A-F]{2})+$'),
   tag_deployed_at TIMESTAMPTZ,
   active BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- 010 (decision-47): NO DEFAULT and NULLable, transcribed verbatim. A fixture that omits
+  -- the column therefore reproduces the production refusal instead of hiding it, which is
+  -- the whole reason 010 has no default.
+  verified_at TIMESTAMPTZ,
+  verified_by_operator_id BIGINT REFERENCES operators(id) ON DELETE SET NULL
 );
 CREATE INDEX zones_location_id_idx ON zones (location_id);
+CREATE INDEX zones_unverified_idx ON zones (location_id) WHERE verified_at IS NULL AND active;
 CREATE UNIQUE INDEX zones_one_live_name_idx
   ON zones (location_id, lower(btrim(name))) WHERE active;
 CREATE UNIQUE INDEX zones_tag_serial_idx ON zones (tag_serial) WHERE tag_serial IS NOT NULL;
