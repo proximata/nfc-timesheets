@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-08-22 21:53'
-updated_date: '2026-08-22 22:47'
+updated_date: '2026-08-22 23:07'
 labels:
   - decision-48
 dependencies: []
@@ -103,3 +103,40 @@ sizeable piece of work and was not asked for in this run's instructions, which n
 Commits: 6fe5921 (the picker), c00e4b2 (demo/check-sms-picker.mjs), deployed via
 ./ops/deploy.sh at commit c00e4b2.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-22 23:07
+---
+VERIFIED LIVE 2026-08-23. The panel half that DID ship is real on the box; AC4 is still open and this comment does not close it.
+
+NEW: ops/prove-sms-panel-live.mjs — drives a real headless Chrome against
+https://schimmer-glanz.exe.xyz/workers/ with an admin cookie minted straight into the
+database (never a guessed password), against a REAL worker row created for the run.
+
+  1+2  'SMS senden' is RENDERED for the active worker, disabled + aria-disabled, with the
+       reason in words beside it: 'SMS ist nicht eingerichtet. Code vorlesen oder kopieren.'
+       'Zugangscode erstellen' is in the SAME cell, ENABLED, one click away.
+  3    THE SABOTAGE SELF-TEST, on the live DOM: the disabled attribute is stripped and the
+       reason paragraph deleted, and the SAME oracle then reports three defects
+       (not disabled / aria-disabled null / reason sentence missing). Reload -> green again.
+       The oracle can fail, so its green means something.
+  4    The button was PRESSED for real: the standing code panel opened with 01AR-JWT6 and
+       that code redeemed at POST /auth/code -> 200. The fallback is a credential, not a
+       rendering.
+  5    390px: both buttons, the sentence, and no horizontal overflow.
+
+Screenshots on disk at /tmp/ts-prove/sms-panel-live/ (docs/media is gitignored wholesale).
+Every row the run created was deleted; production is back to 0 workers / 0 locations /
+1 admin / 2 pre-existing sessions.
+
+ONE COPY CORRECTION for whoever picks up AC4: the German label is 'Zugangscode erstellen'
+(de.json workers.codeIssue). Earlier notes on this task say 'Zugangscode erzeugen', which is
+not a string that exists in the bundle. Do not grep for it.
+
+AC4 REMAINS: PUT/DELETE /admin/workers/:id/phone are live and proven over HTTP but wired into
+no UI, so a worker cannot be given a Login-Nummer without curl — which means that even with
+Twilio credentials in place, nobody could be sent an SMS through the panel.
+---
+<!-- COMMENTS:END -->

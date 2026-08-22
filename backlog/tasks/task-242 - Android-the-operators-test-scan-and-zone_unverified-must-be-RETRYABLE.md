@@ -4,7 +4,7 @@ title: 'Android: the operator''s test scan, and zone_unverified must be RETRYABL
 status: Done
 assignee: []
 created_date: '2026-08-22 13:37'
-updated_date: '2026-08-22 20:48'
+updated_date: '2026-08-22 23:09'
 labels:
   - android
   - zones
@@ -38,3 +38,12 @@ MUST NOT REGRESS: KnownTags.kt stays (decision-44 step 5 now reads: delete it on
 <!-- SECTION:NOTES:BEGIN -->
 Shipped across App-phase commits 31e42cf/299483a/a52b7e5/19681ff/f7e5c92, which landed before the phase died. Verified by reading source, not by trusting the report: ApiFailure.isRetryable=true for zone_unverified with a core-check assertion pinning it (android/checks/core-check.kt:259-260), VerifyZoneActivity wired into TimeSheetApp.kt's real onClick and AndroidManifest.xml, gated on the operator cookie. Not verified on hardware - no card, no device; that stays the owner's.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-22 23:09
+---
+RE-VERIFIED LIVE 2026-08-23: see the full transcript on TASK-241. ops/prove-zone-verification.sh is PROVE-47 OK against schimmer-glanz.exe.xyz after the SMS deploy, including the two assertions this task owns -- the operator's test scan verifies a zone and CREATES NO SHIFT, and a re-scan is idempotent with verified_at unmoved. The script needed two fixes first (a cleanup report that was being written to /dev/null on the abort path, and an inability to run against the wiped database); both are in commit 090af3f. NOT OBSERVED: no physical Android device was used in this pass -- the operator scan was exercised over HTTP against POST /operator/zones/:id/verify, not through VerifyZoneActivity on a handset.
+---
+<!-- COMMENTS:END -->
