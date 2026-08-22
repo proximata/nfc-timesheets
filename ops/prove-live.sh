@@ -82,6 +82,14 @@ psql_box() { ssh "$HOST" "sudo -u postgres psql -d nfc -v ON_ERROR_STOP=1 -Atc \
 # the closing count pass, because the count only looks at the tables it already knows about.
 KNOWN_CHILDREN="location_contracts.location_id location_revenue.location_id material_requests.location_id portal_grants.location_id shifts.location_id shifts.start_zone_id shifts.end_zone_id zones.location_id zones.verified_by_operator_id tag_aliases.zone_id tag_aliases.id material_requests.worker_id shifts.worker_id worker_sessions.worker_id phone_identities.worker_id phone_identities.operator_id operator_sessions.operator_id reported_tags.reported_by_operator_id"
 
+# SET BY THE LAST LINE OF THE FILE, AND BY NOTHING ELSE. The cleanup trap runs on EVERY
+# exit, including one caused by an unbound variable, a killed ssh or a Ctrl-C, and it used to
+# report "PROVE-LIVE OK" purely because no assertion had gone red YET. A run that stops after
+# § 4 has not proved §§ 5-10; it has proved nothing about them, which is not the same as
+# passing. The cleanup itself still runs - a half-run must still leave production clean - but
+# it cannot claim a pass it did not earn.
+COMPLETED=0
+
 cleanup() {
   local rc=$?
   section "cleanup — every row this run created, scoped by the marker"
@@ -158,9 +166,13 @@ cleanup() {
     # An unauthorised key does not fail the script LOAD, which is why the console is read
     # rather than the network: Google serves the file, `new Map()` succeeds, and what renders
     # is a grey box indistinguishable from "still loading" (web/lib/map.ts says exactly this).
+    # Set and unset around the loop rather than as an assignment prefix: `VAR=1 func` is
+    # restored afterwards in bash, but PERSISTS in POSIX mode, and this file is routinely
+    # invoked as `sh ops/prove-live.sh` (/bin/sh on macOS is bash in POSIX mode).
     local samples="${MAP_SAMPLES:-5}" drawn=0 blocked=0 i
+    SHOT_SAMPLING=1
     for i in $(seq 1 "$samples"); do
-      shot "/" "05-map-$i.png" "HOIV" "Karte wird geladen" >/dev/null 2>&1
+      shot "/" "05-map-$i.png" "HOIV" "Karte wird geladen" >/dev/null 2>&1 || true
       if /usr/bin/grep -q 'Auf der Karte:' "$SHOTS/05-map-$i.txt" 2>/dev/null; then
         drawn=$((drawn + 1)); cp "$SHOTS/05-map-$i.png" "$SHOTS/05-map-drawn.png"; cp "$SHOTS/05-map-$i.txt" "$SHOTS/05-map-drawn.txt"
       elif /usr/bin/grep -q 'RefererNotAllowedMapError' "$SHOTS/05-map-$i.console.txt" 2>/dev/null; then
@@ -168,6 +180,7 @@ cleanup() {
       fi
       rm -f "$SHOTS/05-map-$i.png" "$SHOTS/05-map-$i.txt" "$SHOTS/05-map-$i.console.txt"
     done
+    SHOT_SAMPLING=0
 
     if [ -f "$SHOTS/05-map-drawn.txt" ]; then
       /usr/bin/grep -q "$MARK" "$SHOTS/05-map-drawn.txt" \
@@ -224,6 +237,12 @@ cleanup() {
   [ "$apk" = "$BASELINE_APK" ] && ok "the published APK is untouched ($apk)" || bad "published APK changed"
 
   rm -rf "$TMP"
+  if [ "$COMPLETED" -ne 1 ]; then
+    echo
+    echo "PROVE-LIVE DID NOT FINISH — it stopped early (rc=$rc). Production was cleaned, but"
+    echo "                           every section after the last one printed above is UNPROVEN."
+    exit 1
+  fi
   if [ "$FAILED" -ne 0 ]; then echo; echo "PROVE-LIVE FAILED"; exit 1; fi
   echo; echo "PROVE-LIVE OK — $BASE"
   exit "$rc"
@@ -282,19 +301,35 @@ logline() {
 # A screenshot of the LIVE admin, logged in with the throwaway session. Never fatal on its
 # own — a missing Chrome must not turn a production proof into a red — but a screenshot that
 # rendered the WRONG THING is, because that is the failure it exists to catch.
+#
+# SHOT_SAMPLING=1 TURNS THE FAILURE ARM OFF, and it exists because of a real silent red. The
+# map block below calls this five times with `>/dev/null 2>&1`, deliberately expecting some
+# loads to fail. `bad` sets the GLOBAL failure flag but prints to stdout - so a swallowed
+# sample set FAILED=1 with its message thrown away, and the run ended "PROVE-LIVE FAILED"
+# with not one FAIL line anywhere in the transcript. Unactionable, and it made the previous
+# green a coin toss (5/5 drawn) rather than a pass. A sampled probe returns non-zero and says
+# nothing; only a call that is an ASSERTION is allowed to set the flag.
 shot() {
   local page="$1" file="$2" wait_for="$3" wait_gone="${4:-}"
   local token
   token=$(/usr/bin/grep -E '\bts_session\b' "$ADMIN_JAR" | awk '{print $NF}')
-  [ -n "$token" ] || { bad "no ts_session cookie to screenshot with"; return; }
+  [ -n "$token" ] || { [ "${SHOT_SAMPLING:-0}" = "1" ] && return 1; bad "no ts_session cookie to screenshot with"; return 1; }
   mkdir -p "$SHOTS"
   local extra=()
   [ -n "$wait_gone" ] && extra=(--wait-gone "$wait_gone")
+  # `${extra[@]+"${extra[@]}"}`, never a bare `"${extra[@]}"`. Under `set -u` in bash 3.2 -
+  # which is what /bin/sh is on macOS, and how this file gets invoked as `sh ops/prove-live.sh`
+  # - expanding an EMPTY array is an unbound-variable error. It killed the run dead at the
+  # first screenshot that had no --wait-gone (§ 4, /tags/), and because the trap ran and every
+  # assertion so far had passed, the transcript ended "PROVE-LIVE OK" having never executed
+  # §§ 5-10. That second half is the reason COMPLETED exists below.
   if node ops/screenshot.mjs "$BASE$page" "$SHOTS/$file" --cookie "ts_session=$token" \
-        --wait-text "$wait_for" "${extra[@]}" --height 1400 >/dev/null 2>"$TMP/shot.err"; then
+        --wait-text "$wait_for" ${extra[@]+"${extra[@]}"} --height 1400 >/dev/null 2>"$TMP/shot.err"; then
     ok "screen: $page rendered '$wait_for' -> docs/media/prove-live/$file"
   else
+    [ "${SHOT_SAMPLING:-0}" = "1" ] && return 1
     bad "screen: $page never rendered '$wait_for' — $(tail -2 "$TMP/shot.err" | tr '\n' ' ')"
+    return 1
   fi
 }
 
@@ -303,8 +338,16 @@ echo "proving $BASE end to end   (marker: $MARK, slug: $PROVE_SLUG)"
 # =========================================================================================
 section "0 · the box, before anything"
 SINCE=$(ssh "$HOST" 'date +%s')
+# DERIVED FROM THE TREE, NEVER TYPED. This line read `= "8"` and stayed at 8 while 009 and
+# 010 landed on the box, so the FIRST thing a production proof did was fail - for the box
+# being CORRECT. A literal here does not check the box against anything; it checks it against
+# whoever last remembered to edit this line. Counting server/db/migrations/*.sql asks the
+# question that is actually worth asking: has the box run every migration THIS TREE HAS?
+WANT_MIGRATIONS=$(/bin/ls server/db/migrations/*.sql | wc -l | tr -d ' ')
 MIGRATIONS=$(psql_box "SELECT count(*) FROM schema_migrations")
-[ "$MIGRATIONS" = "8" ] && ok "8 migrations applied" || bad "$MIGRATIONS migrations (want 8)"
+[ "$MIGRATIONS" = "$WANT_MIGRATIONS" ] \
+  && ok "$MIGRATIONS migrations applied - every .sql file in this tree is on the box" \
+  || bad "$MIGRATIONS migrations on the box, $WANT_MIGRATIONS in server/db/migrations/ - deploy first"
 BASELINE_HOIV=$(psql_box "SELECT slug || '|' || active || '|' || coalesce(lat::text,'NULL') || '|' || coalesce(lng::text,'NULL') FROM locations")
 BASELINE_APK=$(ssh "$HOST" "sha256sum /srv/nfc/releases/*.apk | cut -d' ' -f1")
 ok "the building on the wall: $BASELINE_HOIV"
@@ -372,7 +415,13 @@ CREATED=$(printf '%s' "$ADMIN_PASSWORD" | ssh "$HOST" \
 case "$CREATED" in created\ *) ok "throwaway admin $CREATED" ;; *) bad "could not create the throwaway admin: $CREATED"; exit 1 ;; esac
 expect 200 POST /admin/login --jar "$ADMIN_JAR" \
   --data "$(node -e 'process.stdout.write(JSON.stringify({email:process.argv[1],password:process.argv[2]}))' "$ADMIN_EMAIL" "$ADMIN_PASSWORD")"
-[ "$FAILED" = "0" ] || { echo "  (admin login failed — stopping here)"; exit 1; }
+# THE LOGIN, not the run. This line used to read `[ "$FAILED" = "0" ]` - the GLOBAL failure
+# flag - so any earlier red anywhere in the file aborted here printing "admin login failed",
+# and the transcript blamed a login that had just answered 200. A guard must test the thing
+# it names. Everything below needs a ts_session cookie and nothing else, so that is what is
+# tested: no cookie, no point continuing.
+/usr/bin/grep -q ts_session "$ADMIN_JAR" \
+  || { bad "POST /admin/login answered but left no ts_session cookie - nothing below can run"; exit 1; }
 
 expect 201 POST /admin/operators --jar "$ADMIN_JAR" --data "{\"name\":\"$MARK operator\",\"phone\":\"+436811111111\"}"
 OPERATOR_ID=$(jget operator.id)
@@ -535,10 +584,14 @@ expect 201 POST /shifts/open --key --jar "$WORKER_JAR" \
   --data "{\"client_uuid\":\"$TAP_OUT\",\"location_uuid\":\"$TAG_ZONE\",\"start_time\":\"$(ago 10)\"}"
 expect 200 POST /shifts/close --key --jar "$WORKER_JAR" \
   --data "{\"client_uuid\":\"$TAP_OUT\",\"location_uuid\":\"$TAG_BUILDING\",\"end_time\":\"$(now)\"}"
+# `auto_closed` through the `||` operator casts to 'true'/'false', NOT psql's bare-boolean
+# 't'/'f' - the same trap ops/prove-zone-verification.sh's cleanup already records, and it
+# made this line red against a shift row that was perfectly correct (the `row:` line below
+# printed auto_closed=false in the same breath).
 OUT_ZONE=$(psql_box "SELECT coalesce(end_zone_id::text,'NULL') || '|' || auto_closed FROM shifts WHERE client_uuid = '$TAP_OUT'")
-[ "$OUT_ZONE" = "$TAG_BUILDING|f" ] \
+[ "$OUT_ZONE" = "$TAG_BUILDING|false" ] \
   && ok "a clock-out through an UNVERIFIED door closes normally and records it — never gated" \
-  || bad "the unverified clock-out recorded '$OUT_ZONE' (want $TAG_BUILDING|f)"
+  || bad "the unverified clock-out recorded '$OUT_ZONE' (want $TAG_BUILDING|false)"
 logline "POST /shifts/close 200 .* w=$WORKER_ID" "the clock-out"
 row "the closed shift" "SELECT 'end_zone=' || coalesce(end_zone_id::text,'NULL') || ' auto_closed=' || auto_closed || ' minutes=' || round(extract(epoch from (end_time - start_time))/60) FROM shifts WHERE id = $SHIFT_ID"
 shot "/shifts/" "03-shift-closed.png" "$MARK worker"
@@ -686,3 +739,9 @@ ZONED=$(building_field "$WALL_ID" zone_state active)
 NEWSTATE=$(building_field "$NEW_LOCATION" zone_state)
 [ "$NEWSTATE" = "zoned" ] && ok "the building this run created reads 'zoned' — the two states are told apart" || bad "the new building reads '$NEWSTATE'"
 shot "/analytics/" "04-analytics.png" "$MARK Haus"
+
+# THE LAST EXECUTABLE LINE IN THE FILE. Anything that stops the script before here - a red
+# assertion's `exit 1`, an unbound variable, a dropped ssh - leaves this at 0 and the trap
+# refuses to print OK. It must stay last; a new section appended below it would be silently
+# excluded from the very claim this flag exists to make.
+COMPLETED=1

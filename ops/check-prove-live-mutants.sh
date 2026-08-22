@@ -262,6 +262,39 @@ script_mutant "the admin screenshot waits for text that is not on the page" \
   's/shot "\/tags\/" "01-tags-unbound\.png" "\$TAG_BUILDING"/shot "\/tags\/" "01-tags-unbound.png" "THIS-TEXT-IS-NOT-ON-THE-PAGE"/' \
   'never rendered'
 
+# --- THE HARNESS ITSELF, which is where this run found three real ones -------------------
+#
+# Every mutant above assumes prove-live.sh REPORTS what it finds. Three separate defects in
+# that assumption were live in this file's own subject on 2026-08-22, and each produced a
+# transcript that looked like an answer and was not. Labels all carry "harness" so they can
+# be run alone: ./ops/check-prove-live-mutants.sh --only harness
+
+# 1 · A RUN THAT STOPS EARLY MUST NOT REPORT OK. `shot` expanded an empty bash array under
+# `set -u`, the script died at § 4, the EXIT trap ran, FAILED was still 0 because nothing had
+# gone red YET — and the transcript ended "PROVE-LIVE OK" having never executed §§ 5-10, the
+# sections that contain the entire decision-47 proof. This mutant reproduces that shape
+# exactly: stop the script mid-run and demand it refuse to claim a pass.
+script_mutant "harness: the run stops after § 4 and must NOT be able to report OK" \
+  's/\nsection "5 · the admin decides/\nexit 0\nsection "5 · the admin decides/' \
+  'PROVE-LIVE DID NOT FINISH'
+
+# 2 · THE MIGRATION COUNT IS THE BOX AGAINST THIS TREE. It used to be the literal 8, which
+# checks the box against whoever last edited that line — and so the first thing a production
+# proof did was fail, for the box being correct. Add a migration this tree has and the box
+# has not: that is the deploy-forgotten case, and it must be red.
+script_mutant "harness: this tree has a migration the box has not run" \
+  's/^WANT_MIGRATIONS=[^\n]*/WANT_MIGRATIONS=\$((\$(\/bin\/ls server\/db\/migrations\/*.sql | wc -l | tr -d " ") + 1))/m' \
+  'in server/db/migrations/ - deploy first'
+
+# 3 · THE MAP ARM STILL BITES, and it is the one `bad` inside the sampled block that is a
+# real assertion. Point every sample at text the page never shows: all five fail, drawn is 0,
+# and the transcript must SAY the key is not authorised — not die silently, which is what the
+# swallowed `bad` used to do (it set the global flag with its message sent to /dev/null, so
+# the run ended FAILED with not one FAIL line in it).
+script_mutant "harness: no map sample ever draws — the one real assertion in a sampled block" \
+  's/shot "\/" "05-map-\$i\.png" "HOIV" "Karte wird geladen"/shot "\/" "05-map-\$i.png" "THIS-TEXT-IS-NOT-ON-THE-PAGE" "Karte wird geladen"/' \
+  'the map NEVER drew'
+
 # =========================================================================================
 echo
 echo "== D · the box, afterwards"
