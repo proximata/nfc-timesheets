@@ -585,6 +585,35 @@ try {
     ok("second use -> 401 invalid_code, no cookie, no extra session");
   });
 
+  await test("THREE VERIFICATIONS RACE for one code and exactly ONE wins — decided by the database", async () => {
+    // The SELECT that finds the candidate already filters on `consumed_at IS NULL`, so a
+    // SEQUENTIAL replay is refused without the UPDATE's predicate doing any work. This case
+    // exists because that is precisely the illusion: under READ COMMITTED three concurrent
+    // verifications all read "live" from their own snapshot, and only the predicate repeated
+    // inside the UPDATE stops all three minting a session. An `if (already_consumed)` in
+    // this process could not — which is the whole reason POST /auth/code writes it that way
+    // (decision-26) and why this one copies it.
+    resetLoginRate();
+    stub.calls.length = 0;
+    await db.query("DELETE FROM otp_challenges");
+    await db.query("DELETE FROM worker_sessions");
+    await call("/auth/sms/request", { method: "POST", body: { phone: WORKER_PHONE_TYPED } });
+    const code = otpFromLastCall();
+
+    const racers = await Promise.all(
+      [0, 1, 2].map(() => call("/auth/sms/verify", { method: "POST", body: { phone: WORKER_PHONE_TYPED, code } })),
+    );
+    const won = racers.filter((r) => r.status === 200);
+    assert.equal(won.length, 1, `exactly one may win, got ${racers.map((r) => r.status).join("/")}`);
+    for (const lost of racers.filter((r) => r.status !== 200)) {
+      assert.equal(lost.status, 401);
+      assert.equal(lost.cookie, null);
+    }
+    assert.equal(await countOf("SELECT count(*) AS n FROM worker_sessions"), 1, "one code, one session, ever");
+    ok(`3 concurrent verifications -> ${racers.map((r) => r.status).join("/")}, one worker_sessions row`);
+    await db.query("DELETE FROM worker_sessions");
+  });
+
   await test("an UNKNOWN number is indistinguishable from a known one, byte for byte", async () => {
     resetLoginRate();
     stub.calls.length = 0;
