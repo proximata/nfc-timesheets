@@ -98,3 +98,10 @@ mkdir -p "$OUT_NFC"
 # was dead on every device for want of one <uses-permission> line (TASK-225). This last
 # check reads the manifest against the scheduler's own source. See checks/manifest-check.sh.
 sh checks/manifest-check.sh
+
+# THE TEST SCAN CANNOT OPEN A SHIFT (decision-47). nfc/VerifyZoneActivity.kt imports
+# android.nfc, so it cannot be compiled into the JVM checks above; this proves the one
+# property that matters about it — no path to the clock-in intent, the tap inbox or the
+# worker-session client — by reading its source the same way manifest-check.sh reads the
+# manifest. See checks/verify-no-shift-check.sh.
+sh checks/verify-no-shift-check.sh

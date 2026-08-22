@@ -111,7 +111,20 @@ NEEDLES=(
   "runSimulation"
 )
 
-for needle in "${NEEDLES[@]}"; do
+# decision-47's TEST SCAN gets the identical treatment (nfc/VerifySimulation.kt): a debug-
+# only mock lets VerifyZoneActivity be exercised on an emulator, where NFC does not exist,
+# and it must not be the thing an operator sees telling them a zone was proved when no card
+# was ever read. "verifyTapSimulations" is the debug-side control, same reasoning as
+# "runSimulation" above: R8 renames it, so it is not load-bearing for the release verdict by
+# itself — the distinctive scenario strings are.
+VERIFY_NEEDLES=(
+  "sollte freischalten"
+  "kein Zonen-Tag"
+  "eine leere oder unlesbare Karte"
+  "verifyTapSimulations"
+)
+
+for needle in "${NEEDLES[@]}" "${VERIFY_NEEDLES[@]}"; do
   # RED FIRST: the debug apk must contain it, or the needle is wrong and the release
   # result below is meaningless.
   if ! has debug "$needle"; then
@@ -152,6 +165,9 @@ if has release "WriteSimulation.kt"; then
   # Present is FINE and expected: src/release/ has a file of that name. What matters is
   # that its scenarios are not there — covered by the needles above.
   echo "  ok  WriteSimulation.kt is present in release (the src/release/ stub), without any scenario"
+fi
+if has release "VerifySimulation.kt"; then
+  echo "  ok  VerifySimulation.kt is present in release (the src/release/ stub), without any scenario"
 fi
 
 if [ "$fail" -ne 0 ]; then
