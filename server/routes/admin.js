@@ -94,7 +94,14 @@ const CONTRACT_COLS =
 // benchmark that is the only reason the column exists. `tag_serial` is ADOPTED hardware
 // only (decision-44) — a tag we wrote carries this zone's id in its URL and has no serial
 // on file. Neither is a credential and neither is ever authenticated on.
-const ZONE_COLS = "id, location_id, name, note, area_sqm, tag_serial, tag_deployed_at, active, created_at";
+// `verified_at` / `verified_by_operator_id` (010, decision-47) ride along on every zone the
+// admin reads, because „Wartet auf Testscan" is a state the director must SEE rather than
+// discover when a cleaner phones. They are READ here and written NOWHERE in this file: no
+// /admin/* route may stamp them, which is the whole guarantee the record buys — verification
+// happens in the field, on an operator session, with the card in hand.
+const ZONE_COLS =
+  "id, location_id, name, note, area_sqm, tag_serial, tag_deployed_at, active, created_at, " +
+  "verified_at, verified_by_operator_id";
 
 // A typed monthly payment (decision-42). APPEND-ONLY: `superseded_at IS NULL` is the
 // figure in force, and a superseded row keeps its amount so a correction stays visible.
@@ -362,9 +369,11 @@ async function adminData({ query }) {
     // Inactive zones ride along like inactive buildings do: history has to keep naming them.
     all(
       `SELECT ${ZONE_COLS.split(", ").map((c) => `z.${c}`).join(", ")},
-              (SELECT max(s.start_time) FROM shifts s WHERE s.start_zone_id = z.id) AS last_tap_at
+              (SELECT max(s.start_time) FROM shifts s WHERE s.start_zone_id = z.id) AS last_tap_at,
+              vo.name AS verified_by_operator_name
          FROM zones z
          JOIN locations l ON l.id = z.location_id
+         LEFT JOIN operators vo ON vo.id = z.verified_by_operator_id
         ORDER BY l.name, z.active DESC, z.name`,
     ),
     // Tags an operator has WRITTEN AND REPORTED but nobody has resolved yet (this

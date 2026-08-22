@@ -160,6 +160,14 @@ async function openShift({ body, session }) {
   // send it, and keep accepting `location_uuid` FOR EVER — a tag on a wall outlives a
   // field name.
   const place = await v.activePlace(body.location_uuid);
+  // THE VERIFICATION GATE (decision-47), on the OPEN half and nowhere else. Two lines in
+  // lib/validate.js, applied HERE rather than inside the resolver so that "nobody has proved
+  // this card yet" keeps its own name instead of collapsing into `unknown_location`.
+  //
+  // A BUILDING tap returns from it unconditionally — `place.zone_id` is an SQL literal NULL
+  // on that branch — so the card on the wall at HOIV passes through this line unchanged, for
+  // ever. Everything below runs exactly as it did.
+  v.requireVerifiedPlace(place);
   const start = v.timestamp(body.start_time, "start_time");
 
   // No conflict TARGET on purpose. Two unique indexes can fire here — client_uuid and

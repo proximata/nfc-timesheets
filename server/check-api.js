@@ -3258,6 +3258,16 @@ try {
 
     const newLocation = async (slug, name) =>
       (await expect(await asAdmin("/admin/locations", { method: "POST", body: { slug, name } }), 201)).location.id;
+
+    /**
+     * Stamp a zone verified, IN THE DATABASE, for fixtures that need a tappable zone
+     * (decision-47 §4). Deliberately not a route call: no `/admin/*` route writes
+     * `verified_at` and this file pins that fact, so a fixture helper must not be the one
+     * place that quietly needs one.
+     */
+    const verifyZoneRow = async (zoneId) => {
+      await admin.query("UPDATE zones SET verified_at = now() WHERE id = $1", [zoneId]);
+    };
     const plA = await newLocation("pl-a", "PL Haus A");
     const plB = await newLocation("pl-b", "PL Haus B");
     const plC = await newLocation("pl-c", "PL Haus C");
@@ -4629,6 +4639,11 @@ try {
           201,
         )
       ).zone;
+      // decision-47 §4: a zone lands UNVERIFIED and is not a clock-in target until an
+      // operator test-scanned its card. Every fixture that expects a TAPPABLE zone now has
+      // to say so explicitly — that is the point of 010 carrying no default, and this line
+      // is exactly what the three fixtures in this file needed when the gate went in.
+      await verifyZoneRow(zone.id);
 
       const opened = await expect(
         await asWorker("/shifts/open", {
@@ -4966,6 +4981,183 @@ try {
         "zones must not STORE a last-tap time — it is derivable, so a stored copy can only drift",
       );
       await admin.query("DELETE FROM shifts WHERE start_zone_id = $1", [zone.id]);
+    });
+
+    // ===================================================================================
+    // decision-47 · THE VERIFICATION GATE. A zone is not a clock-in target until an
+    // OPERATOR test-scanned its card in the field.
+    //
+    // The gate lives in POST /shifts/open (`v.requireVerifiedPlace`) and NOWHERE else. The
+    // four checks below are the four ways that sentence can be got wrong, and each names
+    // the mutation that turns it red. All four were run red before this landed — the first
+    // three fixtures in this file broke the moment the gate went in, which is the same
+    // evidence from the other direction.
+    // ===================================================================================
+
+    await test("GATE: a tap on an UNVERIFIED zone is refused BY NAME and writes NO shift row", async () => {
+      // RED: delete `if (place.zone_verified_at === null) fail(...)` from
+      // requireVerifiedPlace -> this answers 201 AND a shift row appears.
+      const house = await newLocation("gate-haus", "Freischalt Haus");
+      const zone = (
+        await expect(
+          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house, name: "Stiege ungepr\u00fcft" } }),
+          201,
+        )
+      ).zone;
+      assert.equal(zone.verified_at, null, "a zone an admin typed has proved nothing about a card on a wall");
+
+      const before = await countShifts();
+      const refused = await asWorker("/shifts/open", {
+        method: "POST",
+        body: { client_uuid: uuid(66), location_uuid: zone.id, start_time: new Date().toISOString() },
+      });
+      assert.equal(refused.status, 422, "never a 500, and never a 201");
+      assert.equal(
+        (await refused.json()).error,
+        "zone_unverified",
+        "its OWN code: 'not proved yet' must not read as 'this building was removed' (unknown_location)",
+      );
+      assert.equal(await countShifts(), before, "A REFUSED TAP MUST NOT CREATE A SHIFT — shifts are never deleted");
+
+      // THE DIFFERENTIAL that stops the assertion above being a tautology: the same worker,
+      // the same second, the same route — and the zone VERIFIED — opens a shift.
+      await verifyZoneRow(zone.id);
+      const opened = await expect(
+        await asWorker("/shifts/open", {
+          method: "POST",
+          body: { client_uuid: uuid(66), location_uuid: zone.id, start_time: new Date().toISOString() },
+        }),
+        201,
+      );
+      assert.equal(opened.shift.start_zone_id, zone.id);
+      await expect(
+        await asWorker("/shifts/close", {
+          method: "POST",
+          body: { client_uuid: uuid(66), end_time: new Date(Date.now() + 60_000).toISOString() },
+        }),
+        200,
+      );
+      await admin.query("DELETE FROM shifts WHERE client_uuid = $1", [uuid(66)]);
+    });
+
+    await test("GATE: a clock-OUT is NEVER gated — INCIDENT 1 must not be reintroduced", async () => {
+      // A worker who is clocked in must ALWAYS be able to clock out. An unverified zone is
+      // a configuration state of the office; it must never trap somebody in a shift.
+      // RED: call requireVerifiedPlace in closeShift too -> the close below 422s.
+      const house = await newLocation("gate-close-haus", "Ausstempel Haus");
+      const verified = (
+        await expect(
+          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house, name: "Eingang gepr\u00fcft" } }),
+          201,
+        )
+      ).zone;
+      const unverified = (
+        await expect(
+          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house, name: "Hinterausgang" } }),
+          201,
+        )
+      ).zone;
+      await verifyZoneRow(verified.id);
+
+      await expect(
+        await asWorker("/shifts/open", {
+          method: "POST",
+          body: { client_uuid: uuid(67), location_uuid: verified.id, start_time: new Date().toISOString() },
+        }),
+        201,
+      );
+      // Home time, out through the back door, whose card the office has not proved yet.
+      const closed = await expect(
+        await asWorker("/shifts/close", {
+          method: "POST",
+          body: {
+            client_uuid: uuid(67),
+            location_uuid: unverified.id,
+            end_time: new Date(Date.now() + 60_000).toISOString(),
+          },
+        }),
+        200,
+      );
+      assert.equal(closed.shift.end_zone_id, unverified.id, "the door they actually left by is recorded, unverified or not");
+      assert.equal(closed.shift.auto_closed, false, "and it is an ordinary, confirmed close — not a flagged one");
+      await admin.query("DELETE FROM shifts WHERE client_uuid = $1", [uuid(67)]);
+    });
+
+    await test("GATE: NO admin path can verify a zone — there is no desk route, because there is no route", async () => {
+      // decision-47 §5: verification is the field's, structurally. RED: read `verified_at`
+      // out of the body in upsertZone -> the column below stops being NULL.
+      const house = await newLocation("gate-desk-haus", "Schreibtisch Haus");
+      const zone = (
+        await expect(
+          await asAdmin("/admin/zones", {
+            method: "POST",
+            body: {
+              location_id: house,
+              name: "Vom Schreibtisch",
+              verified_at: new Date().toISOString(),
+              verified_by_operator_id: 1,
+            },
+          }),
+          201,
+        )
+      ).zone;
+      assert.equal(zone.verified_at, null, "POST /admin/zones must IGNORE verified_at in the body");
+      assert.equal(
+        (await admin.query("SELECT verified_at, verified_by_operator_id FROM zones WHERE id = $1", [zone.id])).rows[0]
+          .verified_at,
+        null,
+        "...and it must not have reached the column by another name either",
+      );
+
+      // The update half of the same upsert, on a zone that already exists.
+      await expect(
+        await asAdmin("/admin/zones", {
+          method: "POST",
+          body: { id: zone.id, location_id: house, name: "Vom Schreibtisch", verified_at: new Date().toISOString() },
+        }),
+        200,
+      );
+      assert.equal(
+        (await admin.query("SELECT verified_at FROM zones WHERE id = $1", [zone.id])).rows[0].verified_at,
+        null,
+        "an UPDATE through the admin panel must not verify a card nobody held",
+      );
+
+      // And no admin route anywhere writes the column. A grep-level pin, because the claim
+      // is about the whole surface and not about the two calls above.
+      const adminSource = readFileSync(new URL("./routes/admin.js", import.meta.url), "utf8");
+      assert.ok(
+        !/verified_at\s*=/.test(adminSource),
+        "no /admin/* handler may ASSIGN verified_at — decision-47's only real guarantee is that the route does not exist",
+      );
+    });
+
+    await test("GATE: verified_at never reaches money — not payroll, not the P&L, not the portal", async () => {
+      // decision-47: verification is about the CARD, never about the PLACE. A zone whose
+      // card is unproven is still a real room with a real area; its m2 still count and the
+      // pin stays the colour it was. RED: add `verified_at` to any query in reporting.js,
+      // portal.js, or to an activePlace WHERE clause -> this fires and names the file.
+      const sources = {
+        "lib/reporting.js": readFileSync(new URL("./lib/reporting.js", import.meta.url), "utf8"),
+        "lib/prorata.js": readFileSync(new URL("./lib/prorata.js", import.meta.url), "utf8"),
+        "routes/portal.js": readFileSync(new URL("./routes/portal.js", import.meta.url), "utf8"),
+      };
+      for (const [name, src] of Object.entries(sources)) {
+        assert.ok(
+          !src.includes("verified_at"),
+          `${name} reads verified_at — money and the client portal must not know whether a card was test-scanned`,
+        );
+      }
+      // activePlace RESOLVES an unverified zone and reports it; the refusal is the caller's.
+      // A predicate in the WHERE would collapse it into unknown_location and would also stop
+      // the verify route resolving the zone it is about to prove.
+      const validateSrc = readFileSync(new URL("./lib/validate.js", import.meta.url), "utf8");
+      const activePlaceSql = validateSrc.slice(validateSrc.indexOf("const rows = await all("));
+      const whereClauses = activePlaceSql.slice(0, activePlaceSql.indexOf("[placeId]")).match(/WHERE[^\n]*/g) ?? [];
+      assert.equal(whereClauses.length, 3, "activePlace must still have exactly three branches");
+      for (const clause of whereClauses) {
+        assert.ok(!clause.includes("verified"), `a verification predicate reached the RESOLVER: ${clause}`);
+      }
     });
 
     await admin.query("DELETE FROM material_requests WHERE worker_id = $1", [plWorker]);
@@ -5547,6 +5739,14 @@ try {
         201,
       );
       assert.equal(created.zone.id, tagId);
+      assert.equal(
+        created.zone.verified_at,
+        null,
+        "a resolved card lands UNVERIFIED (decision-47): resolving is paperwork, not proof that the card is on the right wall",
+      );
+      // ...and the operator's test scan is what makes it tappable. Its own route is pinned
+      // below; here the column is stamped directly, so this test keeps testing resolve-zone.
+      await admin.query("UPDATE zones SET verified_at = now() WHERE id = $1", [tagId]);
       assert.equal(created.zone.location_id, house.location.id);
       assert.equal(
         created.zone.tag_deployed_at,
@@ -5576,6 +5776,9 @@ try {
         await asAdmin("/admin/zones", { method: "POST", body: { location_id: house.location.id, name: "Haupteingang" } }),
         201,
       );
+      // Verification is per ZONE, not per card (decision-47, accepted loss): once the zone
+      // is proved, a SECOND card aliased onto it resolves without its own scan.
+      await admin.query("UPDATE zones SET verified_at = now() WHERE id = $1", [zone.zone.id]);
 
       const tagId = uuid(97);
       await expect(await reportTag(tagId, op1.cookie), 201);

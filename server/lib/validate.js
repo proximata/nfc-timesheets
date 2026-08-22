@@ -495,6 +495,15 @@ export async function activeLocation(value, field = "location_uuid") {
  * and no site visit could fix it — the tag cannot be rewritten from Vienna. `locations.active`
  * ALONE decides whether a building tag resolves, zoned or not, for ever.
  *
+ * decision-47 RE-STATES THAT PROHIBITION AND ADDS NOTHING TO IT. Verification (010) is a
+ * ZONE-only concept, and this function is deliberately NOT where it is enforced: a predicate
+ * here would collapse "nobody has proved this card yet" into `unknown_location` — telling a
+ * cleaner the building was removed — and would make the verify route itself unable to resolve
+ * the zone it is about to prove. The gate is `requireVerifiedPlace` below, called by
+ * POST /shifts/open and by nothing else. The building branch keeps emitting NULL LITERALS for
+ * both zone columns, so no value of `zones.verified_at`, for any row, in any state, can change
+ * what a BUILDING uuid answers.
+ *
  * A building UUID never resolves to "the first zone" or "a default zone" either: that
  * fabricates a tap location and silently changes meaning the day a second zone is added.
  *
@@ -516,17 +525,25 @@ export async function activePlace(value, field = "location_uuid") {
   // own id (see that migration's own comment for why re-keying was rejected). Purely
   // additive — the first three branches, and every id that only ever matched one of them,
   // are unchanged.
+  //
+  // `zone_verified_at` (010, decision-47) is the ONE added selected expression. Every WHERE
+  // clause below is byte for byte what it was: this function still RESOLVES an unverified
+  // zone, and reports what it found. Deciding what to do about it is the caller's, and only
+  // POST /shifts/open decides anything.
   const rows = await all(
-    `SELECT l.id AS location_id, NULL::uuid AS zone_id, l.slug, l.name, NULL::text AS zone_name
+    `SELECT l.id AS location_id, NULL::uuid AS zone_id, l.slug, l.name, NULL::text AS zone_name,
+            NULL::timestamptz AS zone_verified_at
        FROM locations l
       WHERE l.id = $1 AND l.active
      UNION ALL
-     SELECT z.location_id, z.id AS zone_id, l.slug, l.name, z.name AS zone_name
+     SELECT z.location_id, z.id AS zone_id, l.slug, l.name, z.name AS zone_name,
+            z.verified_at AS zone_verified_at
        FROM zones z
        JOIN locations l ON l.id = z.location_id
       WHERE z.id = $1 AND z.active AND l.active
      UNION ALL
-     SELECT z.location_id, z.id AS zone_id, l.slug, l.name, z.name AS zone_name
+     SELECT z.location_id, z.id AS zone_id, l.slug, l.name, z.name AS zone_name,
+            z.verified_at AS zone_verified_at
        FROM tag_aliases ta
        JOIN zones z ON z.id = ta.zone_id
        JOIN locations l ON l.id = z.location_id
@@ -557,6 +574,43 @@ export async function activePlace(value, field = "location_uuid") {
   const reported = await one("SELECT resolved_at FROM reported_tags WHERE id = $1", [placeId]);
   if (reported && reported.resolved_at === null) fail(422, "tag_unbound");
   fail(422, "unknown_location");
+}
+
+/**
+ * THE VERIFICATION GATE (decision-47). Called by POST /shifts/open and BY NOTHING ELSE.
+ *
+ * A zone becomes a clock-in target when an OPERATOR, standing in the building with the card
+ * in hand, has test-scanned it (POST /operator/zones/:id/verify). Until then a tap on it is
+ * refused BY NAME and no shift row is created — an admin typing a zone name at a desk has
+ * proved nothing about a physical card on a physical wall.
+ *
+ * *** LINE 1 IS THE HOIV GRANDFATHER, AND IT IS UNCONDITIONAL. ***
+ * A BUILDING tap has no zone. `activePlace`'s building branch emits `NULL::uuid AS zone_id`
+ * as an SQL LITERAL, never a join result, so `place.zone_id === null` is decided by the
+ * SHAPE of the query and not by the contents of any row. The card mounted at HOIV therefore
+ * cannot be reached by this function at all: it returns before `zone_verified_at` is read,
+ * for every value that column could ever hold. Deleting this line 422s a card nobody in
+ * Vienna can rewrite — which is exactly the RED case ops/check-hoiv-survives-006.mjs seeds.
+ *
+ * NOT APPLIED ON CLOSE, EVER. A worker who is clocked in must always be able to clock out
+ * (INCIDENT 1, the worst failure this system has had). A tap on an unverified zone of the
+ * building a worker is already clocked into closes the shift, records `end_zone_id`, and is
+ * not gated — `end_zone_id` is a tap FACT, never an input to money (decision-43 §4).
+ *
+ * THE CODE IS NEW, AND WHAT AN OLD APK DOES WITH IT WAS CHECKED BEFORE IT WAS CHOSEN.
+ * `unknown_location` stays the code for every case that already used it (see `activePlace`'s
+ * comment). `zone_unverified` is a code the shipped build has never seen, so it falls through
+ * `ApiFailure.messageKey`'s `else` branch to `err_rejected` — a sentence, not a crash, and
+ * still no shift row: the same safe degrade `tag_unbound` had before its own string shipped.
+ * It is also RETRYABLE on the phone, deliberately, because a refusal here is a temporary
+ * state of the SERVER's configuration and not a defect in the payload: the identical bytes
+ * succeed the moment the operator test-scans, and a non-retryable code would block the queued
+ * row for ever and lose hours somebody actually worked.
+ */
+export function requireVerifiedPlace(place) {
+  if (place.zone_id === null) return place; // BUILDING TAP. No zone exists, so no gate can apply.
+  if (place.zone_verified_at === null) fail(422, "zone_unverified");
+  return place;
 }
 
 export async function activeWorkerById(value) {
