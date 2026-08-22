@@ -42,7 +42,8 @@ them — then counts what is left and fails if a single row survives.
 | 1 | self-update | ✓ | **✓** | ✗ | `/app/version` → 0.4.1 (6); bytes match the manifest sha; same signer as the field build |
 | 2 | writing a tag | ✓ | n/a | **✗** | phone-local. No server can close this; step 1 of § 4 is what does |
 | 3 | reporting the tag to the office | ✓ | **✓** | ✗ | `POST /operator/tags` → 201, lands UNBOUND; twice → 200, still one row |
-| 4 | admin turning it into a building/zone | ✓ | **✓** | ✗ | resolve-building + resolve-zone → 201; screenshot of the live `/tags/` panel |
+| 4 | admin turning the card into a **zone** | ✓ | **✓** | ✗ | resolve-zone → 201 (resolve-building is DELETED, decision-47: it answers 404 on the live box); screenshot of the live `/tags/` panel |
+| 4b | a zone going LIVE only after a test scan | ✓ | **✓** | ✗ | `POST /operator/zones/:id/verify` → 200 with the shift count unchanged; the unverified tap → 422 `zone_unverified`, no row (`ops/prove-zone-verification.sh`) |
 | 5 | a tap opening a shift | ✓ | **✓** | ✗ | old-shape body; zone card → 201 carrying `start_zone_id`; second tap closes it |
 | 6 | a tap on an unbound tag being harmless | ✓ | **✓** | ✗ | 422 `tag_unbound`, no shift row, its OWN German sentence |
 
@@ -260,10 +261,37 @@ Reporting the same card twice is harmless: one row, every time.
 Admin panel → `Unzugeordnete Tags`. The card is in the table with the time and the operator
 who reported it. Two choices, both keep the id already burned into the card:
 
-- **`Neues Gebäude`** — name + slug. The building's id IS the card's id.
 - **`Neue Zone in bestehendem Gebäude`** — pick the building, name the zone.
+- **`Bestehende Zone (zweiter Tag)`** — the card becomes a second tag on a zone that exists.
+
+**A card can no longer become a NEW BUILDING** (decision-47). `POST /admin/tags/:id/resolve-building`
+is deleted and answers 404. A building discovered on a field visit is created TAG-FREE under
+„Objekte" — its id comes from the database, never from a card — and the reported card then
+becomes that building's FIRST ZONE. The screen says so where the radio used to be.
 
 Nothing is written to the card by any of this. Once resolved, the row leaves the list.
+
+---
+
+### Step 5b — an operator proves the card, in the building, before anyone can clock in
+
+A zone lands **UNVERIFIED**. It is a real, active row and it is **not a clock-in target**: a
+tap answers `422 zone_unverified` and **writes no shift**. What makes it live is an operator,
+on site, with the card in hand:
+
+```
+GET  /operator/zones                 the worklist, unverified first, + the serial map
+POST /operator/zones/:id/verify      { place_uuid }  -> 200, verified_at stamped
+```
+
+It resolves the card through `v.activePlace` — the same function `POST /shifts/open` calls —
+and then requires the card to name the zone the operator picked, so a card mounted at the
+wrong door is refused (`422 zone_mismatch`) rather than blessed. **It cannot open a shift:**
+both routes are `auth: "operator"`, and no shift route accepts a `ts_operator` cookie. A
+second scan is a harmless 200 that moves no timestamp.
+
+The card already on the wall at HOIV carries a **building** uuid and is untouched by all of
+this, for ever: verification is a zone-only concept and a building tap reads no zone at all.
 
 ---
 

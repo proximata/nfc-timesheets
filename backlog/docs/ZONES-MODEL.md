@@ -1001,11 +1001,21 @@ reachable resting state.
 
 # 5 · The verification tap, again
 
-> **ANSWERED 2026-08-22 by decision-47 / `backlog/docs/ZONE-VERIFICATION.md`.** The choice below
-> is settled as option **(c)**: a read-only test scan on an OPERATOR session that posts no shift
-> and cannot (no shift route accepts `ts_operator`). `zonesTestTapWarning` — the prose workaround
-> this section names — is deleted, because it stops being true. The paragraphs below are kept as
-> the record of why the problem was deferred and what its trigger was.
+> **ANSWERED 2026-08-22 by decision-47 / `backlog/docs/ZONE-VERIFICATION.md`, and the SERVER
+> half is BUILT, DEPLOYED AND PROVED ON THE LIVE BOX the same day.** The choice below is
+> settled as option **(c)**: a read-only test scan on an OPERATOR session that posts no shift
+> and cannot (no shift route accepts `ts_operator`). `GET /operator/zones` +
+> `POST /operator/zones/:id/verify` are live; a zone that nobody has scanned answers
+> `422 zone_unverified` on `POST /shifts/open` and writes no row.
+>
+> `zonesTestTapWarning` stopped being true the moment that shipped and **is still in
+> `de.json`/`en.json`** — deleting it, and rendering „Wartet auf Testscan" in its place, is
+> TASK-241. The Android side (`err_zone_unverified`, and making `zone_unverified` RETRYABLE so
+> a queued offline tap is not stranded) is TASK-242 and has NOT shipped. Until it does, do not
+> create a zone at a building where anyone is working.
+>
+> The paragraphs below are kept as the record of why the problem was deferred and what its
+> trigger was.
 
 D1 step 9 and IA-PLAN §8.4: a test tap creates a permanent, undeletable payroll row, and
 there is no `DELETE /admin/shifts/:id` anywhere. The owner **deferred** this in IA-PLAN §9,

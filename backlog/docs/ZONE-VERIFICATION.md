@@ -1,8 +1,35 @@
 # ZONE-VERIFICATION — a zone goes live when a human proves the card, not when an admin types a name
 
-Status: **design. Nothing built, no migration file created, production not written to.** The
-only thing this run did to production was **read** it (§1). The SQL below is a sketch inside
-this document until a task applies it.
+Status: **the SERVER half is BUILT, DEPLOYED and PROVED on the live box (2026-08-22). The
+admin screens and the Android build are NOT.** §4.1's SQL stopped being a sketch: it is
+`server/db/migrations/010_zone_verification.sql`, applied to production after the leftover
+`test` zone was deleted (backup `nfc-20260822T125655Z.sql.gz`, restore-tested first).
+
+```
+DONE   §1 the leftover 'test' zone      deleted; production is 1 building, 0 zones, 0 shifts
+DONE   §2 resolve-building              route, handler, web caller and radio all DELETED
+DONE   §4 migration 010                 applied; zero rows created, zero updated
+DONE   §3 the gate                      422 zone_unverified, OPEN only, never CLOSE
+DONE   §6 the test scan                 GET /operator/zones + POST /operator/zones/:id/verify
+DONE   §6.3 the /roster CASE            row published, serial NULLed until verified
+DONE   §5 the HOIV grandfather          5 mutants RED in ops/check-hoiv-survives-006.mjs
+DONE   §8 C1-C13, C15(server side)      + a live proof, ops/prove-zone-verification.sh
+
+TODO   §6.4 the phone: MODE_VERIFY      no APK built; NFC never works on an emulator
+TODO   §7.1 err_zone_unverified         de/en strings + zone_unverified made RETRYABLE
+                                        (an OLD APK degrades to err_rejected today: a
+                                        sentence, still no shift, but TERMINAL for a queued
+                                        offline tap — see the warning in §9)
+TODO   §7.2 the director's screens      „Wartet auf Testscan", the Zonen-cell counts, and
+                                        deleting `zonesTestTapWarning`, which stopped being
+                                        true the moment the test scan shipped
+TODO   §8 C14, C16, C17                 the phone's retryability, the rendered admin state,
+                                        the release artefact
+```
+
+⚠ **§9's warning is now the live operational rule**: the server is at step 3 and the phone is
+not at step 5, so **do not create a zone at a building where anyone is working** until the APK
+ships. Production has zero workers, so nothing is at risk today.
 
 Normative record: `backlog/decisions/decision-47`. That record is what is binding; this
 document is the design it points at — the state machine, the wire shapes, every check and
@@ -764,12 +791,28 @@ first because the row is litter and the brief is to clean up and prove it.
 - **It does not fix `tag_unbound`'s retryability**, though it found the defect. Separate task,
   separate blast radius.
 
-## 11 · What did NOT happen in producing this document
+## 11 · What did NOT happen — kept, and updated after the server build
 
-- Nothing was built. No migration file exists yet; the SQL in §4.1 is a sketch in this document.
-- Production was **read only** — the query in §1 and nothing else. No row was written, updated or
-  deleted, including the `test` zone, which is queued as step 1 of §9.
-- No check in §8 has been run. They are specified, not passing.
-- No screenshot was taken and no APK was built.
-- The claim in §2.4 (`resolve-building` has no Android caller) is a grep result, not an audit of
-  the dex.
+**In producing this document (2026-08-22, design):** nothing was built, production was read
+only, no check in §8 had been run, no screenshot was taken and no APK was built. The claim in
+§2.4 was a grep result and not an audit of the dex.
+
+**After the server build, the same list, honestly:**
+
+- **Built and deployed:** 010, the gate, the two operator routes, the `/roster` CASE, the
+  deletion of `resolve-building` and of every caller.
+- **Run, with their RED cases executed first, not asserted:** C1-C13 and the server half of
+  C15; `check-migrate`, `check-api`, `check-prod-restore` (+3 mutants),
+  `check-field-wire` (+9 mutants), `check-hoiv-survives-006` (+5 mutants),
+  `demo/check-tags-screen.mjs` against a real rendered browser, and
+  `ops/prove-zone-verification.sh` against the LIVE box and the real HOIV row.
+- **NOT run, and not claimed:** C14 (`ApiFailure.isRetryable` on the phone), C16 (the
+  director's rendered zone row — the SCREEN does not carry „Wartet auf Testscan" yet, so
+  there is nothing to render), C17 (the release artefact). **No APK was built.** Android is
+  untouched by this run: `err_zone_unverified` does not exist and `zone_unverified` is NOT
+  retryable yet, so a tap queued offline against an unverified zone is still stranded — the
+  same defect TASK-240 files for `tag_unbound`.
+- **Still a grep and not a dex audit:** §2.4.
+- Production was written to, deliberately and reversibly: the `test` zone deleted, 010
+  applied, and one throwaway worker/operator/zone created and deleted again by
+  `ops/prove-zone-verification.sh`, which counts the rows afterwards to prove it.
