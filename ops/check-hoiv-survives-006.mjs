@@ -11,6 +11,14 @@
 // resolution and the card 422s on the day migration 006 lands, permanently, with no site visit
 // able to fix it.
 //
+// decision-47 ADDS A SECOND WAY TO KILL THE SAME CARD, and this file is now the proof for
+// both. 010 makes a zone untappable until an operator test-scanned it (`zones.verified_at`).
+// A building tap has NO zone, so the gate must be unreachable from it — not "we did not wire
+// it up", but structurally: `activePlace`'s building branch emits NULL LITERALS for both zone
+// columns, and `requireVerifiedPlace` returns unconditionally on a NULL zone_id. Phase 1 taps
+// the wall card BOTH with HOIV unzoned AND with an UNVERIFIED zone sitting under it; phase 2
+// mutates each of those two properties and demands the tap go RED.
+//
 // decision-43 §3 rules that `zone_state` is PRESENTATION ONLY: grey pin, a sentence, and
 // nothing else. This file is the proof that the code agrees, and that the proof can FAIL:
 //
@@ -98,12 +106,38 @@ async function core() {
     );
     assert.ok(before.startsWith("true|"), `HOIV must be ACTIVE in the dump, found: ${before}`);
     ok(`before 006: HOIV is ${before}`);
+    // Counted BEFORE, so "the migrations invent no zone" is a delta and not an assumption
+    // about how old the dump is.
+    const zonesBefore = q("SELECT count(*) FROM zones WHERE to_regclass('public.zones') IS NOT NULL");
 
+    // WHICH FILES ARE PENDING DEPENDS ON THE AGE OF THE DUMP, and both ages are real: the
+    // dump taken before a deploy window has 006-010 pending; the dump taken after it has
+    // only the newest. So the pending set is READ OFF THE RESTORED DATABASE rather than
+    // hardcoded — a hardcoded list turns "this dump is newer than I expected" into a
+    // failure that looks like a schema bug.
+    const applied = new Set(
+      q("SELECT filename FROM schema_migrations ORDER BY filename")
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+    const ALL = [
+      "006_zones_revenue_rates.sql",
+      "007_operator_identity.sql",
+      "008_reported_tags.sql",
+      "009_phone_pending.sql",
+      "010_zone_verification.sql",
+    ];
+    const pending = ALL.filter((f) => !applied.has(f));
+    assert.ok(
+      pending.includes("010_zone_verification.sql"),
+      "010 must be PENDING in the dump under test — a dump that already has it proves nothing about applying it",
+    );
     const out = sh("node", [MIGRATE], { env: { ...process.env, DATABASE_URL } });
-    for (const f of ["006_zones_revenue_rates.sql", "007_operator_identity.sql", "008_reported_tags.sql"]) {
+    for (const f of pending) {
       assert.match(out, new RegExp(`applied ${f.replace(/\./g, "\\.")}`), `${f} must apply`);
     }
-    ok("006, 007 and 008 applied, in order");
+    ok(`applied, in order, over the client's own rows: ${pending.join(", ")}`);
 
     // ---- THE ROW ITSELF ---------------------------------------------------------------
     assert.equal(
@@ -111,8 +145,13 @@ async function core() {
       before,
       "006 changed HOIV's row — it must leave it exactly as it found it, coordinates included",
     );
-    assert.equal(q(`SELECT count(*) FROM zones WHERE location_id = '${WALL_TAG_UUID}'`), "0", "006 must invent no zone");
-    ok("after 006: the row is byte-identical and HOIV still has ZERO zones");
+    assert.equal(q("SELECT count(*) FROM zones"), zonesBefore, "no migration may invent (or destroy) a zone");
+    assert.equal(
+      q(`SELECT count(*) FROM zones WHERE location_id = '${WALL_TAG_UUID}'`),
+      "0",
+      "HOIV must have ZERO zones in the dump under test — that is the production fact the wall-card tap below is about, and a dump with zones cannot make the claim",
+    );
+    ok("after migrating: the row is byte-identical, the zone count is unchanged, and HOIV still has ZERO zones");
 
     // ---- THE API, AND THE TWO WORDS -----------------------------------------------------
     process.env.DATABASE_URL = DATABASE_URL;
@@ -169,6 +208,49 @@ async function core() {
       200,
     );
     ok("POST /shifts/open with the WALL CARD's uuid at an UNZONED building -> 201");
+
+    // *** THE SAME CARD, WITH AN UNVERIFIED ZONE NOW SITTING UNDER IT (decision-47). ***
+    // This is the shape production takes the day somebody creates HOIV's first zone. The
+    // wall card must answer IDENTICALLY — same status, same location_id, same NULL zone —
+    // because verification is a ZONE-only concept and a building tap reads no zone at all.
+    // A zone under this building is deliberately created with NO verified_at, which is what
+    // 010 makes the default state of every zone.
+    q(`INSERT INTO zones (location_id, name) VALUES ('${WALL_TAG_UUID}', 'Erste Zone, ungepr\u00fcft')`);
+    assert.equal(
+      q(`SELECT count(*) FROM zones WHERE location_id = '${WALL_TAG_UUID}' AND verified_at IS NULL AND active`),
+      "1",
+      "the fixture must be an ACTIVE, UNVERIFIED zone, or the assertion below proves nothing",
+    );
+    const withZone = "11111111-2222-4333-8444-5555555590a2";
+    const zoned = await call("/shifts/open", {
+      method: "POST",
+      body: { client_uuid: withZone, location_uuid: WALL_TAG_UUID, start_time: new Date().toISOString() },
+    });
+    const zonedBody = await zoned.json();
+    assert.equal(
+      zoned.status,
+      201,
+      `THE CARD ON THE WALL MUST STILL CLOCK A WORKER IN, with an unverified zone under it: ${JSON.stringify(zonedBody)}`,
+    );
+    assert.equal(zonedBody.shift.location_id, WALL_TAG_UUID);
+    assert.equal(zonedBody.shift.start_zone_id, null, "a building tag must not acquire the zone somebody just created");
+    assert.equal(
+      (await call("/shifts/close", { method: "POST", body: { client_uuid: withZone, end_time: new Date(Date.now() + 60_000).toISOString() } })).status,
+      200,
+      "and the clock-out is never gated either",
+    );
+    // A tap on THAT ZONE's own id, by contrast, IS refused — which is what makes the
+    // assertion above a statement about the BUILDING branch and not about a dead gate.
+    const zoneId = q(`SELECT id FROM zones WHERE location_id = '${WALL_TAG_UUID}'`);
+    const zoneTap = await call("/shifts/open", {
+      method: "POST",
+      body: { client_uuid: "11111111-2222-4333-8444-5555555590a3", location_uuid: zoneId, start_time: new Date().toISOString() },
+    });
+    assert.equal(zoneTap.status, 422, "an UNVERIFIED zone's own id must be refused");
+    assert.equal((await zoneTap.json()).error, "zone_unverified", "...by name");
+    q(`DELETE FROM shifts WHERE client_uuid = '${withZone}'`);
+    q(`DELETE FROM zones WHERE location_id = '${WALL_TAG_UUID}'`);
+    ok("the WALL CARD is unchanged with an UNVERIFIED zone under it, while that zone's own id is refused");
 
     // *** THE FIXTURE SHIFT IS DELETED BEFORE ANY MAP SURFACE IS READ, AND THAT IS LOAD-
     // BEARING. *** `reportableLocations` lists a building that is active OR was worked in the
@@ -252,6 +334,27 @@ async function mutants() {
       expect: /must report the OPERATIONAL active/,
     },
     {
+      // decision-47's FIRST way to kill the same card: the gate's building early-return
+      // deleted. Every building-level tap in the system then reads `zone_verified_at` —
+      // which is a literal NULL on that branch — and 422s. HOIV's card dies instantly.
+      name: "the verification gate loses its BUILDING early return — decision-47's first mutant",
+      file: path.join(SERVER, "lib", "validate.js"),
+      from: "  if (place.zone_id === null) return place; // BUILDING TAP. No zone exists, so no gate can apply.\n",
+      to: "",
+      expect: /THE CARD ON THE WALL MUST STILL CLOCK A WORKER IN/,
+    },
+    {
+      // decision-47's SECOND way: verification wired into RESOLUTION rather than named at
+      // the clock-in site. The building branch starts requiring a VERIFIED zone to exist,
+      // so the wall card at an unzoned building — or at one whose only zone is unproven —
+      // resolves to nothing.
+      name: "activePlace's building branch requires a VERIFIED zone — decision-47's second mutant",
+      file: path.join(SERVER, "lib", "validate.js"),
+      from: "      WHERE l.id = $1 AND l.active\n     UNION ALL",
+      to: "      WHERE l.id = $1 AND l.active AND EXISTS (SELECT 1 FROM zones z7 WHERE z7.location_id = l.id AND z7.verified_at IS NOT NULL)\n     UNION ALL",
+      expect: /THE CARD ON THE WALL MUST STILL CLOCK A WORKER IN/,
+    },
+    {
       // THE OTHER WAY IT DIES: not greyed, GONE. `reportableLocations` is what puts a pin on
       // the map at all (decision-39 makes the map the landing surface), so a zone predicate
       // in its WHERE removes the client's only building from the only screen the director
@@ -320,7 +423,7 @@ async function mutants() {
 
   console.log(`\nmutants: ${red} red, ${alive} alive-or-dead`);
   if (alive > 0) process.exit(1);
-  console.log("OK check-hoiv-survives-006: HOIV survives 006, and all three ways of killing it are RED.");
+  console.log("OK check-hoiv-survives-006: HOIV survives 006-010, and all FIVE ways of killing it are RED.");
 }
 
 await (CORE ? core() : mutants());
