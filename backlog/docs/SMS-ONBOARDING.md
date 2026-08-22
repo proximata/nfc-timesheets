@@ -781,3 +781,108 @@ deployed — a line goes into `/etc/nfc/env`.
   (`SK`, 34 / 32) to establish §1's finding; no value was printed, copied or committed.
 - **Nothing was deployed.** Production is untouched by this run beyond three read-only
   `SELECT count(*)` statements and one `awk` over `/etc/nfc/env`'s key names.
+
+---
+
+## 13 · What the IMPLEMENTING run then built — 2026-08-22, deployed
+
+§12 above is true **of the design run**. This section is the implementing run, and it exists
+so the document does not go on claiming nothing was written.
+
+```
+migrations       011_sms_onboarding.sql (sms_deliveries)   APPLIED on the live box
+                 012_sms_otp.sql        (otp_challenges)   APPLIED on the live box
+                 -- 012 exists NOW because its writer exists now (§6.5's own rule)
+server           lib/sms.js  +  4 admin routes  +  2 auth routes  +  one boot line
+web              NOTHING. No file under web/ was touched.
+android          NOTHING (§6.6). No Kotlin, no string, no versionCode.
+ios              NOTHING. NFCTimeSheets/ and project.pbxproj untouched.
+npm deps         unchanged: pg + @sentry/node. `fetch` is stdlib.
+```
+
+**The flag is OFF on production, measured after the deploy, not promised:**
+
+```
+journalctl -u nfc-api      sms: not configured (missing: account_sid, auth, sender)
+GET  /admin/sms-status     200 {"configured":false,
+                                "missing":["account_sid","auth","sender"],
+                                "sender_kind":null}
+POST /auth/sms/request     503 {"error":"sms_not_configured"}
+POST /auth/sms/verify      503 {"error":"sms_not_configured"}
+POST /admin/workers/101/enrolment-code/sms
+       …with NO login number   503 {"error":"sms_not_configured"}
+       …WITH a login number    503 {"error":"sms_not_configured"}   <- the 503 is the FLAG,
+                                                                      not a missing number
+sms_deliveries after all of that      0 rows
+otp_challenges after all of that      0 rows
+```
+
+`auth` joins `account_sid` and `sender` in the missing list because `/etc/nfc/env` does not
+carry even the two secrets the vault holds (§1 measured that already). `sender_name` is
+**absent** from the list, which is the check that `ops/branding.json` resolved through the
+two-candidate path `lib/sms.js` needs because `server/` is flattened to `/srv/nfc/` on the box.
+
+**And the fallback, on the live box, in the same minute:**
+
+```
+POST /admin/workers/101/enrolment-code   201  {"code":"CH7Z-VPN3","expires_at":…}
+POST /auth/code {"code":"CH7Z-VPN3"}     200  + Set-Cookie: ts_worker=…; 90 days
+```
+
+Every row this proof created was deleted afterwards; production is back to 0 workers,
+0 phone_identities, 0 worker_sessions, 0 sms_deliveries, 0 otp_challenges, 1 admin.
+
+### 13.1 · Two things the design got wrong, found by running it
+
+**`SET worker_id = NULL` cannot release a claim.** `phone_identities_claims` (007) makes a row
+that claims nobody UNREPRESENTABLE, so §3.4's `UPDATE phone_identities SET worker_id = NULL`
+answers `500 … violates check constraint`. The release is a **DELETE** for a worker-only row
+and a NULL only where an operator still holds the other half. decision-45's "named cleanup of
+a both-NULL row" turns out to be unnecessary: the database refuses to create the litter.
+
+**The promotion has to refuse BEFORE it releases.** `phone_identities.worker_id` is UNIQUE, so
+the worker's previous claim must go before the new one is inserted — and releasing first would
+mean a *refused* claim left the worker with no number at all. Order: check, release, claim.
+
+### 13.2 · The checks, and the negative case for every one
+
+```
+server/check-sms-flag.mjs        the flag off (production's real env) -> 503, 0 rows, 0 calls;
+                                 then ON against a local stub -> 200 + a real wire assertion
+                                 (Account SID in the PATH, Basic SK pair, form-encoded)
+server/check-sms-message.mjs     GSM-7, one segment, Europe/Vienna incl. the October boundary
+ops/check-fallback-reachable.mjs the owner's „always": routes present, body built BEFORE the
+                                 send, the code button conditional on `worker.active` ALONE
+server/check-phone-namespace.mjs §3b: the promotion refuses from both sides, in both spellings
+
+server/check-sms-mutants.sh                  11 mutants, ALL RED
+ops/check-fallback-reachable-mutants.sh       9 mutants, ALL RED
+server/check-phone-namespace-mutants.sh       8 mutants, ALL RED  (2 of them new)
+```
+
+`ops/check-fallback-reachable.mjs` and `check-sms-message.mjs` now run in **`ops/deploy.sh`
+step 0**, before anything moves, so hiding the code button stops a deploy rather than being
+noticed later.
+
+**One named ceiling, measured rather than assumed.** The `consumed_at IS NULL` predicate
+*inside* the redemption UPDATE could not be killed as a mutant on its own: with it removed and
+**eight simultaneous** verifications fired at one live code, the result was still 1×200 / 7×401
+and one `worker_sessions` row, because node lands the winner's UPDATE before the losers' SELECT.
+It is genuine defence in depth against a race this harness cannot provoke from outside the
+process. The honest mutant is therefore one semantic change across both sites.
+
+Two mutants that had gone blind were also fixed: `check-phone-namespace-mutants.sh`'s
+"the 409 leaks which kind of person" was anchored on a bare `fail(409, "phone_claimed")`, and
+since this work there are TWO such sites — `perl -0777 s///` without `/g` was patching the
+wrong route and reporting ALIVE.
+
+### 13.3 · Still not done, and not pretended otherwise
+
+- **The panel.** No `SMS senden` button, no `Login-Nummer` cell, no i18n key. §8's table is
+  still a proposal. The server contract it needs is in the run store under `server`.
+- **Android.** Nothing, deliberately (§6.6).
+- **`ops/branding.json` is still unchanged.** `smsSenderName` is read if present and falls back
+  to `appName`; adding it is a one-line configuration change with no code change and no deploy.
+- **Credentials.** `TWILIO_ACCOUNT_SID` and a sender still do not exist. The day they are put
+  in the vault and synced, the feature turns itself on with a `systemctl restart` and nothing
+  else — the flag is re-read per request, never cached at boot.
