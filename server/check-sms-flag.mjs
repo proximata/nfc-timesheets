@@ -317,6 +317,14 @@ try {
     ok("503, no ts_worker cookie, no worker_sessions row");
   });
 
+  await test("GET /auth/capabilities says sms:false — THE ANDROID SIGN-IN SCREEN'S ONE PUBLIC READ", async () => {
+    // No session, no admin cookie — this is what a phone asks before it has anything.
+    const res = await call("/auth/capabilities");
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.deepEqual(res.body, { sms: false }, "exactly one field, and it must read false with no TWILIO_* set");
+    ok("{sms:false} — the sign-in screen composes nothing behind this");
+  });
+
   await test("THE FALLBACK IS RIGHT THERE: the enrolment code still mints and still redeems", async () => {
     // This is the case the owner's sentence is about. With SMS refusing every call, the
     // admin-issued code path must be indistinguishable from a box that has never heard of
@@ -351,6 +359,16 @@ try {
     assert.deepEqual(res.body.missing, []);
     assert.equal(res.body.sender_kind, "number");
     ok("the same process, the same server object: configured false -> true with no restart");
+  });
+
+  await test("GET /auth/capabilities flips to sms:true in the SAME PROCESS — no session, no admin cookie", async () => {
+    const res = await call("/auth/capabilities");
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.deepEqual(res.body, { sms: true }, "the app's one read agrees with the admin's detailed one");
+    // NAMES NOTHING beyond the boolean — this is the whole point of a separate, minimal
+    // route rather than handing the app a slice of GET /admin/sms-status.
+    assert.deepEqual(Object.keys(res.body), ["sms"]);
+    ok("{sms:true} — the sign-in screen may now compose the section");
   });
 
   await test("the wire: Basic auth with the SK pair, the ACCOUNT SID in the URL PATH, form-encoded", async () => {

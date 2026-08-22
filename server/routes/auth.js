@@ -266,6 +266,38 @@ async function whoami({ session }) {
 }
 
 /**
+ * GET /auth/capabilities -> what THIS BUILD may offer, before any session exists.
+ *
+ * decision-48 §6.6. THE APP'S ONE PUBLIC CAPABILITY READ: a phone that has never enrolled,
+ * or whose session just expired, is exactly the phone that needs to know whether the SMS
+ * door is worth drawing BEFORE it draws it — a control that answers 503 the moment it is
+ * pressed is the silent pretence the owner forbade, just moved one tap later. This is not a
+ * second config surface: it is `smsConfigured()` (lib/sms.js), the SAME derived predicate
+ * GET /admin/sms-status and every SMS route already gate on, read again with nothing else
+ * attached.
+ *
+ *   200 {sms: boolean}
+ *
+ * NAMES NOTHING. No `missing[]`, no `sender_kind` — that detail is for the person who can
+ * fix it (GET /admin/sms-status, admin-auth only); this answers before any session exists,
+ * to anyone holding the app key `strings` recovers from any installed APK (decision-24's own
+ * discipline: the app key is not a secret, and this route tells it nothing a secret would
+ * guard).
+ *
+ * `auth: "app"`, exactly like GET /app/version: no worker or operator session required, so
+ * a phone that cannot sign in yet can still ask. `smsConfigured()` is evaluated PER REQUEST
+ * (never cached at boot, lib/sms.js), so flipping the four TWILIO_* vars in /etc/nfc/env and
+ * restarting is believed by the very next launch — no deploy, no version gate.
+ *
+ * ANDROID SHIPS NOTHING BEHIND THIS ROUTE UNTIL THIS ITERATION: it exists so the sign-in
+ * screen can decide whether to compose the SMS section at all, rather than composing a
+ * button that would answer 503 the moment it is pressed.
+ */
+async function capabilities() {
+  return { status: 200, body: { sms: smsConfigured() } };
+}
+
+/**
  * POST /auth/operator-code {code} -> operator session cookie. Mirrors POST /auth/code
  * (decision-45 §6) against `operators` instead of `workers` — same rate limiting, same
  * decoy-timing discipline, same single-use-decided-by-the-database redemption, same ONE
@@ -552,6 +584,9 @@ export const authRoutes = [
   { method: "POST", path: "/auth/code", auth: "app", handler: codeAuth },
   { method: "POST", path: "/auth/logout", auth: "worker", handler: logout },
   { method: "GET", path: "/auth/session", auth: "worker", handler: whoami },
+  // decision-48 §6.6, this iteration. auth: "app" like /app/version below — no session, so
+  // the sign-in screen can ask before it has one. See capabilities() above.
+  { method: "GET", path: "/auth/capabilities", auth: "app", handler: capabilities },
   // decision-45 §6/§7. Not `POST /operator/workers` — that route is BLOCKED, see
   // routes/admin.js (§8, TASK-212 AC#5).
   { method: "POST", path: "/auth/operator-code", auth: "app", handler: operatorCodeAuth },
