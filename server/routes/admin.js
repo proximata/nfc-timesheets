@@ -824,34 +824,38 @@ async function putWorkerPhone({ params, body }) {
   const worker = await one("SELECT id FROM workers WHERE id = $1 AND active", [workerId]);
   if (!worker) fail(404, "unknown_worker");
 
+  // REFUSE BEFORE RELEASING. The worker's own previous claim has to go before the new one
+  // can be inserted (phone_identities.worker_id is UNIQUE — one person, one login number),
+  // and releasing first would mean a refused claim left the worker with NO number at all.
+  // So the refusal is decided first, against the row as it stands.
+  const held = await one("SELECT worker_id FROM phone_identities WHERE phone_e164 = $1", [phone]);
+  if (held && held.worker_id !== null && Number(held.worker_id) !== workerId) fail(409, "phone_claimed");
+
+  // Release the worker's PREVIOUS number, if any. Without this, changing a number would
+  // leave the old one claimed for ever and an OTP sent to it would still resolve to this
+  // worker.
+  await releaseWorkerPhone(workerId, phone);
+
   try {
-    // ONE STATEMENT, and the WHERE is what makes it safe. `worker_id IS NULL` on the
-    // conflict branch lets a row an OPERATOR already holds ADOPT its worker half — one
-    // human, one telephone, two roles, which is precisely what 007's table is for — while
-    // making it impossible to STEAL a number from another worker: that row has a non-NULL
-    // worker_id, the UPDATE matches nothing, and 0 rows come back.
+    // The WHERE on the conflict branch is what makes this safe. `worker_id IS NULL` lets a
+    // row an OPERATOR already holds ADOPT its worker half — one human, one telephone, two
+    // roles, which is precisely what 007's table is for — while making it impossible to
+    // STEAL a number from another worker: that row has a non-NULL worker_id, the UPDATE
+    // matches nothing and 0 rows come back. `OR worker_id = $2` keeps re-saving the same
+    // number idempotent instead of answering 409 for a no-op.
     const claimed = await one(
       `INSERT INTO phone_identities (phone_e164, worker_id) VALUES ($1, $2)
          ON CONFLICT (phone_e164) DO UPDATE SET worker_id = $2
-            WHERE phone_identities.worker_id IS NULL
+            WHERE phone_identities.worker_id IS NULL OR phone_identities.worker_id = $2
        RETURNING phone_e164`,
       [phone, workerId],
     );
-    if (!claimed) fail(409, "phone_claimed");
-
-    // The worker's PREVIOUS claim, if any, is released in the same call — otherwise
-    // changing a number would leave the old one claimed for ever and an OTP to it would
-    // still resolve to this worker.
-    await query("UPDATE phone_identities SET worker_id = NULL WHERE worker_id = $1 AND phone_e164 <> $2", [
-      workerId,
-      phone,
-    ]);
-    await query("DELETE FROM phone_identities WHERE worker_id IS NULL AND operator_id IS NULL");
+    if (!claimed) fail(409, "phone_claimed"); // lost a race between the SELECT and here
 
     return { status: 200, body: { worker: { id: workerId }, phone_e164: phone } };
   } catch (err) {
-    // phone_identities_worker_id_key: this number is free, but the worker already holds a
-    // different one and the UPDATE above has not run yet. Same opaque answer.
+    // The database, not this function, is the thing that makes the collision impossible
+    // (decision-45 §2). Same opaque answer, naming nobody.
     if (err?.code === "23505") fail(409, "phone_claimed");
     throw err;
   }
@@ -866,9 +870,39 @@ async function putWorkerPhone({ params, body }) {
  */
 async function deleteWorkerPhone({ params }) {
   const workerId = v.id(params.id, "id");
-  await query("UPDATE phone_identities SET worker_id = NULL WHERE worker_id = $1", [workerId]);
-  await query("DELETE FROM phone_identities WHERE worker_id IS NULL AND operator_id IS NULL");
+  await releaseWorkerPhone(workerId, null);
   return { status: 200, body: { worker: { id: workerId }, phone_e164: null } };
+}
+
+/**
+ * Give up this worker's registry claim, optionally sparing one number they are about to
+ * re-claim. TWO STATEMENTS AND NOT ONE `SET worker_id = NULL`, and the reason is a
+ * constraint, not a preference:
+ *
+ *   phone_identities_claims CHECK (worker_id IS NOT NULL OR operator_id IS NOT NULL)   -- 007
+ *
+ * A row that claims NOBODY is UNREPRESENTABLE, so nulling the worker on a worker-only row
+ * raises 23514 and the director's „Nummer entfernen" button answers 500. decision-45's
+ * "named cleanup of a both-NULL row" is therefore not a sweep after the fact — the
+ * database refuses to create the litter in the first place, and the release has to be a
+ * DELETE for a worker-only row and a NULL only where an operator still holds the other half
+ * (one human, one telephone, two roles).
+ *
+ * Measured, not reasoned: this function exists because check-sms-flag.mjs §6 caught the
+ * one-statement version answering `500 ... violates check constraint
+ * "phone_identities_claims"`.
+ */
+async function releaseWorkerPhone(workerId, keepPhone) {
+  await query(
+    `DELETE FROM phone_identities
+      WHERE worker_id = $1 AND operator_id IS NULL AND ($2::text IS NULL OR phone_e164 <> $2)`,
+    [workerId, keepPhone],
+  );
+  await query(
+    `UPDATE phone_identities SET worker_id = NULL
+      WHERE worker_id = $1 AND operator_id IS NOT NULL AND ($2::text IS NULL OR phone_e164 <> $2)`,
+    [workerId, keepPhone],
+  );
 }
 
 /**
