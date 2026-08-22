@@ -270,5 +270,23 @@
             android:launchMode="singleTop"
             android:label="@string/write_title" />
 
+        <!--
+          THE TEST SCAN (operator), decision-47. exported="false", no intent filter, no NFC
+          filter of any kind — same reasoning as WriteTagActivity above: reached only from a
+          button inside the app, reader mode only while it is foregrounded and only once an
+          operator has picked which zone is being tested.
+
+          IT MUST NEVER GET AN NDEF_DISCOVERED FILTER, for the same reason WriteTagActivity
+          must not: a tag lying on a desk would be able to launch this screen on its own.
+
+          singleTop: presenting a second card must reuse the running screen, not stack a
+          second verify session pointed at a stale zone selection.
+        -->
+        <activity
+            android:name=".nfc.VerifyZoneActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:label="@string/verify_title" />
+
     </application>
 </manifest>

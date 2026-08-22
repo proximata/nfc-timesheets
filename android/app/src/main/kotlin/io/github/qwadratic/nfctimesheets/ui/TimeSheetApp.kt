@@ -89,6 +89,7 @@ import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.data.LocalShift
 import io.github.qwadratic.nfctimesheets.nfc.NfcReadiness
 import io.github.qwadratic.nfctimesheets.nfc.ScanActivity
+import io.github.qwadratic.nfctimesheets.nfc.VerifyZoneActivity
 import io.github.qwadratic.nfctimesheets.nfc.WriteTagActivity
 import io.github.qwadratic.nfctimesheets.sync.SyncScheduler
 import io.github.qwadratic.nfctimesheets.update.UpdateReadiness
@@ -459,6 +460,19 @@ private fun LogScreen(
                         .fillMaxWidth()
                         .heightIn(min = 48.dp),
                 ) { Text(stringResource(R.string.write_open)) }
+            }
+            // THE TEST SCAN (decision-47). Right next to "write a tag", for the same reason:
+            // the operator opens the app on purpose, and a cleaner holding a phone to a wall
+            // must never be one mis-tap away from a screen that reads a card as anything but
+            // a clock-in. Nothing behind this button can open or close a shift (decision-45) —
+            // android/checks/verify-no-shift-check.sh pins that structurally.
+            item {
+                OutlinedButton(
+                    onClick = { openIntent(Intent(logContext, VerifyZoneActivity::class.java)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.verify_open)) }
             }
         }
 
