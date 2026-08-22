@@ -102,10 +102,29 @@ texts=$(git ls-files 'docs/media/**/*.txt' 'docs/media/*.txt' || true)
 if [ "$MUTATE" = "1" ]; then
   echo "  (mutant: the file this check was written for is restored from history and re-scanned)"
   mutant=$(mktemp -d)
+  chmod 700 "$mutant"
   trap 'rm -rf "$mutant"' EXIT INT TERM
-  # 2cc19b2 is the commit that added it. Taken from history, so the RED below is the real
-  # bytes that were really committed, not a fabricated needle.
-  git show 2cc19b2:docs/media/prove-live/02-building-created.txt > "$mutant/restored.txt" 2>/dev/null || true
+  # 2cc19b2 was the commit that added it, and TAKING IT FROM HISTORY IS THE POINT: the RED is
+  # then the real bytes that were really committed, not a fabricated needle.
+  #
+  # *** THAT COMMIT NO LONGER EXISTS. *** The history containing it was rewritten (that was
+  # the whole remediation), so `git show` fails — and with `|| true` swallowing it and an
+  # empty file being scanned, THIS MUTANT PASSED GREEN and had been proving nothing since.
+  # A check whose negative case cannot fail is not a check, and that applies to its mutant
+  # too. So: try history, and if the blob is gone, FALL BACK to a needle read from production
+  # in this same run and say which path was taken. Never silently.
+  if git show 2cc19b2:docs/media/prove-live/02-building-created.txt > "$mutant/restored.txt" 2>/dev/null \
+     && [ -s "$mutant/restored.txt" ]; then
+    echo "  (the original blob, restored from history)"
+  else
+    # The needle is a REAL production value, so it goes in a 0700 temp directory OUTSIDE the
+    # repo, is never echoed, and is deleted by the trap above. Writing it into the tree — even
+    # briefly — would be the leak this file exists to prevent, one layer out.
+    printf '%s\n' "$(printf '%s\n' "$needles" | sed '/^[[:space:]]*$/d' | head -1)" > "$mutant/restored.txt"
+    chmod 600 "$mutant/restored.txt"
+    [ -s "$mutant/restored.txt" ] || { echo "  FAIL: the mutant has NOTHING to scan — no historical blob and no needle"; exit 1; }
+    echo "  (2cc19b2 is gone with the rewritten history — falling back to one live needle in a temp dir)"
+  fi
   texts=$(printf '%s\n%s\n' "$texts" "$mutant/restored.txt")
 fi
 
