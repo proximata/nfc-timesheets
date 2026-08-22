@@ -1,9 +1,11 @@
 ---
 id: TASK-241
 title: 'Admin: an unverified zone is VISIBLY waiting for a test scan'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-08-22 13:36'
+updated_date: '2026-08-22 15:41'
 labels:
   - web
   - zones
