@@ -66,6 +66,29 @@ mutate() {
   restore_all
 }
 
+# Two sites, ONE semantic change. Used where a property is deliberately enforced twice and
+# neither half alone is observable from outside the process — see mutant 8.
+mutate_pair() {
+  name="$1"; file="$2"; from1="$3"; to1="$4"; from2="$5"; to2="$6"
+  restore_all
+  if ! /usr/bin/grep -qF -- "$from1" "$file" || ! /usr/bin/grep -qF -- "$from2" "$file"; then
+    echo "DEAD  $name — a site was not found in $file"
+    fail=$((fail + 1))
+    restore_all
+    return
+  fi
+  FROM="$from1" TO="$to1" perl -0777 -i -pe 's/\Q$ENV{FROM}\E/$ENV{TO}/' "$file"
+  FROM="$from2" TO="$to2" perl -0777 -i -pe 's/\Q$ENV{FROM}\E/$ENV{TO}/' "$file"
+  if run_check; then
+    echo "ALIVE $name — the mutant PASSED. The assertion does not fire."
+    fail=$((fail + 1))
+  else
+    echo "RED   $name"
+    pass=$((pass + 1))
+  fi
+  restore_all
+}
+
 echo "== baseline (must be GREEN before any mutant means anything)"
 run_check && echo "GREEN baseline" \
   || { echo "BASELINE IS RED — fix that first; no mutant below means anything." >&2; exit 1; }
@@ -107,10 +130,18 @@ mutate "phone_identities.operator_id loses UNIQUE — one operator may hold two 
 #     panel must not become a directory of who is enrolled. The worker-held and
 #     operator-held refusals are compared byte for byte, so a single extra key kills it.
 # ---------------------------------------------------------------------------------------
+#     ANCHORED ON createOperator's OWN return line, not on the bare `fail(409, …)`: since
+#     decision-48 there are TWO sites that answer phone_claimed (PUT .../phone is the other)
+#     and `perl -0777 s///` without /g patches whichever comes FIRST in the file. Without
+#     this anchor the mutant silently edited the wrong route and reported ALIVE.
 mutate "the 409 leaks which kind of person holds the number" \
   "$ADM" \
-  'if (err?.code === "23505") fail(409, "phone_claimed");' \
-  'if (err?.code === "23505") fail(409, "phone_claimed", "operator");'
+  '    return { status: 201, body: { operator: { ...row, phone_e164: phone } } };
+  } catch (err) {
+    if (err?.code === "23505") fail(409, "phone_claimed");' \
+  '    return { status: 201, body: { operator: { ...row, phone_e164: phone } } };
+  } catch (err) {
+    if (err?.code === "23505") fail(409, "phone_claimed", "operator");'
 
 # ---------------------------------------------------------------------------------------
 # 5 · AN OPERATOR SESSION IS GRANTED THE CLOCK-IN ROUTE. decision-45 §3's "structural, not
@@ -129,6 +160,38 @@ mutate "phone_identities_claims removed — a row may claim nobody" \
   "$MIG" \
   "CONSTRAINT phone_identities_claims CHECK (worker_id IS NOT NULL OR operator_id IS NOT NULL)" \
   "CONSTRAINT phone_identities_claims CHECK (true)"
+
+# ---------------------------------------------------------------------------------------
+# 7 · A SECOND E.164 NAMESPACE APPEARS. decision-48 §3.2's whole argument: a
+#     `workers.phone_e164 UNIQUE` satisfies its OWN constraint and phone_identities' at the
+#     same time, so the collision the owner made impossible becomes possible again — this
+#     time SILENTLY, because nothing is violated. Added as a migration so the check sees it
+#     the way it would really arrive.
+# ---------------------------------------------------------------------------------------
+mutate "a second E.164 column with its own UNIQUE is added to workers" \
+  "$MIG" \
+  "CREATE TABLE operators (" \
+  "ALTER TABLE workers ADD COLUMN phone_e164 TEXT UNIQUE;
+
+CREATE TABLE operators ("
+
+# ---------------------------------------------------------------------------------------
+# 8 · THE PROMOTION STOPS REFUSING A NUMBER SOMEBODY ELSE HOLDS. PUT .../phone is the ONLY
+#     route that gives a worker a registry claim (decision-48 §3.4), so if its refusal is
+#     dropped, the one namespace has a door in it that no other check walks.
+# ---------------------------------------------------------------------------------------
+#     TWO SITES, ONE CHANGE, and the reason is that the refusal is deliberately made twice:
+#     an explicit pre-check, and the `worker_id IS NULL` predicate on the ON CONFLICT branch
+#     that lets the DATABASE decide a race. Measured: removing either alone leaves the other
+#     refusing, so neither single mutant can be killed — which is the property working, not
+#     a gap. The honest mutant is "the promotion stops refusing".
+mutate_pair "PUT /admin/workers/:id/phone stops refusing a claimed number" \
+  "$ADM" \
+  '  if (held && held.worker_id !== null && Number(held.worker_id) !== workerId) fail(409, "phone_claimed");' \
+  '  void held;' \
+  '         ON CONFLICT (phone_e164) DO UPDATE SET worker_id = $2
+            WHERE phone_identities.worker_id IS NULL OR phone_identities.worker_id = $2' \
+  '         ON CONFLICT (phone_e164) DO UPDATE SET worker_id = $2'
 
 restore_all
 echo "== the tree is restored; re-running the check must be GREEN again"

@@ -376,9 +376,80 @@ try {
       true,
     );
     note("HOLE (by design, decision-45 §2.3): workers.phone is contact text, not identity —");
-    note("     the panel CAN put an operator's number on a worker row. Closed only when a");
-    note("     worker's number becomes a registry claim (POST /operator/workers, TASK-212).");
+    note("     the panel CAN put an operator's number on a worker row. STILL TRUE on the");
+    note("     CREATE path, and unchanged by decision-48: PUT /admin/workers/:id/phone is a");
+    note("     SEPARATE, deliberate claim (§3b below), never a silent promotion of this string.");
     ok("measured and pinned: worker-side phone is free text, registry untouched, operator's claim intact");
+  });
+
+  // ===================================================================================
+  // 3b · THE PROMOTION decision-45 NAMED AND DID NOT BUILD, now built (decision-48 §3.4).
+  //
+  //     decision-45's Consequences said: "Promotion of existing rows is a named, future,
+  //     one-click admin action, not built here." PUT /admin/workers/:id/phone is that
+  //     action, and it is the ONLY route in this tree that gives a worker a registry claim.
+  //     The owner's sentence — ONE namespace, enforced by the database — has to keep
+  //     holding through it, from BOTH sides and in BOTH spellings.
+  // ===================================================================================
+  await test("PUT /admin/workers/:id/phone claims the number, and then NOTHING may take it", async () => {
+    const w = await asAdmin("/admin/workers", { method: "POST", body: { name: "Promoted Cleaner", phone: "0664 900 55 10", hourly_rate_cents: 1500 } });
+    assert.equal(w.status, 201);
+    const promoted = await asAdmin(`/admin/workers/${w.body.worker.id}/phone`, { method: "PUT", body: { phone: "0664 900 55 10" } });
+    assert.equal(promoted.status, 200, `the promotion must succeed: ${JSON.stringify(promoted.body)}`);
+    assert.equal(promoted.body.phone_e164, "+436649005510", "normalised on the way in");
+
+    // FROM THE OPERATOR SIDE, in the OTHER spelling. This is the direction that was
+    // previously unreachable, because no worker ever held a claim.
+    const op = await asAdmin("/admin/operators", { method: "POST", body: { name: "Feldleiter Zehn", phone: "+43 664/9005510" } });
+    assert.equal(op.status, 409, `an operator must not be able to take a promoted worker's number: ${JSON.stringify(op.body)}`);
+    assert.deepEqual(Object.keys(op.body), ["error"], "and the refusal must still name nobody");
+
+    // FROM THE WORKER SIDE.
+    const w2 = await asAdmin("/admin/workers", { method: "POST", body: { name: "Second Promoted", hourly_rate_cents: 1500 } });
+    assert.equal(w2.status, 201, JSON.stringify(w2.body));
+    const stolen = await asAdmin(`/admin/workers/${w2.body.worker.id}/phone`, { method: "PUT", body: { phone: "+43 664/9005510" } });
+    assert.equal(stolen.status, 409, `a second worker must not be able to take it either: ${JSON.stringify(stolen.body)}`);
+    assert.equal(JSON.stringify(stolen.body), JSON.stringify(op.body), "both refusals must be byte-identical");
+
+    // The free-text column is UNTOUCHED by the promotion (decision-45 §4).
+    assert.equal(
+      (await db.query("SELECT phone FROM workers WHERE id = $1", [w.body.worker.id])).rows[0].phone,
+      "0664 900 55 10",
+      "the director's own spelling must survive the promotion verbatim",
+    );
+    ok("promoted worker claim: operator 409, second worker 409, byte-identical, free text untouched");
+  });
+
+  await test("THERE IS STILL EXACTLY ONE E.164 NAMESPACE — no second column anywhere in the schema", async () => {
+    // A `workers.phone_e164 UNIQUE` would satisfy its own constraint AND
+    // phone_identities' at the same time, and the collision the owner made impossible
+    // would quietly become possible again. This asks the DATABASE, not the source.
+    const { rows } = await db.query(
+      `SELECT table_name, column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND column_name ILIKE '%e164%'
+        ORDER BY table_name, column_name`,
+    );
+    const outside = rows.filter((r) => r.table_name !== "phone_identities");
+    // sms_deliveries.phone_e164 and otp_challenges.phone_e164 (decision-48) are the two
+    // permitted exceptions and NEITHER IS A NAMESPACE: sms_deliveries is an append-only
+    // log with no UNIQUE and no FK (a delivery record must outlive a released claim), and
+    // otp_challenges REFERENCES phone_identities, so it can only ever name a number the
+    // one registry already owns.
+    const allowed = new Set(["sms_deliveries", "otp_challenges"]);
+    const rogue = outside.filter((r) => !allowed.has(r.table_name));
+    assert.deepEqual(rogue, [], `a second E.164 column exists: ${JSON.stringify(rogue)}`);
+
+    for (const r of outside) {
+      const { rows: cons } = await db.query(
+        `SELECT c.contype FROM pg_constraint c
+           JOIN pg_class t ON t.oid = c.conrelid
+           JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY (c.conkey)
+          WHERE t.relname = $1 AND a.attname = 'phone_e164' AND c.contype IN ('u','p')`,
+        [r.table_name],
+      );
+      assert.deepEqual(cons, [], `${r.table_name}.phone_e164 carries a UNIQUE/PK — that makes it a second namespace`);
+    }
+    ok(`phone_e164 appears on ${rows.length} table(s); only phone_identities constrains it`);
   });
 
   await test("POST /operator/workers does not exist — the §8 conflict was not built past", async () => {
