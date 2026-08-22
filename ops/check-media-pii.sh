@@ -146,11 +146,25 @@ else
 fi
 
 # ---- 4 · and the README no longer claims what nobody checked ---------------------------
+#
+# THREE STATES, AND THE THIRD ONE IS NOW THE REAL ONE. `docs/media` was later gitignored
+# WHOLESALE and every file under it removed from the tree, so the README this arm was written
+# to police does not exist — and the arm went RED over its absence, i.e. it failed the repo
+# for having done the SAFER thing. That is a check disagreeing with its own purpose: the
+# property is "no committed media asserts a safety claim nobody verified", and zero committed
+# media satisfies it completely.
+#
+# The clearance is therefore conditional on there BEING committed media, and it is measured
+# rather than assumed — `git ls-files docs/media`, the same source arms 2 and 3 grep. The
+# moment one file comes back under docs/media, the README requirement comes back with it.
 readme=docs/media/prove-live/README.md
-if [ -f "$readme" ] && grep -q "check-media-pii" "$readme"; then
+tracked_media=$(git ls-files docs/media | wc -l | tr -d ' ')
+if [ "$tracked_media" = "0" ]; then
+  ok "docs/media is gitignored wholesale and nothing under it is tracked — there is no committed prose left to be false"
+elif [ -f "$readme" ] && grep -q "check-media-pii" "$readme"; then
   ok "$readme points at this check instead of asserting the property in prose"
 else
-  bad "$readme states a safety property with nothing behind it — the last version of that sentence was false"
+  bad "$tracked_media file(s) are tracked under docs/media but $readme does not point at this check — the last version of that sentence was false"
 fi
 
 echo
