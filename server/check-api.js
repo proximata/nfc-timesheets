@@ -5851,6 +5851,196 @@ try {
       assert.equal((await again.json()).error, "already_resolved");
     });
 
+    // ---- THE TEST SCAN: a zone goes live when a human proved the card (decision-47) ----
+    //
+    // The gate itself is pinned in the zones block above. This is the only way through it,
+    // and the only thing that writes `zones.verified_at` anywhere in this codebase.
+    await test("the TEST SCAN verifies a zone through the REAL resolver and posts NO shift", async () => {
+      // RED: point the handler at POST /shifts/open (or drop `AND verified_at IS NULL` and
+      // let it stamp without resolving) -> the shift count moves, or the mismatch cases
+      // below stop refusing.
+      const house = await expect(
+        await asAdmin("/admin/locations", { method: "POST", body: { slug: "verify-haus", name: "Pr\u00fcfhaus" } }),
+        201,
+      );
+      const tagId = uuid(42);
+      await expect(await reportTag(tagId, op1.cookie), 201);
+      const zone = (
+        await expect(
+          await asAdmin(`/admin/tags/${tagId}/resolve-zone`, {
+            method: "POST",
+            body: { location_id: house.location.id, name: "Stiege Pr\u00fcf" },
+          }),
+          201,
+        )
+      ).zone;
+      assert.equal(zone.verified_at, null);
+
+      // It is on the operator's worklist, UNVERIFIED FIRST, and the payload carries nothing
+      // about money or people.
+      const worklist = await expect(await call("/operator/zones", { cookie: op1.cookie }), 200);
+      const item = worklist.zones.find((z) => z.id === zone.id);
+      assert.ok(item, "an unverified zone must appear on the operator's worklist");
+      assert.equal(item.location_name, "Pr\u00fcfhaus", "...named by its building, or nobody knows where to walk");
+      const firstVerified = worklist.zones.findIndex((z) => z.verified_at !== null);
+      assert.ok(
+        firstVerified === -1 || worklist.zones.slice(firstVerified).every((z) => z.verified_at !== null),
+        "UNVERIFIED rows come first and no verified row may appear before one — it is a worklist, not a list",
+      );
+      for (const key of ["area_sqm", "hourly_rate_cents", "monthly_contract_cents", "client_id"]) {
+        assert.equal(item[key], undefined, `${key} has no business on an operator's phone`);
+      }
+
+      // THE SCAN. The count is taken around the WHOLE call, because "it must not open a
+      // shift" is the reason this route exists instead of a tap.
+      const shiftsBefore = await countShifts();
+      const verified = await expect(
+        await call(`/operator/zones/${zone.id}/verify`, {
+          method: "POST",
+          cookie: op1.cookie,
+          body: { place_uuid: tagId },
+        }),
+        200,
+      );
+      assert.equal(await countShifts(), shiftsBefore, "A TEST SCAN MUST NOT CREATE A SHIFT — shifts are never deleted");
+      assert.equal(verified.zone.id, zone.id);
+      assert.equal(verified.zone.already_verified, false);
+      assert.ok(verified.zone.verified_at, "...and it stamped the fact");
+      assert.equal(
+        Number(
+          (await admin.query("SELECT verified_by_operator_id FROM zones WHERE id = $1", [zone.id])).rows[0]
+            .verified_by_operator_id,
+        ),
+        op1.operatorId,
+        "WHO proved it comes from the SESSION — there is no operator_id field to lie in",
+      );
+
+      // And NOW a cleaner can clock in there. Same worker, same route, same body shape.
+      const opened = await expect(
+        await asWorker("/shifts/open", {
+          method: "POST",
+          body: { client_uuid: uuid(43), location_uuid: tagId, start_time: new Date().toISOString() },
+        }),
+        201,
+      );
+      assert.equal(opened.shift.start_zone_id, zone.id);
+      await admin.query("DELETE FROM shifts WHERE client_uuid = $1", [uuid(43)]);
+
+      // IDEMPOTENT: a second scan is a harmless 200 that moves nothing.
+      const again = await expect(
+        await call(`/operator/zones/${zone.id}/verify`, {
+          method: "POST",
+          cookie: op1.cookie,
+          body: { place_uuid: tagId },
+        }),
+        200,
+      );
+      assert.equal(again.zone.already_verified, true);
+      assert.equal(
+        new Date(again.zone.verified_at).getTime(),
+        new Date(verified.zone.verified_at).getTime(),
+        "a re-scan must not MOVE the timestamp — RED: drop `AND verified_at IS NULL` from the UPDATE",
+      );
+    });
+
+    await test("a card that names a DIFFERENT zone, a BUILDING, or nothing at all stamps NOTHING", async () => {
+      // The equality check IS the check. "Stamp whatever was scanned" would bless a card
+      // mounted on the wrong door — the single most likely honest mistake on a field visit.
+      // RED: delete `if (place.zone_id !== zoneId) fail(422, "zone_mismatch")` -> zone A is
+      // verified by zone B's card, and by the BUILDING's uuid.
+      const house = await expect(
+        await asAdmin("/admin/locations", { method: "POST", body: { slug: "mismatch-haus", name: "Verwechselhaus" } }),
+        201,
+      );
+      const zoneA = (
+        await expect(
+          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house.location.id, name: "Stiege A" } }),
+          201,
+        )
+      ).zone;
+      const zoneB = (
+        await expect(
+          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house.location.id, name: "Stiege B" } }),
+          201,
+        )
+      ).zone;
+
+      const stillNull = async (why) =>
+        assert.equal(
+          (await admin.query("SELECT verified_at FROM zones WHERE id = $1", [zoneA.id])).rows[0].verified_at,
+          null,
+          why,
+        );
+
+      const verifyA = (placeUuid) =>
+        call(`/operator/zones/${zoneA.id}/verify`, { method: "POST", cookie: op1.cookie, body: { place_uuid: placeUuid } });
+
+      const wrongDoor = await verifyA(zoneB.id);
+      assert.equal(wrongDoor.status, 422);
+      assert.equal((await wrongDoor.json()).error, "zone_mismatch");
+      await stillNull("a card from the door next to it must not verify this one");
+
+      // A BUILDING uuid resolves fine and is STILL a mismatch: a building tap has no zone,
+      // so `place.zone_id` is a literal NULL and can never equal a zone id.
+      const buildingCard = await verifyA(house.location.id);
+      assert.equal(buildingCard.status, 422);
+      assert.equal((await buildingCard.json()).error, "zone_mismatch");
+      await stillNull("a BUILDING-level card must never be able to verify a zone");
+
+      // A card the office has not resolved yet, and a card that is not ours at all, keep
+      // activePlace's OWN codes — the operator's phone should say the same thing about a
+      // card as a cleaner's phone would.
+      const unbound = uuid(44);
+      await expect(await reportTag(unbound, op1.cookie), 201);
+      const unboundRes = await verifyA(unbound);
+      assert.equal(unboundRes.status, 422);
+      assert.equal((await unboundRes.json()).error, "tag_unbound");
+
+      const strangerRes = await verifyA(uuid(45));
+      assert.equal(strangerRes.status, 422);
+      assert.equal((await strangerRes.json()).error, "unknown_location");
+      await stillNull("nothing above may have stamped anything");
+
+      // An inactive (or nonexistent) zone is 404, told apart from a mismatch on purpose: an
+      // operator hunting for a wrong card that does not exist is a wasted site visit.
+      await admin.query("UPDATE zones SET active = false WHERE id = $1", [zoneB.id]);
+      const dead = await call(`/operator/zones/${zoneB.id}/verify`, {
+        method: "POST",
+        cookie: op1.cookie,
+        body: { place_uuid: zoneB.id },
+      });
+      assert.equal(dead.status, 404);
+      assert.equal((await dead.json()).error, "unknown_zone");
+    });
+
+    await test("the verify routes need an OPERATOR session — an ADMIN at a desk has no path in", async () => {
+      // decision-47 §5: there is no desk override, and not by policy — by ABSENCE. The check
+      // that no /admin/* route writes the column lives in the zones block; this is the other
+      // half, that the field route does not accept a desk credential.
+      const house = await expect(
+        await asAdmin("/admin/locations", { method: "POST", body: { slug: "desk-verify-haus", name: "Schreibtischpr\u00fcfung" } }),
+        201,
+      );
+      const zone = (
+        await expect(
+          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house.location.id, name: "Stiege Fern" } }),
+          201,
+        )
+      ).zone;
+      const path = `/operator/zones/${zone.id}/verify`;
+      const body = { place_uuid: zone.id };
+
+      assert.equal((await call(path, { method: "POST", body })).status, 401, "the app key alone is not an operator");
+      assert.equal((await call(path, { method: "POST", cookie: workerCookie, body })).status, 401, "a WORKER session is not an operator");
+      assert.equal((await asAdmin(path, { method: "POST", body })).status, 401, "AN ADMIN SESSION IS NOT A PATH INTO THE FIELD");
+      assert.equal((await asAdmin("/operator/zones")).status, 401, "...and not into the worklist either");
+      assert.equal(
+        (await admin.query("SELECT verified_at FROM zones WHERE id = $1", [zone.id])).rows[0].verified_at,
+        null,
+        "none of those refusals may have stamped anything",
+      );
+    });
+
     await test("THE RESOLVE RACE: two admins resolving the SAME reported tag at once — only one wins", async () => {
       const house = await expect(
         await asAdmin("/admin/locations", { method: "POST", body: { slug: "resolve-race-haus", name: "Rennhaus" } }),
