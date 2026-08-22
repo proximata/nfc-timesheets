@@ -246,7 +246,7 @@ export default function TagsPage() {
                           start with a card any more (decision-47). Say where it went, on the
                           screen where somebody would look for it. */}
                       <p>
-                        Ein NEUES Gebäude wird zuerst unter „Objekte" angelegt — ohne Tag. Danach
+                        Ein NEUES Gebäude wird zuerst unter „Objekte“ angelegt — ohne Tag. Danach
                         kann dieser Tag hier als erste Zone darin zugeordnet werden.
                       </p>
                     </div>
