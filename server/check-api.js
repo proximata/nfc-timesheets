@@ -4831,11 +4831,28 @@ try {
       );
 
       // THE DELIVERY PATH: server -> phone, inside /roster, and nowhere else.
+      //
+      // decision-47 §6.3, AND THIS ORDER IS THE POINT. While the zone is UNVERIFIED the ROW
+      // is published and the SERIAL is not. RED for the first half: drop the row from the
+      // roster and an ordinary clock-out at that door reads as a cross-building jump
+      // (auto_closed flood). RED for the second: drop the CASE and an unverified zone
+      // carrying HOIV's Ultralight serial shadows KnownTags.kt, the phone posts a ZONE id,
+      // the gate refuses it, and the one working tap at the only live building dies.
+      const unverifiedRoster = await (await asWorker("/roster")).json();
+      const rowWhileUnverified = unverifiedRoster.zones.find((z) => z.id === adopted.id);
+      assert.ok(rowWhileUnverified, "the ROW must be published even unverified — buildingIdOf() reads it to recognise a clock-out");
+      assert.equal(
+        rowWhileUnverified.tag_serial,
+        null,
+        "an UNVERIFIED zone must NOT publish its serial — it would shadow the compiled fallback the wall card depends on",
+      );
+
+      await verifyZoneRow(adopted.id);
       const roster = await (await asWorker("/roster")).json();
       const carried = roster.zones.find((z) => z.tag_serial === SERIAL);
-      assert.ok(carried, "GET /roster must carry the serial — this is THE GATE before KnownTags.kt is deleted");
+      assert.ok(carried, "GET /roster must carry the serial ONCE VERIFIED — this is THE GATE before KnownTags.kt is deleted");
       assert.equal(carried.location_id, house, "...resolving to the right building");
-      for (const key of ["area_sqm", "note", "tag_deployed_at"]) {
+      for (const key of ["area_sqm", "note", "tag_deployed_at", "verified_at"]) {
         assert.equal(carried[key], undefined, `${key} is admin data and has no business on a worker's phone`);
       }
 

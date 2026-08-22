@@ -117,8 +117,33 @@ async function roster({ session }) {
     // phone's first request. UPGRADE PATH: a targeted `GET /tags/:serial`, session-gated,
     // `checkLoginRate`-bucketed, 404 with no detail on a miss — built the day this crosses
     // ~100 KB, and not before.
+    //
+    // decision-47 — THE ROW STAYS, THE SERIAL GOES, AND BOTH HALVES ARE LOAD-BEARING.
+    //
+    // THE ROW must be published even for an UNVERIFIED zone. `Zones.buildingIdOf()` uses
+    // this list to decide whether a tapped place belongs to the building the worker is
+    // already clocked into. Drop the row and an ordinary clock-out at an unverified door
+    // looks to the phone like a DIFFERENT building, so it posts `auto_closed = true` plus a
+    // new open — a flood of unresolved, unpaid shifts, which is the exact failure
+    // decision-43's deployment order exists to prevent.
+    //
+    // THE SERIAL must be NULL until the zone is verified, and this one protects the client's
+    // only working tap. The card mounted at HOIV is a foreign NXP Ultralight carrying NO
+    // URL; it resolves today only through KnownTags.kt's compiled table, to the BUILDING id.
+    // The moment a zone carries that serial and this query publishes it,
+    // `Zones.zonePlaceIdForSerial` takes priority over the compiled fallback (ScanActivity,
+    // by design), the phone posts a ZONE id, and an unverified zone refuses it — breaking
+    // the one tap that works, at the only live building. One CASE expression turns a
+    // sequencing rule nobody would remember into something the database enforces, and it is
+    // why decision-44 step 5 now reads "delete KnownTags.kt only after a zone carries the
+    // serial AND that zone is VERIFIED".
+    //
+    // Degrades correctly in both directions: a phone whose cached roster predates
+    // verification falls back to KnownTags -> building id -> 201 at building level, i.e.
+    // exactly today's behaviour.
     all(
-      `SELECT z.id, z.location_id, z.name, z.tag_serial
+      `SELECT z.id, z.location_id, z.name,
+              CASE WHEN z.verified_at IS NULL THEN NULL ELSE z.tag_serial END AS tag_serial
          FROM zones z
          JOIN locations l ON l.id = z.location_id
         WHERE z.active AND l.active
