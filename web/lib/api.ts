@@ -325,6 +325,18 @@ export type Zone = {
    * the answer a period filter would hide. Null = this zone's tag has never opened a shift.
    */
   last_tap_at: string | null
+  /**
+   * decision-47 / migration 010. NULL = no operator has test-scanned this card yet, so the
+   * zone is NOT a clock-in target (`POST /shifts/open` answers 422 `zone_unverified`) even
+   * though `active` is true. Set only by `POST /operator/zones/:id/verify`, on an OPERATOR
+   * session, in the field — no `/admin/*` route may write it, and `POST /admin/zones`
+   * refuses the field from the body. Never cleared: a historical fact, not a toggle.
+   */
+  verified_at: string | null
+  /** Who proved the card, joined by `/admin/data`. Null when nobody has, or that operator
+   * was later deactivated and their name is gone with them (`ON DELETE SET NULL`) — the
+   * timestamp survives either way. */
+  verified_by_operator_name: string | null
 }
 
 /**

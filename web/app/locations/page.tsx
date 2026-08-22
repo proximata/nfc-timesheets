@@ -81,6 +81,19 @@ import { tagUri } from '@/lib/tag'
 /** Off-nav (decision-39) — same treatment as OPERATORS_PATH on /workers/. */
 const TAGS_PATH = '/tags/'
 
+/**
+ * decision-47's ONE grandfathered building-level tap. The physical card mounted on the wall
+ * at HOIV carries this building's own uuid and keeps resolving no matter what any zone under
+ * it says (server/lib/validate.js `activePlace`, "LINE 1 IS THE HOIV GRANDFATHER" — the
+ * building branch never reads `zones` at all). `resolve-building` is deleted, so no OTHER
+ * building will ever get a second one: every building created from now on is tag-free, and
+ * "none of its zones is verified yet" really does mean nothing can be tapped there. Which
+ * building that one exception is cannot be derived from a row — it is a fact about which
+ * physical card exists in the world — so it is pinned by id, exactly like the WALL_TAG_UUID
+ * constant every `ops/check-hoiv-survives-006*` script already carries. Never a second entry.
+ */
+const HOIV_BUILDING_ID = 'c3c37d4a-ca0a-42c5-b248-9704b9907ec7'
+
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/
 /** Shape check only, mirroring v.optionalEmail(). */
 const EMAIL_RE = /^[^\s@,]+@[^\s@,.]+(\.[^\s@,.]+)+$/
@@ -1377,11 +1390,12 @@ export default function LocationsPage() {
                 the person who knows which build the phone is running. */}
             <p className="notice">{t('zonesSecondTagWarning')}</p>
 
-            {/* THE VERIFICATION TAP. IA-PLAN §9.2 deferred a read-only „Tag prüfen" mode
-                until tags went in in bulk; zones going in is that trigger and the mode does
-                not exist yet. So the cost is stated HERE rather than discovered at the
-                wall: a test tap opens a real shift, and there is no DELETE for one. */}
-            <p className="notice">{t('zonesTestTapWarning')}</p>
+            {/* THE VERIFICATION TAP is no longer a warning here (decision-47): the test
+                scan runs read-only, on an operator session that has no shift credential,
+                and posts no shift — it stopped being true the moment
+                POST /operator/zones/:id/verify shipped, and `zonesTestTapWarning` is
+                DELETED with it. Which zones still need that visit is now said on every
+                row below, and once more in the Zonen cell of the buildings list. */}
 
             <p className="form-actions">
               <button
@@ -1485,7 +1499,38 @@ export default function LocationsPage() {
                         })
                       )}
                     </td>
-                    <td>{zone.active ? t('statusActive') : t('zoneStatusInactive')}</td>
+                    <td>
+                      {/*
+                        VERIFICATION (decision-47). `active` still means what it always
+                        meant — "this tag is on the wall, off it, or stood down" — and stays
+                        the FIRST branch, unchanged. `verified_at` is a SEPARATE fact ON TOP
+                        of an active zone: an admin resolving a reported tag into a zone no
+                        longer makes it live — an operator has to hold the card in the field
+                        and test-scan it first. The word comes before any colour (decision-43
+                        §3), and nothing here is a filter: an unverified zone stays fully
+                        visible in this list, it just says so.
+                      */}
+                      {!zone.active ? (
+                        t('zoneStatusInactive')
+                      ) : zone.verified_at === null ? (
+                        <>
+                          <span className="state-word is-unres">
+                            <span aria-hidden="true">▲</span> {t('zoneWaitingVerification')}
+                          </span>
+                          <span className="shift-state-note">
+                            {t('zoneWaitingVerificationHint')}
+                          </span>
+                        </>
+                      ) : (
+                        t('zoneVerifiedBy', {
+                          date: format.dateTime(new Date(zone.verified_at), {
+                            dateStyle: 'medium',
+                            timeZone: BUSINESS_TIME_ZONE,
+                          }),
+                          operator: zone.verified_by_operator_name ?? t('zoneVerifiedByUnknown'),
+                        })
+                      )}
+                    </td>
                     <td className="cell-actions">
                       <button
                         type="button"
@@ -1589,6 +1634,11 @@ export default function LocationsPage() {
                 const time = monthTime.get(location.id) ?? { minutes: 0, pending: 0 }
                 const target = location.target_minutes_per_month
                 const contact = contacts.find((row) => row.id === location.contact_id)
+                // VERIFICATION (decision-47), computed once per row and reused in the
+                // Zonen cell below — the same list `liveZonesOf` already returns for the
+                // area sum.
+                const zonesHere = liveZonesOf(location.id)
+                const zonesVerified = zonesHere.filter((zone) => zone.verified_at !== null).length
                 return (
                   <tr key={location.id} className={location.active ? undefined : 'is-muted'}>
                     <th scope="row">
@@ -1694,11 +1744,50 @@ export default function LocationsPage() {
                         uuid — say so. A building that has been stood down does not, and
                         printing the sentence anyway would be a false promise about a wall.
                       */}
-                      {zoneStateOf(liveZonesOf(location.id).length) === 'unzoned' ? (
+                      {zoneStateOf(zonesHere.length) === 'unzoned' ? (
                         <span className="shift-state-note">
                           {location.active ? t('zonesNoneStillWorks') : t('statusUnzoned')}
                         </span>
-                      ) : null}
+                      ) : (
+                        <>
+                          {/*
+                            VERIFICATION (decision-47 §7). A SECOND, independent fact about
+                            the same zones: whether an operator has test-scanned the card in
+                            the field yet. It says nothing about the building's own tag
+                            above — that is `tagResolves`, in the Status column, and the two
+                            words stay apart (decision-43 §3) — and it is never merged into
+                            the reassurance branch above, which only ever fires when this
+                            building has NO zone at all.
+                          */}
+                          <span className="shift-state-note num">
+                            {t('zonesVerifiedCount', {
+                              verified: zonesVerified,
+                              total: zonesHere.length,
+                            })}
+                          </span>
+                          {zonesVerified < zonesHere.length ? (
+                            <span className="shift-state-note num">
+                              {t('zonesAwaitingScan', { count: zonesHere.length - zonesVerified })}
+                            </span>
+                          ) : null}
+                          {/*
+                            HOIV IS GRANDFATHERED BY NAME, NOT DERIVED (decision-47). Its
+                            building uuid is the one physical card that already keeps
+                            working no matter what any zone under it says
+                            (server/lib/validate.js `activePlace`, "LINE 1 IS THE HOIV
+                            GRANDFATHER"). Every OTHER building was created tag-free after
+                            resolve-building was deleted, so for any other building "no
+                            zone here is verified yet" really does mean nothing can be
+                            tapped — which physical card is the one exception cannot be read
+                            off a row, so it is pinned by id (HOIV_BUILDING_ID above).
+                          */}
+                          {zonesVerified === 0 && location.id !== HOIV_BUILDING_ID ? (
+                            <span className="state-word is-unres">
+                              <span aria-hidden="true">▲</span> {t('zonesNoneVerified')}
+                            </span>
+                          ) : null}
+                        </>
+                      )}
                       {/*
                         THE BUILDING TAG IS NOW A COLLAPSED, READ-ONLY DISCLOSURE
                         (decision-43 §7). Tag writing moved onto the zone, but this string
@@ -2381,7 +2470,25 @@ export default function LocationsPage() {
                 <label htmlFor={zoneDeployedId}>{t('fieldDeployed')}</label>
               </div>
 
-              <p className="notice">{t('zonesTestTapWarning')}</p>
+              {/* decision-47: writing/adopting the card here does NOT make the zone a
+                  clock-in target. `zonesTestTapWarning` is DELETED — a test scan no longer
+                  opens a shift — and this is the moment to say what happens instead: an
+                  operator has to test-scan the same card in the field before anyone can
+                  tap in here. Already proven once (an edit reopened on an already-verified
+                  zone), say so instead of repeating a warning that no longer applies. */}
+              {tagZone !== null && tagZone.verified_at !== null ? (
+                <p className="note">
+                  {t('zoneVerifiedBy', {
+                    date: format.dateTime(new Date(tagZone.verified_at), {
+                      dateStyle: 'medium',
+                      timeZone: BUSINESS_TIME_ZONE,
+                    }),
+                    operator: tagZone.verified_by_operator_name ?? t('zoneVerifiedByUnknown'),
+                  })}
+                </p>
+              ) : (
+                <p className="notice">{t('zoneVerifyNextStep')}</p>
+              )}
               <p className="note">{t('zoneTagLaterNote')}</p>
             </div>
           </form>

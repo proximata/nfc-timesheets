@@ -1824,12 +1824,16 @@ check('/locations/: an unzoned building is a PRESENTATION state, never an operat
       locale === 'de' ? /Schicht/ : /shift/i,
       `${locale}: the empty zone list must say the building's own tag still starts a shift`,
     )
-    // 3. The two warnings a director must not discover at the wall: a second tag deployed
-    //    ahead of the zone-aware app, and a test tap that creates an undeletable shift.
+    // 3. The one warning a director must still discover here and not at the wall: a
+    //    second tag deployed ahead of the zone-aware app.
     assert.ok(flat['locations.zonesSecondTagWarning'], `${locale}: the deployment order`)
+    // decision-47: a test scan no longer opens a shift (POST /operator/zones/:id/verify
+    // runs on an operator session no shift route accepts), so the warning that it did is
+    // DELETED rather than merely unused — a key nobody reads is a key a later screen finds
+    // and repeats, describing a cost that no longer exists.
     assert.ok(
-      flat['locations.zonesTestTapWarning'],
-      `${locale}: the verification tap costs a shift`,
+      !('locations.zonesTestTapWarning' in flat),
+      `${locale}: zonesTestTapWarning must be DELETED, not left behind unread`,
     )
   }
 
@@ -1876,6 +1880,83 @@ check('/locations/: an unzoned building is a PRESENTATION state, never an operat
     /window\.location\.origin[^\n]*\/t\?/,
     'a tag URI must never be built from the host this page is served from',
   )
+})
+
+// --- 11b. a zone is not a clock-in target until an operator has proven the card ---------
+// (decision-47, TASK-241). A source-level check is a CEILING here, not the proof: the real
+// proof is a rendered DOM at 390px and at desktop width, seeded with an unverified zone and
+// RED the moment it is seeded VERIFIED instead — demo/check-locations-zones-screen.mjs. What
+// this pins is that the branch and the copy it depends on cannot silently disappear again.
+
+check('/locations/: an unverified zone is named, never merely coloured (decision-47)', () => {
+  const page = sources.find((f) => f.path === 'app/locations/page.tsx')
+  assert.ok(page, 'app/locations/page.tsx must exist')
+
+  // 1. THE WORD FIRST (decision-43 §3, unchanged rule, new state). The per-zone Status cell
+  //    must branch on `verified_at`, not merely on `active` — the two-way branch it replaced
+  //    would silently read a card nobody has proven as though it already worked.
+  assert.match(
+    page.text,
+    /zone\.verified_at === null/,
+    'the per-zone status cell must branch on verified_at',
+  )
+  assert.doesNotMatch(
+    page.text,
+    /\{zone\.active \? t\('statusActive'\) : t\('zoneStatusInactive'\)\}/,
+    'the OLD two-way branch (active only, no verified_at) must not come back',
+  )
+  assert.match(page.text, /t\('zoneWaitingVerification'\)/, 'the pending word')
+  assert.match(page.text, /t\('zoneWaitingVerificationHint'\)/, 'the sentence beside it')
+  assert.match(page.text, /t\('zoneVerifiedBy'/, 'the proven state names who and when')
+  assert.match(
+    page.text,
+    /zone\.verified_by_operator_name \?\? t\('zoneVerifiedByUnknown'\)/,
+    'a deactivated operator must not blank the sentence (ON DELETE SET NULL, decision-47 §2)',
+  )
+
+  // 2. THE BUILDING ROW'S ZONEN CELL: counts, never merged into the operational Status cell
+  //    (decision-43 §3's rule, applied to the new fact).
+  assert.match(page.text, /t\('zonesVerifiedCount'/, 'the count sentence')
+  assert.match(page.text, /t\('zonesAwaitingScan'/, 'the awaiting-scan sentence')
+  assert.match(page.text, /t\('zonesNoneVerified'\)/, "the building's own dead-end sentence")
+
+  // 3. HOIV IS GRANDFATHERED BY NAME, NOT DERIVED. The one physical building-level card
+  //    that already works regardless of any zone's verification state cannot be read off a
+  //    row (every OTHER building was created tag-free, decision-47 §2), so it is pinned by
+  //    id — the SAME uuid every ops/check-hoiv-survives-006* script already pins, and the
+  //    "none verified" sentence must be gated on it.
+  assert.match(
+    page.text,
+    /HOIV_BUILDING_ID = 'c3c37d4a-ca0a-42c5-b248-9704b9907ec7'/,
+    'the grandfather pin must be the real HOIV building uuid, byte for byte',
+  )
+  assert.match(
+    page.text,
+    /zonesVerified === 0 && location\.id !== HOIV_BUILDING_ID/,
+    "the building's own dead-end sentence must never speak about HOIV",
+  )
+
+  // 4. THE OLD WARNING DOES NOT SURVIVE UNDER A DIFFERENT NAME. Nothing on this screen may
+  //    still claim a test scan opens a shift — not the deleted key (11.3 above already pins
+  //    that it is gone from the dictionaries), and not a literal sentence typed inline.
+  assert.doesNotMatch(
+    page.text,
+    /t\('zonesTestTapWarning'\)/,
+    'the deleted key must not still be READ anywhere on this screen',
+  )
+
+  for (const locale of LOCALES) {
+    const flat = dictionaries[locale]
+    const testscan = locale === 'de' ? /Testscan/ : /test scan/i
+    for (const key of ['locations.zoneWaitingVerification', 'locations.zonesAwaitingScan']) {
+      assert.match(flat[key], testscan, `${locale}: ${key} must name the test scan`)
+    }
+    assert.match(
+      flat['locations.zonesNoneVerified'],
+      locale === 'de' ? /einstempeln/ : /clock in/i,
+      `${locale}: the building's own dead-end sentence must say what cannot be done yet`,
+    )
+  }
 })
 
 // --- 12. a wage cannot be zero, on the screen as well as in the column (decision-41) ----

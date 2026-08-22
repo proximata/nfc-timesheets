@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import {
@@ -242,12 +243,15 @@ export default function TagsPage() {
                         Bestehende Zone (zweiter Tag)
                       </label>
                       {/* NOTHING TRUE IS DELETED TO LIGHTEN A SCREEN: the capability the
-                          „Neues Gebäude" radio used to offer still exists, it just does not
-                          start with a card any more (decision-47). Say where it went, on the
-                          screen where somebody would look for it. */}
+                          „Neues Gebäude“ radio used to offer still exists, it just does not
+                          start with a card any more (decision-47). Say where it went, AND
+                          take the admin there — a sentence naming another screen with no
+                          way to reach it is the dead end the owner's own brief warned this
+                          screen must not become. */}
                       <p>
-                        Ein NEUES Gebäude wird zuerst unter „Objekte“ angelegt — ohne Tag. Danach
-                        kann dieser Tag hier als erste Zone darin zugeordnet werden.
+                        Ein NEUES Gebäude wird zuerst unter <Link href="/locations/">Objekte</Link>{' '}
+                        angelegt — ohne Tag. Danach kann dieser Tag hier als erste Zone darin
+                        zugeordnet werden.
                       </p>
                     </div>
 
