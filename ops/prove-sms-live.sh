@@ -34,6 +34,16 @@
 # hairpins and returns 000.
 set -eu
 
+# FD 3 IS THE REAL STDOUT, SAVED BEFORE ANY REDIRECTION EXISTS, and everything this script
+# reports is written to it. Measured, not theorised (bash 3.2, macOS /bin/sh): when `set -e`
+# fires inside `box "..." >/dev/null`, the EXIT trap runs WITH THAT REDIRECTION STILL IN
+# EFFECT and the entire cleanup report — the row counts that prove production was left sane,
+# and the sha256 that proves /etc/nfc/env was put back — goes to /dev/null. That is the one
+# path on which those two lines matter, and ops/prove-zone-verification.sh was observed
+# losing them today against the wiped database. Moving the redirection inside the function
+# does not help; the trap inherits whatever is active at whatever depth errexit fires.
+exec 3>&1
+
 HOST="${1:-$(node -e 'process.stdout.write(require("./ops/branding.json").apiHost)')}"
 BASE="https://$HOST"
 MARK="PROVE48"
@@ -42,9 +52,10 @@ TMP=$(mktemp -d)
 FAILED=0
 SEEDED=0
 
-ok()   { echo "  ok   $*"; }
-bad()  { echo "  FAIL $*"; FAILED=1; }
-red()  { echo "  RED  $*"; }
+ok()   { echo "  ok   $*" >&3; }
+bad()  { echo "  FAIL $*" >&3; FAILED=1; }
+red()  { echo "  RED  $*" >&3; }
+say()  { echo "$@" >&3; }
 box()  { ssh "$HOST" "sudo -u postgres psql -d nfc -v ON_ERROR_STOP=1 -Atc \"$1\""; }
 
 ENV_SHA_BEFORE=$(ssh "$HOST" 'sudo -n sha256sum /etc/nfc/env | cut -d" " -f1')
@@ -66,8 +77,8 @@ restore_env() {
 
 cleanup() {
   restore_env
-  echo
-  echo "== cleanup, and the count that proves it"
+  say
+  say "== cleanup, and the count that proves it"
   box "DELETE FROM sms_deliveries WHERE worker_id IN (SELECT id FROM workers WHERE name LIKE '${MARK}%') OR phone_e164 = '${PHONE}';" >/dev/null
   box "DELETE FROM otp_challenges WHERE phone_e164 = '${PHONE}';" >/dev/null
   box "DELETE FROM phone_identities WHERE phone_e164 = '${PHONE}';" >/dev/null
@@ -80,7 +91,7 @@ cleanup() {
     && ok "locations|zones|clients|contacts|workers|shifts|admins|sms_deliveries|otp_challenges|phone_identities|worker_sessions = $LEFT" \
     || bad "production is '$LEFT' (want 0|0|0|0|0|0|1|0|0|0|0)"
   rm -rf "$TMP"
-  [ "$FAILED" = "0" ] && echo "\nPROVE-48 OK" || { echo "\nPROVE-48 FAILED"; exit 1; }
+  [ "$FAILED" = "0" ] && say "\nPROVE-48 OK" || { say "\nPROVE-48 FAILED"; exit 1; }
 }
 trap cleanup EXIT
 

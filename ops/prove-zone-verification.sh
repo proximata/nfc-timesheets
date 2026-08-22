@@ -23,44 +23,104 @@
 # hairpins and returns 000.
 set -eu
 
+# THE CLEANUP REPORT GOES TO FD 3, AND FD 3 IS THE REAL STDOUT, SAVED HERE BEFORE ANY
+# REDIRECTION EXISTS. Measured on 2026-08-23, bash 3.2 (macOS /bin/sh): when `set -e` fires
+# inside `box "..." >/dev/null`, the EXIT trap runs WITH THAT REDIRECTION STILL IN EFFECT,
+# so every line the cleanup prints goes to /dev/null. This run aborted at §2 against a wiped
+# production database and printed the psql error and NOTHING ELSE — no cleanup header, no row
+# counts, no verdict. The rows really were deleted; the proof that they were was thrown away,
+# on exactly the path where somebody needs it most.
+#
+# Putting the redirection inside `box` does not fix it (the trap inherits whatever is active
+# at whatever depth errexit fires). Saving the fd does.
+exec 3>&1
+
 HOST="${1:-$(node -e 'process.stdout.write(require("./ops/branding.json").apiHost)')}"
 BASE="https://$HOST"
 WALL_ID="c3c37d4a-ca0a-42c5-b248-9704b9907ec7"
 MARK="PROVE47"
 TMP=$(mktemp -d)
 FAILED=0
+# 1 once this run has created the wall-card building itself, because the box did not have
+# one. Set from PROVE47_SEED_WALL=1 only — never guessed. See the block below.
+SEEDED_WALL=0
+# What `locations` must read at the end: the building we found (1), or none at all (0)
+# because we made the only one there was and took it away again.
+WANT_LOCATIONS=1
 
-ok()  { echo "  ok   $*"; }
-bad() { echo "  FAIL $*"; FAILED=1; }
+ok()  { echo "  ok   $*" >&3; }
+bad() { echo "  FAIL $*" >&3; FAILED=1; }
+say() { echo "$@" >&3; }
 box() { ssh "$HOST" "sudo -u postgres psql -d nfc -v ON_ERROR_STOP=1 -Atc \"$1\""; }
 
 cleanup() {
-  echo
-  echo "== cleanup, and the count that proves it"
+  say
+  say "== cleanup, and the count that proves it"
   box "DELETE FROM shifts WHERE worker_id IN (SELECT id FROM workers WHERE name LIKE '${MARK}%');" >/dev/null
   box "DELETE FROM worker_sessions WHERE worker_id IN (SELECT id FROM workers WHERE name LIKE '${MARK}%');" >/dev/null
   box "DELETE FROM operator_sessions WHERE operator_id IN (SELECT id FROM operators WHERE name LIKE '${MARK}%');" >/dev/null
   box "DELETE FROM zones WHERE name LIKE '${MARK}%';" >/dev/null
   box "DELETE FROM workers WHERE name LIKE '${MARK}%';" >/dev/null
   box "DELETE FROM operators WHERE name LIKE '${MARK}%';" >/dev/null
+  # The building this run MADE goes away with everything else it made. A row seeded by a
+  # proof script is not a building; leaving it behind would put a fake address on the
+  # director's map.
+  [ "$SEEDED_WALL" = "1" ] && box "DELETE FROM locations WHERE id = '$WALL_ID';" >/dev/null
   LEFT=$(box "SELECT (SELECT count(*) FROM zones) || '|' || (SELECT count(*) FROM shifts) || '|' || (SELECT count(*) FROM workers) || '|' || (SELECT count(*) FROM operators) || '|' || (SELECT count(*) FROM locations)")
-  [ "$LEFT" = "0|0|0|0|1" ] \
-    && ok "production is zones=0 shifts=0 workers=0 operators=0 locations=1 — exactly as found" \
-    || bad "production is '$LEFT' (want 0|0|0|0|1)"
+  [ "$LEFT" = "0|0|0|0|$WANT_LOCATIONS" ] \
+    && ok "production is zones=0 shifts=0 workers=0 operators=0 locations=$WANT_LOCATIONS — exactly as found" \
+    || bad "production is '$LEFT' (want 0|0|0|0|$WANT_LOCATIONS)"
   # `active::text` through the `||` operator is 'true'/'false', NOT psql's bare-boolean 't'.
   # Getting that wrong made this line fail against a perfectly healthy row on its first run.
   HOIV=$(box "SELECT active || '|' || coalesce(lat::text,'-') || '|' || coalesce(lng::text,'-') FROM locations WHERE id = '$WALL_ID'")
-  case "$HOIV" in
-    true\|*.*\|*.*) ok "HOIV is untouched, active and pinned: $HOIV" ;;
-    *) bad "HOIV reads '$HOIV' (want true|<lat>|<lng>)" ;;
-  esac
+  if [ "$SEEDED_WALL" = "1" ]; then
+    [ -z "$HOIV" ] && ok "the seeded wall-card building is gone again" || bad "the seeded building survived: '$HOIV'"
+  else
+    case "$HOIV" in
+      true\|*.*\|*.*) ok "HOIV is untouched, active and pinned: $HOIV" ;;
+      *) bad "HOIV reads '$HOIV' (want true|<lat>|<lng>)" ;;
+    esac
+  fi
   rm -rf "$TMP"
-  [ "$FAILED" = "0" ] && echo "\nPROVE-47 OK" || { echo "\nPROVE-47 FAILED"; exit 1; }
+  [ "$FAILED" = "0" ] && say "\nPROVE-47 OK" || { say "\nPROVE-47 FAILED"; exit 1; }
 }
 trap cleanup EXIT
 
 APP_KEY=$(ssh "$HOST" 'sudo -n grep "^APP_KEY=" /etc/nfc/env | cut -d= -f2-')
 [ -n "$APP_KEY" ] || { echo "no APP_KEY on the box" >&2; exit 1; }
+
+# THE FIXTURE THIS FILE WAS WRITTEN AGAINST CAN BE ABSENT NOW. Every section below hangs off
+# ONE building — the real HOIV row, whose uuid is written on a card in Arsenalstrasse — and
+# on 2026-08-23 production was wiped to zero locations on the owner's instruction. Without
+# the row, §2's very first INSERT dies on a foreign key and decision-47 goes UNMEASURED.
+#
+# IT REFUSES BY DEFAULT AND SAYS WHY, rather than quietly creating the building: on a box
+# that is SUPPOSED to have it, "the wall card is missing" is the single most important thing
+# this script could ever tell anyone, and a script that repairs that on its own would delete
+# the finding. PROVE47_SEED_WALL=1 is the deliberate way past it, and what it creates is
+# removed again in the cleanup above.
+HAVE_WALL=$(box "SELECT count(*) FROM locations WHERE id = '$WALL_ID'")
+if [ "$HAVE_WALL" = "0" ]; then
+  if [ "${PROVE47_SEED_WALL:-}" = "1" ]; then
+    box "INSERT INTO locations (id, slug, name, address, lat, lng, active) VALUES ('$WALL_ID', '${MARK}-wall-card', '${MARK} Wandkarte', 'Arsenalstrasse, 1030 Wien', 48.1845, 16.3892, true)" >/dev/null
+    SEEDED_WALL=1
+    WANT_LOCATIONS=0
+    ok "PROVE47_SEED_WALL=1: the wall-card building did not exist, so this run made it (and takes it away again)"
+  else
+    echo "FATAL: no location $WALL_ID on $HOST — the card on the wall names a building that" >&2
+    echo "       is not in the database. On a live box that is an INCIDENT, not a test setup" >&2
+    echo "       problem: every tap on that card is unresolvable. If this is a wiped or fresh" >&2
+    echo "       database and you only want to exercise decision-47, re-run with" >&2
+    echo "       PROVE47_SEED_WALL=1 and this script will create the building and remove it." >&2
+    # NOTHING HAS BEEN CREATED YET, so there is nothing to clean and no verdict to give.
+    # Leaving the trap armed would print a cleanup section and a row-count FAIL for a run
+    # that never started — two ways of saying the same missing building, one of which reads
+    # like the script left a mess behind.
+    trap - EXIT
+    rm -rf "$TMP"
+    exit 1
+  fi
+fi
 
 # The two sessions, minted straight into the database: this file is about the ZONE gate, not
 # about enrolment (that is prove-live's §3 and §6). The ROW stores only SHA-256 of the token
