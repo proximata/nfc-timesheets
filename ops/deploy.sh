@@ -41,6 +41,16 @@ echo "==> 0/8 operator identity (ops/branding.json is the source of truth)"
 node ops/gen-wellknown.mjs
 node ops/check-branding.mjs
 
+# THE OWNER'S "ALWAYS", GATED (decision-48). "in admin there must be an option to choose how
+# to onboard a worker, so if sms didnt work, there is always a fallback." These two are here
+# and not in a README because the failure they catch ships silently: a tidy-up that hides the
+# „Zugangscode erstellen" button when SMS is off, or a copy edit that puts a German
+# typographic quote in the SMS template and triples the bill. Both are seconds, need no
+# database and no network, and both have seeded RED cases
+# (ops/check-fallback-reachable-mutants.sh, server/check-sms-mutants.sh).
+node ops/check-fallback-reachable.mjs
+node server/check-sms-message.mjs
+
 echo "==> 0a/8 stage the migration runner and files (inert — nothing runs them yet)"
 # WITHOUT THIS THE GATE BELOW CANNOT SEE THE MIGRATION IT EXISTS FOR, and it reported
 # "up to date" against the real production dump while 006 was sitting in this tree.
