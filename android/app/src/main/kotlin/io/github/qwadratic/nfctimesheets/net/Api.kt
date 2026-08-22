@@ -8,10 +8,12 @@ import io.github.qwadratic.nfctimesheets.core.EnrolmentRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
 import io.github.qwadratic.nfctimesheets.core.PendingWork
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
+import io.github.qwadratic.nfctimesheets.core.VerifyZoneRequest
 import io.github.qwadratic.nfctimesheets.core.Wire
 import io.github.qwadratic.nfctimesheets.core.WireRoster
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.core.WireWorker
+import io.github.qwadratic.nfctimesheets.core.WireZoneVerifyResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -140,6 +142,37 @@ class Api(
      */
     suspend fun reportTag(locationId: String): JSONObject =
         post("/operator/tags", JSONObject().put("id", locationId).toString()).getJSONObject("tag")
+
+    /**
+     * GET /operator/zones -> the worklist: every active zone this operator might be
+     * asked to prove, plus the serial each carries so an adopted, URL-less card can be
+     * matched CLIENT-SIDE (decision-44's pin — no serial travels to the server — holds
+     * here byte for byte). Raw JSONObject, like the material-request calls below: the
+     * caller (nfc/OperatorZoneCache) persists these exact bytes so the picker still works
+     * with no signal, in the stairwell where the card actually is.
+     */
+    suspend fun operatorZones(): JSONObject = get("/operator/zones")
+
+    /**
+     * POST /operator/zones/:id/verify {place_uuid} -> "this card resolves to this zone;
+     * the zone is now a clock-in target" (decision-47).
+     *
+     * CANNOT OPEN A SHIFT. Like every call in this section this goes out over whichever
+     * [Api] instance the caller built it on — TimeSheetsApplication wires this class to
+     * `operatorApi`, which carries `ts_operator`, and no route that touches a shift
+     * accepts that cookie. There is no credential here with which to open one.
+     *
+     *   200 verified            {zone: {..., already_verified}}
+     *   404 unknown_zone        :id is not an ACTIVE zone of an ACTIVE building
+     *   422 zone_mismatch       the card resolved to a different zone, or to a BUILDING
+     *   422 tag_unbound         the card was reported but no admin has resolved it yet
+     *   422 unknown_location    the card is not ours, or its zone/building is inactive
+     */
+    suspend fun verifyZone(zoneId: String, placeUuid: String): WireZoneVerifyResult =
+        Wire.zoneVerifyResult(
+            post("/operator/zones/$zoneId/verify", VerifyZoneRequest(placeUuid).toJson())
+                .getJSONObject("zone"),
+        )
 
     /**
      * POST /shifts/open — decision-19: the shift is posted at clock-IN, end_time NULL.

@@ -3,6 +3,7 @@ package io.github.qwadratic.nfctimesheets
 import android.app.Application
 import io.github.qwadratic.nfctimesheets.core.SessionCookie
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.nfc.OperatorZoneCache
 import io.github.qwadratic.nfctimesheets.nfc.PendingTagReport
 import io.github.qwadratic.nfctimesheets.nfc.TagWriter
 import io.github.qwadratic.nfctimesheets.data.MaterialStore
@@ -89,6 +90,12 @@ class TimeSheetsApplication : Application() {
 
     /** Encodes and verifies the bytes that go onto a physical card. See nfc/TagWriter.kt. */
     val tagWriter: TagWriter by lazy { TagWriter(tagLink) }
+
+    /**
+     * The operator's zone worklist, cached for the stairwell (decision-47). `by lazy`:
+     * a cleaner's phone never opens the verify screen and never creates this file.
+     */
+    val operatorZones: OperatorZoneCache by lazy { OperatorZoneCache(this) }
 
     /**
      * The one fact WriteTagActivity must not lose to a killed process: a card is written

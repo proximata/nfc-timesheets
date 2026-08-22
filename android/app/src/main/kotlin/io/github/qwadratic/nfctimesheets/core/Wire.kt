@@ -124,6 +124,43 @@ object Wire {
         )
     }
 
+    /**
+     * One row of GET /operator/zones (decision-47) — the operator's worklist entry.
+     * NOT [zone]/[WireZone]: this carries fields a cleaner's roster must never see
+     * (`tag_deployed_at`, `verified_at`) and a worker-facing name (`location_name`) the
+     * roster has no use for.
+     */
+    fun operatorZone(o: JSONObject) = WireOperatorZone(
+        id = o.getString("id"),
+        locationId = o.getString("location_id"),
+        locationName = o.optString("location_name", ""),
+        name = o.optString("name", ""),
+        tagSerial = o.stringOrNull("tag_serial"),
+        tagDeployedAt = o.instantOrNull("tag_deployed_at"),
+        verifiedAt = o.instantOrNull("verified_at"),
+    )
+
+    /** GET /operator/zones's whole envelope: `{zones: [...]}`. */
+    fun operatorZones(o: JSONObject): List<WireOperatorZone> {
+        val array = o.getJSONArray("zones")
+        return (0 until array.length()).map { operatorZone(array.getJSONObject(it)) }
+    }
+
+    /**
+     * POST /operator/zones/:id/verify's `{zone: {...}}` (decision-47). `verifiedAt` is
+     * never null here — the route either stamps it just now or reports the earlier stamp
+     * (`alreadyVerified = true`); a card that does not resolve to this zone never reaches
+     * this decoder at all, because the server answers 422/404 instead of 200.
+     */
+    fun zoneVerifyResult(o: JSONObject) = WireZoneVerifyResult(
+        id = o.getString("id"),
+        name = o.optString("name", ""),
+        locationId = o.getString("location_id"),
+        locationName = o.optString("location_name", ""),
+        verifiedAt = instant(o.getString("verified_at")),
+        alreadyVerified = o.optBoolean("already_verified", false),
+    )
+
     fun shift(o: JSONObject) = WireShift(
         id = o.getInt("id"),
         workerId = o.getInt("worker_id"),
@@ -182,6 +219,34 @@ data class WireZone(val id: String, val locationId: String, val name: String, va
 
 /** GET /roster's envelope: the locations that resolve, plus the zones riding along additively. */
 data class WireRoster(val locations: List<WireLocation>, val zones: List<WireZone>)
+
+/**
+ * One row of GET /operator/zones (decision-47): everything the operator's phone needs to
+ * pick a zone off a worklist and recognise the card that names it. `id` is the same PLACE
+ * id space as [WireZone.id] (decision-43) — it is what gets POSTed straight back as
+ * `place_uuid` when the card carries no URL of its own.
+ */
+data class WireOperatorZone(
+    val id: String,
+    val locationId: String,
+    val locationName: String,
+    val name: String,
+    val tagSerial: String?,
+    val tagDeployedAt: Instant?,
+    val verifiedAt: Instant?,
+) {
+    val isVerified: Boolean get() = verifiedAt != null
+}
+
+/** The outcome of POST /operator/zones/:id/verify (decision-47). */
+data class WireZoneVerifyResult(
+    val id: String,
+    val name: String,
+    val locationId: String,
+    val locationName: String,
+    val verifiedAt: Instant,
+    val alreadyVerified: Boolean,
+)
 
 /** The single shift shape every shift endpoint returns. */
 data class WireShift(
@@ -265,4 +330,14 @@ data class ResolveShiftRequest(val endTime: Instant) {
  */
 data class EnrolmentRequest(val code: String) {
     fun toJson(): String = Wire.obj("code" to code)
+}
+
+/**
+ * POST /operator/zones/:id/verify — the id of the zone is in the PATH, and the only body
+ * field is what the phone read off the card: either a URI's uuid, or a zone id resolved
+ * client-side from an adopted card's serial (decision-44's pin — no serial ever travels
+ * to the server — holds here byte for byte).
+ */
+data class VerifyZoneRequest(val placeUuid: String) {
+    fun toJson(): String = Wire.obj("place_uuid" to placeUuid)
 }
