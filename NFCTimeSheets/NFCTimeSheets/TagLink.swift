@@ -48,4 +48,16 @@ enum TagLink {
         guard UUID(uuidString: trimmed) != nil else { return nil }
         return trimmed.lowercased()
     }
+
+    /// The tag link this build would write for a location - the inverse of [locationId],
+    /// and used ONLY by the operator write path (decision-49, NdefTag.swift's `plan`).
+    /// Always the CURRENT host, never a legacy one: this MINTS a link, and nothing new
+    /// should ever be written under a host this build has stopped using. Returns nil for
+    /// anything that is not a well-formed UUID, so a bad id can never inject a URL -
+    /// round-tripping through [locationId] must give the same value back, and NdefTag.plan
+    /// checks exactly that on the bytes themselves before they reach a card.
+    static func uriFor(_ locationId: String) -> URL? {
+        guard let id = normalizedUUID(locationId) else { return nil }
+        return URL(string: "https://\(host)\(path)?l=\(id)")
+    }
 }
