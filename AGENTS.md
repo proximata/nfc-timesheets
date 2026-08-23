@@ -111,6 +111,13 @@ Decision checklist (keep updated as decisions are added):
   becomes its first zone. **The HOIV building card is grandfathered BY NAME and is not
   deprecated** — the gate is ZONE-only and `activePlace`'s building branch is untouched
   (decision-47, AMENDS decision-43; `backlog/docs/ZONE-VERIFICATION.md`)
+- iOS writes tags again, for TAG WRITING and the OPERATOR TEST SCAN only. `NdefTag.kt` and
+  `WriteGuard.kt` are PORTED clause for clause, not reinvented; the operator session is its own
+  cookie jar and its own `URLSession` so no request ever carries `ts_worker` and `ts_operator`
+  together; ZERO new server endpoints; `/admin/tags/resolve-*` is the WEB ADMIN's, never the
+  phone's. The `com.apple.developer.nfc.readersession.formats = ["TAG"]` entitlement and the
+  Xcode capability are the OWNER's one click — no agent edits the entitlement or
+  `project.pbxproj`; the code degrades in words instead (decision-49, `docs/NFC-WRITE-SETUP.md`)
 
 ~~decision-37~~ (zones, no area) is SUPERSEDED by decision-43 and nothing from it shipped.
 
