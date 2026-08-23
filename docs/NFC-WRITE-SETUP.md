@@ -31,6 +31,34 @@ Design and reasoning: `backlog/decisions/decision-49`.
 
 ---
 
+## Measured, not assumed: the portal half is ALREADY DONE
+
+The run that wrote this file expected the App ID capability to be switched off. **It is not.**
+The provisioning profile Xcode is signing with today already carries the entitlement:
+
+```
+profile  iOS Team Provisioning Profile: io.github.qwadratic.NFCTimeSheets
+         fc12518e-4137-4900-8729-4d852a53800c
+created  2026-07-28    expires  2027-07-28
+grants   com.apple.developer.nfc.readersession.formats = [NDEF, TAG, PACE]
+```
+
+So the Apple Developer portal feature for `io.github.qwadratic.NFCTimeSheets` is **ON**, and
+the only thing missing is the key in the local entitlements file. Two things follow:
+
+- Your job below is **one Xcode tick**, not a portal trip. Nothing has to be regenerated.
+- Step 4 is now the step that matters. The portal is willing to grant `NDEF`, so Xcode is
+  likely to write it in — and `NDEF` is the rejection that removed this capability the first
+  time. **Read the array before you build.**
+
+Also measured this run, on this Mac, with the entitlement key injected via a throwaway file so
+the real one stayed untouched: `xcodebuild -sdk iphoneos -configuration Release build`
+**succeeds and code-signs with the key present**. That is worth knowing because it means a
+wrong `NDEF` will *not* announce itself as a build error — it sails through locally and comes
+back as App Store error 90778 days later.
+
+---
+
 ## The step — Near Field Communication Tag Reading
 
 1. Xcode → project → target **NFCTimeSheets** → **Signing & Capabilities**.
@@ -61,9 +89,16 @@ The entitlement file alone is not the capability. The same tick also:
   Apple Developer portal, and
 - regenerates the provisioning profile that has to carry it.
 
-An entitlement key with no matching App ID feature is a **signing failure**, and automatic
-signing may quietly strip or fight the key the next time the project is opened. The symptom
-then looks like a certificate problem rather than a missing tick, which is a bad afternoon.
+An entitlement key with no matching App ID feature is normally a **signing failure**, and
+automatic signing may quietly strip or fight the key the next time the project is opened. The
+symptom then looks like a certificate problem rather than a missing tick.
+
+**On this project, today, that specific failure would not have fired** — the App ID already
+carries the feature (see the measured block above), so the key alone builds and signs. The rule
+stands anyway, for a different and more boring reason: the capability list belongs to the Xcode
+project's own state, an agent editing the entitlement behind Xcode's back leaves the two
+disagreeing, and the next person to open Signing & Capabilities gets a diff they did not write.
+Tick it in Xcode and the file, the project and the profile keep telling the same story.
 
 `project.pbxproj`, `IPHONEOS_DEPLOYMENT_TARGET` and `CURRENT_PROJECT_VERSION` stay yours by
 hand as well. Nothing in this work touches them.
