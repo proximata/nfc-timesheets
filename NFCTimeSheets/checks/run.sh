@@ -47,6 +47,11 @@ run migration-check     "$SRC/Branding.swift" "$SRC/TagLink.swift" "$SRC/API.swi
 run scrub-check         "$SRC/Scrub.swift"
 run materials-check     "$SRC/Branding.swift" "$SRC/TagLink.swift" "$SRC/API.swift" "$SRC/Materials.swift"
 run shift-signal-check  "$SRC/ShiftSignal.swift"
+# decision-49: the byte encoder and the overwrite guard, safety-critical - wrong bytes
+# ruin a physical card mounted to a building. See each check's own header for the exact
+# TASK-220 regression it reproduces before going green.
+run ndef-tag-check      "$SRC/Branding.swift" "$SRC/TagLink.swift" "$SRC/NdefTag.swift"
+run write-guard-check   "$SRC/Branding.swift" "$SRC/TagLink.swift" "$SRC/NdefTag.swift" "$SRC/WriteGuard.swift"
 
 # Reads Localizable.xcstrings off disk rather than being cat-ed together with source.
 if swift checks/localisation-check.swift; then :; else failed=1; fi

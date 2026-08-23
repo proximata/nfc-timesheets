@@ -68,6 +68,12 @@ struct OperatorSignInScreen: View {
             LabeledContent("Name", value: op.name)
                 .accessibilityLabel("Signed in as \(op.name)")
         }
+        // decision-49 / decision-47: reachable only once signed in as an operator, and
+        // additive to sign-in the same way sign-in is additive to Settings.
+        Section {
+            NavigationLink("Write a tag") { WriteTagScreen() }
+            NavigationLink("Test scan") { VerifyZoneScreen() }
+        }
         Section {
             Button("Sign out", role: .destructive) {
                 Task { await operatorSession.signOut() }
