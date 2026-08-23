@@ -191,6 +191,16 @@
         }
       }
     },
+    "Code not accepted. Check it and try again.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code nicht akzeptiert. Bitte prüfen und erneut versuchen."
+          }
+        }
+      }
+    },
     "Confirm finish times": {
       "localizations": {
         "de": {
@@ -263,6 +273,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Für %@"
+          }
+        }
+      }
+    },
+    "For staff who mount and test NFC tags. This never opens a shift.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Für Personal, das NFC-Tags montiert und testet. Dabei wird nie eine Schicht gestartet."
           }
         }
       }
@@ -397,6 +417,16 @@
         }
       }
     },
+    "No connection - try again.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine Verbindung – bitte erneut versuchen."
+          }
+        }
+      }
+    },
     "No connection - will send when you're back online.": {
       "localizations": {
         "de": {
@@ -473,6 +503,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Einstellungen öffnen"
+          }
+        }
+      }
+    },
+    "Operator code": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zugangscode"
+          }
+        }
+      }
+    },
+    "Operator sign-in": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Betreiber-Anmeldung"
           }
         }
       }
@@ -703,6 +753,16 @@
         }
       }
     },
+    "Sign in": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmelden"
+          }
+        }
+      }
+    },
     "Sign in to log your hours.": {
       "localizations": {
         "de": {
@@ -739,6 +799,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Angemeldet als %@"
+          }
+        }
+      }
+    },
+    "Signing out does not affect your worker sign-in above.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Abmelden hier hat keine Auswirkung auf Ihre Mitarbeiter-Anmeldung oben."
           }
         }
       }
@@ -799,6 +869,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Übersicht"
+          }
+        }
+      }
+    },
+    "That doesn't look like an operator code.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das sieht nicht nach einem gültigen Zugangscode aus."
           }
         }
       }

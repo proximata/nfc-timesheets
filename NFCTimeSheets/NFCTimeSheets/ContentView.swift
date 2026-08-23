@@ -715,6 +715,17 @@ struct SettingsView: View {
                     Text("Records an app update archived or flagged on this phone.")
                         .font(.footnote)
                 }
+                // decision-45: a SEPARATE identity for a SEPARATE credential. Reachable
+                // from here because a worker's own phone may also be the one an operator
+                // uses to mount or test a tag — it is additive, and touches nothing above.
+                Section {
+                    NavigationLink("Operator sign-in") {
+                        OperatorSignInScreen()
+                    }
+                } footer: {
+                    Text("For staff who mount and test NFC tags. This never opens a shift.")
+                        .font(.footnote)
+                }
                 Section {
                     Button("Sign out", role: .destructive) { Task { await session.signOut() } }
                         .disabled(session.busy)

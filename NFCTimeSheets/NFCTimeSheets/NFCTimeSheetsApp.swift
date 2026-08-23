@@ -83,6 +83,10 @@ struct NFCTimeSheetsApp: App {
     // One Session for the life of the process. It owns the three states the whole UI
     // switches on (decision-22) and it is the only thing that talks to /auth/*.
     @State private var session = Session()
+    // A SEPARATE identity, for a SEPARATE credential (decision-45): ts_operator, never
+    // ts_worker. One instance for the life of the process, same as `session` above, so a
+    // signed-in operator survives navigating away from Settings and back.
+    @State private var operatorSession = OperatorSession()
 
     /// Built here rather than by the `.modelContainer(for:)` modifier so the app owns a
     /// ModelContext before any view exists. SwiftData's own lightweight SCHEMA migration
@@ -111,6 +115,7 @@ struct NFCTimeSheetsApp: App {
             ContentView()
                 .environment(inbox)
                 .environment(session)
+                .environment(operatorSession)
                 // The badge, the reminder ladder and the Live Activity. One instance for
                 // the life of the process, because the OS surfaces it drives are
                 // process-wide. It is armed from exactly two places (LogView.handleTap
