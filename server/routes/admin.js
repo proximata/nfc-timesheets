@@ -1028,6 +1028,23 @@ async function deleteOperator({ params }) {
 }
 
 /**
+ * POST /admin/operators/:id/reactivate -> flips `active` back to true. The exact inverse
+ * of deleteOperator, same shape: same params, same 404, same `{operator: {id, active}}`
+ * body. `phone_identities.operator_id` is not read, not written, not referenced anywhere
+ * in this handler — the claim never left on deactivation (deleteOperator's own comment:
+ * ON DELETE SET NULL, never CASCADE), so there is nothing here to touch. No session is
+ * restored and no enrolment code is minted: issueOperatorEnrolmentCode already refuses an
+ * inactive operator, so reactivate-then-issue-a-code is the deliberate two-click path
+ * (TASK-219's own "NOT DECIDED HERE" note).
+ */
+async function reactivateOperator({ params }) {
+  const operatorId = v.id(params.id, "id");
+  const row = await one("UPDATE operators SET active = true WHERE id = $1 RETURNING id, active", [operatorId]);
+  if (!row) fail(404, "unknown_operator");
+  return { status: 200, body: { operator: row } };
+}
+
+/**
  * POST /admin/operators/:id/enrolment-code -> byte-identical shape to
  * POST /admin/workers/:id/enrolment-code, against `operators`. Same CODE_TTL_MS, same
  * newEnrolmentCode from lib/enrolment.js — reused, not reimplemented (decision-45 §6).
@@ -2532,6 +2549,7 @@ export const adminRoutes = [
   // comment above createOperator.
   { method: "POST", path: "/admin/operators", auth: "admin", handler: createOperator },
   { method: "DELETE", path: "/admin/operators/:id", auth: "admin", handler: deleteOperator },
+  { method: "POST", path: "/admin/operators/:id/reactivate", auth: "admin", handler: reactivateOperator },
   { method: "POST", path: "/admin/operators/:id/enrolment-code", auth: "admin", handler: issueOperatorEnrolmentCode },
   {
     method: "POST",

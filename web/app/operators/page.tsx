@@ -18,6 +18,7 @@ import {
   fetchSmsStatus,
   issueOperatorEnrolmentCode,
   type Operator,
+  reactivateOperator,
   revokeOperatorEnrolmentCode,
   type SmsStatus,
   saveOperator,
@@ -310,12 +311,11 @@ export default function OperatorsPage() {
   }
 
   /**
-   * Soft delete. UNLIKE `/workers/`, there is no way back from here: `POST /admin/operators`
-   * is create-only (no upsert, no `active: true` branch), so once this commits, the phone
-   * stays claimed by a now-inactive row and neither a new operator nor a reactivation exists
-   * for it through any route this tree builds. The confirm copy says so — see
-   * `deactivateConfirmBody`. Recorded, not silently worked around: a reactivate route is a
-   * server change TASK-212 did not build, not something this screen can add for itself.
+   * Soft delete — reversible now (TASK-219). POST /admin/operators stays create-only (no
+   * upsert, no `active: true` branch: the comment on createOperator server-side is still
+   * true — a phone that needs to change is a new identity claim), but a dedicated
+   * POST /admin/operators/:id/reactivate is the way back, in `reactivate()` above.
+   * `deactivateConfirmBody` no longer claims the action is final — it isn't, any more.
    */
   async function deactivate(operator: Operator) {
     if (busy) return
@@ -323,6 +323,27 @@ export default function OperatorsPage() {
     setFormError(null)
     try {
       await deactivateOperator(operator.id)
+      await load()
+    } catch (cause) {
+      if (!handleAuthLoss(cause))
+        setLoadError(cause instanceof ApiError ? cause.messageKey : 'server')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * The way back (TASK-219). No confirmation: reversing a reversible action needs none —
+   * same posture as /workers/'s inactive → active toggle, which also skips the modal.
+   * POST /admin/operators/:id/reactivate never touches phone_identities; the claim never
+   * left on deactivation in the first place (server-side comment on deleteOperator).
+   */
+  async function reactivate(operator: Operator) {
+    if (busy) return
+    setBusy(true)
+    setFormError(null)
+    try {
+      await reactivateOperator(operator.id)
       await load()
     } catch (cause) {
       if (!handleAuthLoss(cause))
@@ -544,7 +565,18 @@ export default function OperatorsPage() {
                           {t('forOperator', { name: operator.name })}
                         </span>
                       </button>
-                    ) : null}
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-quiet"
+                        onClick={() => void reactivate(operator)}
+                      >
+                        {t('activate')}
+                        <span className="visually-hidden">
+                          {t('forOperator', { name: operator.name })}
+                        </span>
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

@@ -1210,6 +1210,7 @@
     "statusActive": "Active",
     "statusInactive": "Inactive",
     "deactivate": "Deactivate",
+    "activate": "Reactivate",
     "forOperator": " for {name}",
     "fieldName": "Name",
     "fieldPhone": "Phone number",
@@ -1255,7 +1256,7 @@
     "reissueConfirmTitle": "Create a new enrolment code for {name}?",
     "reissueConfirmBody": "The previous code stops working from this moment, even if it has already been passed on. The new code is shown only once.",
     "deactivateConfirmTitle": "Deactivate {name}?",
-    "deactivateConfirmBody": "This person can no longer sign in, and any existing enrolment code becomes invalid. This action cannot be undone from this screen."
+    "deactivateConfirmBody": "This person can no longer sign in, and any existing enrolment code becomes invalid. They can be reactivated at any time."
   },
   "tags": {
     "heading": "Unassigned tags",

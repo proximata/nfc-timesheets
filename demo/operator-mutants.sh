@@ -41,8 +41,17 @@
 #   revoke-direct  „Zugangscode sperren" revokes IMMEDIATELY, with no confirmation. This is
 #                  the one mutant whose check-side failure arrives as a timed-out wait, which
 #                  is why check-operators records a crash as a named FAIL.
-#   soft-consequence  the deactivate confirmation keeps the person's name and loses the
-#                  sentence admitting it cannot be undone from that screen.
+#   soft-consequence  the deactivate confirmation keeps the person's name and goes back to
+#                  claiming the action is final — TASK-219's inverse: it now HAS a way back,
+#                  so this reintroduces the old, now-false, sentence.
+#   reactivate-wrong-handler  the "Wieder aktivieren" button is wired to deactivate()
+#                  instead of reactivate() — the classic copy-paste regression. Clicking it
+#                  is a harmless server-side no-op, so the row silently never comes back.
+#   reactivate-touches-phone (SERVER)  reactivateOperator picks up a stray write to
+#                  phone_identities — the byte-unchanged claim (decision-45) can fail too.
+#   collision-leaks-holder (SERVER)  createOperator's 409 starts naming which role holds
+#                  the number — the literal anti-enumeration regression decision-45 §7 rules
+#                  out, proven catchable rather than merely asserted.
 #   no-trap        useOverlay stops handling Tab. Escape still closes, focus still moves in;
 #                  only the trap is gone, so Tab walks out into the page behind.
 #   no-restore     useOverlay's restoration lands on <body>. The overlay still closes.
@@ -102,7 +111,8 @@ OVERLAY=web/lib/useOverlay.ts
 CSS=web/app/globals.css
 DE=web/messages/de.json
 EN=web/messages/en.json
-FILES="$PAGE $WORKERS $API $OVERLAY $CSS $DE $EN"
+ADMIN=server/routes/admin.js
+FILES="$PAGE $WORKERS $API $OVERLAY $CSS $DE $EN $ADMIN"
 LOG=/tmp/operator-mutants
 mkdir -p "$LOG"
 
@@ -110,7 +120,114 @@ restore() { git checkout -- $FILES 2>/dev/null; }
 rebuild() {
   ( cd web && NEXT_PUBLIC_GOOGLE_MAPS_KEY="$MAPS_KEY" pnpm build ) >/dev/null 2>&1
 }
-cleanup() { restore; echo "  … rebuilding the real tree"; rebuild; }
+
+# ---- the SERVER half of the harness (TASK-219 AC#5's #2/#3) ---------------------------
+#
+# `run()` above only ever mutates web/ and relies on the API process that was ALREADY
+# running before this script started (server.js reads its route table fresh off disk on
+# every request — no bundle, nothing to rebuild). server/routes/admin.js is different: node
+# has already loaded and compiled it into memory, so a mutation on disk does nothing until
+# the process is KILLED and RESTARTED. `SERVER_PORT` is read off `$BASE` so this also works
+# against a non-default DEMO_BASE port; the invocation below is byte-for-byte the one this
+# file's own header comment documents for check-operators.mjs, with no web rebuild (nothing
+# server-only changes needs one) and PUBLIC_DIR pointing at the web/out that is already on
+# disk from whatever `run()` last left behind (restore()+rebuild() already put the REAL
+# tree back before any server mutant runs, since server mutants are listed after the web
+# ones and each `run()` call ends with its own `restore`).
+SERVER_PORT=$(printf '%s' "$BASE" | sed -n 's#.*:\([0-9]\{1,\}\)$#\1#p')
+[ -z "$SERVER_PORT" ] && SERVER_PORT=8080
+SERVER_PID=""
+SERVER_BOUNCED=0
+
+# Polls `$BASE/admin/session` for an HTTP STATUS CODE, not for `curl -f`'s notion of
+# success — unauthenticated it answers 401, and `-f` treats any 4xx as "not up yet", which
+# would spin for the full timeout on a server that came up on the first try. "000" is
+# curl's own code for "could not connect at all"; anything else means a process is
+# listening and speaking HTTP.
+wait_for_server() {
+  i=0
+  while true; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/admin/session" 2>/dev/null)
+    [ "$code" != "000" ] && [ -n "$code" ] && return 0
+    i=$((i + 1))
+    if [ "$i" -gt 50 ]; then
+      echo "  server did not come up on $BASE within 10s — see $LOG/server.log"
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+
+# Kill whatever is bound to $SERVER_PORT and wait for the socket to actually free — a start
+# right on top of a not-yet-closed listener silently binds nothing and the next
+# `wait_for_server` times out for a reason that has nothing to do with the mutant.
+stop_port() {
+  pids=$(lsof -ti "tcp:$SERVER_PORT" -sTCP:LISTEN 2>/dev/null)
+  [ -n "$pids" ] && kill $pids 2>/dev/null
+  i=0
+  while [ -n "$(lsof -ti "tcp:$SERVER_PORT" -sTCP:LISTEN 2>/dev/null)" ]; do
+    i=$((i + 1))
+    [ "$i" -gt 25 ] && break
+    sleep 0.2
+  done
+}
+
+start_server() {
+  stop_port
+  DATABASE_URL="postgres:///nfc_demo" APP_KEY="demo-app-key-local-only-0123456789" \
+    PORT="$SERVER_PORT" PUBLIC_DIR="$PWD/web/out" \
+    node server/server.js >>"$LOG/server.log" 2>&1 &
+  SERVER_PID=$!
+  wait_for_server
+}
+
+# run_server <id> <what-must-go-red> — same contract as `run()`, but for a mutation on
+# server/routes/admin.js: bounce the server ONTO the mutated code, run check-operators.mjs
+# against it, classify RED/GREEN exactly like `run()` does, then bounce the server BACK onto
+# the restored real code before returning — so the next mutant (server or web) finds the
+# stack in the same state this one found it.
+run_server() {
+  id=$1; want=$2
+  SERVER_BOUNCED=1
+  if ! start_server; then
+    echo "  FAIL $id: the mutated server never came up"
+    fails=$((fails + 1))
+    restore
+    start_server >/dev/null 2>&1 || true
+    return
+  fi
+  DEMO_BASE="$BASE" node demo/check-operators.mjs > "$LOG/$id.log" 2>&1
+  rc=$?
+  caught=$(grep -cE '^ +(FAIL|STALE-GAP)' "$LOG/$id.log")
+  named=$(grep -E '^ +(FAIL|STALE-GAP)' "$LOG/$id.log" | grep -ci "$want")
+  if [ "$rc" -eq 0 ]; then
+    echo "  FAIL $id is GREEN with the truth reverted — nothing tests it"
+    fails=$((fails + 1))
+  elif [ "$named" -gt 0 ]; then
+    echo "  ok   $id goes RED and NAMES it ($caught failed assertion(s)):"
+    grep -E '^ +(FAIL|STALE-GAP)' "$LOG/$id.log" | head -3 | sed 's/^/       /'
+  elif [ "$caught" -gt 0 ]; then
+    echo "  FAIL $id went red for the WRONG reason — no failure mentions \"$want\""
+    grep -E '^ +(FAIL|STALE-GAP)' "$LOG/$id.log" | head -3 | sed 's/^/       /'
+    fails=$((fails + 1))
+  else
+    echo "  FAIL $id: exit $rc with no failed assertion — INCONCLUSIVE, not caught"
+    tail -3 "$LOG/$id.log" | sed 's/^/       /'
+    fails=$((fails + 1))
+  fi
+  restore
+  start_server >/dev/null 2>&1
+}
+
+cleanup() {
+  restore
+  echo "  … rebuilding the real tree"
+  rebuild
+  if [ "$SERVER_BOUNCED" -eq 1 ]; then
+    echo "  … putting the real server back on $BASE"
+    start_server >/dev/null 2>&1
+  fi
+}
 trap cleanup EXIT
 
 fails=0
@@ -351,19 +468,114 @@ run revoke-direct "confirmation names the person"
 fi
 
 # --- soft-consequence ------------------------------------------------------------------
+# TASK-219 reworked this string: it no longer claims deactivation is final (there is now a
+# reactivate route), so the old mutant's target sentence — "...nicht rückgängig machen." —
+# was deleted from de.json by that same change and no longer exists to be reverted. The
+# REAL inverse of today's truth is the other direction: reintroduce the old lie by taking
+# away the new closing sentence that says the person can be reactivated.
 if selected soft-consequence; then
 echo ""
-echo "=== MUTANT soft-consequence · the deactivate confirmation stops admitting it is final ==="
+echo "=== MUTANT soft-consequence · the deactivate confirmation goes back to claiming it is final ==="
 apply "$DE" <<'PY'
-import sys, json, collections
+import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-old = "Diese Aktion lässt sich auf diesem Bildschirm nicht rückgängig machen."
+old = "Sie kann jederzeit wieder aktiviert werden."
 assert old in s, 'soft-consequence site not found in de.json'
-open(p, 'w', encoding='utf-8').write(s.replace(old, "", 1))
+new = "Diese Aktion lässt sich auf diesem Bildschirm nicht rückgängig machen."
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
 PY
 [ $? -eq 0 ] || exit 1
-run soft-consequence "cannot be undone here"
+run soft-consequence "no longer claims the action is final"
+fi
+
+# --- reactivate-wrong-handler ------------------------------------------------------------
+# The classic copy-paste-from-deactivate regression: the "Wieder aktivieren" button exists,
+# renders, is reachable — and is wired to `deactivate()` instead of `reactivate()`. Clicking
+# it on an already-inactive row is a harmless no-op server-side (UPDATE ... SET active =
+# false WHERE ... — already false), so the row silently stays Inaktiv forever.
+if selected reactivate-wrong-handler; then
+echo ""
+echo "=== MUTANT reactivate-wrong-handler · the reactivate button calls deactivate() ==="
+apply "$PAGE" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p, encoding='utf-8').read()
+old = """                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-quiet"
+                        onClick={() => void reactivate(operator)}
+                      >
+                        {t('activate')}"""
+new = """                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-quiet"
+                        onClick={() => void deactivate(operator)}
+                      >
+                        {t('activate')}"""
+assert old in s, 'reactivate-wrong-handler site not found — the reactivate button moved'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
+[ $? -eq 0 ] || exit 1
+run reactivate-wrong-handler "says Aktiv again"
+fi
+
+# --- reactivate-touches-phone (SERVER) ----------------------------------------------------
+# Proves AC#2's byte-unchanged claim CAN fail: reactivateOperator picks up a stray write to
+# phone_identities on the way out. Chosen to be innocuous-LOOKING — a `created_at` touch,
+# not a value change — which is exactly the kind of "just refreshing a timestamp" edit that
+# survives a casual read and is why §9a compares the FULL row, not just presence.
+if selected reactivate-touches-phone; then
+echo ""
+echo "=== MUTANT reactivate-touches-phone (SERVER) · reactivate writes to phone_identities ==="
+apply "$ADMIN" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p, encoding='utf-8').read()
+old = '''async function reactivateOperator({ params }) {
+  const operatorId = v.id(params.id, "id");
+  const row = await one("UPDATE operators SET active = true WHERE id = $1 RETURNING id, active", [operatorId]);
+  if (!row) fail(404, "unknown_operator");
+  return { status: 200, body: { operator: row } };
+}'''
+new = old.replace(
+  'if (!row) fail(404, "unknown_operator");',
+  'if (!row) fail(404, "unknown_operator");\n  await query("UPDATE phone_identities SET created_at = now() WHERE operator_id = $1", [operatorId]);',
+)
+assert old in s, 'reactivate-touches-phone site not found — reactivateOperator moved'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
+[ $? -eq 0 ] || exit 1
+run_server reactivate-touches-phone "byte-unchanged"
+fi
+
+# --- collision-leaks-holder (SERVER) -------------------------------------------------------
+# Proves AC#3's byte-identical claim CAN fail, and is the literal anti-enumeration regression
+# decision-45 §7 exists to rule out: createOperator's 409 starts naming WHICH role holds the
+# number.
+if selected collision-leaks-holder; then
+echo ""
+echo "=== MUTANT collision-leaks-holder (SERVER) · the 409 starts naming who holds the phone ==="
+apply "$ADMIN" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p, encoding='utf-8').read()
+old = '''      [name, session.adminId, phone],
+    );
+    return { status: 201, body: { operator: { ...row, phone_e164: phone } } };
+  } catch (err) {
+    if (err?.code === "23505") fail(409, "phone_claimed");
+    throw err;
+  }
+}'''
+new = old.replace(
+  'if (err?.code === "23505") fail(409, "phone_claimed");',
+  'if (err?.code === "23505") fail(409, "phone_claimed", { taken_by: "operator" });',
+)
+assert old in s, 'collision-leaks-holder site not found — createOperator moved'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
+[ $? -eq 0 ] || exit 1
+run_server collision-leaks-holder "byte-identical"
 fi
 
 # --- no-trap ---------------------------------------------------------------------------

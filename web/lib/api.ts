@@ -761,6 +761,12 @@ export function deactivateOperator(id: number, signal?: AbortSignal): Promise<vo
   return apiFetch<void>(`/admin/operators/${id}`, { method: 'DELETE', signal })
 }
 
+/** The inverse of deactivateOperator (TASK-219). Sends no body — the route takes none;
+ *  reactivating never touches a phone claim. */
+export function reactivateOperator(id: number, signal?: AbortSignal): Promise<void> {
+  return apiFetch<void>(`/admin/operators/${id}/reactivate`, { method: 'POST', signal })
+}
+
 /** Byte-identical shape to `FreshEnrolmentCode` above, over an operator instead of a worker. */
 export type FreshOperatorCode = {
   operator: { id: number; name: string }

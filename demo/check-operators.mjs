@@ -536,7 +536,7 @@ async function main() {
     await page.type('.drawer input[type="text"]', 'PROBE Kollision', { perChar: 0 })
     await page.type('.drawer input[type="tel"]', WORKER_PHONE, { perChar: 0 })
     await page.screenshot(`${SHOTS}/drawer-before-collision.png`)
-    await page.clickText('Operator anlegen', { selector: '.drawer footer button[type="submit"]' })
+    await page.clickText('Betreiber anlegen', { selector: '.drawer footer button[type="submit"]' })
     await sleep(1500)
     const collision = await page.eval(`(() => {
       const drawer = document.querySelector('.drawer')
@@ -616,6 +616,32 @@ async function main() {
     await press(page, 'Escape')
     await sleep(400)
 
+    // ---- 3a · the SAME collision, off the wire, byte-for-byte (TASK-219 AC#3) ---------
+    //
+    // §3 above proves the SCREEN turns this into German prose. This proves the ROUTE itself
+    // is UNCHANGED by adding /admin/operators/:id/reactivate next to it: reactivate takes no
+    // phone in its body at all (POST .../:id/reactivate, id only), so it cannot itself
+    // collide — the only way this task could disturb the refusal is by touching
+    // createOperator's own code, which a raw call proves it did not (decision-45 §7).
+    const rawCollision = await page.eval(`(async () => {
+      const r = await fetch('/admin/operators', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'PROBE Raw Kollision', phone: ${JSON.stringify(WORKER_PHONE)} }),
+      })
+      return { status: r.status, text: await r.text() }
+    })()`)
+    assert(
+      'collision[raw]: 409 phone_claimed, byte-identical, no info on who holds it',
+      rawCollision.status === 409 && rawCollision.text === '{"error":"phone_claimed"}',
+      `status=${rawCollision.status} body=${JSON.stringify(rawCollision.text)}`,
+    )
+    assert(
+      'collision[raw]: nothing was written by the refused attempt',
+      sql("SELECT count(*) FROM operators WHERE name = 'PROBE Raw Kollision'") === '0',
+    )
+
     // ---- 5 · create, for real ---------------------------------------------------------
     await openDrawer(page)
     await page.type('.drawer input[type="text"]', PROBE_NAME, { perChar: 0 })
@@ -623,7 +649,7 @@ async function main() {
     const preview = await page.eval(
       `(document.querySelector('.drawer .field-hint')?.textContent || '')`,
     )
-    await page.clickText('Operator anlegen', { selector: '.drawer footer button[type="submit"]' })
+    await page.clickText('Betreiber anlegen', { selector: '.drawer footer button[type="submit"]' })
     await page.waitFor(`document.querySelector('.drawer') === null`, {
       timeout: 10000,
       label: 'the drawer to close on a successful create',
@@ -754,13 +780,14 @@ async function main() {
       : ''
     await page.screenshot(`${SHOTS}/deactivate-confirm.png`)
     assert(
-      'deactivate: the confirmation names the person AND admits it cannot be undone here',
+      'deactivate: the confirmation names the person, and no longer claims the action is final',
       deactivateAsked &&
         confirmText.includes(PROBE_NAME) &&
-        /nicht rückgängig/.test(confirmText),
+        /wieder aktivier/i.test(confirmText) &&
+        !/nicht rückgängig/.test(confirmText),
       deactivateAsked
         ? confirmText.slice(0, 200)
-        : 'NOTHING ASKED — one click deactivated a person whom this screen cannot reactivate',
+        : 'NOTHING ASKED — one click deactivated a person with no confirmation shown',
     )
     if (deactivateAsked)
       await page.clickText('Deaktivieren', { selector: '.modal footer button.btn-danger' })
@@ -780,6 +807,47 @@ async function main() {
       'deactivate: it is a soft delete — the row and its phone claim both survive',
       softly.active === 'false' && softly.claim === '1',
       `operators.active=${softly.active} · phone_identities rows for +436649009001: ${softly.claim}`,
+    )
+
+    // ---- 9a · reactivate: the way back (TASK-219 AC#1, AC#2) --------------------------
+    const claimBefore = sql(
+      `SELECT phone_e164, worker_id, operator_id, created_at FROM phone_identities WHERE phone_e164 = '+436649009001'`,
+    )
+    const unknown = await page.eval(`(async () => {
+      const r = await fetch('/admin/operators/999999999/reactivate', {
+        method: 'POST', credentials: 'include',
+      })
+      return { status: r.status, text: await r.text() }
+    })()`)
+    assert(
+      'reactivate[raw]: an unknown id is refused with 404 unknown_operator',
+      unknown.status === 404 && unknown.text === '{"error":"unknown_operator"}',
+      `status=${unknown.status} body=${JSON.stringify(unknown.text)}`,
+    )
+    await page.eval(`(${rowButton(PROBE_NAME, 'Wieder aktivieren')}).click()`)
+    await sleep(1500)
+    const afterReactivate = await page.eval(rowText(PROBE_NAME))
+    await page.screenshot(`${SHOTS}/after-reactivate.png`)
+    assert(
+      'reactivate: the row says Aktiv again, in words, on one click, no dialog asked',
+      afterReactivate.includes('Aktiv') && !afterReactivate.includes('Inaktiv'),
+      afterReactivate,
+    )
+    const reactivated = {
+      active: sql(`SELECT active::text FROM operators WHERE name = '${PROBE_NAME}'`),
+      claim: sql(
+        `SELECT phone_e164, worker_id, operator_id, created_at FROM phone_identities WHERE phone_e164 = '+436649009001'`,
+      ),
+    }
+    assert(
+      'reactivate: operators.active flips back to true',
+      reactivated.active === 'true',
+      `operators.active=${reactivated.active}`,
+    )
+    assert(
+      'reactivate: phone_identities is byte-unchanged by the round trip',
+      reactivated.claim === claimBefore,
+      `before="${claimBefore}" after="${reactivated.claim}"`,
     )
 
     // ---- 10 · eleven widths, both themes, list AND drawer ------------------------------
@@ -917,7 +985,7 @@ async function main() {
     await page.type('.drawer input[type="text"]', PHONE_PROBE_NAME, { perChar: 0 })
     await page.type('.drawer input[type="tel"]', PHONE_PROBE_PHONE, { perChar: 0 })
     await page.screenshot(`${SHOTS}/390-drawer.png`)
-    await page.clickText('Operator anlegen', { selector: '.drawer footer button[type="submit"]' })
+    await page.clickText('Betreiber anlegen', { selector: '.drawer footer button[type="submit"]' })
     await sleep(2000)
     const phoneRow = await page.eval(rowText(PHONE_PROBE_NAME))
     assert(
@@ -972,12 +1040,14 @@ async function main() {
         })()`)
       : null
     await page.screenshot(`${SHOTS}/390-confirm.png`)
+    // TASK-219: this was written when deactivateConfirmBody still ended "...nicht
+    // rückgängig machen." — that sentence is gone (deactivation is reversible now), so what
+    // this section can still prove is unchanged: the confirmation reaches the screen at all,
+    // fits it, and names the person. The SPECIFIC wording claim is §9's job, on the desktop
+    // probe — duplicating it here would test the same string twice under two different names.
     assert(
       'phone[390]: the deactivate confirmation is on screen, whole, and names the person',
-      phoneConfirm !== null &&
-        phoneConfirm.fits &&
-        phoneConfirm.text.includes(PHONE_PROBE_NAME) &&
-        /nicht rückgängig/.test(phoneConfirm.text),
+      phoneConfirm !== null && phoneConfirm.fits && phoneConfirm.text.includes(PHONE_PROBE_NAME),
       phoneConfirm === null ? 'no confirmation appeared at 390px' : JSON.stringify(phoneConfirm),
     )
     if (phoneConfirm !== null)

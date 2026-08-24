@@ -1210,6 +1210,7 @@
     "statusActive": "Aktiv",
     "statusInactive": "Inaktiv",
     "deactivate": "Deaktivieren",
+    "activate": "Wieder aktivieren",
     "forOperator": " von {name}",
     "fieldName": "Name",
     "fieldPhone": "Telefonnummer",
@@ -1255,7 +1256,7 @@
     "reissueConfirmTitle": "Neuen Zugangscode für {name} erstellen?",
     "reissueConfirmBody": "Der bisherige Code funktioniert ab diesem Moment nicht mehr, auch wenn er bereits weitergegeben wurde. Der neue Code wird nur ein einziges Mal angezeigt.",
     "deactivateConfirmTitle": "{name} deaktivieren?",
-    "deactivateConfirmBody": "Diese Person kann sich danach nicht mehr anmelden, und ein bestehender Zugangscode wird ungültig. "
+    "deactivateConfirmBody": "Diese Person kann sich danach nicht mehr anmelden, und ein bestehender Zugangscode wird ungültig. Sie kann jederzeit wieder aktiviert werden."
   },
   "tags": {
     "heading": "Unzugeordnete Tags",
