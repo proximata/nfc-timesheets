@@ -3,6 +3,23 @@
 PLANNING ONLY. Nothing in this document was built. Every line number and every claim below
 was read at HEAD `713dfa4` on 2026-08-24, not inferred from an earlier report.
 
+**TWO PASSES.** A plan pass wrote §1–§7; a review pass re-read the same source against them and
+changed five things. Where the review overruled the plan, both readings are kept — a plan whose
+wrong turns are erased teaches nobody why the right turn is right. The five:
+
+| # | What the review found | Where |
+|---|---|---|
+| 1 | **An expired session permanently strands an iOS worker's queued hours.** Not a parity nicety — unpaid labour, today, with no wipe involved | new row 37, **§1.6**, TASK-M |
+| 2 | **The wipe's explanation cannot be shown.** The migration receipt is wired into the signed-in branch only, and the wipe signs the worker out | §5.2(e) |
+| 3 | **"Defer without advancing the version" is not expressible** in the runner, and the deferral predicate as written would never clear — the wipe would silently never run | §5.2(f), §5.5 |
+| 4 | **§3.5 contradicted itself** on the deactivated worker, and would have leaked the one case decision-48 named | §3.5 |
+| 5 | **The uncommitted entitlement diff deletes four explanatory comments**, including the one naming App Store error 90778 | §1.7 |
+
+Verdict: the plan's three central judgements survive the review unchanged — keep Sign in with
+Apple visible (§2.1), say the honest thing to everyone rather than reopen the enumeration
+oracle (§3.4), and build the wipe as another version of the existing runner (§5.1). What did
+not survive is the belief that the wipe is a small change.
+
 WHY NOW. A real SMS was delivered to a real handset in production through
 `POST /auth/sms/request` → Twilio (decision-48). Android can sign a worker in with a phone
 number today; iOS cannot, and has never had any door except Sign in with Apple. The owner
@@ -12,7 +29,8 @@ audit, and a sequenced backlog. This is the answer to all six.
 
 READ FIRST, because it changes what is safe to build:
 
-> **decision-45, decision-46, decision-48 and decision-40 are all still `status: proposed`.**
+> **decision-28, decision-40, decision-45, decision-46 and decision-48 are all still
+> `status: proposed`** (`grep -l '^status: proposed' backlog/decisions/*.md` — five, not four).
 > Not accepted. Yet `/auth/sms/*` is deployed, an OTP was delivered to a handset, and this
 > document proposes stacking a fourth mechanism (iOS phone login) on top of them. Per this
 > project's own rule — *"the owner accepts decisions"* — the owner should accept or amend
@@ -48,11 +66,12 @@ gap even when it is small.
 | # | Feature | iOS | Android | Verdict |
 |---|---|---|---|---|
 | 11 | Background tap → universal link → clock in | live (`onOpenURL` + `onContinueUserActivity`) | live (App Link + `NfcTapActivity` fallback) | PARITY |
-| 12 | In-app manual scan fallback for a WORKER | **none** — removed for App Store error 90778 | `ScanActivity.kt` | **iOS GAP** — was blocked by the missing NFC entitlement; that entitlement is now present in the worktree (see §1.6) so the block is gone |
+| 12 | In-app manual scan fallback for a WORKER | **none** — removed for App Store error 90778 | `ScanActivity.kt` | **iOS GAP** — was blocked by the missing NFC entitlement; that entitlement is now present in the worktree (see §1.7) so the block is gone |
 | 13 | Shift posted at clock-IN, server authoritative (decision-19) | live | live | PARITY |
 | 14 | 8h auto-close + mandatory resolver (decision-10) | `ResolveSheet` | resolve dialog | PARITY |
 | 15 | Offline queue, retry, blocked-row marking | SwiftData `Shift` | SQLite `shifts` | PARITY |
 | 16 | `X-Pending-Shifts` / `-Blocked` / `-Oldest` headers (TASK-225) | **not sent, not read** | sent on every request | **iOS GAP** — the office's "this phone is still holding N" counter is Android-only |
+| 37 | **Which sync failures may be retried** | `APIFailure.isRetryable`, `API.swift:152-154`: `shift_already_open`, status 0/408/429/5xx. **A 401 is TERMINAL and so is `zone_unverified`** | `ApiFailure.isRetryable`, `ApiFailure.kt:69-80`: the same set **plus `zone_unverified` (decision-47) plus `status == 401 && code != "invalid_code"`**, with the reason written out in the file | **iOS GAP — and it is payroll data loss, see §1.6** |
 | 17 | In-shift takeover / switch notice card | live (`switchNotice`, `ContentView.swift:~110`) | live | PARITY |
 | 18 | Out-of-app running-shift signal | Live Activity + Dynamic Island | ongoing notification w/ `setUsesChronometer` (decision-27: no foreground service) | **N/A-PLATFORM** — each is the platform's own idiom; neither is portable |
 | 19 | Reminder ladder + app-icon badge | `ShiftSignalCenter.swift` | `AlarmManager` ladder | PARITY |
@@ -81,19 +100,63 @@ gap even when it is small.
 | 32 | Two-host split: `tagHost` parsed, `apiHost` talked to (decision-40) | **single host.** `API.swift:27` derives the API base from `TagLink.host` = `Branding.tagHost`; `Branding.swift:29` fallback is `schimmer-glanz.exe.xyz`; the entitlement names the same. `node ops/check-branding.mjs` prints the TODO today | correct and Gradle-enforced (an unresolved placeholder fails the build) | **iOS GAP** — TASK-188. The last unmigrated corner of decision-40 |
 | 33 | On-device DATA migration runner + receipt | `DataMigrations.swift` / `MigrationCore.swift` / `MigrationReceiptView.swift` | plain `SQLiteOpenHelper.onUpgrade()`, additive `ALTER TABLE`, no archive, no receipt | **N/A-PLATFORM** by choice of persistence layer, not by OS constraint. §4 removes its Settings entry; §5 reuses its runner |
 | 34 | Sentry + PII scrub | `Telemetry.swift` + `Scrub.swift` | equivalent | PARITY ⚠ — `SENTRY_DSN` is unset in production (TASK-44/TASK-224), so both are blind |
-| 35 | de/en localisation | `Localizable.xcstrings`, 112 keys ⚠ **0 use plural variations** | `strings.xml` de/en | PARITY ⚠ — TASK-40, and §5 makes it a blocker |
+| 35 | de/en localisation | `Localizable.xcstrings`, **171 keys**, every one has `de` ⚠ **0 use plural variations** | `strings.xml` de/en | PARITY ⚠ — TASK-40, and §5 makes it a blocker. (The "112 keys" in `checks/localisation-check.swift`'s own header is stale; the catalogue is 171. The check itself passes — it never asserted a count) |
 | 36 | Runnable logic checks outside the IDE | `NFCTimeSheets/checks/run.sh`, 9 checks | `android/checks` | PARITY ⚠ — **no check anywhere touches `Auth.swift`, `SignInView`, `SettingsView`, `OperatorSession.swift`, or the SwiftData half of `DataMigrations.swift`.** Everything §2–§5 adds is first-of-its-kind in that directory |
+| 38 | Sign-in errors reach a screen reader | `SignInView` renders `reason` as a plain red footnote — no field association, no announcement | every sign-in field's error is its own `supportingText` with `liveRegion = Assertive`, colour never the only signal | **iOS GAP** — small, and §2's screen triples the number of error surfaces. An acceptance line on TASK-E, not its own task |
 
 ### 1.5 Gap totals
 
 ```
-iOS GAP        rows 2 3 4 10 12 16 25 26 28 29 31 32   → 12
-ANDROID GAP    row  20                                 →  1
-BOTH + SERVER  row  9                                  →  1
-N/A-PLATFORM   rows 1 7 8 18 30 33                     →  6
+iOS GAP        rows 2 3 4 10 12 16 25 26 28 29 31 32 37 38  → 14
+ANDROID GAP    row  20                                      →  1
+BOTH + SERVER  row  9                                       →  1
+N/A-PLATFORM   rows 1 7 8 18 30 33                          →  6
 ```
 
-### 1.6 One measured surprise, uncommitted
+Rows 37 and 38 were added by the review pass, not the plan pass. Row 37 is the most serious
+finding in this document and has its own section.
+
+### 1.6 Row 37 in full: an expired session strands an iOS worker's queued hours FOR EVER
+
+This is not a parity nicety. It is the same class of defect Android's `ApiFailure.kt` already
+carries a comment about having fixed, still open on iOS, and it destroys pay.
+
+```
+API.swift:152-154   isRetryable = (code == "shift_already_open") || status ∈ {0,408,429,5xx}
+                    ∴ 401 → false            ∴ zone_unverified (422) → false
+Sync.swift:154      record() { shift.syncBlocked = !failure.isRetryable }
+Sync.swift:71       for shift in all where !shift.syncBlocked && !shift.isFullySynced
+                    ∴ a blocked row is NEVER planned again
+nothing clears syncBlocked for it — the only two writers of `false` are the adopt paths
+(Sync.swift:216, DataMigrations adopt), and both are unreachable for a row that is never planned
+```
+
+The reachable sequence, entirely ordinary:
+
+```
+cleaner taps in → row written locally → 90-day cookie has lapsed → push → 401
+  → record() sets syncBlocked = true        (hours stranded, permanently)
+  → send() posts .sessionRejected           (app drops to signed-out)
+cleaner signs in again → the row is still blocked → it is never sent → it is never paid
+```
+
+Android excludes exactly this: `status == 401 && code != "invalid_code"` is retryable there,
+and the `!= invalid_code` carve-out is itself deliberate (auto-retrying a single-use sign-in
+code burns the worker's remaining attempts). `zone_unverified` is retryable there too, for
+decision-47's stated reason: it is a temporary state of the SERVER's configuration, not a
+defect in the payload. Neither carve-out exists on iOS.
+
+`tag_unbound` is terminal on BOTH — that is TASK-240, already filed, but filed as `android`
+only. It has an unfiled iOS twin in the same three lines.
+
+Consequences for the rest of this document, which is why it is here and not in a footnote:
+
+- **§5.5's wipe-deferral predicate never clears** on a phone holding a blocked row. See §5.5.
+- If the owner overrides §5.5 and the wipe deletes unsent rows, it would delete hours that
+  were only unsent because of this bug.
+- Filed as **TASK-M**, and it is sequenced BEFORE the wipe, not after.
+
+### 1.7 One measured surprise, uncommitted
 
 `git status` shows `NFCTimeSheets/NFCTimeSheets/NFCTimeSheets.entitlements` **modified in the
 working tree and not committed.** The diff adds
@@ -103,12 +166,32 @@ com.apple.developer.nfc.readersession.formats = ["TAG"]
 ```
 
 i.e. **TASK-246 AC6 — the owner's one Xcode click — appears to have already happened
-locally.** It is not in any commit. Two consequences, both actionable and neither done here:
+locally.** It is not in any commit.
+
+**REVIEW CORRECTION — the diff is bigger than "adds one key", and the difference matters.**
+Reading `git diff` on that file: Xcode did not add a key, it **rewrote the whole plist and
+deleted every XML comment in it** — 26 lines out, 17 in. Four comment blocks are gone:
+
+```
+- why there was deliberately no NFC key, and that iOS 26 rejects "NDEF" outright (error 90778)
+- that background tap needs associated-domains + AASA and no NFC entitlement (decision-4)
+- that re-adding the key means adopting NFCTagReaderSession, not NFCNDEFReaderSession
+- why Apple-only sign-in, no Google (decision-22, guideline 4.8)
+```
+
+No key was LOST (`applesignin`, `associated-domains` and their values are byte-identical; only
+`nfc.readersession.formats` is new). But those comments are the only in-file record of four
+non-obvious constraints, and one of them — error 90778 — is exactly the trap matrix row 12
+will walk back into. Three consequences, none done here:
 
 - AC6 cannot be marked done from a dirty worktree. Someone has to commit that file (owner's
   call — decision-49 says no agent edits the entitlement) or the next `git checkout` silently
   reverts the capability and the write screen degrades back to words.
+- **The commit should restore the four comments**, updated to say the key is now present and
+  why. Committing Xcode's output as-is trades a documented file for an undocumented one.
 - With `TAG` present, matrix row 12 (worker manual scan) stops being blocked by entitlements.
+- `applinks:` still names `schimmer-glanz.exe.xyz`, unchanged — matrix row 32 / TASK-188 is
+  neither helped nor harmed by this commit.
 
 ---
 
@@ -210,7 +293,7 @@ describes. Filed as TASK-Y in §6 — do not "fix" it inside the login work.
   `server/routes/auth.js`:
   - `capabilities() -> WireCapabilities` — `GET /auth/capabilities`, `{sms:Bool}`, `auth:"app"`, no session.
   - `signIn(code:) -> WireSession` — `POST /auth/code`, 200 · 401 `invalid_code` · 429.
-  - `smsRequest(phone:)` — `POST /auth/sms/request`, **202** · 422 `invalid_phone` · 429 · 503 `sms_not_configured`. Returns `Void`; the 202 body carries nothing a client may act on and must not be modelled as if it did.
+  - `smsRequest(phone:)` — `POST /auth/sms/request`, **202** · 422 `invalid_phone` · 429 · 503 `sms_not_configured`. Returns `Void`; the 202 body carries nothing a client may act on and must not be modelled as if it did. **Mechanically that is `let _: WireEmpty = try await apiPost(…)`** — `apiPost` is generic over `Out: Decodable` and `Void` is not `Decodable`, so it cannot simply return nothing. `logout()` at `API.swift:437` is the existing idiom; copy it, do not invent a second transport.
   - `smsVerify(phone:code:) -> WireSession` — `POST /auth/sms/verify`, 200 (byte-identical to `/auth/code`'s) · 401 `invalid_code` · 429 · 503.
 - New wire types beside the existing ones: `WireCapabilities`, `CodeSignInRequest`,
   `SmsRequestRequest`, `SmsVerifyRequest` — explicit `CodingKeys`, snake_case, per the file
@@ -220,6 +303,41 @@ describes. Filed as TASK-Y in §6 — do not "fix" it inside the login work.
   two strings on purpose (`TimeSheetApp.kt:395-412`, `smsErrorText` at `:405`): the shared mapper's advice for a bad
   *enrolment* code is "ask your admin for a new one", which is wrong for an OTP that the
   worker re-requests themselves. `signInErrorText(_:)` in the new screen file is the fork.
+
+**`API.swift` — the 401 hazard the plan pass missed, and the pin it needs**
+
+`send()` (`API.swift:365-388`) is a single choke point that posts `.sessionRejected` on **every**
+401. Both new sign-in doors answer **401 `invalid_code`** on a wrong code. So every mistyped
+enrolment code and every mistyped OTP will fire the notification that `Auth.swift:77-81` turns
+into `serverRejectedSession()`.
+
+It is harmless **today**, and only by accident:
+
+```
+serverRejectedSession()  Auth.swift:238   if case .signedOut = state { return }
+∴ fired from the sign-in screen, where state IS .signedOut, it early-returns and stomps nothing
+```
+
+That is an accident, not a guarantee, and it fails the moment a sign-in door is reachable from
+any other state. Two ways to make it a property instead of luck, and the plan picks the first:
+
+1. **RECOMMENDED — state the invariant and pin it.** "A worker sign-in call may only be issued
+   while `session.state == .signedOut`." One guard at the top of each of the three new `Session`
+   methods (`guard case .signedOut = state else { return }`), and a line in
+   `checks/`’s new sign-in check asserting `serverRejectedSession`'s early-return survives.
+   Costs nothing and keeps ONE choke point.
+2. Rejected — a third `send`-alike that does not post, mirroring `OperatorAPI.sendOperator`.
+   That fork is load-bearing for the operator because operator calls are made *while a worker is
+   signed in*; sign-in calls are not, so forking here buys a maintenance burden and no property.
+
+**`ContentView.swift` — `IneligibleView` is a dead end that the new doors do not reach**
+
+`IneligibleView` (159-224) offers exactly one control: Sign out. A worker whose Apple ID is not
+on the roster but whose **phone is on file** must therefore sign out before they can see the
+phone field — and "sign out" is not obvious advice to someone who just signed in successfully.
+With SIWA staying (§2.1), this state stays reachable. Cheapest honest fix, and it is one line:
+re-label the button *"Sign in a different way"*, same action. Not a separate task; an acceptance
+line on TASK-E.
 
 **`Auth.swift`**
 
@@ -314,10 +432,36 @@ number. Maximum leak for no extra honesty over §3.4.
 message reaches only the handset that owns the number, so the HTTP API leaks nothing at all.
 It is refused because it converts the login endpoint into a **denial-of-service on the
 company's own workers**: the global spend cap is 20 SMS per rolling hour
-(`lib/auth.js:425-428`), so ~20 junk numbers per hour exhaust the budget and a real cleaner
-standing at a door cannot get their code. It is also a 3-messages-per-hour harassment vector
-against any number a stranger types. A login path that a stranger can switch off is not a
-login path.
+(`SMS_SPEND_RULES`, `lib/auth.js:425-428` — also 100/day), so ~20 junk numbers per hour exhaust
+the budget and a real cleaner standing at a door cannot get their code. It is also a
+3-messages-per-hour harassment vector against any number a stranger types. A login path that a
+stranger can switch off is not a login path.
+
+> **REVIEW FINDING — THAT DENIAL-OF-SERVICE ALREADY EXISTS IN PRODUCTION, AND IT IS DELIBERATE.**
+>
+> `smsRequest` calls `checkGlobalSmsSpend()` **before** it looks the number up, so an
+> UNREGISTERED number spends the company's hourly SMS budget even though no message is sent:
+>
+> ```
+> checkOtpRequestRate(phone)   per-phone: 3/hour, 10/day — spent for unknown numbers too
+> checkGlobalSmsSpend()        process-wide: 20/hour, 100/day — ALSO spent for unknown numbers
+> const target = await one(…)  the lookup happens AFTER both
+> if (target) { … sendSms … }
+> ```
+>
+> ∴ 7 junk numbers × 3 requests = 21 > 20, and **the SMS door is shut for the whole company
+> for an hour**, from a phone, with no session, using only the app key that `strings` recovers
+> from any installed binary.
+>
+> This is the correct trade and it must NOT be "fixed" by moving the spend after the lookup:
+> then a budget-exhausted server would answer 429 for known numbers and 202 for unknown ones,
+> which is precisely the enumeration oracle the identical 202 exists to close. The cost of
+> enumeration-safety here is availability, and it was paid on purpose.
+>
+> What follows from it, and it is the strongest argument in this document for §2.2:
+> **the enrolment-code field is not a nicety on the iOS sign-in screen, it is the only door
+> a stranger cannot close.** Ship SMS without it and one afternoon of junk requests locks
+> every iOS worker out. Filed as an observation, not a task — there is nothing to change.
 
 **Refused — reveal after N failed attempts.** No `otp_challenges` row is written for an
 unknown number at all — the `INSERT` is inside `if (target)` — so there is nothing to count.
@@ -385,9 +529,23 @@ Shape:
   the per-phone limiter for unknown numbers. The send side never becomes an oracle.
 - `POST /auth/sms/verify` — after `checkGlobalOtpVerifyRate()` and the per-IP
   `smsotp:` bucket, and only when the phone parses, a lookup that finds **no
-  `phone_identities` row joined to an active worker** answers a new
-  `404 {error:"not_registered"}`. Everything else — wrong code, expired, consumed, attempts
-  exhausted, deactivated worker — keeps the existing `401 invalid_code`, byte for byte.
+  `phone_identities` row for that number at all** answers a new `404 {error:"not_registered"}`.
+  Everything else — wrong code, expired, consumed, attempts exhausted, deactivated worker —
+  keeps the existing `401 invalid_code`, byte for byte.
+- **REVIEW CORRECTION, and it is not cosmetic.** The first draft of this section said "no
+  `phone_identities` row joined to an **active** worker", and then promised a deactivated
+  worker still gets 401. Those two clauses contradict each other: a deactivated worker HAS no
+  row joined to an *active* worker, so the first clause would hand them `not_registered` and
+  leak the one thing decision-48 named explicitly. The predicate must test **existence in
+  `phone_identities`, not activeness** — a number that belongs to a deactivated worker is
+  registered, and keeps the byte-identical 401.
+- It also needs its **own query**, which the ~10-line estimate below does not cover.
+  `smsVerify`'s existing `row` SELECT joins `otp_challenges → phone_identities → workers`, so
+  `row === null` already means six different things (no challenge / expired / consumed /
+  attempts spent / worker inactive / number unknown). `not_registered` cannot be read off it.
+  One extra indexed `SELECT 1 FROM phone_identities WHERE phone_e164 = $1`, inside the
+  `row === null` branch and before `recordLoginFailure`. Call it ~20 lines, one round trip,
+  and it runs only on the failure path.
 - The oracle this opens, stated honestly so the owner is signing something true: one
   `POST /auth/sms/verify` with any 6 digits reveals whether a given number belongs to an
   active worker. Bounded by 60 verifies/min process-wide and the per-IP bucket. The real-world
@@ -490,7 +648,11 @@ And the sequencing is free: land it in the same release as §2's phone login, an
 re-login is not an extra insult — it is the release's headline feature, with three doors
 waiting on the other side of it.
 
-### 5.2 Four mismatches found, each needing an explicit answer
+### 5.2 Seven mismatches found, each needing an explicit answer
+
+> Four were found in the plan pass. **(e), (f) and (g) were found in the review pass and two
+> of them break the plan as written.** Read (e) and (f) first; they are the reason this
+> section is no longer four items long.
 
 **(a) A wipe on an empty phone would say nothing.** `DataMigrations.swift:94` only sets
 `MigrationReceipt.unseen` `for outcome in outcomes where outcome.touchedAnything`, and
@@ -523,6 +685,76 @@ local row, identity, cache and cookie, and keep ONLY the shift archive.** Nothin
 inventory has anything to recover — a roster cache re-fetches, a notification flag is a
 boolean, a zone cache re-fetches.
 
+**(e) THE RECEIPT CANNOT BE SHOWN AFTER A WIPE. The mechanism the whole plan leans on is
+wired into the SIGNED-IN branch only.** This is the load-bearing flaw.
+
+```
+ContentView.swift:19-21  "Loaded lazily and only inside the eligible branch"  — its own comment
+ContentView.swift:44     case .eligible(let worker):  TabView { … }
+ContentView.swift:87-95      .task  { guard MigrationReceipt.unseen … }
+                             .sheet(isPresented: $showReceipt) { MigrationReceiptSheet(…) }
+```
+
+The wipe signs the worker out. `session.restore()` then finds no cache and no cookie and lands
+on `.signedOut`, so `ContentView` renders `SignInView` — and the `.task` and `.sheet` that
+present the receipt are attached to the `TabView` inside `.eligible`, which is never built.
+
+```
+launch → runPending wipes → restore() → .signedOut → SignInView
+         MigrationReceipt.unseen == true, and nothing on screen reads it
+∴ the worker sees a sign-in screen where their app used to be, with NO explanation,
+  and gets one only if and when they successfully sign in again
+```
+
+That inverts §5.6's own gate: TASK-40 was promoted to a blocker because "the receipt is the
+only screen explaining where a worker's history went", and the receipt is exactly the screen
+that does not appear. A second, smaller cut of the same wire: even inside the eligible branch,
+`if receipt.isEmpty { MigrationReceipt.unseen = false }` (`ContentView.swift:91`) silently
+swallows the announcement on a phone that had nothing to archive — so (a)'s `announces` flag
+is necessary and still not sufficient.
+
+**Required fix, and it changes what TASK-E must ship:** the explanation lives on the
+SIGNED-OUT screen. `WorkerSignInScreen` reads `MigrationReceipt.unseen` and, when it is set,
+renders a banner above the three doors — *"This update cleared the data stored on this phone.
+Please sign in again."* — in German, plus the queued-shift card from TASK-J if any row is
+unsent. The receipt sheet still fires later, once signed in, for the detail. Do not move the
+sheet: it needs `worker` and the archive list, and a modal over a sign-in screen is the wrong
+shape for the one sentence that matters.
+
+**(f) "Return without advancing the version" is not expressible in the runner.** §5.5 says the
+wipe should defer "exactly as the existing `serverUnreachable` path does". It cannot, and the
+analogy is wrong in both halves:
+
+```
+MigrationRunner.runPending   try run(step); advance(next)
+∴ the ONLY way not to advance is for the step to THROW
+
+DataMigrations.runPending    catch { Telemetry.capture(error)
+                                     Telemetry.log("data migration failed", .error, …) }
+∴ a deferral would fire a Sentry ERROR on EVERY launch of every phone holding a queued shift
+
+and serverUnreachable does NOT do this: it returns [] from the OUTER runPending
+(DataMigrations.swift:73-76) BEFORE the chain starts. It is a pre-flight, not a step return.
+```
+
+**Required fix:** put the deferral where `serverShiftsIfNeeded` already is — a pre-flight in
+the outer `DataMigrations.runPending`, before `MigrationRunner.runPending` is called, logging
+at `.info` and returning `[]`. If it must live in the step instead, the runner needs a
+deferral signal that is not an `Error`, and `Telemetry.capture` must not see it. Either way
+this is a change to the RUNNER, not only an added step — the first one since it was written,
+and it needs `checks/migration-check.swift` extended to cover it.
+
+**(g) NEVER `UserDefaults.removePersistentDomain`.** It is the obvious one-line reading of
+"clear UserDefaults", and it also deletes `ts.dataMigrationVersion`:
+
+```
+wipe clears the domain → watermark back to 0 → next launch runs v1 and v2 again
+→ wipes again, for ever, erasing each new session moments after the worker signs in
+```
+
+The step must enumerate its keys explicitly, by name, from the §5.3 inventory. State it in the
+code as a comment, not only here — the next person to add a key is the person at risk.
+
 ### 5.3 The inventory the step must cover
 
 | What | Where | Wipe? |
@@ -538,8 +770,30 @@ boolean, a zone cache re-fetches.
 | `operator.zones.json` | Application Support | yes, no archive (re-fetched) |
 | `ts-migration-archive-v*.json` | Application Support | **no** — §5.2(d) |
 | `ts_worker` cookie | `HTTPCookieStorage` | yes — this is what forces the re-login |
-| `ts_operator` cookie | `HTTPCookieStorage` | **owner's call**, same as the operator defaults above |
+| `ts_operator` cookie | `HTTPCookieStorage` | **NOT ACTUALLY A CHOICE if `signOut()` is reused** — see below |
 | Keychain | — | nothing to wipe. `Auth.swift:59` and `DataMigrations.swift:11` both state this app puts nothing there |
+
+> **REVIEW FINDING — the operator cookie is already collateral, today, with no wipe involved.**
+>
+> ```
+> Auth.swift:263-270  clearLocalSession()
+>   for cookie in HTTPCookieStorage.shared.cookies(for: API.base) ?? [] { deleteCookie(cookie) }
+> lib/auth.js:211     sessionCookie(…) — both ts_worker and ts_operator are Path=/ on ONE host
+> ∴ "every cookie for API.base" is BOTH of them
+> ```
+>
+> So `Session.signOut()` — the Settings row a worker taps when handing the phone over — already
+> destroys the operator session too, and `OperatorSession` never notices: it restores from
+> `UserDefaults` in `init()` and there is no `GET /auth/operator-session` to reconcile against
+> (its own header says so). The phone keeps showing *"Signed in as ‹operator›"* while the
+> credential is gone, until the next operator call 401s in a stairwell with a card in hand.
+>
+> Two consequences: (1) §5.4's recommendation to reuse `signOut()` silently answers open
+> question 6 as "yes, the operator session is wiped too" — the owner should answer it knowing
+> that, not discover it; (2) this is a **pre-existing defect independent of the wipe** and it
+> belongs to TASK-Y, whose scope grows from "amend a decision's wording" to "decide whether
+> iOS splits the jar". A cookie jar that cannot be cleared selectively is the *reason* Android
+> split its own.
 
 ### 5.4 THE QUESTION THE OWNER MUST ANSWER FIRST
 
@@ -586,11 +840,37 @@ TASK-225's rule is explicit and was designed for exactly this: *signing out does
 queued shift.* A wipe that erases an unsent shift erases unpaid labour whose only copy was on
 that phone.
 
-**Recommendation: the wipe DEFERS while any unsynced row exists.** Return without advancing
-the version, exactly as the existing `serverUnreachable` path does; the next launch retries.
-Surface it in words — "There are still N shifts to send. Connect to the internet once and
-this will finish by itself." One-time wipes and unpaid Tuesdays do not belong in the same
-release note.
+**Recommendation: the wipe DEFERS while any RETRYABLE unsynced row exists.** Surface it in
+words — "There are still N shifts to send. Connect to the internet once and this will finish by
+itself." One-time wipes and unpaid Tuesdays do not belong in the same release note.
+
+> **REVIEW CORRECTION — the predicate as first written never clears, so the wipe would never
+> run.** "While any unsynced row exists" is the wrong test, because some rows are unsendable
+> by construction and stay that way for ever:
+>
+> ```
+> Sync.swift:71   for shift in all where !shift.syncBlocked && …   ∴ a blocked row is never planned
+> nothing clears syncBlocked for such a row (§1.6)
+> and v1 CREATES them: the .keepBlocked branch sets syncBlocked = true on rows whose
+> locationId is "" — rows the migration itself says "your admin has to enter it"
+> ∴ on exactly the phones migration v1 touched, openSyncedAt == nil FOR EVER
+> ∴ "defer while any unsynced row exists" = "never wipe", silently, on those phones
+> ```
+>
+> Add §1.6's 401 bug on top and any iOS worker whose session lapsed while a shift was queued
+> also carries a permanently-blocked row.
+>
+> **The predicate must be `openSyncedAt == nil && !syncBlocked`** — defer only on rows that
+> are still *trying*. Blocked rows were already archived by v1 (under "needs your admin")
+> before they were blocked, and the receipt already routes the worker to their admin, so the
+> wipe may delete them and lose nothing that was not already lost.
+>
+> **And it is why TASK-M is sequenced before the wipe:** fix the 401 / `zone_unverified`
+> classification FIRST, so the rows the wipe deletes as "blocked" are genuinely unsendable and
+> not merely victims of row 37. Wiping first would delete recoverable hours.
+>
+> Note the deferral also has to be expressed as §5.2(f) requires — a pre-flight in the outer
+> `runPending`, not a throw from inside the step.
 
 This is a strong recommendation, and it is the one clause the owner may reasonably override
 ("erase everything, one time" could genuinely mean *everything*). If overridden, the archive
@@ -605,10 +885,15 @@ worker typed. Same rule.
 ```
 ✓ §2 phone login is in the SAME build          — three doors waiting after the forced logout
 ✓ TASK-244 AC4 shipped                          — an admin can actually put a phone on a worker
-✓ TASK-40 fixed                                 — the receipt is now the ONLY explanation, in German
+✓ TASK-M shipped (row 37 / §1.6)                — else the wipe deletes hours a BUG stranded
+✓ the explanation renders on the SIGNED-OUT screen — §5.2(e). The receipt sheet CANNOT show it
+✓ the deferral is a pre-flight, not a step throw — §5.2(f). A step throw = Sentry every launch
+✓ keys enumerated by name, never removePersistentDomain — §5.2(g). Else it wipes for ever
+✓ TASK-40 fixed                                 — broken German on the one explanation screen
 ✓ matrix row 10 (pending card on the sign-out screen) — or a queued shift becomes invisible
-✓ a new checks/wipe-migration-check.swift       — first check ever to touch this area (row 36)
-✓ owner has answered §5.4 and §5.5
+✓ a new checks/wipe-migration-check.swift       — first check ever to touch this area (row 36),
+                                                  and it must cover the RUNNER change in (f)
+✓ owner has answered §5.4, §5.5 and §5.3's operator-cookie note
 ```
 
 ---
@@ -623,11 +908,13 @@ referenced and only the **delta** is stated — no duplicates were created.
 | Id | Status | Delta from this analysis |
 |---|---|---|
 | **TASK-244** | In Progress | AC4 (Login-Nummer editor in the panel) is promoted from "sizeable follow-up" to **hard blocker of the whole iOS phone-login line**. Without it there is no way to onboard the first iOS worker except curl — which is literally how the production SMS test was performed |
-| **TASK-246** | In Progress | **AC6 may already be satisfied**: the NFC `TAG` entitlement is present in the working tree, uncommitted (§1.6). Needs the owner to commit it. AC7 (8-item hardware list) still outstanding |
+| **TASK-246** | In Progress | **AC6 may already be satisfied**: the NFC `TAG` entitlement is present in the working tree, uncommitted (§1.7). Needs the owner to commit it. AC7 (8-item hardware list) still outstanding |
 | **TASK-188** | To Do | Independently re-verified: `API.swift:27` derives the API base from `TagLink.host`, `Branding.swift:29` fallback is the renameable host, `check-branding.mjs` prints the TODO. **Any new iOS network call — phone login included — rides the tag host until this ships.** Still owner-blocked on an Xcode build |
 | **TASK-189** | To Do | Confirmed still real. Android's `HistoryScreen` reads local SQLite, **not** `GET /shifts/mine` — easy to mistake for done. Not touched by this iteration; keep it filed accurately |
 | **TASK-215 / TASK-216** | To Do | Underlying `phone_identities` namespace is not closed: `POST /admin/workers` still accepts an operator's number. Phone login makes this a login-collision path, not just a data-hygiene one. TASK-216 remains blocked on the decision-41 ruling |
-| **TASK-40** | To Do | Promoted from cosmetic to **blocker of §5**, because the receipt becomes the only explanation a wiped phone offers |
+| **TASK-40** | To Do | Promoted from cosmetic to **blocker of §5**. ⚠ review amends the reason: the receipt is NOT the explanation a wiped phone offers (§5.2(e) — it cannot be shown while signed out). It is still the explanation offered on the NEXT sign-in, and still the wrong place for `4 alte Schichts` |
+| **TASK-240** | To Do | **Has an unfiled iOS twin.** It is labelled `android` and names `ApiFailure.kt`, but `tag_unbound` is terminal on iOS too, in the same three lines TASK-M touches (`API.swift:152-154`). Widen its scope or let TASK-M carry the iOS half — do not leave iOS silently uncovered by a task whose title reads like it covers the behaviour |
+| **TASK-233 / TASK-237** | To Do | Adjacent, not duplicated. TASK-233 (force-stop caveat below the fold on the Android pending card) is the copy TASK-J should not re-invent from scratch on iOS; TASK-237 (the office's counter is stale by one) is matrix row 16's server-side twin |
 | **TASK-41** | To Do | This is how any of the above reaches a phone. Owner-only |
 | **TASK-52 / TASK-53** | To Do | Research on store-independent delivery. Matrix row 30 is their real motivation, now measured |
 
@@ -708,16 +995,38 @@ TASK-A ─┬─ TASK-244 AC4 ────────────────�
         └─ TASK-B ─ TASK-C ─ TASK-D ─ TASK-E ─┬─ TASK-F(iOS) ─┐
                                               ├─ TASK-J ──────┤
                                               └───────────────┴─ TASK-I ─ TASK-41
+TASK-M ...................................................┴──────┘
+  ↑ unblocked by everything, and it MUST land before TASK-I. Start it FIRST: it is the only
+    item on this page that is losing money while nothing else is decided.
 TASK-H, TASK-K, TASK-F(Android)   independent, ship any time
 TASK-G                            waits on decision-50
 TASK-Y, TASK-Z, TASK-188, TASK-189   parallel, unblocked by the above
 ```
 
+**The one sequencing rule this iteration must not break.** Every server change comes before the
+client that depends on it — and §2 is the easy case, because it needs NO server change at all
+(`/auth/capabilities`, `/auth/code`, `/auth/sms/*` are deployed and generic; verified at
+`server/routes/auth.js:584-600`). The ONE genuine server-first edge in the whole plan is
+TASK-G: decision-50 accepted → `smsVerify` → the `server/check-api.js` pin → only then the two
+client strings. Shipping the client half first would render a message for a status code the
+server cannot produce.
+
+**One inconsistency worth naming rather than quietly fixing:** §2.6 lists decision acceptance as
+blocking "everything", while §6.2 says TASK-B depends on nothing. Both are right about
+different things — `PhoneNumber.swift` is pure Foundation and mergeable under any decision
+outcome, but it is pointless work if decision-48 is amended away. Read §2.6 as the release
+order and §6.2 as the technical dependency.
+
 ---
 
 ## 7 · Open questions for the owner
 
+0. **START TASK-M REGARDLESS OF EVERY ANSWER BELOW.** §1.6: on iOS a lapsed session
+   permanently blocks a queued shift, and nothing ever unblocks it. It is not a parity item,
+   it is unpaid hours, it needs no decision, and it blocks the wipe. It is the only thing on
+   this page that is costing something today.
 1. **Accept decision-45 and decision-48?** They are `proposed` and production runs on them.
+   (So are decision-28, decision-40 and decision-46 — five in total, not four.)
 2. **Is the iOS pilot still "running"?** decision-26 conditioned retiring Sign in with Apple
    on it no longer being. Nothing in the repo answers this.
 3. **§3 — honest-copy-for-everyone (recommended, no server change) or a literal
@@ -727,9 +1036,22 @@ TASK-Y, TASK-Z, TASK-188, TASK-189   parallel, unblocked by the above
    wipe leaves the row to its 90-day TTL.
 5. **§5.5 — may the wipe delete UNSENT shifts?** Recommended: no — defer until they are sent.
    This is the only clause where the wipe can destroy unpaid labour.
-6. **§5.3 — does the wipe also clear the OPERATOR session on a shared phone?**
-7. **Commit the NFC entitlement?** It is modified and uncommitted in the working tree (§1.6).
-   decision-49 says no agent edits that file, so this is the owner's commit to make — and
-   until it is made, a `git checkout` silently reverts the capability.
+6. **§5.3 — does the wipe also clear the OPERATOR session on a shared phone?** Answer it
+   knowing that **iOS already clears it on every ordinary worker sign-out** — one cookie jar,
+   both cookies `Path=/`, and `clearLocalSession()` deletes every cookie for the host. Keeping
+   `ts_operator` through a wipe is therefore NOT a smaller change than dropping it; it is a
+   larger one, and it is really TASK-Y.
+7. **Commit the NFC entitlement — and restore the comments Xcode deleted?** It is modified and
+   uncommitted (§1.7). The diff is not "one key added": Xcode rewrote the plist and dropped all
+   four explanatory comments, including the one naming App Store error 90778. decision-49 says
+   no agent edits that file, so this is the owner's commit — and until it is made, a
+   `git checkout` silently reverts the capability.
 8. **TASK-244 AC4 priority.** Until an admin can set a login phone from the panel, iOS phone
    login is demonstrable but not deployable.
+9. **§5.2(e) — accept that TASK-J grows?** The wipe's explanation cannot ride the migration
+   receipt, because the receipt only exists inside the signed-in branch. Either TASK-J renders
+   the sentence on the sign-in screen, or the wipe ships with no explanation at all. There is
+   no third option that reuses existing UI.
+10. **§5.5 — confirm the corrected deferral predicate.** `openSyncedAt == nil && !syncBlocked`,
+    not "any unsynced row". The original wording would have made the wipe a permanent no-op on
+    precisely the phones migration v1 touched.
