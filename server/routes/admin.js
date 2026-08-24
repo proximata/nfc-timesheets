@@ -18,6 +18,9 @@ import {
   hashToken,
   recordLoginFailure,
   sessionCookie,
+  SMS_OTP_REQUESTS_KEY,
+  SMS_OTP_REQUESTS_MAX,
+  SMS_OTP_REQUESTS_MIN,
   verifyPassword,
 } from "../lib/auth.js";
 import { all, one, query } from "../lib/db.js";
@@ -160,6 +163,16 @@ const SETTINGS = {
   pl_margin_baseline_bp: (value, field) => {
     const n = typeof value === "string" ? Number(value.trim()) : value;
     if (!Number.isSafeInteger(n) || n < -10_000 || n > 10_000) fail(400, "invalid_field", field);
+    return String(n);
+  },
+  // decision-51. How many times one source address may call POST /auth/sms/request in a
+  // rolling 5 minutes (window fixed in lib/auth.js, not here). WRITE-TIME rejects an
+  // out-of-range value outright — the admin is told, never silently clamped — while
+  // lib/auth.js's checkSmsRequestRate falls back to the default at READ time if the row is
+  // ever missing or garbled. Bounds imported, not retyped, so the two copies cannot drift.
+  [SMS_OTP_REQUESTS_KEY]: (value, field) => {
+    const n = typeof value === "string" ? Number(value.trim()) : value;
+    if (!Number.isSafeInteger(n) || n < SMS_OTP_REQUESTS_MIN || n > SMS_OTP_REQUESTS_MAX) fail(400, "invalid_field", field);
     return String(n);
   },
 };

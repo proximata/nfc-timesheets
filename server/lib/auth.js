@@ -427,14 +427,22 @@ const SMS_SPEND_RULES = [
   { windowMs: 24 * 60 * 60_000, limit: 100 },
 ];
 
-// ONE PERSON'S HANDSET. Bucketed on the NORMALISED number and spent for UNKNOWN numbers
-// too — if it only counted real workers, a number that starts answering 429 after three
-// tries would confirm that number is on file, which is exactly the enumeration oracle the
-// identical 202 exists to prevent.
-const OTP_REQUEST_RULES = [
-  { windowMs: 60 * 60_000, limit: 3 },
-  { windowMs: 24 * 60 * 60_000, limit: 10 },
-];
+// PER-IP, ON REQUEST (decision-51, amends decision-48 §6). The per-PHONE bucket that used
+// to live here is DELETED: its only stated purpose was making an unknown number behave
+// like a known one so a 429 could not confirm it was on file, and decision-51 has the
+// owner waiving that concern outright — POST /auth/sms/request now answers 404 for a
+// number that does not resolve, so there is nothing left for a per-phone bucket to hide.
+//
+// The window is FIXED IN CODE and the count is ADMIN-TUNABLE via app_settings, exactly
+// the pl_margin_baseline_bp idiom (routes/admin.js SETTINGS): one key, one clamp, read on
+// every request so POST /admin/settings takes effect with no restart. The key, the
+// bounds and the default live in exactly ONE place — here — so routes/admin.js's
+// validator imports them rather than retyping 1/20.
+export const SMS_OTP_REQUESTS_KEY = "sms_otp_requests_per_5min";
+export const SMS_OTP_REQUESTS_DEFAULT = 3;
+export const SMS_OTP_REQUESTS_MIN = 1;
+export const SMS_OTP_REQUESTS_MAX = 20;
+const SMS_REQUEST_WINDOW_MS = 5 * 60_000;
 
 // A VERIFY FLOOD MUST NOT SPEND THE SEND BUDGET. Verifying costs nothing and sends nothing,
 // so it gets its own ceiling: sharing SMS_SPEND_RULES would let a stranger exhaust the hour's
@@ -447,9 +455,19 @@ export function checkGlobalSmsSpend() {
   spendRolling("sms:spend", SMS_SPEND_RULES);
 }
 
-/** Throws 429 once this phone number has asked for too many codes. */
-export function checkOtpRequestRate(phoneE164) {
-  spendRolling(`otp:req:${phoneE164}`, OTP_REQUEST_RULES);
+/**
+ * Throws 429 once this SOURCE ADDRESS has asked for too many SMS codes in the last 5
+ * minutes. N is read from app_settings on EVERY call — never cached at boot — so
+ * POST /admin/settings takes effect on the very next request. A row typed in psql, a
+ * NULL, a float, or a string that fails to parse ALL clamp to the default: this is a
+ * security control and must never resolve to unlimited.
+ */
+export async function checkSmsRequestRate(ip) {
+  const row = await one("SELECT value FROM app_settings WHERE key = $1", [SMS_OTP_REQUESTS_KEY]);
+  const n = row ? Number(row.value) : Number.NaN;
+  const limit =
+    Number.isSafeInteger(n) && n >= SMS_OTP_REQUESTS_MIN && n <= SMS_OTP_REQUESTS_MAX ? n : SMS_OTP_REQUESTS_DEFAULT;
+  spendRolling(`smsreq:${ip}`, [{ windowMs: SMS_REQUEST_WINDOW_MS, limit }]);
 }
 
 /** Throws 429 once the process has spent its per-minute OTP verification budget. */
