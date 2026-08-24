@@ -3,9 +3,10 @@ id: TASK-219
 title: >-
   An operator can be deactivated and never brought back: no reactivate route,
   and the phone stays claimed
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-20 14:01'
+updated_date: '2026-08-24 21:55'
 labels:
   - server
   - web
@@ -40,9 +41,35 @@ NOT DECIDED HERE: whether a reactivated operator should get a fresh enrolment co
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 an admin can bring a deactivated operator back without touching the database
-- [ ] #2 the reactivate path never re-points a phone claim: phone_identities is untouched by it
-- [ ] #3 a phone claimed by a WORKER is still refused, and the refusal is byte-identical to today's (anti-enumeration, decision-45 §7)
-- [ ] #4 deactivateConfirmBody no longer claims the action is final, in de and en, with exact key parity
-- [ ] #5 demo/check-operators.mjs covers the round trip and a mutant in demo/operator-mutants.sh shows it RED
+- [x] #1 an admin can bring a deactivated operator back without touching the database
+- [x] #2 the reactivate path never re-points a phone claim: phone_identities is untouched by it
+- [x] #3 a phone claimed by a WORKER is still refused, and the refusal is byte-identical to today's (anti-enumeration, decision-45 §7)
+- [x] #4 deactivateConfirmBody no longer claims the action is final, in de and en, with exact key parity
+- [x] #5 demo/check-operators.mjs covers the round trip and a mutant in demo/operator-mutants.sh shows it RED
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-24 21:55
+---
+VERIFIED independently at db3833e (not the build agent's claims). Local nfc_demo + node server/server.js on 127.0.0.1:8080. No production touched.
+
+AC1 — way back without touching the DB: created PROBE Verify219 (op id 122) over the wire, DELETE /admin/operators/122 -> {"operator":{"id":122,"active":false}}, POST /admin/operators/122/reactivate -> 200 {"operator":{"id":122,"active":true}}, psql confirms active=true. Unknown id -> 404 {"error":"unknown_operator"} (parity with DELETE's 404). Non-numeric id -> 400 invalid_id. Unauthenticated -> 401 unauthorized (route is auth:"admin").
+
+AC2 — phone_identities untouched (HARD GATE): the handler body is 5 lines and contains ZERO occurrences of phone_identities; the only statement is UPDATE operators SET active = true. Live proof: row_to_json of the operator's phone_identities row before and after the deactivate->reactivate round trip is byte-identical, and the md5 of the WHOLE table is unchanged (52295b06fb345b1b1bf7aef75bbbd978 both sides).
+
+AC3 — worker-held phone still refused, byte-identical (HARD GATE, anti-enumeration, decision-45 §7): (a) source proof — the entire server diff db3833e~1..db3833e is PURELY ADDITIVE (18 added lines, zero removed); createOperator is byte-identical old vs new (sha 886078ac). (b) wire proof — booted the PRE-change admin.js on :8081 alongside the new one on :8080, POSTed the same worker-held +436600000004 to both: bodies cmp byte-identical (hex 7b226572726f72...227d = {"error":"phone_claimed"}), and the response HEADERS diff clean too (409, content-type, content-length: 25, cache-control: no-store). (c) an OPERATOR-held phone (+436600000001) returns the byte-identical refusal, so the 409 still names no role. Nothing written by either refusal.
+
+AC4 — copy no longer claims finality, exact key parity: de 'Sie kann jederzeit wieder aktiviert werden.' / en 'They can be reactivated at any time.'; the old 'nicht rückgängig machen' / 'cannot be undone from this screen' sentences are gone. Parity measured over the WHOLE file, not just this key: 1338 keys in each, zero de-only, zero en-only; 30 ICU-placeholder differences are pre-existing (30 at db3833e~1 too, none in the operators namespace). web/ pnpm check: All checks passed.
+
+AC5 — check + mutants (HARD GATE, run by me, not accepted as a claim): full demo/check-operators.mjs GREEN on the committed tree, twice (before and after the mutant runs): 'all checks green, 1 named gap(s) still open' — the gap is the pre-existing TASK-215 one, untouched. demo/operator-mutants.sh, real output:
+  ok reactivate-touches-phone goes RED and NAMES it -> FAIL reactivate: phone_identities is byte-unchanged by the round trip (created_at 23:48:07.825561 -> 23:48:21.51949)
+  ok collision-leaks-holder goes RED and NAMES it -> FAIL collision[raw]: byte-identical ... body={"error":"phone_claimed","field":{"taken_by":"operator"}}
+  ok reactivate-wrong-handler goes RED and NAMES it (2 assertions: 'row says Aktiv again', 'operators.active flips back to true')
+  ok soft-consequence goes RED and NAMES it -> FAIL deactivate: ... no longer claims the action is final
+All restored afterwards; git status clean for every touched file; nfc_demo teardown asserts operators 3->3, identities 4->4, codes 0->0.
+
+Also checked, not required: the UI button goes through useTranslations t('activate') with a visually-hidden per-row name, and mirrors deactivate()'s busy guard + error handling.
+---
+<!-- COMMENTS:END -->
