@@ -11,10 +11,18 @@
 //  READ-ONLY WITH RESPECT TO SHIFTS, STRUCTURALLY: every call here goes out over
 //  OperatorTagAPI, which carries ts_operator, and no route that touches a shift accepts it.
 //
+//  Reachable directly from the sign-in screen (TASK-252's iOS half - full parity with
+//  android/.../nfc/VerifyZoneActivity.kt, gated the same way: `onResume` refuses to load
+//  zones or scan at all while `!operatorReady`). The gate lives HERE, not only at the
+//  navigation link, for the same reason WriteTagScreen.swift's does - a link on the
+//  sign-in screen is reachable before anyone has proven they are an operator.
+//
 
 import SwiftUI
 
 struct VerifyZoneScreen: View {
+    @Environment(OperatorSession.self) private var operatorSession
+    @State private var operatorCode = ""
     @State private var zones: [WireOperatorZone] = []
     @State private var loading = false
     @State private var loadError = false
@@ -27,6 +35,57 @@ struct VerifyZoneScreen: View {
 
     var body: some View {
         Form {
+            switch operatorSession.state {
+            case .unknown:
+                Section { ProgressView() }
+            case .signedOut(let reason):
+                operatorSignInSection(reason: reason)
+            case .signedIn:
+                verifySections
+            }
+        }
+        .navigationTitle("Test scan")
+        // Loading zones is an operator action (OperatorTagAPI carries ts_operator) - firing
+        // it while signed out would just 401. `.task(id:)` re-runs the moment sign-in
+        // flips the environment value, so the picker fills in without a manual refresh.
+        .task(id: isSignedIn) { if isSignedIn { await load() } }
+    }
+
+    private var isSignedIn: Bool {
+        if case .signedIn = operatorSession.state { return true }
+        return false
+    }
+
+    @ViewBuilder
+    private func operatorSignInSection(reason: String?) -> some View {
+        Section {
+            Text("This phone is not signed in as an operator. Only operators can test a tag.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        Section("Operator code") {
+            TextField("Operator code", text: $operatorCode)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .accessibilityLabel("Operator code")
+            if let reason {
+                Text(reason)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+            Button("Sign in") {
+                Task {
+                    await operatorSession.signIn(code: operatorCode)
+                    if operatorSession.operatorInfo != nil { operatorCode = "" }
+                }
+            }
+            .disabled(operatorSession.busy || EnrolmentCode.normalise(operatorCode) == nil)
+        }
+    }
+
+    @ViewBuilder
+    private var verifySections: some View {
+        Group {
             Section {
                 Text("Proves a card resolves to this zone before a cleaner can clock in on it. This never opens a shift.")
                     .font(.footnote)
@@ -38,8 +97,6 @@ struct VerifyZoneScreen: View {
                 pickerSection
             }
         }
-        .navigationTitle("Test scan")
-        .task { await load() }
     }
 
     @ViewBuilder

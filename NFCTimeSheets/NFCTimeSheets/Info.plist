@@ -44,5 +44,20 @@
 	     Xcode work and still sees nothing. -->
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+
+	<!-- THE MISSING KEY THAT CRASHED EVERY TAG-WRITE ATTEMPT (2026-08-24 field crash, iOS
+	     14/26.5.2, symbolicated from Xcode Organizer's local crash cache under
+	     ~/Library/Developer/Xcode/Products). CoreNFC does not politely refuse a reader
+	     session started without this key - it calls its own
+	     `__CRASHING_DUE_TO_PRIVACY_VIOLATION__` inside NFCHardwareManager and SIGABRTs the
+	     whole process, on the XPC thread, the instant TagWriter.write()'s
+	     NFCTagReaderSession.begin() reaches the system NFC daemon. The entitlement
+	     (com.apple.developer.nfc.readersession.formats: TAG) says the app MAY use NFC;
+	     this key is the separate, mandatory user-facing permission STRING Apple requires
+	     before it will actually start a session - one without the other still crashes.
+	     This file is already wired via INFOPLIST_FILE, so adding this key needs no
+	     project.pbxproj edit. -->
+	<key>NFCReaderUsageDescription</key>
+	<string>Wird verwendet, um einen NFC-Tag am Objekt zu beschreiben oder zu prüfen.</string>
 </dict>
 </plist>

@@ -2,16 +2,27 @@
 //  WriteTagScreen.swift
 //  NFCTimeSheets
 //
-//  Reachable only once an operator is signed in (OperatorSignInScreen.swift). Mirrors
-//  android/.../nfc/WriteTagActivity.kt's shape: mint an id, present the system NFC sheet,
-//  show exactly one Outcome, then report it - and the report is SOFT, never downgrading a
-//  verified write (decision-49). NOTHING here opens or closes a shift: OperatorTagAPI
-//  carries the ts_operator cookie, which no shift route accepts (decision-45).
+//  Reachable directly from the sign-in screen (TASK-252's iOS half - full parity with
+//  android/.../nfc/WriteTagActivity.kt, which was never gated behind a separate sign-in
+//  screen either). Mints an id, presents the system NFC sheet, shows exactly one Outcome,
+//  then reports it - and the report is SOFT, never downgrading a verified write
+//  (decision-49). NOTHING here opens or closes a shift: OperatorTagAPI carries the
+//  ts_operator cookie, which no shift route accepts (decision-45).
+//
+//  THE GATE IS HERE, NOT JUST AT THE NAVIGATION LINK - mirrors WriteTagActivity.kt's own
+//  `onResume` refusal (`if (!operatorReady) return`, never starting reader mode): a link
+//  on the sign-in screen is reachable by ANYONE with the app installed, so without this
+//  check this screen would run a real NFC write from a phone that had never proven it is
+//  an operator's. `session.write(...)` only ever ran through CoreNFC once - it never
+//  checked WHO was holding the phone - so this was the actual gap direct sign-in-screen
+//  buttons would have opened if this screen stayed as unguarded as it was before.
 //
 
 import SwiftUI
 
 struct WriteTagScreen: View {
+    @Environment(OperatorSession.self) private var operatorSession
+    @State private var operatorCode = ""
     @State private var pendingId = UUID().uuidString.lowercased()
     // The actual bytes this build would write, computed the SAME way TagWriter.plan() does
     // (TagLink.uriFor), so what the operator sees here can never drift from what lands on
@@ -31,6 +42,52 @@ struct WriteTagScreen: View {
 
     var body: some View {
         Form {
+            // ONE FORM, one of two contents - never both. Matches WriteTagActivity.kt's
+            // `if (!operatorReady) { ... } else { ... }` split, not a disabled button next
+            // to a live one: a phone that has not proven it is an operator's must not be
+            // able to even attempt a write while a code field sits unfilled beside it.
+            switch operatorSession.state {
+            case .unknown:
+                Section { ProgressView() }
+            case .signedOut(let reason):
+                operatorSignInSection(reason: reason)
+            case .signedIn:
+                writeSections
+            }
+        }
+        .navigationTitle("Write a tag")
+    }
+
+    @ViewBuilder
+    private func operatorSignInSection(reason: String?) -> some View {
+        Section {
+            Text("This phone is not signed in as an operator. Only operators can write tags.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        Section("Operator code") {
+            TextField("Operator code", text: $operatorCode)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .accessibilityLabel("Operator code")
+            if let reason {
+                Text(reason)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+            Button("Sign in") {
+                Task {
+                    await operatorSession.signIn(code: operatorCode)
+                    if operatorSession.operatorInfo != nil { operatorCode = "" }
+                }
+            }
+            .disabled(operatorSession.busy || EnrolmentCode.normalise(operatorCode) == nil)
+        }
+    }
+
+    @ViewBuilder
+    private var writeSections: some View {
+        Group {
             Section {
                 Text("This never opens a shift. A fresh id is minted on this phone before anything is written.")
                     .font(.footnote)
@@ -70,7 +127,6 @@ struct WriteTagScreen: View {
                 }
             }
         }
-        .navigationTitle("Write a tag")
     }
 
     private var occupiedOutcome: (onTag: String, offered: String, token: String)? {

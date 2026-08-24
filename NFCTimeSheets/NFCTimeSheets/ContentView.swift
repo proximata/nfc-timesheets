@@ -97,8 +97,9 @@ struct ContentView: View {
 // MARK: - State (a): signed out
 
 /// Two doors, both always visible, neither gated (decision-50): an SMS one-time code, and
-/// the admin-issued enrolment code EnrolmentCode.swift already normalises for
-/// OperatorSignInScreen. No `GET /auth/capabilities` check here, unlike Android - with
+/// the admin-issued enrolment code, normalised by EnrolmentCode.swift the same way
+/// WriteTagScreen/VerifyZoneScreen's own operator-code fields do. No `GET
+/// /auth/capabilities` check here, unlike Android - with
 /// Apple gone, hiding SMS behind a flag could leave a phone with exactly one door, and a
 /// control that answers 503 the moment it is pressed says so in the copy right where the
 /// tap happened (decision-50 §1).
@@ -123,8 +124,8 @@ struct SignInView: View {
     @State private var enrolmentErrorMessage: String?
 
     var body: some View {
-        // OperatorSignInScreen pushes further screens of its own (Write a tag, Test
-        // scan), so whatever presents it needs a NavigationStack ancestor - Settings
+        // WriteTagScreen and VerifyZoneScreen are both pushed from operatorSection below,
+        // so whatever presents this view needs a NavigationStack ancestor - Settings
         // already has one; this is the second, and now the ONLY one that does not
         // require a worker session first.
         NavigationStack {
@@ -165,18 +166,25 @@ struct SignInView: View {
     // MARK: Operator door
     //
     // decision-45 makes an operator a genuinely separate identity from a worker - it must
-    // not require signing in as a worker first. Before this, the ONLY route to
-    // OperatorSignInScreen was Settings, which only exists inside .eligible(worker): a
-    // phone that is operator-only had no way in at all (found 2026-08-24, TASK-252). This
-    // is additive - Settings keeps its own identical link for a phone that is already
-    // signed in as a worker and also mounts tags.
+    // not require signing in as a worker first. Before this, the ONLY route in was
+    // Settings, which only exists inside .eligible(worker): a phone that is operator-only
+    // had no way in at all (found 2026-08-24, TASK-252).
+    //
+    // TWO DIRECT LINKS, not a link to a sign-in screen that then reveals two more links -
+    // full parity with android/.../ui/TimeSheetApp.kt's SignInScreen, which puts "Tag
+    // schreiben" and "Tag pruefen" directly on the welcome screen. WriteTagScreen and
+    // VerifyZoneScreen each carry their OWN operator-code gate now (mirrors
+    // WriteTagActivity.kt/VerifyZoneActivity.kt refusing to start a reader session while
+    // `!operatorReady`), so there is nothing left for an intermediate sign-in screen to
+    // do - OperatorSignInScreen.swift is retired, not left as a second, now-redundant door.
+    // Settings keeps its own identical section for a phone that is already signed in as a
+    // worker and also mounts tags.
     private var operatorSection: some View {
         Section {
-            NavigationLink("Operator sign-in") {
-                OperatorSignInScreen()
-            }
+            NavigationLink("Write a tag") { WriteTagScreen() }
+            NavigationLink("Test a tag") { VerifyZoneScreen() }
         } footer: {
-            Text("For staff who mount and test NFC tags. This never opens a shift.")
+            Text("Operator? Write or test tags without signing in as a worker.")
                 .font(.footnote)
         }
     }
@@ -838,9 +846,8 @@ struct SettingsView: View {
                 // from here because a worker's own phone may also be the one an operator
                 // uses to mount or test a tag — it is additive, and touches nothing above.
                 Section {
-                    NavigationLink("Operator sign-in") {
-                        OperatorSignInScreen()
-                    }
+                    NavigationLink("Write a tag") { WriteTagScreen() }
+                    NavigationLink("Test a tag") { VerifyZoneScreen() }
                 } footer: {
                     Text("For staff who mount and test NFC tags. This never opens a shift.")
                         .font(.footnote)
