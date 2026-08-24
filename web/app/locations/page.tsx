@@ -1200,6 +1200,7 @@ export default function LocationsPage() {
     if (sum.state === 'none') return t('areaNoZones')
     const value = format.number(sum.hundredths / 100, { maximumFractionDigits: 2 })
     if (sum.state === 'incomplete') {
+      if (sum.hundredths === 0) return t('areaAllUnmeasured', { zones: sum.unmeasured })
       return t('areaFloor', { area: value, zones: sum.unmeasured })
     }
     return t('areaTotal', { area: value, zones: sum.zones })
