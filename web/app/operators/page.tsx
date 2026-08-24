@@ -15,10 +15,13 @@ import {
   deactivateOperator,
   type FreshOperatorCode,
   fetchOperators,
+  fetchSmsStatus,
   issueOperatorEnrolmentCode,
   type Operator,
   revokeOperatorEnrolmentCode,
+  type SmsStatus,
   saveOperator,
+  sendOperatorEnrolmentCodeBySms,
 } from '@/lib/api'
 import { codeStateOf } from '@/lib/enrolment'
 import { filterHref } from '@/lib/filters'
@@ -87,6 +90,12 @@ export default function OperatorsPage() {
   const [pending, setPending] = useState<Pending | null>(null)
   /** The code just created, shown once. Unrecoverable afterwards. */
   const [freshCode, setFreshCode] = useState<FreshOperatorCode | null>(null)
+  /**
+   * `GET /admin/sms-status`, the same fail-closed picker `/workers/` already uses
+   * (decision-48 extended to operators): null = not loaded yet, and the SMS button stays
+   * disabled until it is — never guessed from the static bundle.
+   */
+  const [smsInfo, setSmsInfo] = useState<SmsStatus | null>(null)
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
@@ -115,7 +124,18 @@ export default function OperatorsPage() {
   const load = useCallback(
     async (signal?: AbortSignal) => {
       try {
-        setOperators(await fetchOperators(signal))
+        const [ops, sms] = await Promise.all([
+          fetchOperators(signal),
+          // FAILS CLOSED, exactly like /workers/: an old server, a proxy hiccup or offline
+          // never render as "configured" — the button ends up disabled with the same
+          // sentence a real 503 would produce.
+          fetchSmsStatus(signal).catch((cause) => {
+            if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+            return { configured: false, missing: [], sender_kind: null } as SmsStatus
+          }),
+        ])
+        setOperators(ops)
+        setSmsInfo(sms)
         setLoadError(null)
       } catch (cause) {
         if (cause instanceof DOMException && cause.name === 'AbortError') return
@@ -224,6 +244,54 @@ export default function OperatorsPage() {
     }
   }
 
+  /**
+   * "SMS senden" for an operator — byte-identical action to `/workers/`'s `sendCodeBySms`,
+   * against `sendOperatorEnrolmentCodeBySms`. A failed send still lands a working code in
+   * the SAME standing panel `issueCode` uses above, never a second UI for the same fact.
+   *
+   * ponytail: unlike `/workers/`, this screen does not persist "last SMS attempt" beside
+   * the row (`Operator` carries no `sms_last_status`/`sms_last_at` — no server join exists
+   * for it). The one-shot notice banner below is the whole result surface. Ceiling: the
+   * outcome of an SMS is invisible again after the notice clears or the page reloads.
+   * Upgrade path if that turns out to matter: join `sms_deliveries` onto `/admin/data`'s
+   * operator rows the same way it is already joined onto workers.
+   */
+  async function sendCodeBySms(operator: Operator) {
+    if (busy) return
+    setBusy(true)
+    setNotice(null)
+    setFreshCode(null)
+    try {
+      const result = await sendOperatorEnrolmentCodeBySms(operator.id)
+      setFreshCode({ operator: result.operator, code: result.code, expires_at: result.expires_at })
+      setNotice(
+        result.delivery.status === 'sent'
+          ? {
+              ok: true,
+              text: t('smsHandedOver', {
+                phone: result.delivery.phone_e164,
+                time: dayTime(new Date().toISOString()),
+              }),
+            }
+          : { ok: false, text: t('smsFailed', { reason: result.delivery.reason }) },
+      )
+      await load()
+    } catch (cause) {
+      if (handleAuthLoss(cause)) return
+      if (cause instanceof ApiError && cause.code === 'no_phone_identity') {
+        setNotice({ ok: false, text: t('smsNoPhone') })
+      } else if (cause instanceof ApiError && cause.status === 503) {
+        setNotice({ ok: false, text: t('smsNotConfigured') })
+      } else if (cause instanceof ApiError && cause.status === 429) {
+        setNotice({ ok: false, text: t('smsTooMany') })
+      } else {
+        setNotice({ ok: false, text: t('smsSendFailed') })
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
   /** The control for a code read aloud to the wrong person. Immediate, and idempotent. */
   async function revokeCode(operator: Operator) {
     if (busy) return
@@ -301,6 +369,12 @@ export default function OperatorsPage() {
   }
 
   const phonePreview = draft === null ? null : normaliseIdentityPhone(draft.phone)
+
+  /** decision-48's picker, applied to operators: disabled with the reason in words beside
+      it — never hidden — exactly like /workers/'s smsButtonDisabled. */
+  function smsButtonDisabled(operator: Operator, sms: SmsStatus | null): boolean {
+    return sms === null || !sms.configured || operator.phone_e164 === null
+  }
 
   return (
     <>
@@ -439,7 +513,24 @@ export default function OperatorsPage() {
                           </span>
                         </button>
                       ) : null}
+                      {operator.active ? (
+                        <button
+                          type="button"
+                          className="btn btn-quiet"
+                          disabled={smsButtonDisabled(operator, smsInfo)}
+                          aria-disabled={smsButtonDisabled(operator, smsInfo)}
+                          onClick={() => sendCodeBySms(operator)}
+                        >
+                          {t('smsSend')}
+                          <span className="visually-hidden">
+                            {t('forOperator', { name: operator.name })}
+                          </span>
+                        </button>
+                      ) : null}
                     </div>
+                    {operator.active && smsInfo !== null && !smsInfo.configured ? (
+                      <p className="cell-muted">{t('smsNotConfigured')}</p>
+                    ) : null}
                   </td>
                   <td className="cell-actions">
                     {operator.active ? (

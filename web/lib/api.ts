@@ -789,6 +789,24 @@ export function revokeOperatorEnrolmentCode(
 }
 
 /**
+ * `POST /admin/operators/:id/enrolment-code/sms` — byte-identical contract to
+ * `sendEnrolmentCodeBySms` above, over an operator instead of a worker (decision-45 §6 /
+ * decision-48 applied to the operator role). A failed send is still a 200 carrying a
+ * working code, for the same reason as the worker route.
+ */
+export type SmsOperatorCode = FreshOperatorCode & { delivery: SmsDeliveryResult }
+
+export function sendOperatorEnrolmentCodeBySms(
+  operatorId: number,
+  signal?: AbortSignal,
+): Promise<SmsOperatorCode> {
+  return apiFetch<SmsOperatorCode>(`/admin/operators/${operatorId}/enrolment-code/sms`, {
+    method: 'POST',
+    signal,
+  })
+}
+
+/**
  * A row of `inventory_items`. Products and equipment are ONE table and one screen: they
  * differ by this `kind` label and by nothing else (server/db/migrations/003).
  */

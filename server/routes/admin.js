@@ -1038,6 +1038,24 @@ async function issueOperatorEnrolmentCode({ params, session }) {
   const operator = await one("SELECT id, name FROM operators WHERE id = $1 AND active", [v.id(params.id, "id")]);
   if (!operator) fail(404, "unknown_operator");
 
+  const minted = await mintOperatorEnrolmentCode(operator.id, session.adminId);
+  return {
+    status: 201,
+    body: {
+      operator: { id: operator.id, name: operator.name },
+      code: minted.display,
+      expires_at: minted.expiresAt.toISOString(),
+    },
+  };
+}
+
+/**
+ * Mint one code onto one operator row. EXTRACTED, NOT INLINE, for the same reason
+ * mintEnrolmentCode is extracted for workers (decision-48 §5.1, applied here for the
+ * operator SMS channel below): the „Zugangscode erzeugen“ button and the SMS route call
+ * THIS function, so the two can never mint a different credential from one another.
+ */
+async function mintOperatorEnrolmentCode(operatorId, adminId) {
   const expiresAt = new Date(Date.now() + CODE_TTL_MS);
   // enrolment_code_hash is UNIQUE, same collision handling as the worker route: retry
   // rather than let a ~1-in-2^40 event surface as an unreproducible 500.
@@ -1052,21 +1070,89 @@ async function issueOperatorEnrolmentCode({ params, session }) {
                 enrolment_code_issued_by = $4,
                 enrolment_code_redeemed_at = NULL
           WHERE id = $1`,
-        [operator.id, hashToken(code), expiresAt, session.adminId],
+        [operatorId, hashToken(code), expiresAt, adminId],
       );
-      return {
-        status: 201,
-        body: {
-          operator: { id: operator.id, name: operator.name },
-          code: display,
-          expires_at: expiresAt.toISOString(),
-        },
-      };
+      return { display, expiresAt };
     } catch (err) {
       if (err?.code !== "23505") throw err;
     }
   }
   fail(503, "code_unavailable");
+}
+
+/**
+ * POST /admin/operators/:id/enrolment-code/sms -> the SAME code, delivered by SMS.
+ * Byte-identical contract to POST /admin/workers/:id/enrolment-code/sms (decision-48),
+ * against `operators` instead of `workers`, `phone_identities.operator_id` instead of
+ * `.worker_id`, and `sms_deliveries.operator_id` instead of `.worker_id`. Same eight-step
+ * order, same guarantee: steps 1-3 all precede the mint, so a misconfigured or
+ * rate-limited box can never spend an operator's code.
+ *
+ *   200 {operator, code, expires_at, delivery:{status:"sent",   provider_sid, phone_e164}}
+ *   200 {operator, code, expires_at, delivery:{status:"failed", reason, provider_code, phone_e164}}
+ *   409 {error:"no_phone_identity"}   no number on file (createOperator always sets one,
+ *                                     so this is the same defensive check as the worker
+ *                                     route, not a reachable state today)
+ *   503 {error:"sms_not_configured"}  NOTHING minted, NOTHING written, NO budget spent
+ *   429 {error:"too_many_attempts"}   over the rolling spend cap; nothing minted
+ *   404 {error:"unknown_operator"}
+ */
+async function sendOperatorEnrolmentCodeBySms({ params, session }) {
+  const operatorId = v.id(params.id, "id");
+
+  if (!smsConfigured()) fail(503, "sms_not_configured");
+
+  const operator = await one(
+    `SELECT o.id, o.name, pi.phone_e164
+       FROM operators o
+       LEFT JOIN phone_identities pi ON pi.operator_id = o.id
+      WHERE o.id = $1 AND o.active`,
+    [operatorId],
+  );
+  if (!operator) fail(404, "unknown_operator");
+  if (!operator.phone_e164) fail(409, "no_phone_identity");
+
+  checkGlobalSmsSpend();
+
+  const minted = await mintOperatorEnrolmentCode(operator.id, session.adminId);
+  const body = {
+    operator: { id: operator.id, name: operator.name },
+    code: minted.display,
+    expires_at: minted.expiresAt.toISOString(),
+  };
+
+  const result = await sendSms(
+    operator.phone_e164,
+    renderEnrolmentSms({ name: senderName(), display: minted.display, expiresAt: minted.expiresAt }),
+  );
+
+  await query(
+    `INSERT INTO sms_deliveries (kind, operator_id, phone_e164, status, reason, provider_sid, provider_code, requested_by)
+     VALUES ('enrolment_code', $1, $2, $3, $4, $5, $6, $7)`,
+    [
+      operator.id,
+      operator.phone_e164,
+      result.status,
+      result.reason ?? null,
+      result.provider_sid ?? null,
+      result.provider_code ?? null,
+      session.adminId,
+    ],
+  );
+
+  return {
+    status: 200,
+    body: {
+      ...body,
+      delivery: {
+        status: result.status,
+        phone_e164: operator.phone_e164,
+        ...(result.status === "sent" ?
+          { provider_sid: result.provider_sid }
+        : { reason: result.reason, provider_code: result.provider_code ?? null }),
+      },
+    },
+  };
 }
 
 /**
@@ -2447,6 +2533,12 @@ export const adminRoutes = [
   { method: "POST", path: "/admin/operators", auth: "admin", handler: createOperator },
   { method: "DELETE", path: "/admin/operators/:id", auth: "admin", handler: deleteOperator },
   { method: "POST", path: "/admin/operators/:id/enrolment-code", auth: "admin", handler: issueOperatorEnrolmentCode },
+  {
+    method: "POST",
+    path: "/admin/operators/:id/enrolment-code/sms",
+    auth: "admin",
+    handler: sendOperatorEnrolmentCodeBySms,
+  },
   { method: "DELETE", path: "/admin/operators/:id/enrolment-code", auth: "admin", handler: revokeOperatorEnrolmentCode },
   { method: "POST", path: "/admin/locations", auth: "admin", handler: upsertLocation },
   { method: "DELETE", path: "/admin/locations/:id", auth: "admin", handler: deleteLocation },
