@@ -80,6 +80,7 @@ import { tagUri } from '@/lib/tag'
 /** Mirrors v.slug() in server/lib/validate.js. The server decides for real. */
 /** Off-nav (decision-39) — same treatment as OPERATORS_PATH on /workers/. */
 const TAGS_PATH = '/tags/'
+const OPERATORS_PATH = '/operators/'
 
 /**
  * decision-47's ONE grandfathered building-level tap. The physical card mounted on the wall
@@ -1520,6 +1521,15 @@ export default function LocationsPage() {
                           <span className="shift-state-note">
                             {t('zoneWaitingVerificationHint')}
                           </span>
+                          <span className="shift-state-note">
+                            {t.rich('zoneVerifyStepsIssue', {
+                              operatorsLink: (chunks) => (
+                                <Link href={OPERATORS_PATH}>{chunks}</Link>
+                              ),
+                            })}
+                          </span>
+                          <span className="shift-state-note">{t('zoneVerifyStepsOpen')}</span>
+                          <span className="shift-state-note">{t('zoneVerifyStepsScan')}</span>
                         </>
                       ) : (
                         t('zoneVerifiedBy', {
