@@ -536,7 +536,7 @@
     "zoneWaitingVerificationHint": "An operator has to test the card on site once. Only then can anyone clock in here.",
     "zoneVerifyStepsIssue": "First, issue an enrolment code on <operatorsLink>Operators</operatorsLink>.",
     "zoneVerifyStepsOpen": "The operator opens the app without signing in as a worker.",
-    "zoneVerifyStepsScan": "There, tap “Tag pruefen” (Android) or “Test a tag” (iOS), pick this zone, then hold the card to the phone.",
+    "zoneVerifyStepsScan": "There, tap “Tag prüfen”, pick this zone, then hold the card to the phone.",
     "zoneVerifiedBy": "Activated {date} by {operator}",
     "zoneVerifiedByUnknown": "unknown",
     "zoneVerifyNextStep": "This does not make the zone live yet: only once an operator has tested this card on site can anyone clock in here. Until then the zone shows in the list as “Waiting for a test scan”.",

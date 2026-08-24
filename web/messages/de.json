@@ -536,7 +536,7 @@
     "zoneWaitingVerificationHint": "Ein Betreiber muss die Karte vor Ort einmal prüfen. Erst danach kann hier eingestempelt werden.",
     "zoneVerifyStepsIssue": "Zuerst auf <operatorsLink>Betreiber</operatorsLink> einen Freischaltcode ausstellen.",
     "zoneVerifyStepsOpen": "Der Betreiber öffnet die App ohne Anmeldung als Mitarbeiter.",
-    "zoneVerifyStepsScan": "Dort „Tag pruefen“ (Android) bzw. „Test a tag“ (iOS) tippen, diese Zone wählen und die Karte anhalten.",
+    "zoneVerifyStepsScan": "Dort „Tag prüfen“ tippen, diese Zone wählen und die Karte anhalten.",
     "zoneVerifiedBy": "Freigeschaltet {date} von {operator}",
     "zoneVerifiedByUnknown": "unbekannt",
     "zoneVerifyNextStep": "Damit ist die Zone noch nicht scharf: Erst wenn ein Betreiber diese Karte vor Ort testet, kann hier eingestempelt werden. Bis dahin steht die Zone in der Liste als „Wartet auf Testscan“.",

@@ -59,7 +59,7 @@ struct VerifyZoneScreen: View {
     @ViewBuilder
     private func operatorSignInSection(reason: String?) -> some View {
         Section {
-            Text("This phone is not signed in as an operator. Only operators can test a tag.")
+            Text("This phone is not signed in as an operator. Only operators can test a tag. Please enter the operator code. Until a code is entered, this screen reads no card at all.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }

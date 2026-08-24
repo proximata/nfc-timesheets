@@ -1273,22 +1273,22 @@
         }
       }
     },
-    "This phone is not signed in as an operator. Only operators can write tags.": {
+    "This phone is not signed in as an operator. Only operators can write tags. Please enter the operator code. Until a code is entered, this screen reads no card at all.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dieses Telefon ist nicht als Betreiber angemeldet. Nur Betreiber können Tags beschreiben."
+            "value": "Dieses Telefon ist nicht als Betreiber angemeldet. Nur Betreiber können Tags beschreiben. Bitte den Betreiber-Code eingeben. Solange kein Code eingegeben ist, liest dieser Bildschirm gar keine Karte."
           }
         }
       }
     },
-    "This phone is not signed in as an operator. Only operators can test a tag.": {
+    "This phone is not signed in as an operator. Only operators can test a tag. Please enter the operator code. Until a code is entered, this screen reads no card at all.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dieses Telefon ist nicht als Betreiber angemeldet. Nur Betreiber können einen Tag prüfen."
+            "value": "Dieses Telefon ist nicht als Betreiber angemeldet. Nur Betreiber können einen Tag prüfen. Bitte den Betreiber-Code eingeben. Solange kein Code eingegeben ist, liest dieser Bildschirm gar keine Karte."
           }
         }
       }
