@@ -123,36 +123,62 @@ struct SignInView: View {
     @State private var enrolmentErrorMessage: String?
 
     var body: some View {
-        Form {
-            Section {
-                VStack(spacing: 12) {
-                    Image(systemName: "wave.3.right")
-                        .font(.system(size: 44))
-                        .foregroundStyle(.tint)
-                        .accessibilityHidden(true)
-                    Text("NFC TimeSheets")
-                        .font(.title.bold())
-                        .accessibilityAddTraits(.isHeader)
-                    Text("Sign in to log your hours.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    if let reason {
-                        Text(reason)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                            .multilineTextAlignment(.center)
+        // OperatorSignInScreen pushes further screens of its own (Write a tag, Test
+        // scan), so whatever presents it needs a NavigationStack ancestor - Settings
+        // already has one; this is the second, and now the ONLY one that does not
+        // require a worker session first.
+        NavigationStack {
+            Form {
+                Section {
+                    VStack(spacing: 12) {
+                        Image(systemName: "wave.3.right")
+                            .font(.system(size: 44))
+                            .foregroundStyle(.tint)
+                            .accessibilityHidden(true)
+                        Text("NFC TimeSheets")
+                            .font(.title.bold())
+                            .accessibilityAddTraits(.isHeader)
+                        Text("Sign in to log your hours.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        if let reason {
+                            Text(reason)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                                .multilineTextAlignment(.center)
+                        }
                     }
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+                    .padding(.vertical, 6)
                 }
-                .frame(maxWidth: .infinity)
-                .multilineTextAlignment(.center)
-                .padding(.vertical, 6)
-            }
-            .listRowBackground(Color.clear)
+                .listRowBackground(Color.clear)
 
-            smsSection
-            enrolmentSection
+                smsSection
+                enrolmentSection
+                operatorSection
+            }
+            .scrollDismissesKeyboard(.interactively)
         }
-        .scrollDismissesKeyboard(.interactively)
+    }
+
+    // MARK: Operator door
+    //
+    // decision-45 makes an operator a genuinely separate identity from a worker - it must
+    // not require signing in as a worker first. Before this, the ONLY route to
+    // OperatorSignInScreen was Settings, which only exists inside .eligible(worker): a
+    // phone that is operator-only had no way in at all (found 2026-08-24, TASK-252). This
+    // is additive - Settings keeps its own identical link for a phone that is already
+    // signed in as a worker and also mounts tags.
+    private var operatorSection: some View {
+        Section {
+            NavigationLink("Operator sign-in") {
+                OperatorSignInScreen()
+            }
+        } footer: {
+            Text("For staff who mount and test NFC tags. This never opens a shift.")
+                .font(.footnote)
+        }
     }
 
     // MARK: SMS door
