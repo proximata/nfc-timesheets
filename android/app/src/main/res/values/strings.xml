@@ -170,8 +170,8 @@
 
     <!-- Auflösung nicht bestätigter Schichten (decision-10) -->
     <plurals name="resolve_banner">
-        <item quantity="one">%d Schicht braucht eine Endzeit</item>
-        <item quantity="other">%d Schichten brauchen eine Endzeit</item>
+        <item quantity="one">%1$d Schicht vom %2$s braucht eine Endzeit</item>
+        <item quantity="other">%1$d Schichten brauchen eine Endzeit, älteste vom %2$s</item>
     </plurals>
     <string name="resolve_title">Nicht abgeschlossene Schichten</string>
     <string name="resolve_intro">Diese Schichten wurden nach 8 Stunden automatisch beendet. Bitte eintragen, wann Sie tatsächlich fertig waren.</string>
@@ -318,7 +318,7 @@
          deren Sitzung schlicht abgelaufen ist, zu einem Update, das nichts ändert.
          Die Schicht ist dabei NICHT verloren: sie wird nach dem Anmelden erneut gesendet. -->
     <string name="err_unauthorized">Bitte erneut anmelden – die Schicht wird danach automatisch gesendet. Falls die Anmeldung nicht hilft, ist ein Update der App nötig.</string>
-    <string name="err_no_session">Sie wurden abgemeldet. Bitte erneut anmelden.</string>
+    <string name="err_no_session">Sie wurden von diesem Gerät abgemeldet — nicht durch Sie selbst. Bereits erfasste Zeiten sind gespeichert und werden nach der nächsten Anmeldung automatisch gesendet. Bitte einen neuen Code bei der Verwaltung anfordern.</string>
     <string name="err_invalid_token">Die Anmeldung wurde nicht akzeptiert. Bitte erneut versuchen.</string>
     <!-- Deckt SECHS Fälle ab, die der Server absichtlich nicht unterscheidet: unbekannt,
          falsch getippt, abgelaufen, schon benutzt, zurückgezogen, Mitarbeiter inaktiv.
@@ -438,62 +438,62 @@
 
     <!-- Tag schreiben (Betreiber). Der einzige Bildschirm, der einen physischen Gegenstand veraendert. -->
     <string name="write_title">Tag beschreiben</string>
-    <string name="write_hint">Halte einen leeren NTAG213 an das Telefon. Der Tag wird zuerst gelesen, dann beschrieben, danach sofort zurueckgelesen und Byte fuer Byte verglichen. Erst wenn das stimmt, gilt er als fertig. Eine Karte, die bereits eine unserer IDs traegt, wird nicht ueberschrieben.</string>
+    <string name="write_hint">Halte einen leeren NTAG213 an das Telefon. Der Tag wird zuerst gelesen, dann beschrieben, danach sofort zurückgelesen und Byte für Byte verglichen. Erst wenn das stimmt, gilt er als fertig. Eine Karte, die bereits eine unserer IDs trägt, wird nicht überschrieben.</string>
     <string name="write_pending_id">Neue Tag-ID: %1$s</string>
     <string name="write_waiting">Warte auf Tag …</string>
-    <string name="write_ok">Geschrieben und geprueft.\n\nID: %1$s\n%2$d von %3$d Byte belegt\nSeriennummer: %4$s</string>
-    <string name="write_too_small">NICHT beschrieben. Dieser Tag fasst nur %1$d Byte, gebraucht werden %2$d. Bitte einen NTAG213 verwenden. Der Tag wurde nicht veraendert.</string>
-    <string name="write_read_only">NICHT beschrieben. Dieser Tag ist gesperrt und kann nicht mehr beschrieben werden. Der Tag wurde nicht veraendert.</string>
-    <string name="write_no_capacity">NICHT beschrieben. Dieser Tag meldet keine nutzbare Groesse. Der Tag wurde nicht veraendert.</string>
-    <string name="write_not_formatted">NICHT beschrieben. Dieser Tag ist nicht NDEF-formatiert, deshalb ist seine Groesse vorher nicht pruefbar. Einmal mit einem Tag-Tool formatieren und erneut anhalten.\n\nTechnologien: %1$s</string>
-    <string name="write_bad_id">NICHT beschrieben. Die App konnte fuer diese ID keine gueltige Adresse erzeugen. Bitte melden — das ist ein Fehler in der App.</string>
-    <string name="write_unverified">ACHTUNG: Der Tag wurde beschrieben, aber die Kontrolle beim Zurueklesen hat NICHT gestimmt (%1$s). Dieser Tag ist unbrauchbar, bis er erneut erfolgreich beschrieben wurde. Nochmal anhalten oder wegwerfen — nicht montieren.</string>
+    <string name="write_ok">Geschrieben und geprüft.\n\nID: %1$s\n%2$d von %3$d Byte belegt\nSeriennummer: %4$s</string>
+    <string name="write_too_small">NICHT beschrieben. Dieser Tag fasst nur %1$d Byte, gebraucht werden %2$d. Bitte einen NTAG213 verwenden. Der Tag wurde nicht verändert.</string>
+    <string name="write_read_only">NICHT beschrieben. Dieser Tag ist gesperrt und kann nicht mehr beschrieben werden. Der Tag wurde nicht verändert.</string>
+    <string name="write_no_capacity">NICHT beschrieben. Dieser Tag meldet keine nutzbare Größe. Der Tag wurde nicht verändert.</string>
+    <string name="write_not_formatted">NICHT beschrieben. Dieser Tag ist nicht NDEF-formatiert, deshalb ist seine Größe vorher nicht prüfbar. Einmal mit einem Tag-Tool formatieren und erneut anhalten.\n\nTechnologien: %1$s</string>
+    <string name="write_bad_id">NICHT beschrieben. Die App konnte für diese ID keine gültige Adresse erzeugen. Bitte melden — das ist ein Fehler in der App.</string>
+    <string name="write_unverified">ACHTUNG: Der Tag wurde beschrieben, aber die Kontrolle beim Zurücklesen hat NICHT gestimmt (%1$s). Dieser Tag ist unbrauchbar, bis er erneut erfolgreich beschrieben wurde. Nochmal anhalten oder wegwerfen — nicht montieren.</string>
     <string name="write_lost">Der Tag war zu kurz am Telefon. Es wurde nichts geschrieben. Bitte ruhig halten und erneut anhalten.</string>
-    <string name="write_report_sending">Wird an das Buero gemeldet …</string>
-    <string name="write_report_sent">An das Buero gemeldet. Der Tag kann jetzt montiert werden.</string>
-    <string name="write_report_failed">Der Tag ist fertig, aber die Meldung an das Buero ist fehlgeschlagen (%1$s). Der Tag ist in Ordnung — spaeter erneut senden.</string>
+    <string name="write_report_sending">Wird an das Büro gemeldet …</string>
+    <string name="write_report_sent">An das Büro gemeldet. Der Tag kann jetzt montiert werden.</string>
+    <string name="write_report_failed">Der Tag ist fertig, aber die Meldung an das Büro ist fehlgeschlagen (%1$s). Der Tag ist in Ordnung — später erneut senden.</string>
     <string name="write_report_needs_operator">Der Tag ist fertig, aber dieses Telefon ist nicht als Betreiber angemeldet. Code eingeben, dann wird die Meldung nachgeholt.</string>
     <string name="write_operator_code">Betreiber-Code</string>
     <string name="write_operator_enrol">Anmelden</string>
     <string name="write_report_retry">Meldung erneut senden</string>
     <string name="write_open">Tag beschreiben</string>
-    <string name="write_needs_operator_to_write">Dieses Telefon ist nicht als Betreiber angemeldet. Tags koennen nur Betreiber beschreiben. Bitte den Betreiber-Code eingeben. Solange kein Code eingegeben ist, liest dieser Bildschirm gar keine Karte.</string>
-    <string name="write_occupied">NICHT beschrieben. Diese Karte traegt bereits die ID %1$s — das ist eine montierte Karte an einer Tuer. Wird sie ueberschrieben, funktioniert diese Tuer fuer alle Reinigungskraefte nicht mehr, bis das Buero die neue ID zuordnet. Der Tag wurde nicht veraendert.\n\nWenn die Karte wirklich ueberschrieben werden soll: die letzten sechs Zeichen der alten ID eingeben (%2$s) und bestaetigen, dann die Karte erneut anhalten.</string>
+    <string name="write_needs_operator_to_write">Dieses Telefon ist nicht als Betreiber angemeldet. Tags können nur Betreiber beschreiben. Bitte den Betreiber-Code eingeben. Solange kein Code eingegeben ist, liest dieser Bildschirm gar keine Karte.</string>
+    <string name="write_occupied">NICHT beschrieben. Diese Karte trägt bereits die ID %1$s — das ist eine montierte Karte an einer Tür. Wird sie überschrieben, funktioniert diese Tür für alle Reinigungskräfte nicht mehr, bis das Büro die neue ID zuordnet. Der Tag wurde nicht verändert.\n\nWenn die Karte wirklich überschrieben werden soll: die letzten sechs Zeichen der alten ID eingeben (%2$s) und bestätigen, dann die Karte erneut anhalten.</string>
     <string name="write_confirm_label">Letzte sechs Zeichen der alten ID (%1$s)</string>
-    <string name="write_confirm_button">Ueberschreiben bestaetigen</string>
-    <string name="write_confirm_armed">Ueberschreiben freigegeben — nur fuer die Karte mit der ID %1$s. Karte jetzt erneut anhalten. Nach dem Schreiben gilt die Freigabe nicht mehr.</string>
-    <string name="write_replaced_ours">ACHTUNG: Diese Karte trug vorher unsere ID %1$s. Diese ID ist jetzt weg. Falls die Karte an einer Tuer montiert war, muss das Buero die neue ID dieser Tuer zuordnen.</string>
-    <string name="write_replaced_foreign">Hinweis: Die Karte war nicht leer, der Inhalt war aber keiner von uns (%1$s) und wurde ueberschrieben.</string>
+    <string name="write_confirm_button">Überschreiben bestätigen</string>
+    <string name="write_confirm_armed">Überschreiben freigegeben — nur für die Karte mit der ID %1$s. Karte jetzt erneut anhalten. Nach dem Schreiben gilt die Freigabe nicht mehr.</string>
+    <string name="write_replaced_ours">ACHTUNG: Diese Karte trug vorher unsere ID %1$s. Diese ID ist jetzt weg. Falls die Karte an einer Tür montiert war, muss das Büro die neue ID dieser Tür zuordnen.</string>
+    <string name="write_replaced_foreign">Hinweis: Die Karte war nicht leer, der Inhalt war aber keiner von uns (%1$s) und wurde überschrieben.</string>
 
     <!-- TESTSCAN (Betreiber), decision-47. Eine Zone ist erst ein gueltiges Einstempelziel,
          nachdem ein Betreiber die montierte Karte hier einmal geprueft hat. Dieser Bildschirm
          OEFFNET UND SCHLIESST NIEMALS EINE SCHICHT: er spricht ausschliesslich ueber die
          Betreiber-Sitzung (ts_operator), und keine Schicht-Route akzeptiert dieses Cookie. -->
-    <string name="verify_open">Tag pruefen</string>
-    <string name="verify_title">Tag pruefen</string>
-    <string name="verify_hint">Zone auswaehlen, dann die Karte an das Telefon halten. Dieser Testscan startet und beendet niemals eine Schicht — er prueft nur, ob die Karte die gewaehlte Zone oeffnet.</string>
-    <string name="verify_needs_operator">Dieses Telefon ist nicht als Betreiber angemeldet. Nur Betreiber koennen Zonen pruefen. Bitte den Betreiber-Code eingeben. Solange kein Code eingegeben ist, liest dieser Bildschirm gar keine Karte.</string>
+    <string name="verify_open">Tag prüfen</string>
+    <string name="verify_title">Tag prüfen</string>
+    <string name="verify_hint">Zone auswählen, dann die Karte an das Telefon halten. Dieser Testscan startet und beendet niemals eine Schicht — er prüft nur, ob die Karte die gewählte Zone öffnet.</string>
+    <string name="verify_needs_operator">Dieses Telefon ist nicht als Betreiber angemeldet. Nur Betreiber können Zonen prüfen. Bitte den Betreiber-Code eingeben. Solange kein Code eingegeben ist, liest dieser Bildschirm gar keine Karte.</string>
     <string name="verify_zones_loading">Zonenliste wird geladen …</string>
     <string name="verify_zones_error">Zonenliste konnte nicht neu geladen werden. Letzte gespeicherte Liste wird angezeigt, falls vorhanden.</string>
     <string name="verify_zones_empty">Keine aktive Zone gefunden. Erst in „Objekte“ eine Zone anlegen.</string>
-    <string name="verify_pick_zone_hint">Welche Zone wird jetzt geprueft?</string>
+    <string name="verify_pick_zone_hint">Welche Zone wird jetzt geprüft?</string>
     <string name="verify_zone_status_pending">Wartet auf Testscan</string>
     <!-- %1$s = Datum/Uhrzeit der Freischaltung -->
     <string name="verify_zone_status_verified">Freigeschaltet am %1$s</string>
-    <string name="verify_selected">Pruefe: %1$s, %2$s</string>
-    <string name="verify_change_zone">Andere Zone waehlen</string>
+    <string name="verify_selected">Prüfe: %1$s, %2$s</string>
+    <string name="verify_change_zone">Andere Zone wählen</string>
     <string name="verify_waiting">Warte auf Tag …</string>
-    <string name="verify_checking">Karte wird geprueft …</string>
-    <string name="verify_ok">Zone freigeschaltet. Reinigungskraefte koennen hier jetzt einstempeln.</string>
+    <string name="verify_checking">Karte wird geprüft …</string>
+    <string name="verify_ok">Zone freigeschaltet. Reinigungskräfte können hier jetzt einstempeln.</string>
     <!-- %1$s = Datum/Uhrzeit der (fruehreren) Freischaltung -->
-    <string name="verify_already">Diese Zone war bereits freigeschaltet (%1$s). Nichts wurde veraendert.</string>
+    <string name="verify_already">Diese Zone war bereits freigeschaltet (%1$s). Nichts wurde verändert.</string>
     <!-- %1$s = Name der gewaehlten Zone, die NICHT zu dieser Karte passt -->
-    <string name="verify_mismatch">Diese Karte gehoert nicht zur gewaehlten Zone (%1$s). Bitte pruefen, ob die richtige Karte an der richtigen Tuer haengt, oder die passende Zone auswaehlen.</string>
-    <string name="verify_unbound">Diese Karte ist dem Buero noch nicht zugeordnet. Bitte bei der Verwaltung melden.</string>
-    <string name="verify_unknown_location">Diese Karte gehoert nicht zu diesem System.</string>
+    <string name="verify_mismatch">Diese Karte gehört nicht zur gewählten Zone (%1$s). Bitte prüfen, ob die richtige Karte an der richtigen Tür hängt, oder die passende Zone auswählen.</string>
+    <string name="verify_unbound">Diese Karte ist dem Büro noch nicht zugeordnet. Bitte bei der Verwaltung melden.</string>
+    <string name="verify_unknown_location">Diese Karte gehört nicht zu diesem System.</string>
     <string name="verify_unknown_zone">Diese Zone wurde inzwischen entfernt. Bitte Liste neu laden.</string>
     <string name="verify_no_uri">Karte gelesen, aber ohne Web-Adresse und ohne bekannte Seriennummer.\n\nTechnologien: %1$s\nUID: %2$s</string>
-    <string name="verify_network_error">Keine Verbindung zum Server. Bitte pruefen und erneut versuchen.</string>
+    <string name="verify_network_error">Keine Verbindung zum Server. Bitte prüfen und erneut versuchen.</string>
     <string name="verify_server_error">Serverproblem. Bitte erneut versuchen.</string>
-    <string name="verify_scan_again">Nochmal pruefen</string>
+    <string name="verify_scan_again">Nochmal prüfen</string>
 </resources>

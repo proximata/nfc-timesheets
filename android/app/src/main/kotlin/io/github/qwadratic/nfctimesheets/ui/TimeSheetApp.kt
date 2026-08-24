@@ -189,6 +189,27 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
         // to ever SET the preference in the first place.
         LanguageSection()
 
+        // AC4 (TASK-262): a genuine session expiry used to bounce here with an empty code
+        // field and no explanation -- errorKey below only renders after THIS screen's own
+        // submit fails, so a reason set by dropToSignedOut() (the passive-drop path) was
+        // silently dropped on the very first composition, where typed="" and attempted=null
+        // can never equal a real reasonKey. "err_no_session" is CLIENT-SYNTHESIZED --
+        // unique to dropToSignedOut(), never echoed by the server (auth failures answer
+        // "unauthorized"; /auth/code answers "invalid_code") -- so it is safe to special-case
+        // on this exact key. Deliberately NOT gated by `typed == attempted`: it stops
+        // rendering the instant reasonKey changes to anything else, e.g. a later failed
+        // submit, which the existing gated errorKey path below already renders correctly.
+        if (reasonKey == "err_no_session") {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(
+                        stringResource(R.string.err_no_session),
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                    )
+                }
+            }
+        }
+
         Text(stringResource(R.string.signin_code_intro), style = MaterialTheme.typography.bodyLarge)
 
         PendingCard(pending.pending, signedOut = true, armed = pending.pushArmed)
@@ -586,7 +607,7 @@ private fun LogScreen(
                 startTime = open.startTime,
                 serverAutoClosed = open.needsResolution,
             ),
-            unresolvedCount = log.unresolved.size,
+            unresolved = log.unresolved,
             onResolve = { showResolver = true },
             notice = log.switchNotice,
             onDismissNotice = model::dismissSwitchNotice,
@@ -678,6 +699,7 @@ private fun LogScreen(
                                 R.plurals.resolve_banner,
                                 log.unresolved.size,
                                 log.unresolved.size,
+                                dateOnly(log.unresolved.minBy { it.startTime }.startTime),
                             ),
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -754,7 +776,7 @@ private fun LogScreen(
 private fun ShiftRunningScreen(
     model: TimeSheetViewModel,
     running: RunningShift,
-    unresolvedCount: Int,
+    unresolved: List<WireShift>,
     onResolve: () -> Unit,
     notice: Pair<String?, String?>?,
     onDismissNotice: () -> Unit,
@@ -952,11 +974,16 @@ private fun ShiftRunningScreen(
         }
 
         // decision-10 may NEVER be hidden by the lock.
-        if (unresolvedCount > 0) {
+        if (unresolved.isNotEmpty()) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        pluralStringResource(R.plurals.resolve_banner, unresolvedCount, unresolvedCount),
+                        pluralStringResource(
+                            R.plurals.resolve_banner,
+                            unresolved.size,
+                            unresolved.size,
+                            dateOnly(unresolved.minBy { it.startTime }.startTime),
+                        ),
                         color = MaterialTheme.colorScheme.error,
                     )
                     Button(

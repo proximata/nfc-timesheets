@@ -109,8 +109,8 @@
     <string name="switch_notice">Finished your open shift at %1$s and started at %2$s. Confirm when you actually left %1$s — it will not count until you do.</string>
 
     <plurals name="resolve_banner">
-        <item quantity="one">%d unfinished shift needs a finish time</item>
-        <item quantity="other">%d unfinished shifts need a finish time</item>
+        <item quantity="one">%1$d unfinished shift from %2$s needs a finish time</item>
+        <item quantity="other">%1$d unfinished shifts need a finish time, oldest from %2$s</item>
     </plurals>
     <string name="resolve_title">Unfinished shifts</string>
     <string name="resolve_intro">These shifts were closed automatically after 8 hours. Enter when you actually finished.</string>
@@ -231,7 +231,7 @@
          session, and an app version the server will not accept. One string must be true of
          both, and must lead with the commoner one. The shift is not lost either way. -->
     <string name="err_unauthorized">Sign in again — the shift is sent automatically afterwards. If signing in does not help, the app needs updating.</string>
-    <string name="err_no_session">You were signed out. Sign in again.</string>
+    <string name="err_no_session">You were signed out of this device — not something you did. Any hours already recorded are saved and will be sent automatically once you sign in again. Ask your office for a new code.</string>
     <string name="err_invalid_token">Sign-in was not accepted. Try again.</string>
     <string name="err_invalid_code">That code wasn\'t accepted. Type it again — if it still doesn\'t work, ask your admin for a new one.</string>
     <string name="err_signin_offline">No connection. Signing in needs the internet once — try again when you have it. Your code is still valid.</string>
