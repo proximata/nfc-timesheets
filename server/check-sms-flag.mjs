@@ -632,19 +632,20 @@ try {
     await db.query("DELETE FROM worker_sessions");
   });
 
-  await test("an UNKNOWN number is indistinguishable from a known one, byte for byte", async () => {
+  await test("an unknown number is TOLD: 404 unknown_phone, and still mints no challenge (decision-51)", async () => {
     resetLoginRate();
     stub.calls.length = 0;
     const known = await call("/auth/sms/request", { method: "POST", body: { phone: WORKER_PHONE_TYPED } });
+    assert.equal(known.status, 202, JSON.stringify(known.body));
     const unknown = await call("/auth/sms/request", { method: "POST", body: { phone: STRANGER_E164 } });
-    assert.equal(unknown.status, known.status, "a different status IS the oracle");
-    assert.deepEqual(unknown.body, known.body);
+    assert.equal(unknown.status, 404, JSON.stringify(unknown.body));
+    assert.deepEqual(unknown.body, { error: "unknown_phone" });
     assert.equal(
       await countOf("SELECT count(*) AS n FROM otp_challenges WHERE phone_e164 = $1", [STRANGER_E164]),
       0,
       "no challenge for a number nobody holds",
     );
-    ok(`both answer ${known.status} ${JSON.stringify(known.body)} — nothing distinguishes them`);
+    ok(`known -> 202 accepted; unknown -> 404 unknown_phone, no challenge minted`);
   });
 
   await test("every wrong answer is the SAME 401 — expired, unknown, wrong shape, wrong number", async () => {
@@ -699,34 +700,52 @@ try {
     ok(`5 wrong answers -> the challenge is burned (attempts=${row.attempts}); the right code no longer works`);
   });
 
-  await test("a DEACTIVATED worker cannot sign in by SMS — 202 that sends nothing", async () => {
+  await test("a DEACTIVATED worker cannot sign in by SMS — 404 unknown_phone, still zero messages", async () => {
     resetLoginRate();
     await db.query("UPDATE workers SET active = false WHERE id = $1", [workerId]);
     stub.calls.length = 0;
     const res = await call("/auth/sms/request", { method: "POST", body: { phone: WORKER_PHONE_TYPED } });
-    assert.equal(res.status, 202, "still 202 — deactivation is not something an outsider gets told");
+    assert.equal(res.status, 404, JSON.stringify(res.body));
+    assert.deepEqual(res.body, { error: "unknown_phone" }, "deactivation reads exactly like an unknown number — decision-51 §2");
     assert.equal(stub.calls.length, 0, "no message may go to a worker who has been let go");
     await db.query("UPDATE workers SET active = true WHERE id = $1", [workerId]);
-    ok("deactivated -> 202, zero messages");
+    ok("deactivated -> 404 unknown_phone, zero messages");
   });
 
-  await test("the per-phone ceiling bites, and the enrolment path is NOT locked with it", async () => {
+  await test("the per-IP ceiling bites at the default of 3, spares the enrolment path, and POST /admin/settings changes it live (decision-51)", async () => {
     resetLoginRate();
     await db.query("DELETE FROM otp_challenges");
     stub.calls.length = 0;
+
     let last = null;
-    for (let i = 0; i < 5; i++) last = await call("/auth/sms/request", { method: "POST", body: { phone: WORKER_PHONE_TYPED } });
-    assert.equal(last.status, 429, `the 4th request in an hour must be refused, got ${last.status}`);
+    for (let i = 0; i < 4; i++) last = await call("/auth/sms/request", { method: "POST", body: { phone: WORKER_PHONE_TYPED } });
+    assert.equal(last.status, 429, `the 4th request in 5 minutes must be refused at the default of 3, got ${last.status}`);
     assert.equal(last.body.error, "too_many_attempts");
 
-    // THE POINT: the enrolment code, from the same caller, at the same moment, still works.
-    // Own buckets (`smsotp:` / the sms spend counter), never the enrolment ones.
+    // THE POINT: the enrolment code, from the same caller, in the same second, still works.
+    // Own buckets — `enrol:` is nowhere near `smsreq:`.
     const issued = await asAdmin(`/admin/workers/${workerId}/enrolment-code`, { method: "POST" });
     assert.equal(issued.status, 201);
     const redeemed = await call("/auth/code", { method: "POST", body: { code: issued.body.code } });
-    assert.equal(redeemed.status, 200, "an OTP flood must never lock a worker out of the code path");
+    assert.equal(redeemed.status, 200, "an SMS-request flood must never lock a worker out of the code path");
     await db.query("DELETE FROM worker_sessions");
-    ok("429 on the 4th SMS request; POST /auth/code still 200 in the same second");
+    ok("429 on the 4th SMS request within 5 min; POST /auth/code still 200 in the same second");
+
+    // Raise the limit from the panel — NO RESTART, no cache to invalidate: the very next
+    // request in the SAME process must obey the new number.
+    const raised = await asAdmin("/admin/settings", { method: "POST", body: { key: "sms_otp_requests_per_5min", value: 5 } });
+    assert.equal(raised.status, 200, JSON.stringify(raised.body));
+    const afterRaise = await call("/auth/sms/request", { method: "POST", body: { phone: WORKER_PHONE_TYPED } });
+    assert.equal(afterRaise.status, 202, `raising the limit to 5 must unblock the 4th-in-window caller, got ${afterRaise.status}`);
+    ok("POST /admin/settings {sms_otp_requests_per_5min:5} -> the same process now allows a 4th request, no restart");
+
+    // Delete the key — must fall back to the coded default of 3, and NOT to unlimited.
+    const cleared = await asAdmin("/admin/settings/sms_otp_requests_per_5min", { method: "DELETE" });
+    assert.equal(cleared.status, 200);
+    const afterClear = await call("/auth/sms/request", { method: "POST", body: { phone: WORKER_PHONE_TYPED } });
+    assert.equal(afterClear.status, 429, `unsetting the key must fall back to the default of 3, not to unlimited, got ${afterClear.status}`);
+    ok("DELETE /admin/settings/sms_otp_requests_per_5min -> falls back to 3, immediately refuses again");
+    await db.query("DELETE FROM otp_challenges");
   });
 
   // ===================================================================================

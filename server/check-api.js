@@ -4248,6 +4248,32 @@ try {
       assert.equal((await asAdmin("/admin/settings/pl_margin_baseline_bp", { method: "DELETE" })).status, 200);
     });
 
+    // decision-51. Same allowlist, same shape of validator as pl_margin_baseline_bp above —
+    // a legal value in range, 400 for everything out of it, and the typo'd key rejected too.
+    await test("sms_otp_requests_per_5min is on the settings allowlist, clamped 1..20", async () => {
+      const legal = await expect(
+        await asAdmin("/admin/settings", { method: "POST", body: { key: "sms_otp_requests_per_5min", value: 5 } }),
+        200,
+      );
+      assert.deepEqual(legal.setting, { key: "sms_otp_requests_per_5min", value: "5", updated_at: legal.setting.updated_at });
+
+      for (const bad of [
+        { key: "sms_otp_requests_per_5min", value: 0 },
+        { key: "sms_otp_requests_per_5min", value: 21 },
+        { key: "sms_otp_requests_per_5min", value: 1.5 },
+        { key: "sms_otp_requests_per_5min", value: "drei" },
+        // Not on the allowlist: same reasoning as pl_margin_baseline_bpp above.
+        { key: "sms_otp_requests_per_5mn", value: 5 },
+      ]) {
+        assert.equal((await asAdmin("/admin/settings", { method: "POST", body: bad })).status, 400, JSON.stringify(bad));
+      }
+
+      const cleared = await expect(await asAdmin("/admin/settings/sms_otp_requests_per_5min", { method: "DELETE" }), 200);
+      assert.deepEqual(cleared.setting, { key: "sms_otp_requests_per_5min", value: null });
+      // Idempotent: pressing it twice must not look like a failure.
+      assert.equal((await asAdmin("/admin/settings/sms_otp_requests_per_5min", { method: "DELETE" })).status, 200);
+    });
+
     await test("analytics reports actual vs target and refuses to call one month a trend", async () => {
       const payload = await analytics(VIENNA_OCT_2025, "&months=3");
       const a = payload.buildings.find((b) => b.location_id === plA);

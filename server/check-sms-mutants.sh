@@ -164,19 +164,20 @@ mutate "a present-but-malformed Account SID counts as configured" \
 # =======================================================================================
 mutate "POST /auth/sms/request answers 202 on a box with no credentials" \
   "$AUT" \
-  'async function smsRequest({ body }) {
+  'async function smsRequest({ body, ip }) {
   if (!smsConfigured()) fail(503, "sms_not_configured");' \
-  'async function smsRequest({ body }) {' \
+  'async function smsRequest({ body, ip }) {' \
   run_flag
 
 # =======================================================================================
-# 7 · THE 202 BECOMES AN ENUMERATION ORACLE. Answering differently for a number nobody
-#     holds turns the sign-in screen into a directory of who works here.
+# 7 · THE ENUMERATION GUARD IS BYPASSED (decision-51). An unknown number must get 404
+#     unknown_phone, on purpose — not the old byte-identical 202. Restoring the 202 for a
+#     number that resolves to nothing is exactly the regression this mutant reproduces.
 # =======================================================================================
-mutate "an unknown number gets a different answer from a known one" \
+mutate "an unknown number gets 202 instead of 404 — the enumeration guard is bypassed" \
   "$AUT" \
-  '  return { status: 202, body: { status: "accepted" } };' \
-  '  return { status: 202, body: { status: target ? "accepted" : "unknown" } };' \
+  '  if (!target) fail(404, "unknown_phone");' \
+  '  if (!target) return { status: 202, body: { status: "accepted" } };' \
   run_flag
 
 # =======================================================================================
