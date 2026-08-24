@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-24 19:08'
+updated_date: '2026-08-24 22:45'
 labels:
   - web
   - ux
@@ -37,3 +38,12 @@ SAME PATTERN, DIFFERENT SCREENS: TASK-180 is the open task for answer bands prin
 - [ ] #4 NULL versus zero handling in the data layer is untouched (decision-43, ZONES-MODEL.md)
 - [ ] #5 de.json and en.json gain the same keys with exact parity, including plurals
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-24 22:45
+---
+VERIFIED independently at d11bb36 (web-verify): 4 of 5 ACs hold, AC#1 holds on /locations/ ONLY. STAYS To Do. HOLDS: AC#2 - areaSentence() in app/locations/page.tsx:1199-1207 guards on sum.hundredths === 0 inside state==='incomplete'; parseAreaToHundredths returns >0 or null, so hundredths===0 is equivalent to zero measured zones, and any building with >=1 measured zone still falls through to the unchanged areaFloor call ('Mindestens N m2 ...'). Both call sites (page.tsx:1385 zone drawer, :1739 list row) share that one function. AC#3 - the unmeasured count is on BOTH branches: areaAllUnmeasured takes zones=sum.unmeasured, same argument areaFloor already took. AC#4 - lib/area.ts is not in the commit (3 files only: de.json, en.json, app/locations/page.tsx); sumArea/AreaSum/state enum/NULL-vs-zero untouched, decision-43 gates in scripts/check.mjs still pass. AC#5 - locations.areaAllUnmeasured exists in de.json and en.json with the same ICU one/other branches; rendered via intl-messageformat: DE 'Noch keine Flaeche erfasst - 1 Zone ohne Flaechenangabe' / '2 Zonen ohne Flaechenangabe', EN 'No area recorded yet - 1 zone has no area on file' / '2 zones have no area on file'. Gates re-run by verifier: tsc --noEmit exit 0; biome check exit 0 (1 pre-existing warning in untouched app/payroll/page.tsx:749); node scripts/check.mjs 'All checks passed' incl. key-parity, ICU-argument and plural-branch gates; pnpm build exit 0, 18 routes static. GAP (AC#1, exact): components/BuildingFacts.tsx has its OWN copy of areaSentence (lines 137-148) and was not touched. It has no zero-guard, so a building whose live zones all have NULL area still renders home.panelZonesFloor, which formats to DE 'mindestens 0 m2 aus 1 Zone - 1 Zone ist noch nicht vermessen' / EN 'at least 0 m2 across 1 zone - 1 zone has not been measured'. That is the same 0-that-means-not-measured this task forbids, on the building panel of / (app/page.tsx:555) and in the map drawer (components/HomeMap.tsx). It is NOT covered by TASK-180, whose ACs are all about AnswerBand cells, and this task's own description says the two are different components. FIX: mirror the /locations/ guard - add a home.panelZonesAllUnmeasured key to de.json and en.json (same one/other plural shape, keep the zone count and the unmeasured count that the current sentence carries) and branch on sum.hundredths === 0 inside the incomplete branch of BuildingFacts.tsx's areaSentence. Do not touch lib/area.ts. Re-close when / shows the honest sentence for an all-unmeasured building.
+---
+<!-- COMMENTS:END -->

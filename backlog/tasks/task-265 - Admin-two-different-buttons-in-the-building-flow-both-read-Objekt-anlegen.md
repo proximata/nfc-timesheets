@@ -1,9 +1,10 @@
 ---
 id: TASK-265
 title: 'Admin: two different buttons in the building flow both read Objekt anlegen'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-24 19:08'
+updated_date: '2026-08-24 22:44'
 labels:
   - web
   - ux
@@ -32,3 +33,12 @@ FIX: rename the drawer's submit button to what it does — 'Speichern' or 'Objek
 - [ ] #3 The other create drawers (/workers/, /operators/, /clients/) are checked for the same collision and brought into line if they have it
 - [ ] #4 de.json and en.json gain or change the same keys with exact parity
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-24 22:44
+---
+VERIFIED independently at d11bb36 (web-verify). AC#1: /locations/ header trigger = locations.createHeading 'Objekt anlegen' (page.tsx:1226), drawer submit = locations.submitCreate now 'Speichern'/'Save' (page.tsx:1951) - no shared label. AC#2: git diff of d11bb36 on both message files touches ONLY submitCreate-family lines + one new areaAllUnmeasured key; createHeading/createTitle/newHeading/zoneCreate values byte-identical to d11bb36~1 in de.json AND en.json (diff empty). Empty-state copy that teaches the trigger name is unchanged. AC#3: exhaustive mechanical scan of ALL namespaces for createHeading-family x submitCreate-family value equality in de+en -> 0 collisions. Brought into line: workers, locations, inventory, operators, clients.clientSubmitCreate, clients.contactSubmitCreate. shifts (Schicht nachtragen / Schicht erfassen) and contracts (Neue Vertragsperiode / Neue Periode speichern) already differed, correctly untouched. locations.zoneCreate 'Zone anlegen' vs zoneSubmitStepOne/Two also differ. AC#4: identical keys in de.json+en.json, scripts/check.mjs key-parity + ICU-argument gates pass. Gates re-run by verifier: tsc --noEmit exit 0; biome check exit 0 (1 warning, pre-existing, app/payroll/page.tsx:749, file untouched by this commit); node scripts/check.mjs 'All checks passed'; pnpm build exit 0, 18 routes static. NOTE (not a gap, no action): DE 'Speichern' now also equals workers.rateLimitSave and is shared by both /clients/ drawers - all inside Drawer role=dialog aria-modal=true, so no two same-named controls are ever in one AT context.
+---
+<!-- COMMENTS:END -->
