@@ -1,6 +1,6 @@
 project_name: "NFC-TimeSheets"
 default_status: "To Do"
-statuses: ["To Do", "In Progress", "Done"]
+statuses: ["To Do", "In Progress", "Done", "Wont Do"]
 labels: []
 date_format: yyyy-mm-dd
 max_column_width: 20

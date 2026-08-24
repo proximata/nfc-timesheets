@@ -3,9 +3,10 @@ id: TASK-247
 title: >-
   iOS: tag_unbound strands a queued offline shift for ever — the iOS half of
   TASK-240
-status: To Do
+status: Wont Do
 assignee: []
 created_date: '2026-08-24 13:48'
+updated_date: '2026-08-24 17:49'
 labels:
   - ios
   - payroll
@@ -65,3 +66,12 @@ makes retrying safe and must not be touched — it is the client-side half of de
 - [ ] #3 401 invalid_code stays TERMINAL and 400 invalid_uuid / 422 unknown_worker stay terminal — re-asserted in the same check
 - [ ] #4 ./NFCTimeSheets/checks/run.sh green, and RED first: revert isRetryable before adding the assertion and watch tag-link-check fail
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-24 17:49
+---
+Same ruling as TASK-240 (its Android twin): piloting/UAT stage, data loss not a concern yet, and an unresolved-tag clock-in correctly not landing is the wanted behaviour. Won't-do.
+---
+<!-- COMMENTS:END -->

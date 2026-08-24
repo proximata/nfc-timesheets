@@ -1,9 +1,10 @@
 ---
 id: TASK-240
 title: tag_unbound strands a queued offline shift for ever — make it retryable
-status: To Do
+status: Wont Do
 assignee: []
 created_date: '2026-08-22 12:54'
+updated_date: '2026-08-24 17:49'
 labels:
   - android
   - payroll
@@ -62,3 +63,12 @@ changes.
 - [ ] #3 RED case run and shown failing first: with the change reverted, the same scenario leaves the row sync_blocked=1 and the shift never reaches the server
 - [ ] #4 invalid_code is still terminal; no other error code's isRetryable changes (asserted, with a RED case)
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-24 17:49
+---
+Owner ruling 2026-08-24: still piloting UAT, client highly loyal, data loss at this stage is explicitly not a concern. More importantly — a clock-in against a tag not (yet) resolved in the system SHOULD NOT land; the current 422 tag_unbound refusal is the wanted behaviour, not a bug. Won't-do the retry. Revisit only if/when this moves past pilot and an unresolved-tag refusal starts costing a real worker real, un-recoverable hours.
+---
+<!-- COMMENTS:END -->

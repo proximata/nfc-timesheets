@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-24 13:49'
+updated_date: '2026-08-24 16:14'
 labels:
   - ios
   - release
@@ -71,3 +72,12 @@ DO NOT bump CURRENT_PROJECT_VERSION from an agent — project.pbxproj is the own
 - [ ] #4 'Andere Nummer verwenden' returns to phone entry and clears the code field
 - [ ] #5 sms_deliveries shows the row, status sent, and the handset actually received the text
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-24 16:14
+---
+Same session also found and fixed a second, unrelated iOS blocker in this area: CoreNFC was SIGABRTing (__CRASHING_DUE_TO_PRIVACY_VIOLATION__) on any tag write because Info.plist had no NFCReaderUsageDescription key at all — commit 6c89860, confirmed present in a real Release build's Info.plist post-build. Device test for THIS task should now also exercise a tag write, not just sign-in, since both were broken.
+---
+<!-- COMMENTS:END -->
