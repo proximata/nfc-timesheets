@@ -503,6 +503,26 @@ breathe with the clocks.
 
 ## 6 · PHASE 2 — the OTP login. Specified now, built after phase 1
 
+> **⚠ AMENDED by decision-51.** §6.1 and §6.4 below are left exactly as written — this is a
+> measured history of what was true when phase 2 was designed, and rewriting it in place
+> would destroy that record. Two things below are no longer current:
+>
+> - **§6.1**: `POST /auth/sms/request` no longer answers a byte-identical `202` for every
+>   number. A number that does not resolve to an ACTIVE worker now answers
+>   `404 {"error":"unknown_phone"}`. The owner explicitly waived number-enumeration as a
+>   threat for this deployment; see decision-51 for the full argument and its named costs.
+> - **§6.4**: the **per-phone** limiter (`3/rolling hour, 10/rolling 24h`, bucketed on the
+>   normalised number and spent for unknown numbers too) is DELETED — its only stated
+>   purpose was making an unknown number behave like a known one, and decision-51 removes
+>   that requirement outright. It is replaced by ONE **per-source-address** limiter, N per
+>   rolling 5 minutes, N read from `app_settings` key `sms_otp_requests_per_5min`
+>   (default 3, clamped 1..20, admin-tunable via the existing `POST /admin/settings` with no
+>   restart). The other three rows of §6.4's table — per challenge, per IP on verify, and
+>   global spend — are unchanged and not reordered.
+>
+> Everything else in §6, including the 200 body shape, the six-digit OTP, the 10-minute TTL
+> and `POST /auth/sms/verify`'s single byte-identical `401 invalid_code`, stands as written.
+
 Phase 1 is delivery of an existing credential. This is a *different mechanism with a
 different threat model*, and conflating the two is how one of them gets sized wrong.
 
