@@ -22,6 +22,12 @@ NFC-based shift tracking for a Vienna cleaning company. Workers tap NFC tags at 
 - `state.md` — project state snapshot
 - `backlog/decisions/` — architectural decision records (ADRs)
 
+### Desktop APK copy
+
+`~/Desktop/` holds exactly ONE signed release APK for this project, filename carrying its
+version tag (e.g. `nfc-timesheets-0.5.5-12-release.apk`). A new release REPLACES it — delete
+the old file, `cp -p` the new one in. Never leave multiple versions side by side on the Desktop.
+
 ### Apple Developer
 
 **Source of truth is `ops/branding.json`, not this list** (decision-24). The values below are a
