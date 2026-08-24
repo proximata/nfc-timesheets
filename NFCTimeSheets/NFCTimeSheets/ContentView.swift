@@ -831,6 +831,13 @@ struct SettingsView: View {
     @Environment(Session.self) private var session
     let worker: WireWorker
 
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    }
+    private var appBuild: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -858,6 +865,15 @@ struct SettingsView: View {
                 } footer: {
                     Text("Shifts already sent stay on the server. Anything still waiting to send will be blocked until you sign back in.")
                         .font(.footnote)
+                }
+                // decision-52: same wording Android's Settings → UpdateSection already
+                // renders. Reads the native fields Xcode already writes into the built
+                // Info.plist from project.pbxproj's MARKETING_VERSION/
+                // CURRENT_PROJECT_VERSION — no build-setting edit needed or made.
+                Section {
+                    Text("Installed: \(appVersion) (\(appBuild))")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Settings")

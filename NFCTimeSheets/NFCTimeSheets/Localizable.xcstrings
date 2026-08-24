@@ -507,6 +507,16 @@
         }
       }
     },
+    "Installed: %@ (%@)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installiert: %@ (%@)"
+          }
+        }
+      }
+    },
     "Last six characters": {
       "localizations": {
         "de": {
