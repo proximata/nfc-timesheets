@@ -1,5 +1,6 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
+import android.content.Context
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
@@ -19,6 +20,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -29,6 +31,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import io.github.qwadratic.nfctimesheets.AppLocale
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
@@ -92,6 +95,8 @@ class WriteTagActivity : ComponentActivity() {
      */
     private var pendingId by mutableStateOf(UUID.randomUUID().toString())
 
+    private var nfcState by mutableStateOf(NfcState.READY)
+
     private var outcome by mutableStateOf<TagWriter.Outcome?>(null)
     private var report by mutableStateOf<ReportState>(ReportState.Idle)
     private var operatorCode by mutableStateOf("")
@@ -115,6 +120,10 @@ class WriteTagActivity : ComponentActivity() {
 
     /** What the operator has typed into the confirmation box. */
     private var confirmText by mutableStateOf("")
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppLocale.wrap(newBase))
+    }
 
     private sealed interface ReportState {
         data object Idle : ReportState
@@ -158,90 +167,11 @@ class WriteTagActivity : ComponentActivity() {
                             stringResource(R.string.write_title),
                             style = MaterialTheme.typography.headlineSmall,
                         )
-                        Text(stringResource(R.string.write_hint), style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            stringResource(R.string.write_pending_id, pendingId),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
 
-                        // THE ROLE GATE, said out loud. The reader mode behind it is simply
-                        // never started, so this is an explanation and not a warning about
-                        // something that might still happen.
-                        if (!operatorReady) {
-                            Text(
-                                stringResource(R.string.write_needs_operator_to_write),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-
-                        // liveRegion: the operator is holding a phone against a wall and
-                        // cannot hunt the screen for what changed.
-                        Text(
-                            text = outcomeText(),
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                        )
-                        Text(text = reportText(), style = MaterialTheme.typography.bodySmall)
-
-                        // THE OVERRIDE FOR A MOUNTED CARD. Shown only when a card carrying
-                        // one of our ids has actually been presented, and it names that id:
-                        // an always-visible "overwrite anyway" switch is a switch that ends
-                        // up left on.
-                        val occupied = outcome as? TagWriter.Outcome.Refused.Occupied
-                        if (occupied != null && confirmedFor != occupied.onTag) {
-                            OutlinedTextField(
-                                value = confirmText,
-                                onValueChange = { confirmText = it },
-                                label = { Text(stringResource(R.string.write_confirm_label, occupied.token)) },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            Button(
-                                onClick = {
-                                    confirmedFor = occupied.onTag
-                                    confirmText = ""
-                                },
-                                enabled = WriteGuard.confirms(occupied.onTag, confirmText),
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) { Text(stringResource(R.string.write_confirm_button)) }
-                        }
-
-                        if (!operatorReady || report is ReportState.NeedsOperator) {
-                            OutlinedTextField(
-                                value = operatorCode,
-                                onValueChange = { operatorCode = it },
-                                label = { Text(stringResource(R.string.write_operator_code)) },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            Button(
-                                onClick = ::enrolOperator,
-                                enabled = !busy && EnrolmentCode.normalise(operatorCode) != null,
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) { Text(stringResource(R.string.write_operator_enrol)) }
-                        }
-
-                        val written = outcome as? TagWriter.Outcome.Written
-                        if (written != null && report !is ReportState.Sent) {
-                            OutlinedButton(
-                                onClick = { sendReport(written.locationId) },
-                                enabled = !busy,
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) { Text(stringResource(R.string.write_report_retry)) }
-                        }
-
-                        // DEBUG BUILDS ONLY. writeSimulations() is defined twice — once in
-                        // src/debug/ with these scenarios, once in src/release/ returning an
-                        // empty list and containing none of the code. On a release build this
-                        // loop has nothing to iterate and the buttons do not exist.
-                        for (simulation in writeSimulations()) {
-                            OutlinedButton(
-                                onClick = {
-                                    apply(runSimulation(simulation, app.tagLink, pendingId, confirmedFor))
-                                },
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) { Text("▶ ${simulation.label}") }
+                        when (nfcState) {
+                            NfcState.UNSUPPORTED -> Text(stringResource(R.string.scan_unsupported))
+                            NfcState.DISABLED -> Text(stringResource(R.string.scan_disabled))
+                            NfcState.READY -> WriteBody()
                         }
 
                         Button(
@@ -251,6 +181,95 @@ class WriteTagActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun WriteBody() {
+        Text(stringResource(R.string.write_hint), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            stringResource(R.string.write_pending_id, pendingId),
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        // THE ROLE GATE, said out loud. The reader mode behind it is simply
+        // never started, so this is an explanation and not a warning about
+        // something that might still happen.
+        if (!operatorReady) {
+            Text(
+                stringResource(R.string.write_needs_operator_to_write),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
+        // liveRegion: the operator is holding a phone against a wall and
+        // cannot hunt the screen for what changed.
+        Text(
+            text = outcomeText(),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
+        Text(text = reportText(), style = MaterialTheme.typography.bodySmall)
+
+        // THE OVERRIDE FOR A MOUNTED CARD. Shown only when a card carrying
+        // one of our ids has actually been presented, and it names that id:
+        // an always-visible "overwrite anyway" switch is a switch that ends
+        // up left on.
+        val occupied = outcome as? TagWriter.Outcome.Refused.Occupied
+        if (occupied != null && confirmedFor != occupied.onTag) {
+            OutlinedTextField(
+                value = confirmText,
+                onValueChange = { confirmText = it },
+                label = { Text(stringResource(R.string.write_confirm_label, occupied.token)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = {
+                    confirmedFor = occupied.onTag
+                    confirmText = ""
+                },
+                enabled = WriteGuard.confirms(occupied.onTag, confirmText),
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.write_confirm_button)) }
+        }
+
+        if (!operatorReady || report is ReportState.NeedsOperator) {
+            OutlinedTextField(
+                value = operatorCode,
+                onValueChange = { operatorCode = it },
+                label = { Text(stringResource(R.string.write_operator_code)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = ::enrolOperator,
+                enabled = !busy && EnrolmentCode.normalise(operatorCode) != null,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.write_operator_enrol)) }
+        }
+
+        val written = outcome as? TagWriter.Outcome.Written
+        if (written != null && report !is ReportState.Sent) {
+            OutlinedButton(
+                onClick = { sendReport(written.locationId) },
+                enabled = !busy,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.write_report_retry)) }
+        }
+
+        // DEBUG BUILDS ONLY. writeSimulations() is defined twice — once in
+        // src/debug/ with these scenarios, once in src/release/ returning an
+        // empty list and containing none of the code. On a release build this
+        // loop has nothing to iterate and the buttons do not exist.
+        for (simulation in writeSimulations()) {
+            OutlinedButton(
+                onClick = {
+                    apply(runSimulation(simulation, app.tagLink, pendingId, confirmedFor))
+                },
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text("▶ ${simulation.label}") }
         }
     }
 
@@ -267,6 +286,12 @@ class WriteTagActivity : ComponentActivity() {
      */
     override fun onResume() {
         super.onResume()
+        val nfc = adapter
+        nfcState = when {
+            nfc == null -> NfcState.UNSUPPORTED
+            !nfc.isEnabled -> NfcState.DISABLED
+            else -> NfcState.READY
+        }
         // Re-read on every resume, not once in onCreate: enrolment can have happened in
         // another screen, and a session can have been cleared while this one was in the
         // background.

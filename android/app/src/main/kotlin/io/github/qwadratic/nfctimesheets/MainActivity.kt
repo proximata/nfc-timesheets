@@ -1,5 +1,6 @@
 package io.github.qwadratic.nfctimesheets
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -25,6 +26,10 @@ class MainActivity : ComponentActivity() {
 
     private val model: TimeSheetViewModel by lazy {
         ViewModelProvider(this, TimeSheetViewModel.Factory(app))[TimeSheetViewModel::class.java]
+    }
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppLocale.wrap(newBase))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

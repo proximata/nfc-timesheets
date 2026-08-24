@@ -1,5 +1,6 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
+import android.content.Context
 import android.net.Uri
 import android.nfc.NfcAdapter
 import android.nfc.Tag
@@ -32,6 +33,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import io.github.qwadratic.nfctimesheets.AppLocale
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
@@ -101,8 +103,6 @@ class VerifyZoneActivity : ComponentActivity() {
     private var checking by mutableStateOf(false)
     private var outcome by mutableStateOf<VerifyOutcome?>(null)
 
-    private enum class NfcState { READY, UNSUPPORTED, DISABLED }
-
     /** What a completed test scan showed. Rendered as a named sentence, never a raw code. */
     private sealed interface VerifyOutcome {
         data class Verified(val result: WireZoneVerifyResult) : VerifyOutcome
@@ -112,6 +112,10 @@ class VerifyZoneActivity : ComponentActivity() {
         data object UnknownZone : VerifyOutcome
         data class Unreadable(val techs: List<String>, val uid: String) : VerifyOutcome
         data class Failure(val serverSide: Boolean) : VerifyOutcome
+    }
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppLocale.wrap(newBase))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

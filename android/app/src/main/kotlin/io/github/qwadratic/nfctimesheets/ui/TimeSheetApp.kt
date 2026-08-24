@@ -1,6 +1,7 @@
 package io.github.qwadratic.nfctimesheets.ui
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
@@ -74,7 +75,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
+import io.github.qwadratic.nfctimesheets.AppLocale
 import io.github.qwadratic.nfctimesheets.BuildConfig
+import io.github.qwadratic.nfctimesheets.Choice
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
@@ -179,6 +182,12 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.semantics { heading() },
         )
+        // A phone that is an operator's and NOTHING ELSE never signs a worker in and so
+        // never reaches Settings (see this screen's own operator-entry buttons below) —
+        // the language picker has to live here too, or that phone has no screen on which
+        // to ever SET the preference in the first place.
+        LanguageSection()
+
         Text(stringResource(R.string.signin_code_intro), style = MaterialTheme.typography.bodyLarge)
 
         PendingCard(pending.pending, signedOut = true, armed = pending.pushArmed)
@@ -1719,10 +1728,59 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
         )
 
         HorizontalDivider()
+        LanguageSection()
+
+        HorizontalDivider()
         PushSection(model)
 
         HorizontalDivider()
         UpdateSection(model, shiftRunning, openIntent)
+    }
+}
+
+/**
+ * TASK-258: names the app's available languages and applies the choice everywhere without
+ * signing the worker out and without touching a running shift. See AppLocale.kt for the
+ * mechanism and why `Activity.recreate()` is what makes that hold structurally — it is the
+ * SAME path a screen rotation takes, so the ViewModelStore (session, running shift, sync
+ * queue) is retained across it, not destroyed.
+ *
+ * TWO CALL SITES, one composable — [SignInScreen] and [SettingsScreen]. See the SignInScreen
+ * call site for why the picker cannot live in Settings alone.
+ */
+@Composable
+private fun LanguageSection() {
+    val context = LocalContext.current
+    var choice by remember { mutableStateOf(AppLocale.get(context)) }
+    val options = listOf(
+        Choice.SYSTEM to R.string.settings_language_system,
+        Choice.GERMAN to R.string.settings_language_de,
+        Choice.ENGLISH to R.string.settings_language_en,
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            stringResource(R.string.settings_language_title),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.semantics { heading() },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for ((option, labelRes) in options) {
+                val pick: () -> Unit = {
+                    choice = option
+                    AppLocale.set(context, option)
+                    (context as? Activity)?.recreate()
+                }
+                if (option == choice) {
+                    Button(onClick = pick, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text(stringResource(labelRes))
+                    }
+                } else {
+                    OutlinedButton(onClick = pick, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text(stringResource(labelRes))
+                    }
+                }
+            }
+        }
     }
 }
 
