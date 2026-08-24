@@ -131,7 +131,21 @@ Decisions can only be changed by creating a new decision record that supersedes 
 
 ### i18n
 
-Default language: German. For 3A: develop in English, i18n infrastructure in place, German locale files with English placeholder content. No hardcoded user-visible strings.
+Default language: German (Austrian business German), English kept in the switcher (decision-17).
+No hardcoded user-visible strings, on either platform, ever.
+
+**Every new page/screen ships with BOTH `web/messages/en.json` and `web/messages/de.json`
+complete, at the same time it ships — never as a follow-up.** Concretely, before calling a
+screen done:
+- every string on it goes through `useTranslations`/`t()`, never a bare JSX literal
+- the same keys exist in both message files with the same argument placeholders
+  (`scripts/check.mjs` gates key-SET parity automatically — run it)
+- but the check only proves the two files agree with EACH OTHER, not that a given page
+  actually uses them: a page can hardcode text in one language and still pass. Grep the new
+  file for `useTranslations` yourself; its absence is the tell (this is exactly how
+  `web/app/tags/page.tsx` shipped German-only with zero i18n, found 2026-08-24).
+- same rule for Android (`res/values/strings.xml` German default, `res/values-en/`) and iOS
+  (`Localizable.xcstrings`) — a new screen on either app ships both languages too.
 
 ### Dependencies
 
