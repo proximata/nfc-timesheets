@@ -102,25 +102,17 @@ data class MaterialState(
 
 class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
-    init {
-        // A 401 from ANY path, not only from refresh() (parity row 4). One collector, one
-        // choke point, immediate — the same shape iOS's API.send() has always had.
-        viewModelScope.launch {
-            app.sessionRejected.collect { rejected -> if (rejected) dropToSignedOut() }
-        }
-        // THE APP'S ONE PUBLIC CAPABILITY READ, at launch, silently — same idiom as
-        // checkForUpdateSilently(): no spinner, no screen anywhere waits on it. Runs
-        // regardless of session state because the ONE screen that needs the answer,
-        // SignInScreen, is exactly the screen a phone with no session yet is showing.
-        //
-        // ANY FAILURE — offline, an old server that predates the route, a timeout — is
-        // swallowed here and read as false. This is the fail-closed half of the flag:
-        // a phone that could not confirm SMS is configured must behave exactly like a
-        // phone on a build where the flag is off, never like one where it is on.
-        viewModelScope.launch {
-            _smsAvailable.value = runCatching { app.api.capabilities() }.getOrDefault(false)
-        }
-    }
+    // THE TWO init{} LAUNCHES BELOW USED TO LIVE HERE, ABOVE EVERY PROPERTY THEY TOUCH —
+    // A REAL CRASH, ON EVERY LAUNCH, ON A GALAXY S20 ULTRA (and reproduced on an emulator
+    // the same way): `viewModelScope` dispatches on Dispatchers.Main.immediate, which runs
+    // a coroutine body INLINE, synchronously, while still on the constructing thread, up
+    // to its first real suspension point. `_smsAvailable.value = …` reached that
+    // assignment before the class had executed `_smsAvailable`'s OWN initializer 69 lines
+    // further down — Kotlin runs init{} blocks and property initializers in strict
+    // TEXTUAL order, and a property is null (for an object type) until its own line runs.
+    // Stack trace was `NullPointerException … MutableStateFlow.setValue … on a null
+    // object reference` at this exact line. The init{} block is relocated below, after
+    // every property it or [dropToSignedOut] touches — see there.
 
     /** One mailbox for every way a tap can arrive. See core/TapInbox.kt. */
     private val inbox = TapInbox()
@@ -199,6 +191,28 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
      *  and replaced whenever a NEW download starts, so two overlapping polls never race
      *  to write [_update]. */
     private var updatePollJob: Job? = null
+
+    // Placed HERE, after every property either launch touches (see the note at the top of
+    // this class for why the position is load-bearing, not stylistic).
+    init {
+        // A 401 from ANY path, not only from refresh() (parity row 4). One collector, one
+        // choke point, immediate — the same shape iOS's API.send() has always had.
+        viewModelScope.launch {
+            app.sessionRejected.collect { rejected -> if (rejected) dropToSignedOut() }
+        }
+        // THE APP'S ONE PUBLIC CAPABILITY READ, at launch, silently — same idiom as
+        // checkForUpdateSilently(): no spinner, no screen anywhere waits on it. Runs
+        // regardless of session state because the ONE screen that needs the answer,
+        // SignInScreen, is exactly the screen a phone with no session yet is showing.
+        //
+        // ANY FAILURE — offline, an old server that predates the route, a timeout — is
+        // swallowed here and read as false. This is the fail-closed half of the flag:
+        // a phone that could not confirm SMS is configured must behave exactly like a
+        // phone on a build where the flag is off, never like one where it is on.
+        viewModelScope.launch {
+            _smsAvailable.value = runCatching { app.api.capabilities() }.getOrDefault(false)
+        }
+    }
 
     // ---- session -------------------------------------------------------------------
 
