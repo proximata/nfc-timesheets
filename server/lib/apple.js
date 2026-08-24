@@ -1,5 +1,14 @@
 // Sign in with Apple — identity token verification (decision-22).
 //
+// DEPRECATED IN WORDS ONLY (decision-50). The button that called this is gone from new iOS
+// builds — sign-in is SMS OTP + the admin-issued enrolment code now — but TestFlight builds
+// already on workers' phones still call POST /auth/apple on every launch, and deleting this
+// file would strand every one of them at a sign-in screen until they update. Removal is a
+// separate, later run, gated on the Apple-free build being live on TestFlight AND
+// worker_sessions showing every worker re-signed in through SMS or a code. Do not delete
+// this file, POST /auth/apple, or the workers.apple_sub column on the strength of decision-50
+// alone.
+//
 // TRUST BOUNDARY. Everything below runs on a string an unauthenticated caller handed
 // us. The rule is: SIGNATURE FIRST, CLAIMS SECOND, and nothing in the payload is a
 // fact until the RSA check has passed. A token that merely *parses* is not verified —

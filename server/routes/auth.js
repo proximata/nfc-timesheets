@@ -1,5 +1,13 @@
 // Worker sign-in. Sign in with Apple, server-side eligibility (decision-22).
 //
+// APPLE SIGN-IN IS DEPRECATED IN WORDS ONLY (decision-50). No new iOS build offers the
+// SignInWithAppleButton — the screen now composes SMS OTP and the admin-issued enrolment
+// code, unconditionally, no capability gate. `appleAuth` below, lib/apple.js and
+// workers.apple_sub all STAY: TestFlight builds already on workers' phones still call
+// POST /auth/apple on every launch, and deleting any of it strands them at a sign-in screen
+// until they update. decision-22's STRUCTURAL half — worker_id comes from the session, never
+// a request body — outlives the mechanism and is untouched by this note.
+//
 // This route replaces the iOS Settings picker that was bound to @AppStorage("workerId").
 // The worker no longer *claims* an identity; they prove one to Apple, and this server
 // decides whether that identity is an eligible worker.
@@ -31,7 +39,7 @@ import {
   checkGlobalOtpVerifyRate,
   checkGlobalSmsSpend,
   checkLoginRate,
-  checkOtpRequestRate,
+  checkSmsRequestRate,
   clearLoginFailures,
   clearedSessionCookie,
   createOperatorSession,
@@ -376,53 +384,67 @@ async function operatorLogout({ session }) {
 }
 
 /**
- * POST /auth/sms/request {phone} -> 202 {status:"accepted"}
+ * POST /auth/sms/request {phone} -> 202 {status:"accepted"}, or 404 for a number this
+ * server does not recognise.
  *
- * decision-48 §6. The THIRD enrolment mechanism onto the SAME worker_sessions table — never
- * a third identity system. Apple (decision-22), the admin-issued code (decision-26) and
- * this all terminate in `createWorkerSession()`, and nothing downstream can tell which door
- * was used because `worker_id` still comes from the session and never from a body.
+ * decision-48 §6 as AMENDED by decision-51. This is the THIRD enrolment mechanism onto the
+ * SAME worker_sessions table — never a third identity system. Apple (decision-22, retired
+ * from iOS by decision-50 but still live for the TestFlight builds already on workers'
+ * phones), the admin-issued code (decision-26) and this all terminate in
+ * `createWorkerSession()`, and nothing downstream can tell which door was used because
+ * `worker_id` still comes from the session and never from a body.
  *
- *   202 {status:"accepted"}          IDENTICAL for a known and an unknown number
+ *   202 {status:"accepted"}          resolves to an ACTIVE worker; a message was attempted
+ *   404 {error:"unknown_phone"}      no such number, an operator-only row, or a DEACTIVATED
+ *                                    worker — the three collapse to one answer on purpose
  *   422 {error:"invalid_phone"}      SHAPE ONLY — never existence
  *   429 {error:"too_many_attempts"}
  *   503 {error:"sms_not_configured"}
  *
- * 202 AND NOT `200 {sent:true}`. We are accepting a request, not asserting a delivery: the
- * body says nothing about whether a message went out, so it cannot be a lie for an unknown
- * number and cannot become an enumeration oracle. Every branch below — no registry row, an
- * operator-only row, a deactivated worker, a carrier rejection — returns these same bytes.
+ * THIS USED TO BE A BYTE-IDENTICAL 202 FOR EVERY NUMBER, AND THAT CLAIM IS NOW FALSE.
+ * decision-51 records the owner explicitly waiving number-enumeration as a threat for this
+ * one-customer, low-tens-of-workers deployment: a worker who is not on file is told so, in
+ * words, at the moment they ask, instead of waiting indefinitely for a text that is never
+ * coming. See decision-51 for the full argument and its named costs.
+ *
+ * 202 AND NOT `200 {sent:true}` for the case that DOES send: it is still an acceptance, not
+ * a delivery receipt — the body says nothing about whether the carrier actually delivered,
+ * only that this server tried. A carrier rejection is recorded in sms_deliveries and never
+ * changes this response (see below).
  *
  * THE 503 IS DELIBERATE AND IS NOT A LEAK. It discloses "SMS is off on this server", which
  * is a property of the SERVER, not of a person; there is nothing to enumerate. A caller who
  * could not be told would sit waiting for a message that is never coming, which is exactly
  * the silent pretence the owner forbade.
  *
- * THE ENROLMENT CODE IS UNAFFECTED BY EVERY ONE OF THOSE OUTCOMES. This route does not
+ * THE ENROLMENT CODE IS UNAFFECTED BY EVERY ONE OF THESE OUTCOMES. This route does not
  * touch workers.enrolment_code_*, does not spend the enrolment limiter's budget
  * (`checkGlobalEnrolmentRate` is NOT called here, and this route's buckets are its own),
  * and cannot make POST /auth/code answer differently.
  */
-async function smsRequest({ body }) {
+async function smsRequest({ body, ip }) {
   if (!smsConfigured()) fail(503, "sms_not_configured");
 
   // Shape, in the same normaliser `POST /admin/operators` uses — phone parsing is not
   // reimplemented here (decision-45 §4, lib/validate.js identityPhone). 422 for a shape
-  // failure only; a perfectly-shaped number nobody has still gets 202.
+  // failure only; a perfectly-shaped number nobody has still gets past this check.
   const phone = v.identityPhone(body.phone, "phone");
 
-  // PER-PHONE FIRST, AND SPENT FOR UNKNOWN NUMBERS TOO. If this only counted real workers,
-  // a number that starts answering 429 after three tries would confirm it is on file — the
-  // exact oracle the identical 202 exists to close. Bucketing on the normalised string
-  // regardless of resolution makes the limiter behave identically for both.
-  checkOtpRequestRate(phone);
+  // PER-SOURCE-ADDRESS, AND SPENT BEFORE THE DATABASE IS TOUCHED (decision-51 §6): a
+  // refusal must be cheaper than the work it refuses, including for a number that turns
+  // out to be unknown. The per-PHONE bucket this used to be is gone — its only purpose was
+  // hiding whether a number was on file, and decision-51 has the owner waiving that.
+  await checkSmsRequestRate(ip);
   // THE BILL, process-wide. Own counter, never the enrolment ceiling: that one is sized
-  // against a shared 40-bit search space, this one against a telephone bill.
+  // against a shared 40-bit search space, this one against a telephone bill. NOT retuned
+  // or reordered by decision-51 — an unregistered number still spends one unit of this,
+  // named as a cost in that record.
   checkGlobalSmsSpend();
 
-  // WORKER-ONLY, and the ceiling is stated rather than discovered: a phone_identities row
-  // that carries only `operator_id` gets the same 202 and no message. Operators keep
-  // /auth/operator-code (decision-45 §6); extending SMS to them is a follow-up decision.
+  // WORKER-ONLY: a phone_identities row that carries only `operator_id`, and a DEACTIVATED
+  // worker's row, both fall through to the same 404 below as a genuinely unknown number.
+  // Operators keep /auth/operator-code (decision-45 §6); extending SMS to them is a
+  // follow-up decision.
   const target = await one(
     `SELECT w.id, w.name
        FROM phone_identities pi
@@ -431,39 +453,32 @@ async function smsRequest({ body }) {
     [phone],
   );
 
-  if (target) {
-    const code = newOtpCode();
-    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
-    // THE CODE IS NEVER WRITTEN DOWN, exactly as decision-26 requires of the enrolment
-    // code: it exists here as a local, reaches the database only as a SHA-256 (hashToken —
-    // the ONE hash helper for every bearer token in this system), and lib/scrub.js already
-    // drops a bare `code` key from every Sentry event.
-    await query("INSERT INTO otp_challenges (phone_e164, code_hash, expires_at) VALUES ($1, $2, $3)", [
-      phone,
-      hashToken(code),
-      expiresAt,
-    ]);
-    // Opportunistic sweep, the same idiom createWorkerSession uses for expired sessions:
-    // cheaper than owning another systemd timer for it.
-    await query("DELETE FROM otp_challenges WHERE expires_at < now() - interval '1 day'");
+  if (!target) fail(404, "unknown_phone");
 
-    // Fire it. The RESULT DOES NOT CHANGE THE RESPONSE — a carrier rejection must look
-    // exactly like an unknown number from the outside, or the failure itself becomes the
-    // oracle. It is recorded instead, in the append-only log, where the admin can see it.
-    const result = await sendSms(phone, renderOtpSms({ name: senderName(), code, ttlMinutes: OTP_TTL_MINUTES }));
-    await query(
-      `INSERT INTO sms_deliveries (kind, worker_id, phone_e164, status, reason, provider_sid, provider_code)
-       VALUES ('otp', $1, $2, $3, $4, $5, $6)`,
-      [
-        target.id,
-        phone,
-        result.status,
-        result.reason ?? null,
-        result.provider_sid ?? null,
-        result.provider_code ?? null,
-      ],
-    );
-  }
+  const code = newOtpCode();
+  const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+  // THE CODE IS NEVER WRITTEN DOWN, exactly as decision-26 requires of the enrolment
+  // code: it exists here as a local, reaches the database only as a SHA-256 (hashToken —
+  // the ONE hash helper for every bearer token in this system), and lib/scrub.js already
+  // drops a bare `code` key from every Sentry event.
+  await query("INSERT INTO otp_challenges (phone_e164, code_hash, expires_at) VALUES ($1, $2, $3)", [
+    phone,
+    hashToken(code),
+    expiresAt,
+  ]);
+  // Opportunistic sweep, the same idiom createWorkerSession uses for expired sessions:
+  // cheaper than owning another systemd timer for it.
+  await query("DELETE FROM otp_challenges WHERE expires_at < now() - interval '1 day'");
+
+  // Fire it. The RESULT DOES NOT CHANGE THE RESPONSE — a carrier rejection is recorded
+  // instead, in the append-only log, where the admin can see it, and the worker is simply
+  // told (by the 202) that a request was accepted.
+  const result = await sendSms(phone, renderOtpSms({ name: senderName(), code, ttlMinutes: OTP_TTL_MINUTES }));
+  await query(
+    `INSERT INTO sms_deliveries (kind, worker_id, phone_e164, status, reason, provider_sid, provider_code)
+     VALUES ('otp', $1, $2, $3, $4, $5, $6)`,
+    [target.id, phone, result.status, result.reason ?? null, result.provider_sid ?? null, result.provider_code ?? null],
+  );
 
   return { status: 202, body: { status: "accepted" } };
 }
@@ -578,6 +593,8 @@ async function smsVerify({ body, ip }) {
 export const authRoutes = [
   // `auth: "app"` and not `null`: the X-App-Key gate stays in front of sign-in as
   // defence in depth, so this endpoint is not reachable from a browser or curl.
+  // DEPRECATED IN WORDS ONLY (decision-50) — no new build calls this, but TestFlight builds
+  // already on workers' phones do, on every launch. Not removed. See appleAuth's docblock.
   { method: "POST", path: "/auth/apple", auth: "app", handler: appleAuth },
   // Same coarse app-key gate as /auth/apple, and for the same reason: it is not identity,
   // it just keeps the endpoint off the open web for a browser or a stray curl.
