@@ -1253,12 +1253,52 @@
         }
       }
     },
-    "Test scan": {
+    "Operator? Write or test tags without signing in as a worker.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Testscan"
+            "value": "Betreiber? Tags beschreiben oder prüfen, ohne sich als Mitarbeiter anzumelden."
+          }
+        }
+      }
+    },
+    "Test a tag": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tag prüfen"
+          }
+        }
+      }
+    },
+    "This phone is not signed in as an operator. Only operators can write tags.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses Telefon ist nicht als Betreiber angemeldet. Nur Betreiber können Tags beschreiben."
+          }
+        }
+      }
+    },
+    "This phone is not signed in as an operator. Only operators can test a tag.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses Telefon ist nicht als Betreiber angemeldet. Nur Betreiber können einen Tag prüfen."
+          }
+        }
+      }
+    },
+    "Will write": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird geschrieben"
           }
         }
       }

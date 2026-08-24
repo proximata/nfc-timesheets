@@ -44,7 +44,7 @@ struct VerifyZoneScreen: View {
                 verifySections
             }
         }
-        .navigationTitle("Test scan")
+        .navigationTitle("Test a tag")
         // Loading zones is an operator action (OperatorTagAPI carries ts_operator) - firing
         // it while signed out would just 401. `.task(id:)` re-runs the moment sign-in
         // flips the environment value, so the picker fills in without a manual refresh.
