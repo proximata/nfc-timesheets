@@ -407,6 +407,11 @@ private fun smsErrorText(failure: ApiFailure): String = when {
     failure.code == "sms_not_configured" -> stringResource(R.string.sms_not_configured_note)
     failure.code == "invalid_phone" -> stringResource(R.string.sms_invalid_phone)
     failure.code == "invalid_code" -> stringResource(R.string.sms_invalid_code)
+    // decision-51. The number is real input, not a rejected shape, so it gets its own
+    // sentence rather than falling into the generic err_rejected bucket — and it must
+    // never say what invalid_code says: nobody re-issues this, the worker's admin has to
+    // add the number first.
+    failure.code == "unknown_phone" -> stringResource(R.string.sms_unknown_phone)
     failure.code == "too_many_attempts" -> stringResource(R.string.err_too_many_attempts)
     else -> stringResource(stringIdFor(failure.messageKey))
 }

@@ -52,6 +52,12 @@
     <string name="sms_not_configured_note">SMS ist auf diesem Server nicht eingerichtet. Bitten Sie Ihre Verwaltung um einen Anmeldecode.</string>
     <string name="sms_invalid_phone">Diese Telefonnummer sieht nicht richtig aus. Bitte prüfen und erneut versuchen.</string>
     <string name="sms_invalid_code">Der Code wurde nicht angenommen. Bitte erneut eingeben, oder fordern Sie einen neuen an.</string>
+    <!-- decision-51: /auth/sms/request now answers 404 unknown_phone for a number that
+         does not resolve to an ACTIVE worker, instead of the old byte-identical 202 for
+         everyone. Byte-identical to the iOS German sentence on purpose (design brief) —
+         two different words for the same fact on two phones is how a crew stops trusting
+         either. -->
+    <string name="sms_unknown_phone">Diese Nummer ist nicht hinterlegt. Bitte bei Ihrer Verwaltung melden, damit sie eingetragen wird.</string>
 
     <string name="sign_out">Abmelden</string>
 
@@ -277,6 +283,10 @@
     <string name="err_invalid_code">Dieser Code wird nicht angenommen. Bitte noch einmal eingeben – wenn es dann immer noch nicht geht, bei Ihrer Verwaltung einen neuen Code anfordern.</string>
     <string name="err_signin_offline">Keine Verbindung. Für die Anmeldung braucht das Telefon einmal Internet – bitte danach erneut versuchen. Der Code bleibt gültig.</string>
     <string name="err_too_many_attempts">Zu viele Versuche – bitte in Kürze erneut versuchen.</string>
+    <!-- decision-51. Same sentence as sms_unknown_phone — this arm exists only so
+         ApiFailure.messageKey resolves for "unknown_phone" if it ever reaches
+         stringIdFor() by a path other than smsErrorText()'s own, earlier check. -->
+    <string name="err_unknown_phone">Diese Nummer ist nicht hinterlegt. Bitte bei Ihrer Verwaltung melden, damit sie eingetragen wird.</string>
     <string name="err_missing_location">Zu dieser Schicht fehlt das Objekt, sie kann nicht gesendet werden.</string>
     <string name="err_wrong_account">Diese Schicht wurde mit einem anderen Konto erfasst und kann nicht gesendet werden.</string>
     <string name="err_server">Serverproblem – wird erneut versucht.</string>

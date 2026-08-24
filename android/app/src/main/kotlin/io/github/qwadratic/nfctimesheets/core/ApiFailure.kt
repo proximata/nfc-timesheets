@@ -109,6 +109,13 @@ data class ApiFailure(
             "unauthorized" -> "err_unauthorized"
             "no_session" -> "err_no_session"
             "invalid_token" -> "err_invalid_token"
+            // decision-51. The SMS-request answer for a number that does not resolve to an
+            // ACTIVE worker. Terminal, not retryable — see [isRetryable]'s kdoc: this governs
+            // the shift/material sync queue only, and nothing there can ever produce this
+            // code. smsErrorText() in ui/TimeSheetApp.kt intercepts it before it ever reaches
+            // this key, same as invalid_code/invalid_phone, but the arm stays here so the key
+            // resolves for anything that DOES fall through to [stringIdFor].
+            "unknown_phone" -> "err_unknown_phone"
             // decision-26. The server answers this to SIX different situations — unknown,
             // malformed, expired, already redeemed, revoked, worker deactivated — with
             // one byte-identical body, so that distinguishing them is impossible. One

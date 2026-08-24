@@ -264,6 +264,11 @@ private fun retryClassification() {
     check(!ApiFailure(400, "invalid_uuid").isRetryable, "400 terminal")
     check(!ApiFailure(422, "unknown_worker").isRetryable, "422 terminal")
     check(!ApiFailure(404, "unknown_shift").isRetryable, "404 terminal")
+    // decision-51. A sign-in outcome, not a queue-affecting one: nothing in the
+    // shift/material sync queue can ever produce this code, so it must never be treated
+    // as retryable traffic the queue keeps hammering.
+    check(!ApiFailure(404, "unknown_phone").isRetryable, "404 unknown_phone terminal — a sign-in outcome, not a queue retry")
+    check(ApiFailure(404, "unknown_phone").messageKey == "err_unknown_phone", "404 unknown_phone maps to err_unknown_phone")
     // 401 IS RETRYABLE, AND THIS ASSERTION USED TO SAY THE OPPOSITE.
     //
     // It was inverted on 2026-08-20 after ops/break-taps.sh section 8 expired a live worker
@@ -649,6 +654,9 @@ private fun stringResources() {
         "end_before_start", "timestamp_in_future", "timestamp_out_of_range", "unauthorized",
         "no_session", "invalid_token", "invalid_code", "too_many_attempts",
         "missing_location", "wrong_account",
+        // decision-51. /auth/sms/request now answers 404 unknown_phone instead of the old
+        // byte-identical 202 for everyone.
+        "unknown_phone",
         "http_500", "invalid_field",
     )
     for (code in codes) {

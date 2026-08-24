@@ -32,6 +32,10 @@
     <string name="sms_not_configured_note">SMS isn\'t set up on this server. Ask your admin for a sign-in code instead.</string>
     <string name="sms_invalid_phone">That phone number doesn\'t look right. Please check and try again.</string>
     <string name="sms_invalid_code">That code wasn\'t accepted. Type it again, or request a new one.</string>
+    <!-- decision-51: /auth/sms/request now answers 404 unknown_phone instead of the old
+         byte-identical 202 for everyone. Not a literal translation of the German — see
+         values/strings.xml, whose wording is the one that must match iOS byte for byte. -->
+    <string name="sms_unknown_phone">That number isn\'t on file. Ask your admin to add it.</string>
 
     <string name="sign_out">Sign out</string>
 
@@ -197,6 +201,7 @@
     <string name="err_invalid_code">That code wasn\'t accepted. Type it again — if it still doesn\'t work, ask your admin for a new one.</string>
     <string name="err_signin_offline">No connection. Signing in needs the internet once — try again when you have it. Your code is still valid.</string>
     <string name="err_too_many_attempts">Too many attempts — try again shortly.</string>
+    <string name="err_unknown_phone">That number isn\'t on file. Ask your admin to add it.</string>
     <string name="err_missing_location">This shift is missing its location and can\'t be sent.</string>
     <string name="err_wrong_account">This shift was logged by a different account and can\'t be sent.</string>
     <string name="err_server">Server trouble — will retry.</string>

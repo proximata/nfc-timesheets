@@ -828,6 +828,7 @@ fun stringIdFor(key: String): Int = when (key) {
     "err_invalid_code" -> R.string.err_invalid_code
     "err_signin_offline" -> R.string.err_signin_offline
     "err_too_many_attempts" -> R.string.err_too_many_attempts
+    "err_unknown_phone" -> R.string.err_unknown_phone
     "err_missing_location" -> R.string.err_missing_location
     "err_wrong_account" -> R.string.err_wrong_account
     "err_unknown_request" -> R.string.err_unknown_request
