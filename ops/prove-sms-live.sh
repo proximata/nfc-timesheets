@@ -21,7 +21,9 @@
 #      correctly SHAPED, entirely FAKE credential set whose API base points at a dead
 #      loopback port. The flag flips, §1-§4's oracles are re-run and MUST NOW FAIL, and the
 #      one call that gets through returns 200 with a WORKING CODE and status 'failed' —
-#      never 'sent'. Then the env file is restored and compared by sha256.
+#      never 'sent'. §5 also proves decision-51 live: POST /auth/sms/request answers 202
+#      for the number claimed in §2/§3 and 404 unknown_phone for one nobody has ever
+#      claimed. Then the env file is restored and compared by sha256.
 #
 # NO REAL SMS CAN BE SENT BY THIS FILE. The seeded credentials are obvious fakes and
 # TWILIO_API_BASE points at 127.0.0.1 on a port with nothing listening, so the only possible
@@ -48,6 +50,8 @@ HOST="${1:-$(node -e 'process.stdout.write(require("./ops/branding.json").apiHos
 BASE="https://$HOST"
 MARK="PROVE48"
 PHONE="+436609900148"
+# Deliberately never claimed by anyone — the decision-51 negative case, §5 below.
+UNREG_PHONE="+436609900149"
 TMP=$(mktemp -d)
 FAILED=0
 SEEDED=0
@@ -261,10 +265,20 @@ CODE=$(app POST /auth/code "{\"code\":\"$SEEDCODE\"}")
   || bad "the code from the failed send answered $CODE $(jget error)"
 
 CODE=$(app POST /auth/sms/request "{\"phone\":\"$PHONE\"}")
-[ "$CODE" = "202" ] && red "POST /auth/sms/request now answers 202 — §4's assertion would FAIL here" \
-  || bad "sms/request answered $CODE with the flag on (want 202)"
+[ "$CODE" = "202" ] && red "POST /auth/sms/request, KNOWN number, now answers 202 — §4's 503 assertion would FAIL here" \
+  || bad "sms/request (known number) answered $CODE with the flag on (want 202)"
 CH=$(box "SELECT count(*) FROM otp_challenges WHERE phone_e164 = '$PHONE'")
 [ "$CH" = "1" ] && ok "one otp_challenge exists while the flag is on (it is deleted below)" || bad "otp_challenges = $CH"
+
+# decision-51: a number that does NOT resolve to an active worker is now TOLD so, at
+# request time, rather than left byte-identical to a known one. This number is never
+# claimed by anyone in this script, on purpose.
+CODE=$(app POST /auth/sms/request "{\"phone\":\"$UNREG_PHONE\"}")
+[ "$CODE" = "404" ] && [ "$(jget error)" = "unknown_phone" ] \
+  && ok "POST /auth/sms/request, UNREGISTERED number, -> 404 unknown_phone (decision-51)" \
+  || bad "sms/request (unregistered number) answered $CODE $(jget error) (want 404 unknown_phone)"
+CH=$(box "SELECT count(*) FROM otp_challenges WHERE phone_e164 = '$UNREG_PHONE'")
+[ "$CH" = "0" ] && ok "…and no challenge was minted for it" || bad "otp_challenges for the unregistered number = $CH"
 
 echo
 echo "== 6 · and back off again"
