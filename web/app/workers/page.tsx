@@ -14,14 +14,22 @@ import { PageHeader } from '@/components/PageHeader'
 import { WorkerPanel } from '@/components/WorkerPanel'
 import {
   ApiError,
+  clearSetting,
+  clearWorkerLoginPhone,
   type FreshEnrolmentCode,
   fetchSmsStatus,
   fetchWorkerSnapshot,
   issueEnrolmentCode,
   revokeEnrolmentCode,
+  SMS_OTP_REQUESTS_DEFAULT,
+  SMS_OTP_REQUESTS_KEY,
+  SMS_OTP_REQUESTS_MAX,
+  SMS_OTP_REQUESTS_MIN,
   type SmsStatus,
+  saveSetting,
   saveWorker,
   sendEnrolmentCodeBySms,
+  setWorkerLoginPhone,
   type Worker,
   type WorkerSnapshot,
 } from '@/lib/api'
@@ -30,6 +38,7 @@ import { useFilters } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
 import { centsToPlainEuros, parseEuroToCents } from '@/lib/money'
 import { loginPathWithReturn } from '@/lib/nav'
+import { normaliseIdentityPhone } from '@/lib/phone'
 import { BUSINESS_TIME_ZONE } from '@/lib/shifts'
 
 /**
@@ -85,9 +94,29 @@ type Draft = {
    */
   rate: string
   active: boolean
+  /**
+   * THE LOGIN NUMBER (`phone_identities`, decision-45) — a DIFFERENT field from `phone`
+   * above, edited as typed. Prefilled from `worker.phone_e164`, which is already E.164, so
+   * an untouched field round-trips through `normaliseIdentityPhone` unchanged.
+   */
+  loginPhone: string
+  /**
+   * `worker.phone_e164` as loaded, NEVER edited by the form. The only job this field has
+   * is telling `onSubmit` whether `loginPhone` actually changed, so an untouched field
+   * never spends a second write — or a second failure mode — on a no-op.
+   */
+  originalLoginPhone: string | null
 }
 
-const EMPTY_DRAFT: Draft = { name: '', email: '', phone: '', rate: '', active: true }
+const EMPTY_DRAFT: Draft = {
+  name: '',
+  email: '',
+  phone: '',
+  rate: '',
+  active: true,
+  loginPhone: '',
+  originalLoginPhone: null,
+}
 
 function draftOf(worker: Worker): Draft {
   return {
@@ -99,6 +128,8 @@ function draftOf(worker: Worker): Draft {
     // apply at all until the one rate-less row in production was dealt with by a human.
     rate: centsToPlainEuros(worker.hourly_rate_cents),
     active: worker.active,
+    loginPhone: worker.phone_e164 ?? '',
+    originalLoginPhone: worker.phone_e164,
   }
 }
 
@@ -110,13 +141,17 @@ type ErrorMessage =
   | 'errorPhoneShape'
   | 'errorRateRequired'
   | 'errorRateInvalid'
+  | 'errorLoginPhoneInvalid'
+  | 'errorLoginPhoneClaimed'
   | 'errorRejected'
+  | 'loginPhoneNotSaved'
 
 type FieldErrors = {
   name?: ErrorMessage
   email?: ErrorMessage
   phone?: ErrorMessage
   rate?: ErrorMessage
+  loginPhone?: ErrorMessage
 }
 
 /** The one irreversible-or-destructive action waiting for a plain yes/no. */
@@ -133,11 +168,14 @@ export default function WorkersPage() {
   const nameId = useId()
   const emailId = useId()
   const phoneId = useId()
+  const loginPhoneId = useId()
   const rateId = useId()
   const activeId = useId()
   const codeHeadingId = useId()
   const codeValueId = useId()
   const codeOnceId = useId()
+  const rateLimitHeadingId = useId()
+  const rateLimitId = useId()
   const codePanelRef = useRef<HTMLElement>(null)
 
   // null = still loading. An empty worker list is the genuine first-run state, not an error.
@@ -170,6 +208,14 @@ export default function WorkersPage() {
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   /** Ticks so an expiry that has passed stops being reported as a live code. */
   const [now, setNow] = useState(() => Date.now())
+  /**
+   * decision-51's `sms_otp_requests_per_5min` — seeded from `snapshot.settings` on every
+   * `load()`, exactly the `pl_margin_baseline_bp` idiom `/pl/` uses. An empty string is the
+   * genuine unset state, never a guessed default: the DEFAULT is stated in the hint text,
+   * not typed into this field.
+   */
+  const [rateLimitDraft, setRateLimitDraft] = useState('')
+  const [rateLimitError, setRateLimitError] = useState(false)
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), CODE_TICK_MS)
@@ -210,6 +256,7 @@ export default function WorkersPage() {
         ])
         setSnapshot(snap)
         setSmsInfo(sms)
+        setRateLimitDraft(snap.settings[SMS_OTP_REQUESTS_KEY] ?? '')
         setLoadError(null)
       } catch (cause) {
         if (cause instanceof DOMException && cause.name === 'AbortError') return
@@ -279,6 +326,28 @@ export default function WorkersPage() {
     }
   }
 
+  /**
+   * The SECOND write (PUT/DELETE .../phone) failed AFTER the first one (saveWorker)
+   * already succeeded. The master data is safe; the login number is not — and that has to
+   * be said in words, not swallowed by a generic "gespeichert". `409` names nobody
+   * (anti-enumeration, same posture as `errorEmailTaken`'s opposite number), so it binds to
+   * the login-number field specifically; anything else falls back to the same 5xx/offline
+   * handling `reportSaveFailure` uses.
+   */
+  function reportLoginPhoneFailure(cause: unknown) {
+    if (handleAuthLoss(cause)) return
+    if (cause instanceof ApiError && cause.status === 409) {
+      setFieldErrors({ loginPhone: 'errorLoginPhoneClaimed' })
+    } else {
+      setFieldErrors({})
+      if (cause instanceof ApiError && (cause.status === 0 || cause.status >= 500)) {
+        setLoadError(cause.messageKey)
+        setSaveError(cause.messageKey)
+      }
+    }
+    setFormError('loginPhoneNotSaved')
+  }
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (busy || draft === null) return
@@ -300,6 +369,19 @@ export default function WorkersPage() {
     const typed = draft.rate.trim()
     const cents = typed === '' ? null : parseEuroToCents(typed)
 
+    /*
+     * THE LOGIN NUMBER IS A SECOND, SEPARATE WRITE (PUT/DELETE .../phone), never folded
+     * into `saveWorker`'s single POST — decision-45 keeps the two claims (free-text phone,
+     * login phone) on different routes. '' means "clear it"; anything else must normalise
+     * the same way `identityPhone` would server-side, or the client says so before a
+     * request is even sent. Comparing NORMALISED forms is what makes an untouched field a
+     * no-op: `draft.originalLoginPhone` is already E.164, so re-typing it byte-for-byte
+     * agrees with itself and spends no second write.
+     */
+    const rawLoginPhone = draft.loginPhone.trim()
+    const normalisedLoginPhone = rawLoginPhone === '' ? null : normaliseIdentityPhone(rawLoginPhone)
+    const loginPhoneChanged = normalisedLoginPhone !== draft.originalLoginPhone
+
     // Client-side validation is UX only — server/lib/validate.js decides for real.
     const errors: FieldErrors = {}
     if (name === '') errors.name = 'errorNameRequired'
@@ -307,6 +389,9 @@ export default function WorkersPage() {
     if (phone !== '' && !PHONE_RE.test(phone)) errors.phone = 'errorPhoneShape'
     if (typed === '') errors.rate = 'errorRateRequired'
     else if (cents === null || cents <= 0) errors.rate = 'errorRateInvalid'
+    if (rawLoginPhone !== '' && normalisedLoginPhone === null) {
+      errors.loginPhone = 'errorLoginPhoneInvalid'
+    }
     setFieldErrors(errors)
     setFormError(null)
     setSaveError(null)
@@ -314,7 +399,7 @@ export default function WorkersPage() {
 
     setBusy(true)
     try {
-      await saveWorker({
+      const saved = await saveWorker({
         ...(draft.id === undefined ? {} : { id: draft.id }),
         name,
         email,
@@ -322,9 +407,34 @@ export default function WorkersPage() {
         hourly_rate_cents: cents,
         active: draft.active,
       })
+
+      if (loginPhoneChanged) {
+        try {
+          if (normalisedLoginPhone === null) await clearWorkerLoginPhone(saved.id)
+          else await setWorkerLoginPhone(saved.id, normalisedLoginPhone)
+        } catch (cause) {
+          // A SILENT "gespeichert" after a HALF-applied save is the defect this branch
+          // exists to avoid. The drawer STAYS OPEN — bound to the row just created or
+          // edited, via `saved.id`, so a retry writes the number and nothing else twice.
+          reportLoginPhoneFailure(cause)
+          setDraft({ ...draft, id: saved.id })
+          await load()
+          return
+        }
+      }
+
       // The result is announced by the PAGE, not by the drawer: the drawer closes on
       // success and would take its own success message with it, unread.
-      setNotice({ ok: true, text: t('saved') })
+      setNotice({
+        ok: true,
+        text: !loginPhoneChanged
+          ? t('saved')
+          : `${t('saved')} ${
+              normalisedLoginPhone === null
+                ? t('loginPhoneCleared')
+                : t('loginPhoneSaved', { phone: normalisedLoginPhone })
+            }`,
+      })
       closeDrawer()
       await load()
     } catch (cause) {
@@ -451,6 +561,52 @@ export default function WorkersPage() {
       await load()
     } catch (cause) {
       reportSaveFailure(cause)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * decision-51's ADMIN-TUNABLE ceiling on `POST /auth/sms/request` — how many times one
+   * source address may ask for an SMS code in a rolling 5 minutes before it is refused.
+   * Reuses `saveSetting`/`clearSetting` byte-for-byte, the same pair `/pl/` already uses
+   * for `pl_margin_baseline_bp`: the server re-checks the same [1,20] bound on write
+   * (routes/admin.js `SETTINGS`), so this control is a convenience, never the boundary.
+   */
+  async function submitRateLimit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (busy) return
+    const typed = rateLimitDraft.trim()
+    const n = Number.parseInt(typed, 10)
+    const valid = /^\d{1,2}$/.test(typed) && n >= SMS_OTP_REQUESTS_MIN && n <= SMS_OTP_REQUESTS_MAX
+    if (!valid) {
+      setRateLimitError(true)
+      return
+    }
+    setRateLimitError(false)
+    setBusy(true)
+    try {
+      await saveSetting(SMS_OTP_REQUESTS_KEY, n)
+      setNotice({ ok: true, text: t('rateLimitSaved', { value: n }) })
+      await load()
+    } catch (cause) {
+      if (!handleAuthLoss(cause)) setNotice({ ok: false, text: t('rateLimitSaveFailed') })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** Back to "nobody has told us" — the default in `SMS_OTP_REQUESTS_DEFAULT` applies again. */
+  async function clearRateLimit() {
+    if (busy) return
+    setRateLimitError(false)
+    setBusy(true)
+    try {
+      await clearSetting(SMS_OTP_REQUESTS_KEY)
+      setNotice({ ok: true, text: t('rateLimitCleared', { default: SMS_OTP_REQUESTS_DEFAULT }) })
+      await load()
+    } catch (cause) {
+      if (!handleAuthLoss(cause)) setNotice({ ok: false, text: t('rateLimitSaveFailed') })
     } finally {
       setBusy(false)
     }
@@ -633,6 +789,55 @@ export default function WorkersPage() {
           stop a director concluding that the email address is now optional. */}
       <p className="note">{t('codeStandingNote')}</p>
 
+      {/* decision-51's admin-tunable ceiling on POST /auth/sms/request, next to the SMS
+          machinery this screen already reads status from (the picker button and its
+          per-row note above). A small inline form, not a drawer: one number, one bound,
+          one fallback — the same `saveSetting`/`clearSetting` pair `/pl/` uses for
+          `pl_margin_baseline_bp`, reused here rather than a second settings page. */}
+      <section className="note" aria-labelledby={rateLimitHeadingId}>
+        <p id={rateLimitHeadingId}>
+          <strong>{t('rateLimitHeading')}</strong>
+        </p>
+        <form onSubmit={submitRateLimit} noValidate>
+          <Field
+            id={rateLimitId}
+            label={t('fieldRateLimit')}
+            help={t('rateLimitHint', { default: SMS_OTP_REQUESTS_DEFAULT })}
+            error={
+              rateLimitError
+                ? t('errorRateLimitInvalid', {
+                    min: SMS_OTP_REQUESTS_MIN,
+                    max: SMS_OTP_REQUESTS_MAX,
+                  })
+                : undefined
+            }
+          >
+            <input
+              type="number"
+              inputMode="numeric"
+              min={SMS_OTP_REQUESTS_MIN}
+              max={SMS_OTP_REQUESTS_MAX}
+              value={rateLimitDraft}
+              onChange={(event) => setRateLimitDraft(event.target.value)}
+              disabled={busy}
+            />
+          </Field>
+          <p className="form-actions">
+            <button type="submit" className="btn btn-quiet" disabled={busy}>
+              {t('rateLimitSave')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-quiet"
+              onClick={clearRateLimit}
+              disabled={busy}
+            >
+              {t('rateLimitReset')}
+            </button>
+          </p>
+        </form>
+      </section>
+
       {/* The one and only sighting of the code. NOT a dialog (owner, explicitly): the
           director reads it out over the phone while looking at that person's row, and a
           centred modal covers the row. Focused on appearance (above), so it is not
@@ -739,6 +944,14 @@ export default function WorkersPage() {
                       // tel: so a director on a laptop with a softphone can just click it.
                       <a href={`tel:${worker.phone.replace(/[^0-9+]/g, '')}`}>{worker.phone}</a>
                     )}
+                    {/* The LOGIN number, contrasted with the CONTACT number above it — the
+                        same fact this cell's own SMS row (`smsCellNote`) already implies
+                        for a worker with none, now stated plainly for every row. */}
+                    <p className={worker.phone_e164 === null ? 'cell-muted' : 'cell-code'}>
+                      {worker.phone_e164 === null
+                        ? t('loginPhoneNone')
+                        : t('loginPhoneRow', { phone: worker.phone_e164 })}
+                    </p>
                   </td>
                   {/* Always an amount. The „Kein Stundensatz hinterlegt" branch that used
                       to live here described a row the database can no longer hold
@@ -954,6 +1167,27 @@ export default function WorkersPage() {
                 type="tel"
                 value={draft.phone}
                 onChange={(event) => setDraft({ ...draft, phone: event.target.value })}
+                maxLength={40}
+                autoComplete="off"
+                disabled={busy}
+              />
+            </Field>
+
+            {/* THE LOGIN NUMBER (decision-45), directly under the phone field it contrasts
+                with, and edited by its OWN write (PUT/DELETE .../phone) — never folded into
+                this form's single POST, so a claim conflict here never blocks the master
+                data above it. */}
+            <Field
+              id={loginPhoneId}
+              label={t('fieldLoginPhone')}
+              optional
+              help={t('loginPhoneHint')}
+              error={fieldErrors.loginPhone === undefined ? undefined : t(fieldErrors.loginPhone)}
+            >
+              <input
+                type="tel"
+                value={draft.loginPhone}
+                onChange={(event) => setDraft({ ...draft, loginPhone: event.target.value })}
                 maxLength={40}
                 autoComplete="off"
                 disabled={busy}

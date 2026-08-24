@@ -62,7 +62,7 @@ function messageKeyForStatus(status: number): ErrorKey {
 }
 
 export type ApiRequest = {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
   signal?: AbortSignal
 }
@@ -241,6 +241,8 @@ export type WorkerSnapshot = {
   workers: Worker[]
   shifts: Shift[]
   shift_limit: number
+  /** `app_settings` as `/admin/data` returns it — read here for `SMS_OTP_REQUESTS_KEY`. */
+  settings: AppSettings
 }
 
 export function fetchWorkerSnapshot(signal?: AbortSignal): Promise<WorkerSnapshot> {
@@ -571,6 +573,31 @@ export function saveWorker(input: WorkerInput, signal?: AbortSignal): Promise<Wo
     body: input,
     signal,
   }).then((data) => data.worker)
+}
+
+/**
+ * `PUT /admin/workers/:id/phone` — claims a LOGIN number for this worker (`phone_identities`,
+ * decision-45), the one an SMS sign-in code actually goes to. NEVER `workers.phone` (the
+ * free-text contact number above): the two are allowed to disagree and this route never
+ * touches the other. `409 phone_claimed` names nobody — the same anti-enumeration posture
+ * as `createOperator` — so the caller can only say "already assigned to someone else".
+ */
+export function setWorkerLoginPhone(
+  workerId: number,
+  phone: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  return apiFetch<{ worker: { id: number }; phone_e164: string }>(
+    `/admin/workers/${workerId}/phone`,
+    { method: 'PUT', body: { phone }, signal },
+  ).then((data) => data.phone_e164)
+}
+
+/** `DELETE /admin/workers/:id/phone`. Idempotent: releasing an unclaimed number is a 200. */
+export function clearWorkerLoginPhone(workerId: number, signal?: AbortSignal): Promise<void> {
+  return apiFetch<void>(`/admin/workers/${workerId}/phone`, { method: 'DELETE', signal }).then(
+    () => undefined,
+  )
 }
 
 /**
@@ -1329,6 +1356,20 @@ export type AppSettings = Record<string, string>
 
 /** The margin floor, in BASIS POINTS. Signed: -500 is a legitimate "lose at most 5%". */
 export const MARGIN_BASELINE_KEY = 'pl_margin_baseline_bp'
+
+/**
+ * decision-51. How many times one source address may call `POST /auth/sms/request` in a
+ * rolling 5 minutes. The window itself is fixed in server code and not settable here.
+ *
+ * MIN/MAX/DEFAULT mirror `server/lib/auth.js` (`SMS_OTP_REQUESTS_MIN/MAX/DEFAULT`) — the
+ * server is the trust boundary and re-checks the same bound on write, so a mismatch here
+ * is a worse UX, never a hole: a client-side value outside the bound is caught by the
+ * server's own `400 invalid_field` before it can be stored.
+ */
+export const SMS_OTP_REQUESTS_KEY = 'sms_otp_requests_per_5min'
+export const SMS_OTP_REQUESTS_DEFAULT = 3
+export const SMS_OTP_REQUESTS_MIN = 1
+export const SMS_OTP_REQUESTS_MAX = 20
 
 /** One request behind /material-requests/: the queue plus the two lists its selects offer. */
 export type MaterialSnapshot = {
