@@ -6,33 +6,33 @@
 //  there is no symbol, no string and no branch to reach. `demo/ios-setup.sh --prove-release`
 //  greps the Release binary for the markers below and fails if any of them survive.
 //
-//  WHY IT EXISTS. Two things a screen recording of the iOS app has to do cannot be done on
-//  a simulator, and neither is a limitation of this app:
+//  WHY IT EXISTS. TAP cannot be done on a simulator, and that is not a limitation of this
+//  app: the tag hands the app a universal link, and a universal link needs the
+//  `com.apple.developer.associated-domains` entitlement. The iOS Simulator SDK sets
+//  `ENTITLEMENTS_ALLOWED = NO`, so a simulator build HAS no entitlements — forcing
+//  `ENTITLEMENTS_ALLOWED=YES` on the xcodebuild command line still produces an empty
+//  `<dict/>`. `simctl openurl` therefore opens Safari, every time, by construction. (On a
+//  device the same tap works and is what workers use daily; nothing here is a workaround
+//  for a bug.)
 //
-//   1. SIGN IN. The app signs in with Apple and nothing else (decision-22). A simulator has
-//      no Apple ID, and signing one in needs a human, a password and a 2FA code.
-//   2. TAP. The tag hands the app a universal link, and a universal link needs the
-//      `com.apple.developer.associated-domains` entitlement. The iOS Simulator SDK sets
-//      `ENTITLEMENTS_ALLOWED = NO`, so a simulator build HAS no entitlements — forcing
-//      `ENTITLEMENTS_ALLOWED=YES` on the xcodebuild command line still produces an empty
-//      `<dict/>`. `simctl openurl` therefore opens Safari, every time, by construction.
-//      (On a device the same tap works and is what workers use daily; nothing here is a
-//      workaround for a bug.)
+//  So this file injects, at launch and from the command line, the value that path would
+//  have produced — AND NOTHING ELSE. What happens after the injection is the shipping
+//  code, unmodified: the id goes through TagLink.normalizedUUID — the trust boundary that
+//  keeps anything not UUID-shaped off the wire (decision-15) — and then into the same
+//  TapInbox that `onOpenURL` and `onContinueUserActivity` feed, so LogView's cold-launch
+//  ordering, the local write, POST /shifts/open, the takeover screen and every out-of-app
+//  signal are the real ones.
 //
-//  So this file injects, at launch and from the command line, the two values those two
-//  paths would have produced — AND NOTHING ELSE. What happens after the injection is the
-//  shipping code, unmodified:
-//
-//    sign-in : the token goes through Session.exchange -> AuthAPI.signInWithApple ->
-//              POST /auth/apple, and the server verifies the RS256 signature, the issuer,
-//              the audience, the expiry and the nonce exactly as it does in production.
-//              demo/demo-server.mjs mints a real signature with a key it tells ITSELF is
-//              Apple's; the live server, which fetches Apple's real JWKS, rejects it.
-//    tap     : the id goes through TagLink.normalizedUUID — the trust boundary that keeps
-//              anything not UUID-shaped off the wire (decision-15) — and then into the same
-//              TapInbox that `onOpenURL` and `onContinueUserActivity` feed, so LogView's
-//              cold-launch ordering, the local write, POST /shifts/open, the takeover
-//              screen and every out-of-app signal are the real ones.
+//  SIGN-IN USED TO BE INJECTED HERE TOO, for Sign in with Apple (decision-22): a simulator
+//  has no Apple ID, and signing one in needs a human, a password and a 2FA code. That hook
+//  is GONE with decision-50 - Apple sign-in is retired from the app, and there is no
+//  simulator-safe replacement wired up yet (POST /auth/code redeems a real, single-use,
+//  admin-issued code; POST /auth/sms/request needs a live SMS provider). Recording a signed
+//  -in demo therefore currently needs a device, or a hand-typed code in the Simulator UI
+//  the way a worker would use it. See demo/record-ios.mjs and demo/demo-server.mjs, both
+//  UNCHANGED by this run and both still passing the now-inert --ts-demo-signin /
+//  --ts-demo-nonce flags below - repointing the demo pipeline at a minted enrolment code is
+//  a follow-up, not part of the iOS sign-in rewrite.
 //
 //  NFC IS STILL MOCKED AND THE APP SAYS SO. There is no NFC radio in a simulator; that is
 //  physics, not a shortcut. `demoBanner()` puts that sentence on screen for as long as the
@@ -53,16 +53,14 @@ enum DemoHooks {
     static let marker = "TSDemoHooksArmed"
 
     static let armFlag = "--ts-demo"
-    static let signInFlag = "--ts-demo-signin"
-    static let nonceFlag = "--ts-demo-nonce"
     static let tapFlag = "--ts-demo-tap"
 
     private static let loopback: Set<String> = ["127.0.0.1", "localhost", "::1"]
 
     /// Armed only when BOTH hold. The host check is not decoration: it is the same rule
     /// demo/record-ios.mjs and demo/demo-server.mjs enforce, restated where it cannot be
-    /// forgotten — a build that can be handed a sign-in must not be able to reach a real
-    /// server with it.
+    /// forgotten — a build that injects a tap must not be able to reach a real server
+    /// with it.
     static var isActive: Bool {
         guard arguments.contains(armFlag) else { return false }
         guard let host = API.base.host(), loopback.contains(host) else { return false }
@@ -88,10 +86,6 @@ enum DemoHooks {
     static func run(session: Session, inbox: TapInbox) async {
         guard isActive else { return }
         print("[\(marker)] loopback demo hooks armed for \(API.base.absoluteString)")
-
-        if let token = value(signInFlag), let nonce = value(nonceFlag), session.worker == nil {
-            await session.demoSignIn(identityToken: token, nonce: nonce)
-        }
 
         // Same validation the URL path applies. A malformed id is dropped, exactly as a
         // rewritten tag would be.

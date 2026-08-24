@@ -2,25 +2,27 @@
 //  Auth.swift
 //  NFCTimeSheets
 //
-//  Worker identity (decision-22). Everything the app knows about "who is using this
-//  phone" lives here, and all of it came from the server.
+//  Worker identity (decision-22, decision-50). Everything the app knows about "who is
+//  using this phone" lives here, and all of it came from the server.
 //
 //  What this replaced: a Picker in Settings bound to @AppStorage("workerId"). The worker
 //  chose who they were and the server believed the worker_id in the request body, so any
 //  worker - or anyone holding the app key - could file hours as anyone. That was an
 //  authentication hole, not a UX wrinkle, and it is why the picker is gone rather than
-//  restyled.
+//  restyled. THAT part - worker_id comes from the SESSION and never a request body - is
+//  untouched by everything below and must stay true of every door added here.
 //
-//  Apple only, no Google, on purpose:
-//    - AuthenticationServices is a native framework: no SDK, no client secret in the
-//      binary, no third-party code path to audit.
-//    - App Store guideline 4.8 requires Sign in with Apple alongside any third-party
-//      provider. Apple-only is compliance for free; adding Google buys an obligation.
-//    - Every user of this app is on an iPhone. They all already have an Apple ID.
-//  Google becomes interesting the day an Android app exists, and not one day earlier.
+//  Sign in with Apple was the FIRST mechanism to prove a worker session (decision-22) and
+//  is RETIRED from this screen by decision-50: no AuthenticationServices import, no
+//  SignInWithAppleButton, no "ineligible" dead end. Two doors replace it, both always
+//  visible and neither gated: SMS one-time code (requestSmsCode / verifySmsCode) and the
+//  admin-issued enrolment code (signInWithCode). All three mechanisms that have ever
+//  existed - Apple, SMS, code - terminate in the SAME store(_:) tail: one cache write, one
+//  Telemetry.setWorker, one .eligible transition, so nothing downstream can tell which
+//  door was used. POST /auth/apple stays live on the SERVER for TestFlight builds already
+//  in the field (decision-50 §3); this file simply has no caller for it any more.
 //
 
-import AuthenticationServices
 import Foundation
 import Observation
 
@@ -31,14 +33,12 @@ final class Session {
     /// before the cache is read - it shows a spinner, never the app.
     enum State: Equatable {
         case unknown
-        /// Nothing but a Sign in with Apple button. `reason` explains the last failure.
+        /// The SMS and enrolment-code doors. `reason` explains the last failure at the
+        /// screen level (e.g. a dropped session); field-level SMS/code errors are held as
+        /// local @State on SignInView itself, not here (ContentView.swift).
         case signedOut(reason: String?)
-        /// The server matched this Apple ID to an active worker. The normal app.
+        /// The server matched this session to an active worker. The normal app.
         case eligible(WireWorker)
-        /// Signed in to Apple, not a worker here. A dead end by design: the email is the
-        /// only thing on screen that can change anything, and only by being read aloud
-        /// to a manager who pastes it into the worker record.
-        case ineligible(email: String?)
     }
 
     private(set) var state: State = .unknown
@@ -50,10 +50,6 @@ final class Session {
         return nil
     }
 
-    /// Nonce for the authorization currently on screen. Cleared as soon as it is spent -
-    /// a nonce that can be used twice is not a nonce.
-    private var pendingNonce: String?
-
     // ponytail: worker id + name cached in UserDefaults so a launch in a basement opens
     // straight into the app instead of a sign-in screen that cannot reach the server.
     // NOT the Keychain: none of this is a secret. The credential is the session cookie,
@@ -64,9 +60,6 @@ final class Session {
     private enum Cache {
         static let workerId = "session.workerId"
         static let workerName = "session.workerName"
-        /// Apple's stable user identifier, needed only to ask iOS whether the user
-        /// revoked this app in Settings > Apple ID > Sign in with Apple.
-        static let appleUserId = "session.appleUserId"
     }
 
     init() {
@@ -99,8 +92,6 @@ final class Session {
             state = .signedOut(reason: nil)
         }
 
-        await verifyAppleCredentialState()
-
         do {
             store(try await AuthAPI.me())
         } catch let failure as APIFailure where failure.status == 401 {
@@ -110,120 +101,42 @@ final class Session {
         }
     }
 
-    /// The user can revoke this app under Settings > Apple ID > Sign in with Apple, and
-    /// deleting their Apple ID has the same effect. iOS knows before the server does.
-    private func verifyAppleCredentialState() async {
-        guard let appleUserId = UserDefaults.standard.string(forKey: Cache.appleUserId) else { return }
-        let credentialState = try? await ASAuthorizationAppleIDProvider()
-            .credentialState(forUserID: appleUserId)
-        switch credentialState {
-        case .revoked:
-            await signOut()
-        case .authorized, .notFound, .transferred, .none:
-            // notFound covers "asked while offline" as well as "never signed in", so it
-            // is deliberately NOT a sign-out: the server session is the thing that
-            // decides, and it will 401 if it has genuinely gone. `transferred` only
-            // happens if this app moves to another developer account, which is not a
-            // reason to throw a worker out mid-shift.
-            break
-        @unknown default:
-            break
-        }
-    }
+    // MARK: - Sign in by SMS or admin-issued code (decision-50)
+    //
+    // No `exchange`/`prepare`/`complete` triad any more - there is no third-party
+    // authorization dance to drive. Each door is one network call; success runs the same
+    // `store(_:)` tail every door has always run. Failures are left as thrown APIFailure:
+    // the copy shown for the SAME server code differs by FIELD (an OTP request's "not on
+    // file" is not a code redemption's "ask your admin for a new one"), so the mapping
+    // lives beside the field it is shown next to (ContentView.swift SignInView), not here.
 
-    // MARK: - Sign in with Apple
-
-    /// Configure the authorization request. Called by SignInWithAppleButton's onRequest.
-    func prepare(_ request: ASAuthorizationAppleIDRequest) {
-        let raw = AppleNonce.raw()
-        pendingNonce = raw
-        request.requestedScopes = [.fullName, .email]
-        // The HASH goes to Apple, the raw value goes to our server. See AppleNonce.
-        request.nonce = AppleNonce.hashed(raw)
-    }
-
-    /// Called by SignInWithAppleButton's onCompletion.
-    func complete(_ result: Result<ASAuthorization, Error>) async {
-        let nonce = pendingNonce
-        pendingNonce = nil
+    /// POST /auth/sms/request. Mints no session - only "was a code sent". The caller
+    /// (SignInView) moves to the code-entry field on success and shows the thrown
+    /// failure's message on the phone field otherwise.
+    func requestSmsCode(phone: String) async throws {
         busy = true
         defer { busy = false }
-
-        switch result {
-        case .failure(let error):
-            // A cancel is not an error worth shouting about - they tapped the X.
-            if (error as? ASAuthorizationError)?.code == .canceled {
-                state = .signedOut(reason: nil)
-            } else {
-                state = .signedOut(reason: "Apple sign-in didn't finish. Try again.")
-            }
-
-        case .success(let authorization):
-            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
-                  let tokenData = credential.identityToken,
-                  let identityToken = String(data: tokenData, encoding: .utf8),
-                  let nonce
-            else {
-                state = .signedOut(reason: "Apple didn't return a usable sign-in. Try again.")
-                return
-            }
-            UserDefaults.standard.set(credential.user, forKey: Cache.appleUserId)
-            await exchange(identityToken: identityToken,
-                           nonce: nonce,
-                           name: Self.formatted(credential.fullName),
-                           appleEmail: credential.email)
-        }
+        _ = try await AuthAPI.requestSmsCode(phone: phone)
     }
 
-    /// Trade the identity token for a session. The server decides eligibility; the app
-    /// only renders the answer.
-    private func exchange(identityToken: String, nonce: String, name: String?, appleEmail: String?) async {
-        do {
-            store(try await AuthAPI.signInWithApple(identityToken: identityToken, nonce: nonce, name: name))
-        } catch let failure as APIFailure where failure.code == "not_eligible" {
-            clearCache()
-            // The server echoes back exactly what Apple gave it, which with Hide My Email
-            // is a relay address nobody could have registered in advance. `credential.email`
-            // is the fallback, and it is only ever populated on a first authorization.
-            state = .ineligible(email: failure.email ?? appleEmail)
-        } catch let failure as APIFailure {
-            clearCache()
-            state = .signedOut(reason: failure.workerMessage)
-        } catch {
-            clearCache()
-            state = .signedOut(reason: APIFailure(status: 0, code: "network").workerMessage)
-        }
-    }
-
-    #if DEBUG
-    /// DEMO ONLY, and compiled out of every Release build. See DemoHooks.swift.
-    ///
-    /// An iOS Simulator has no Apple ID, so `SignInWithAppleButton` cannot be driven from
-    /// a script. This hands an identity token straight to `exchange` — the SAME method the
-    /// real button's completion handler reaches — so /auth/apple, the RS256 signature
-    /// check, the audience check and the nonce check all run for real. It verifies nothing
-    /// itself and it cannot: the server decides, here as everywhere (decision-22).
-    func demoSignIn(identityToken: String, nonce: String) async {
+    /// POST /auth/sms/verify. On success, the SAME store(_:) tail as every other door.
+    func verifySmsCode(phone: String, code: String) async throws {
         busy = true
         defer { busy = false }
-        await exchange(identityToken: identityToken, nonce: nonce, name: nil, appleEmail: nil)
+        store(try await AuthAPI.verifySmsCode(phone: phone, code: code))
     }
-    #endif
 
-    /// Apple hands over the name on the FIRST authorization only - never again, on any
-    /// device, for the life of the app. It is a hint for the admin, not an identity:
-    /// the worker's real name is whatever is in the workers row they were matched to.
-    private static func formatted(_ components: PersonNameComponents?) -> String? {
-        guard let components else { return nil }
-        let name = PersonNameComponentsFormatter().string(from: components)
-        return name.isEmpty ? nil : name
+    /// POST /auth/code. `code` is already EnrolmentCode.normalise()'d by the caller.
+    func signInWithCode(_ code: String) async throws {
+        busy = true
+        defer { busy = false }
+        store(try await AuthAPI.signInWithCode(code))
     }
 
     // MARK: - Sign out
 
-    /// The only control on the ineligible screen, and the last row in Settings. Revokes
-    /// the session server-side first so a stolen phone cannot keep the cookie alive,
-    /// then drops everything locally even if that call failed.
+    /// The last row in Settings. Revokes the session server-side first so a stolen phone
+    /// cannot keep the cookie alive, then drops everything locally even if that call failed.
     func signOut() async {
         busy = true
         defer { busy = false }
@@ -263,7 +176,6 @@ final class Session {
     private func clearLocalSession() {
         clearCache()
         Telemetry.clearWorker()
-        UserDefaults.standard.removeObject(forKey: Cache.appleUserId)
         let storage = HTTPCookieStorage.shared
         for cookie in storage.cookies(for: API.base) ?? [] { storage.deleteCookie(cookie) }
     }

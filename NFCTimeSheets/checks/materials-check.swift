@@ -149,8 +149,17 @@ func outcomes() {
           "a rejected payload is terminal - a human must act")
     check(MaterialQueue.outcome(of: APIFailure(status: 422, code: "unknown_location")) == .blocked,
           "a removed building is terminal")
-    check(MaterialQueue.outcome(of: APIFailure(status: 401, code: "no_session")) == .blocked,
-          "a dead session is terminal here; Session drops the app to signed out")
+    // INVERTED alongside APIFailure.isRetryable (decision-50's retry fix,
+    // checks/tag-link-check.swift): a dead session is a statement about the CREDENTIAL,
+    // not this request's payload. Session already drops the app to signed-out on this
+    // same 401 (API.swift's .sessionRejected), so the Materials tab is gone until the
+    // worker signs back in - and `.task(id: worker.id)` re-runs `push()` the moment it
+    // does, picking this row back up. `invalid_code` is the one 401 that stays terminal,
+    // and it cannot reach this queue: no material request is ever posted mid sign-in.
+    check(MaterialQueue.outcome(of: APIFailure(status: 401, code: "no_session")) == .retryLater,
+          "a dead session retries once the worker signs back in")
+    check(MaterialQueue.outcome(of: APIFailure(status: 401, code: "invalid_code")) == .blocked,
+          "invalid_code stays terminal even here, for the same reason it does in shift sync")
 
     // Every arm says something. A blank row is a row that looks sent.
     for failure in [APIFailure(status: 0, code: "network"),

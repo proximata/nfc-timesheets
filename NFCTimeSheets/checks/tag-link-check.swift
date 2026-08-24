@@ -98,6 +98,11 @@ check(APIFailure(status: 429, code: "too_many_attempts").isRetryable, "429 retry
 check(APIFailure(status: 409, code: "shift_already_open").isRetryable, "409 already-open retryable")
 check(!APIFailure(status: 400, code: "invalid_uuid").isRetryable, "400 terminal")
 check(!APIFailure(status: 422, code: "unknown_worker").isRetryable, "422 terminal")
+// 422 zone_unverified (server/lib/validate.js requireVerifiedPlace, decision-47) is the
+// ONE 422 that IS retryable: an operator's later test scan makes the identical request
+// succeed, so a locally-recorded worked shift must not be stranded by it.
+check(APIFailure(status: 422, code: "zone_unverified").isRetryable,
+      "422 zone_unverified retryable - a temporary server-config state, not a bad payload")
 
 // ContentView.handleTap no longer checks the LOCAL roster cache before recording a tap -
 // that guard refused valid tags on a cold launch, before any roster fetch had finished,
@@ -111,11 +116,17 @@ check(!unknownLocation.isRetryable, "422 unknown_location is terminal, so sync s
 check(unknownLocation.workerMessage == "This location was removed. Ask your admin.",
       "422 unknown_location tells the worker to involve the admin: \(unknownLocation.workerMessage)")
 check(!APIFailure(status: 404, code: "unknown_shift").isRetryable, "404 terminal")
-check(!APIFailure(status: 401, code: "unauthorized").isRetryable, "401 terminal")
+// INVERTED (ops/break-taps.sh §8): a worker session that lapses mid-shift 401s the
+// clock-out, and the bytes were always fine - a 401 is a statement about the CREDENTIAL,
+// not the payload. The old assertion here ("401 terminal") pinned the payroll data-loss
+// bug as if it were the design; retrying picks the row up the moment the cookie is back.
+check(APIFailure(status: 401, code: "unauthorized").isRetryable, "401 retryable, except invalid_code")
+// invalid_code IS THE ONE 401 THAT STAYS TERMINAL: a sign-in code is single-use and
+// rate-limited, so auto-retrying a rejected one would burn the worker's remaining
+// attempts and lock the phone out for fifteen minutes at the exact moment they are
+// trying to get in.
+check(!APIFailure(status: 401, code: "invalid_code").isRetryable, "401 invalid_code terminal")
 check(!APIFailure(status: 403, code: "not_eligible").isRetryable, "403 not_eligible terminal")
-// The relay address the ineligible screen reads out has to survive the error path.
-check(APIFailure(status: 403, code: "not_eligible", email: "x@privaterelay.appleid.com").email
-        == "x@privaterelay.appleid.com", "not_eligible carries the email Apple gave")
 
 // --- the wire bytes ---------------------------------------------------------------
 // Diff these against server/routes/app.js by eye. The previous build sent
@@ -144,19 +155,17 @@ check(json(CloseShiftRequest(clientUuid: key, endTime: start, autoClosed: false)
         == #"{"auto_closed":false,"client_uuid":"6b3a2c1d-0e4f-4a8b-9c7d-1e2f3a4b5c6d","end_time":"2026-07-14T03:43:11.412Z"}"#,
       "POST /shifts/close body")
 
-check(json(AppleSignInRequest(identityToken: "eyJ.a.b", nonce: "deadbeef", name: "Ada L"))
-        == #"{"identity_token":"eyJ.a.b","name":"Ada L","nonce":"deadbeef"}"#,
-      "POST /auth/apple body")
-
-// --- the nonce ---------------------------------------------------------------------
-// The HASH goes to Apple, the RAW value goes to our server, which re-hashes and compares.
-// Both halves must agree on this exact spelling - lowercase hex SHA-256 over UTF-8 - or
-// every sign-in 401s. Pinned to the standard "abc" vector so a refactor cannot drift.
-check(AppleNonce.hashed("abc")
-        == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-      "nonce hash is lowercase hex sha-256: \(AppleNonce.hashed("abc"))")
-check(AppleNonce.raw().count == 64, "raw nonce is 32 bytes of hex")
-check(AppleNonce.raw() != AppleNonce.raw(), "a nonce that repeats is not a nonce")
+// POST /auth/apple, AppleSignInRequest and AppleNonce are gone from this file with
+// decision-50 - Sign in with Apple is retired from this app. server/routes/auth.js keeps
+// the route (deprecated in words, not deleted), but nothing on iOS encodes its body any
+// more, so there is nothing left here to pin.
+check(json(CodeRequest(code: "K7QF3MZ2")) == #"{"code":"K7QF3MZ2"}"#,
+      "POST /auth/code body")
+check(json(PhoneRequest(phone: "+436641234567")) == #"{"phone":"+436641234567"}"#,
+      "POST /auth/sms/request body")
+check(json(SmsVerifyRequest(phone: "+436641234567", code: "123456"))
+        == #"{"code":"123456","phone":"+436641234567"}"#,
+      "POST /auth/sms/verify body")
 
 check(json(ResolveShiftRequest(endTime: start)) == #"{"end_time":"2026-07-14T03:43:11.412Z"}"#,
       "POST /shifts/:id/resolve body")

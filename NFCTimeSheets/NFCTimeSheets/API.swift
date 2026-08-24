@@ -2,10 +2,10 @@
 //  API.swift
 //  NFCTimeSheets
 //
-//  The wire contract, and nothing else. Foundation + CryptoKit only - no SwiftUI, no
-//  SwiftData, no AuthenticationServices - so checks/tag-link-check.swift can compile and
-//  exercise it outside Xcode. (Branding.swift and TagLink.swift are Foundation-only too and
-//  must be concatenated ahead of this file; see the header of that check.)
+//  The wire contract, and nothing else. Foundation only - no SwiftUI, no SwiftData, no
+//  AuthenticationServices - so checks/tag-link-check.swift can compile and exercise it
+//  outside Xcode. (Branding.swift and TagLink.swift are Foundation-only too and must be
+//  concatenated ahead of this file; see the header of that check.)
 //
 //  Every field name below is snake_case and spelled out in an explicit CodingKeys. The
 //  previous version of this file used camelCase names of its own invention ("worker",
@@ -15,7 +15,6 @@
 //  by eye. Do not replace them with .convertToSnakeCase.
 //
 
-import CryptoKit
 import Foundation
 
 enum API {
@@ -33,8 +32,9 @@ enum API {
     // phone. It is a coarse gate against unauthenticated internet noise, nothing more.
     //
     // Since decision-22 it carries no authority on its own: /roster and every /shifts/*
-    // route require a worker session from Sign in with Apple, and the app key alone
-    // answers 401. Extracting it buys an attacker no ability to file or read hours.
+    // route require a worker session (SMS OTP or the admin-issued code, decision-50), and
+    // the app key alone answers 401. Extracting it buys an attacker no ability to file or
+    // read hours.
     //
     // Because it is not a secret it is intentionally NOT in the psst vault - keeping it
     // there blocked every commit touching this file for no security gain. THIS LINE IS
@@ -124,18 +124,12 @@ struct APIFailure: Error {
     let status: Int
     let code: String
     let field: String?
-    /// Only ever set by 403 not_eligible: the address Apple actually handed the server.
-    /// With Hide My Email that is a relay address the admin cannot know in advance, so
-    /// echoing it back is the whole mechanism - the worker reads it to their manager
-    /// who pastes it into the worker record. There is no approval queue by design.
-    let email: String?
     let body: Data?
 
-    init(status: Int, code: String, field: String? = nil, email: String? = nil, body: Data? = nil) {
+    init(status: Int, code: String, field: String? = nil, body: Data? = nil) {
         self.status = status
         self.code = code
         self.field = field
-        self.email = email
         self.body = body
     }
 
@@ -149,9 +143,25 @@ struct APIFailure: Error {
     /// 409 shift_already_open is the one 4xx that is retryable: it means an OLDER shift
     /// of ours has not been closed on the server yet. The sync pass works in start-time
     /// order, so the next pass closes that one first and this open then lands.
+    ///
+    /// 422 zone_unverified is retryable for the same reason: requireVerifiedPlace
+    /// (server/lib/validate.js) rejects a clock-in at a zone an operator has not yet
+    /// test-scanned (decision-47), which is a temporary state of the SERVER's
+    /// configuration, not a defect in this payload - the operator's scan later makes the
+    /// identical request succeed, so a locally-recorded worked shift must not be stranded
+    /// by it.
+    ///
+    /// Every OTHER 401 is retryable, and that is the fix for a measured payroll data-loss
+    /// bug (ops/break-taps.sh §8): a worker session that lapses mid-shift 401s the
+    /// clock-out, and the bytes were always fine - a 401 is a statement about the
+    /// CREDENTIAL, not the payload. The one exception is `invalid_code`: a sign-in code is
+    /// single-use and rate-limited, so auto-retrying a rejected one would burn the
+    /// worker's remaining attempts and lock the phone out for fifteen minutes at the exact
+    /// moment they are trying to get in. See checks/tag-link-check.swift for the vectors
+    /// this exact expression is pinned against.
     var isRetryable: Bool {
-        if code == "shift_already_open" { return true }
-        return status == 0 || status == 408 || status == 429 || status >= 500
+        code == "shift_already_open" || code == "zone_unverified" || (status == 401 && code != "invalid_code")
+            || status == 0 || status == 408 || status == 429 || status >= 500
     }
 
     /// Shown to the worker. Deliberately says what to DO, not what broke.
@@ -189,10 +199,10 @@ struct APIFailure: Error {
             return String(localized: "This app version was rejected by the server. Update it.")
         case "no_session":
             return String(localized: "You were signed out. Sign in again.")
-        case "invalid_token":
-            return String(localized: "Apple sign-in failed. Try again.")
-        case "not_eligible":
-            return String(localized: "This Apple ID isn't registered as a worker.")
+        case "zone_unverified":
+            // decision-47 / server/lib/validate.js requireVerifiedPlace. Same wording as
+            // Android's err_zone_unverified - one sentence across both phones.
+            return String(localized: "This tag hasn't been activated yet. No shift was started. Please contact your administration.")
         case "too_many_attempts":
             return String(localized: "Too many attempts - try again shortly.")
         default:
@@ -210,31 +220,10 @@ struct WireWorker: Codable, Identifiable, Hashable {
     let name: String
 }
 
-// MARK: - Auth (decision-22)
+// MARK: - Auth (decision-22, decision-50)
 
-/// POST /auth/apple body.
-///
-/// `nonce` is the RAW nonce. The value handed to Apple is its SHA-256 hex, so the token
-/// itself never carries the raw value; the server re-hashes this field and compares.
-/// Sending the token without a nonce would let a token minted for another session be
-/// replayed here.
-///
-/// `name` is present on the FIRST authorization only - Apple never sends it again, for
-/// any later sign-in, on any device. The server takes it as a hint and nothing more:
-/// the worker's real name lives in the workers row the admin created.
-struct AppleSignInRequest: Encodable {
-    let identityToken: String
-    let nonce: String
-    let name: String?
-
-    enum CodingKeys: String, CodingKey {
-        case identityToken = "identity_token"
-        case nonce
-        case name
-    }
-}
-
-/// 200 from POST /auth/apple and GET /auth/session. The session cookie rides in the headers.
+/// 200 from POST /auth/sms/verify, POST /auth/code and GET /auth/session. The session
+/// cookie rides in the headers.
 /// `expiresAt` is informational and OPTIONAL: only the sign-in response carries it,
 /// /auth/session answers with the worker alone. The server enforces expiry either way,
 /// so the app never pre-empts it.
@@ -375,16 +364,19 @@ private func send(_ request: URLRequest) async throws -> Data {
 
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     guard (200..<300).contains(status) else {
-        // Server error bodies are `{"error":"code"}` (+ optional `"field"` / `"email"`).
+        // Server error bodies are `{"error":"code"}` (+ optional `"field"`).
         let parsed = try? Wire.decoder.decode(WireError.self, from: data)
-        // Any 401 means this session is not coming back: expired, revoked, or the worker
-        // was deactivated in the admin panel. Drop to signed-out ONCE, from here, rather
-        // than letting each caller retry a request that can never succeed (decision-22).
-        if status == 401 { NotificationCenter.default.post(name: .sessionRejected, object: nil) }
+        // Any 401 that is not invalid_code means this session is not coming back: expired,
+        // revoked, or the worker was deactivated in the admin panel. Drop to signed-out
+        // ONCE, from here, rather than letting each caller retry a request that can never
+        // succeed (decision-22). invalid_code is a sign-IN rejection, not a session loss -
+        // there is no session yet to drop - so it must NOT post this notification.
+        if status == 401, parsed?.error != "invalid_code" {
+            NotificationCenter.default.post(name: .sessionRejected, object: nil)
+        }
         throw APIFailure(status: status,
                          code: parsed?.error ?? "http_\(status)",
                          field: parsed?.field,
-                         email: parsed?.email,
                          body: data)
     }
     return data
@@ -393,7 +385,6 @@ private func send(_ request: URLRequest) async throws -> Data {
 private struct WireError: Decodable {
     let error: String
     let field: String?
-    let email: String?
 }
 
 /// The worker session rides in a cookie, held by URLSession's shared cookie store. No
@@ -419,13 +410,34 @@ func apiPost<In: Encodable, Out: Decodable>(_ path: String, _ body: In) async th
 // MARK: - Endpoints
 
 /// Sign-in, session restore, sign-out. Everything else on the app surface assumes the
-/// cookie one of these left behind.
+/// cookie one of these left behind. Sign in with Apple is retired from this app
+/// (decision-50); the two doors below are the whole surface. POST /auth/apple stays on
+/// the SERVER (deprecated in words, not deleted - see server/routes/auth.js), but this
+/// file has no caller for it any more.
 enum AuthAPI {
-    /// POST /auth/apple {identity_token, nonce, name?}
-    /// 200 signed in · 403 not_eligible (+ the email Apple gave) · 401 invalid_token.
-    static func signInWithApple(identityToken: String, nonce: String, name: String?) async throws -> WireSession {
-        try await apiPost("/auth/apple",
-                          AppleSignInRequest(identityToken: identityToken, nonce: nonce, name: name))
+    /// POST /auth/sms/request {phone} -> 202 {status:"accepted"}.
+    ///   404 unknown_phone (decision-51) · 422 invalid_phone (shape only) ·
+    ///   429 too_many_attempts · 503 sms_not_configured.
+    /// Mints no session - the caller (Session.requestSmsCode) only learns whether a code
+    /// went out. The specific failure copy lives beside the field it is shown next to
+    /// (ContentView.swift SignInView), not here.
+    static func requestSmsCode(phone: String) async throws -> WireSmsRequestAck {
+        try await apiPost("/auth/sms/request", PhoneRequest(phone: phone))
+    }
+
+    /// POST /auth/sms/verify {phone, code} -> worker session cookie (ts_worker).
+    /// BYTE-IDENTICAL 200 body to POST /auth/code's.
+    ///   401 invalid_code (every failure mode) · 429 too_many_attempts · 503 sms_not_configured.
+    static func verifySmsCode(phone: String, code: String) async throws -> WireSession {
+        try await apiPost("/auth/sms/verify", SmsVerifyRequest(phone: phone, code: code))
+    }
+
+    /// POST /auth/code {code} -> worker session cookie (ts_worker). decision-26: the
+    /// admin-issued enrolment code, EnrolmentCode.swift-normalised by the caller before
+    /// this is ever reached.
+    ///   401 invalid_code (every failure mode) · 429 too_many_attempts.
+    static func signInWithCode(_ code: String) async throws -> WireSession {
+        try await apiPost("/auth/code", CodeRequest(code: code))
     }
 
     /// GET /auth/session - is this cookie still a worker? 401 when it is not.
@@ -439,29 +451,18 @@ enum AuthAPI {
     }
 }
 
+private struct PhoneRequest: Encodable { let phone: String }
+private struct CodeRequest: Encodable { let code: String }
+private struct SmsVerifyRequest: Encodable { let phone: String; let code: String }
+
+/// 202 body of POST /auth/sms/request. The one field is never inspected - a 2xx status is
+/// already the whole answer - but it is decoded so a shape change on the server is a
+/// decode failure here, not a silently-ignored body.
+struct WireSmsRequestAck: Decodable { let status: String }
+
 /// POST with no fields. `{}` rather than an empty body so the server's JSON parse is
 /// never handed zero bytes.
 private struct WireLogoutRequest: Encodable {}
-
-/// Replay protection for the Apple identity token.
-///
-/// Apple copies whatever string is put in `ASAuthorizationAppleIDRequest.nonce` into the
-/// token's `nonce` claim verbatim. So the HASH goes to Apple and the RAW value goes to
-/// our server, which re-hashes it and compares. Anyone who intercepts the token learns
-/// only the hash and cannot construct the matching body. Both halves must agree on this
-/// exact spelling - lowercase hex of SHA-256 over the raw string's UTF-8 - or every
-/// single sign-in 401s. checks/tag-link-check.swift pins it to a known vector.
-enum AppleNonce {
-    /// 32 bytes of hex. SystemRandomNumberGenerator is documented as cryptographically
-    /// secure on Apple platforms, so this needs no SecRandomCopyBytes ceremony.
-    static func raw() -> String {
-        (0..<32).map { _ in String(format: "%02x", UInt8.random(in: .min ... .max)) }.joined()
-    }
-
-    static func hashed(_ raw: String) -> String {
-        SHA256.hash(data: Data(raw.utf8)).map { String(format: "%02x", $0) }.joined()
-    }
-}
 
 enum ShiftAPI {
     /// POST /shifts/open  {client_uuid, location_uuid, start_time}

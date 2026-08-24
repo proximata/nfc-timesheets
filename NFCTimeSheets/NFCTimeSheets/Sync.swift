@@ -16,9 +16,11 @@ import SwiftData
 /// Drop what the picker era left behind: the self-chosen worker id/name, and the cached
 /// list of every colleague's name. Nothing reads these any more (decision-22), but they
 /// sit in the app's defaults plist - and in its backups - until something deletes them.
+/// `session.appleUserId` joins the list for the same reason (decision-50): Sign in with
+/// Apple is retired from this screen, and Auth.swift no longer writes or reads that key.
 /// One upgrade does it; the keys are dead and will never be written again.
 func purgeLegacyIdentityDefaults() {
-    for key in ["workerId", "workerName", "rosterWorkersV2", "rosterWorkers"] {
+    for key in ["workerId", "workerName", "rosterWorkersV2", "rosterWorkers", "session.appleUserId"] {
         UserDefaults.standard.removeObject(forKey: key)
     }
 }

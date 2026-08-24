@@ -3,16 +3,15 @@
 //  NFCTimeSheets
 //
 
-import AuthenticationServices
 import SwiftUI
 import SwiftData
 
 // The API layer lives in API.swift, the sync engine in Sync.swift, identity in Auth.swift.
 // There is no admin screen here: admin is password-authenticated on the web (decision-20).
 
-/// The whole app is one of three screens, chosen by the server's answer to "who is this?"
-/// (decision-22). There is no path from the ineligible screen into the tabs - not a
-/// button, not a link, not a swipe - because the tabs are not built at all in that state.
+/// The whole app is one of two screens, chosen by the server's answer to "who is this?"
+/// (decision-22). Sign-in offers SMS and the admin-issued code, both always visible, never
+/// gated (decision-50) - there is no third, dead-end screen any more.
 struct ContentView: View {
     @Environment(Session.self) private var session
     /// Rows an on-device migration archived, shown once as a receipt. Loaded lazily and
@@ -40,8 +39,6 @@ struct ContentView: View {
                 .accessibilityLabel("Checking your sign-in")
         case .signedOut(let reason):
             SignInView(reason: reason)
-        case .ineligible(let email):
-            IneligibleView(email: email)
         case .eligible(let worker):
             // THE LOCK. While a shift runs the tab bar is shorter: History goes, because
             // nothing in it is time-critical. Materials and Settings never go, because a
@@ -99,137 +96,243 @@ struct ContentView: View {
 
 // MARK: - State (a): signed out
 
-/// A title, a sentence, and Apple's own button. Nothing to tap that is not sign-in -
-/// there is nothing in this app to see before the server says who you are.
+/// Two doors, both always visible, neither gated (decision-50): an SMS one-time code, and
+/// the admin-issued enrolment code EnrolmentCode.swift already normalises for
+/// OperatorSignInScreen. No `GET /auth/capabilities` check here, unlike Android - with
+/// Apple gone, hiding SMS behind a flag could leave a phone with exactly one door, and a
+/// control that answers 503 the moment it is pressed says so in the copy right where the
+/// tap happened (decision-50 §1).
 struct SignInView: View {
     @Environment(Session.self) private var session
-    @Environment(\.colorScheme) private var colorScheme
-    /// Why the last attempt failed, if it did. nil after a plain cancel.
+    /// Why the last attempt failed, if it did. Screen-level only (e.g. a dropped
+    /// session) - the field-level SMS/code errors below are local @State.
     let reason: String?
 
+    // SMS door. `sentTo` mirrors Android's rememberSaveable shape: non-nil only once a
+    // request has been ACCEPTED for this exact string, and the ONLY way back to phone
+    // entry is the "Use a different number" button - so the code field can never sit next
+    // to a number nothing was sent to.
+    @State private var phone = ""
+    @State private var sentTo: String?
+    @State private var otp = ""
+    @State private var phoneErrorMessage: String?
+    @State private var otpErrorMessage: String?
+
+    // Enrolment-code door.
+    @State private var enrolmentInput = ""
+    @State private var enrolmentErrorMessage: String?
+
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            Image(systemName: "wave.3.right")
-                .font(.system(size: 56))
-                .foregroundStyle(.tint)
-                .accessibilityHidden(true)
-            Text("NFC TimeSheets")
-                .font(.largeTitle.bold())
-                .accessibilityAddTraits(.isHeader)
-            Text("Sign in to log your hours.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-            if let reason {
-                Text(reason)
+        Form {
+            Section {
+                VStack(spacing: 12) {
+                    Image(systemName: "wave.3.right")
+                        .font(.system(size: 44))
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                    Text("NFC TimeSheets")
+                        .font(.title.bold())
+                        .accessibilityAddTraits(.isHeader)
+                    Text("Sign in to log your hours.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    if let reason {
+                        Text(reason)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
+                .padding(.vertical, 6)
+            }
+            .listRowBackground(Color.clear)
+
+            smsSection
+            enrolmentSection
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    // MARK: SMS door
+
+    @ViewBuilder
+    private var smsSection: some View {
+        if let target = sentTo {
+            Section {
+                Text("A 6-digit code was sent to \(target).")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                TextField("SMS code", text: $otp)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .onChange(of: otp) { _, new in
+                        // Digits only, capped at 6 - an OTP has no alphabet to alias, so
+                        // there is nothing here for an EnrolmentCode-style normaliser to do.
+                        otp = String(new.filter(\.isNumber).prefix(6))
+                        otpErrorMessage = nil
+                    }
+                    .accessibilityLabel("SMS code")
+                if let otpErrorMessage {
+                    Text(otpErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+                Button("Confirm") { verifyOtp() }
+                    .disabled(session.busy || otp.count != 6)
+                Button("Use a different number") {
+                    sentTo = nil
+                    otp = ""
+                    otpErrorMessage = nil
+                }
+                .disabled(session.busy)
+            } header: {
+                Text("Sign in by SMS")
+            }
+        } else {
+            Section {
+                TextField("Phone number", text: $phone)
+                    .keyboardType(.phonePad)
+                    .textContentType(.telephoneNumber)
+                    .onChange(of: phone) { _, _ in phoneErrorMessage = nil }
+                    .accessibilityLabel("Phone number")
+                if let phoneErrorMessage {
+                    Text(phoneErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                } else {
+                    Text("Start with 0 or +43, for example 0664 1234567.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Button("Send code") { requestCode() }
+                    .disabled(session.busy || phone.isEmpty)
+            } header: {
+                Text("Sign in by SMS")
+            }
+        }
+    }
+
+    // MARK: Enrolment-code door
+
+    private var enrolmentSection: some View {
+        Section {
+            TextField("Access code", text: $enrolmentInput)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .onChange(of: enrolmentInput) { _, _ in enrolmentErrorMessage = nil }
+                .accessibilityLabel("Access code")
+            if let enrolmentErrorMessage {
+                Text(enrolmentErrorMessage)
                     .font(.footnote)
                     .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-            }
-            Spacer()
-            // Apple's own control, not a lookalike: it is localised, accessible and
-            // sized by the system, and the HIG rules about its appearance make a
-            // hand-rolled version a review risk for no gain.
-            SignInWithAppleButton(.signIn) { request in
-                session.prepare(request)
-            } onCompletion: { result in
-                Task { await session.complete(result) }
-            }
-            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-            .frame(maxWidth: 360, minHeight: 50)
-            .disabled(session.busy)
-            .opacity(session.busy ? 0.5 : 1)
-        }
-        .padding(28)
-        .multilineTextAlignment(.center)
-    }
-}
-
-// MARK: - State (c): signed in, not a worker
-
-/// A DEAD END, deliberately. No tabs, no navigation, no retry-into-the-app.
-///
-/// The only way forward is a human one: the worker reads the address below to their
-/// manager, who pastes it into the worker record in the admin panel. With Hide My Email
-/// that address is a per-app relay nobody could have registered in advance, so a first
-/// sign-in landing here is normal rather than an error - which is exactly why the
-/// address has to be on screen, and why there is no approval queue to build.
-///
-/// Sign out is the one permitted control: they may simply have used the wrong Apple ID.
-struct IneligibleView: View {
-    @Environment(Session.self) private var session
-    let email: String?
-
-    private var message: String {
-        email == nil
-            ? String(localized: "This Apple ID isn't registered as a worker. Ask your manager to add you, then sign in again.")
-            : String(localized: "This Apple ID isn't registered as a worker yet. Read the address below to your manager and ask them to add it to your worker record, then sign in again.")
-    }
-
-    var body: some View {
-        // ScrollView, not VStack: at the largest accessibility text sizes this content is
-        // taller than the screen, and a locked-out worker who cannot read WHY is worse
-        // off than one who has to scroll.
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Image(systemName: "person.crop.circle.badge.xmark")
-                    .font(.largeTitle)
-                    .foregroundStyle(.orange)
-                    .accessibilityHidden(true)   // decorative; the text below says it
-
-                Text("You're not on the worker list")
-                    .font(.title2.bold())
-                    .accessibilityAddTraits(.isHeader)
-
-                Text(message)
-                    .font(.body)
+            } else {
+                Text("The one-time code your administration gave you.")
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
-
-                if let email {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Your sign-in address")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Text(email)
-                            .font(.body.monospaced())
-                            .textSelection(.enabled)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-                    // Read as one item, and spelled out: "j7k2p" said as a word is
-                    // useless to someone dictating it down a phone line.
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Your sign-in address: \(Self.spelledOut(email))")
-                    .accessibilityValue(email)
-                }
-
-                Button("Sign out") { Task { await session.signOut() } }
-                    .buttonStyle(.bordered)
-                    .disabled(session.busy)
-                    .accessibilityHint("Returns to the sign-in screen so you can use a different Apple ID")
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(28)
-        }
-        // VoiceOver lands on a screen with no obvious focus otherwise, and the reason for
-        // being locked out is the entire content of this screen. Say it out loud.
-        .task {
-            try? await Task.sleep(for: .milliseconds(600))  // let the screen settle first
-            AccessibilityNotification.Announcement(
-                email.map { "\(message) \(Self.spelledOut($0))" } ?? message
-            ).post()
+            Button("Sign in with code") { submitEnrolmentCode() }
+                .disabled(session.busy || EnrolmentCode.normalise(enrolmentInput) == nil)
+        } header: {
+            Text("Sign in with an access code")
         }
     }
 
-    /// Local part letter by letter, domain as words. A relay address is random noise
-    /// before the @ and a fixed hostname after it.
-    private static func spelledOut(_ email: String) -> String {
-        guard let at = email.firstIndex(of: "@") else {
-            return email.map(String.init).joined(separator: " ")
+    // MARK: Actions
+
+    private func requestCode() {
+        guard !session.busy, !phone.isEmpty else { return }
+        let requested = phone
+        Task {
+            do {
+                try await session.requestSmsCode(phone: requested)
+                sentTo = requested
+                phoneErrorMessage = nil
+                otp = ""
+                otpErrorMessage = nil
+            } catch let failure as APIFailure {
+                phoneErrorMessage = Self.phoneRequestMessage(for: failure)
+            } catch {
+                phoneErrorMessage = APIFailure(status: 0, code: "network").workerMessage
+            }
         }
-        let local = email[..<at].map(String.init).joined(separator: " ")
-        return "\(local) at \(email[email.index(after: at)...])"
+    }
+
+    private func verifyOtp() {
+        guard !session.busy, let target = sentTo, otp.count == 6 else { return }
+        Task {
+            do {
+                try await session.verifySmsCode(phone: target, code: otp)
+                // Success moves the whole screen to .eligible; nothing left to reset here.
+            } catch let failure as APIFailure {
+                otpErrorMessage = Self.otpVerifyMessage(for: failure)
+            } catch {
+                otpErrorMessage = APIFailure(status: 0, code: "network").workerMessage
+            }
+        }
+    }
+
+    private func submitEnrolmentCode() {
+        guard !session.busy, let code = EnrolmentCode.normalise(enrolmentInput) else { return }
+        Task {
+            do {
+                try await session.signInWithCode(code)
+            } catch let failure as APIFailure {
+                enrolmentErrorMessage = Self.enrolmentCodeMessage(for: failure)
+            } catch {
+                enrolmentErrorMessage = APIFailure(status: 0, code: "network").workerMessage
+            }
+        }
+    }
+
+    // MARK: Error copy
+    //
+    // Distinct per outcome and per field (decision-50 §1): the SAME server code means a
+    // different next action depending on which field is on screen, so none of these go
+    // through APIFailure.workerMessage's generic switch - that one is shift-sync copy.
+
+    private static func phoneRequestMessage(for failure: APIFailure) -> String {
+        switch failure.code {
+        case "unknown_phone":
+            // decision-51: the number is well-formed but not on file. Never the same
+            // sentence as an invalid code - nobody re-issues this, the admin adds the number.
+            return String(localized: "This number isn't on file. Please contact your administration so it can be added.")
+        case "invalid_phone":
+            return String(localized: "That phone number doesn't look right.")
+        case "too_many_attempts":
+            return String(localized: "Too many attempts - try again in a few minutes.")
+        case "sms_not_configured":
+            return String(localized: "SMS sign-in isn't set up on this server. Please use the access code below.")
+        default:
+            return failure.workerMessage
+        }
+    }
+
+    private static func otpVerifyMessage(for failure: APIFailure) -> String {
+        switch failure.code {
+        case "invalid_code":
+            // NEVER the enrolment field's "ask your admin for a new one" - an OTP is
+            // re-requested by the WORKER, not reissued by an admin.
+            return String(localized: "That code is wrong or has expired.")
+        case "too_many_attempts":
+            return String(localized: "Too many attempts - try again in a few minutes.")
+        case "sms_not_configured":
+            return String(localized: "SMS sign-in isn't set up on this server. Please use the access code below.")
+        default:
+            return failure.workerMessage
+        }
+    }
+
+    private static func enrolmentCodeMessage(for failure: APIFailure) -> String {
+        switch failure.code {
+        case "invalid_code":
+            return String(localized: "Code not accepted. Ask your admin for a new one.")
+        case "too_many_attempts":
+            return String(localized: "Too many attempts - try again in a few minutes.")
+        default:
+            return failure.workerMessage
+        }
     }
 }
 
@@ -704,16 +807,6 @@ struct SettingsView: View {
                 Section {
                     Text("Hours, locations and payroll are managed by your admin on the web.")
                         .font(.footnote).foregroundStyle(.secondary)
-                }
-                // Not a flash-and-gone. A worker who dismissed the receipt at 06:00 at a
-                // door can find out later what was cleared off their phone and why.
-                Section {
-                    NavigationLink("Migration history") {
-                        MigrationHistoryView()
-                    }
-                } footer: {
-                    Text("Records an app update archived or flagged on this phone.")
-                        .font(.footnote)
                 }
                 // decision-45: a SEPARATE identity for a SEPARATE credential. Reachable
                 // from here because a worker's own phone may also be the one an operator

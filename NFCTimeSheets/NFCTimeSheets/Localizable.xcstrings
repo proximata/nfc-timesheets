@@ -131,6 +131,26 @@
         }
       }
     },
+    "A 6-digit code was sent to %@.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein 6-stelliger Code wurde an %@ gesendet."
+          }
+        }
+      }
+    },
+    "Access code": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zugangscode"
+          }
+        }
+      }
+    },
     "Already verified %@.": {
       "localizations": {
         "de": {
@@ -157,16 +177,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "App-Aktualisierung"
-          }
-        }
-      }
-    },
-    "Apple sign-in failed. Try again.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anmeldung mit Apple fehlgeschlagen. Bitte erneut versuchen."
           }
         }
       }
@@ -251,12 +261,32 @@
         }
       }
     },
+    "Code not accepted. Ask your admin for a new one.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Code wird nicht angenommen. Bitte einen neuen Code bei Ihrer Verwaltung anfordern."
+          }
+        }
+      }
+    },
     "Code not accepted. Check it and try again.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "Code nicht akzeptiert. Bitte prüfen und erneut versuchen."
+          }
+        }
+      }
+    },
+    "Confirm": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bestätigen"
           }
         }
       }
@@ -537,16 +567,6 @@
         }
       }
     },
-    "Migration history": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verlauf der Umstellungen"
-          }
-        }
-      }
-    },
     "NFC TimeSheets": {
       "localizations": {
         "de": {
@@ -747,6 +767,16 @@
         }
       }
     },
+    "Phone number": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Telefonnummer"
+          }
+        }
+      }
+    },
     "Pick the zone you're testing": {
       "localizations": {
         "de": {
@@ -807,16 +837,6 @@
         }
       }
     },
-    "Records an app update archived or flagged on this phone.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zeigt, was eine App-Aktualisierung auf diesem Telefon archiviert oder markiert hat."
-          }
-        }
-      }
-    },
     "Rejected by the server (%@). Ask your admin.": {
       "localizations": {
         "de": {
@@ -847,22 +867,32 @@
         }
       }
     },
-    "Returns to the sign-in screen so you can use a different Apple ID": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zurück zur Anmeldung, um eine andere Apple-ID zu verwenden"
-          }
-        }
-      }
-    },
     "Running": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "Läuft"
+          }
+        }
+      }
+    },
+    "SMS code": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SMS-Code"
+          }
+        }
+      }
+    },
+    "SMS sign-in isn't set up on this server. Please use the access code below.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SMS-Anmeldung ist auf diesem Server nicht eingerichtet. Bitte den Zugangscode verwenden."
           }
         }
       }
@@ -883,6 +913,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Karte scannen"
+          }
+        }
+      }
+    },
+    "Send code": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code senden"
           }
         }
       }
@@ -1033,12 +1073,42 @@
         }
       }
     },
+    "Sign in by SMS": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Per SMS anmelden"
+          }
+        }
+      }
+    },
     "Sign in to log your hours.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "Melden Sie sich an, um Ihre Stunden zu erfassen."
+          }
+        }
+      }
+    },
+    "Sign in with an access code": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit Zugangscode anmelden"
+          }
+        }
+      }
+    },
+    "Sign in with code": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit Code anmelden"
           }
         }
       }
@@ -1099,6 +1169,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Etwas stimmt nicht? Fragen Sie Ihre Verwaltung – Stunden, Objekte und Abrechnung werden im Web verwaltet. Material anfordern und Abmelden erreichen Sie weiterhin über die Reiter unten."
+          }
+        }
+      }
+    },
+    "Start with 0 or +43, for example 0664 1234567.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit 0 oder +43 beginnen, zum Beispiel 0664 1234567."
           }
         }
       }
@@ -1183,12 +1263,32 @@
         }
       }
     },
+    "That code is wrong or has expired.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Code stimmt nicht oder ist abgelaufen."
+          }
+        }
+      }
+    },
     "That doesn't look like an operator code.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "Das sieht nicht nach einem gültigen Zugangscode aus."
+          }
+        }
+      }
+    },
+    "That phone number doesn't look right.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Telefonnummer sieht nicht richtig aus."
           }
         }
       }
@@ -1209,6 +1309,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Die Verwaltung liest die Anfragen im Web. Öffnen Sie diesen Reiter, um zu sehen, wann etwas eingetroffen ist – Ihr Telefon meldet sich nicht von selbst."
+          }
+        }
+      }
+    },
+    "The one-time code your administration gave you.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Einmalcode, den Sie von Ihrer Verwaltung erhalten haben."
           }
         }
       }
@@ -1269,36 +1379,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Diese Schichten wurden nach 8 Stunden automatisch beendet. Bitte eintragen, wann Sie tatsächlich fertig waren."
-          }
-        }
-      }
-    },
-    "This Apple ID isn't registered as a worker yet. Read the address below to your manager and ask them to add it to your worker record, then sign in again.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Diese Apple-ID ist noch nicht als Mitarbeiter registriert. Lesen Sie die Adresse unten Ihrer Verwaltung vor und lassen Sie sie in Ihrem Mitarbeiterdatensatz eintragen, dann melden Sie sich erneut an."
-          }
-        }
-      }
-    },
-    "This Apple ID isn't registered as a worker.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Diese Apple-ID ist nicht als Mitarbeiter registriert."
-          }
-        }
-      }
-    },
-    "This Apple ID isn't registered as a worker. Ask your manager to add you, then sign in again.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Diese Apple-ID ist nicht als Mitarbeiter registriert. Bitten Sie Ihre Verwaltung, Sie einzutragen, und melden Sie sich dann erneut an."
           }
         }
       }
@@ -1413,6 +1493,16 @@
         }
       }
     },
+    "This number isn't on file. Please contact your administration so it can be added.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Nummer ist nicht hinterlegt. Bitte bei Ihrer Verwaltung melden, damit sie eingetragen wird."
+          }
+        }
+      }
+    },
     "This phone's clock looks wrong. Check Date & Time in Settings.": {
       "localizations": {
         "de": {
@@ -1469,6 +1559,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Diese Schicht wurde von einem anderen Konto erfasst und kann nicht gesendet werden."
+          }
+        }
+      }
+    },
+    "This tag hasn't been activated yet. No shift was started. Please contact your administration.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Tag ist noch nicht freigeschaltet. Es wurde keine Schicht gestartet. Bitte bei der Verwaltung melden."
           }
         }
       }
@@ -1533,6 +1633,16 @@
         }
       }
     },
+    "Too many attempts - try again in a few minutes.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Versuche - bitte in ein paar Minuten erneut versuchen."
+          }
+        }
+      }
+    },
     "Too many attempts - try again shortly.": {
       "localizations": {
         "de": {
@@ -1579,6 +1689,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Unbekanntes Objekt"
+          }
+        }
+      }
+    },
+    "Use a different number": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Andere Nummer verwenden"
           }
         }
       }
@@ -1699,16 +1819,6 @@
         }
       }
     },
-    "You're not on the worker list": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sie stehen nicht auf der Mitarbeiterliste"
-          }
-        }
-      }
-    },
     "Your name is no longer on the roster. Ask your admin.": {
       "localizations": {
         "de": {
@@ -1735,26 +1845,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ihre Schicht bei %@ hat 8 Stunden erreicht und wurde automatisch beendet. Öffnen Sie die App und bestätigen Sie, wann Sie tatsächlich fertig waren – sonst wird sie nicht bezahlt."
-          }
-        }
-      }
-    },
-    "Your sign-in address": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ihre Anmeldeadresse"
-          }
-        }
-      }
-    },
-    "Your sign-in address: %@": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ihre Anmeldeadresse: %@"
           }
         }
       }

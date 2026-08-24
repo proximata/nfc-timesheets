@@ -2,26 +2,31 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- No com.apple.developer.nfc.readersession.formats key on purpose.
-	     That entitlement gates IN-APP reader sessions only. Clocking in uses BACKGROUND
-	     tag reading: iOS reads the tag with the app closed and opens the universal link
-	     below, which needs associated-domains + AASA and no NFC entitlement at all.
-	     Building against the iOS 26 SDK, "NDEF" is rejected outright (App Store error
-	     90778) and only "TAG" is accepted, so re-adding this key means adopting
-	     NFCTagReaderSession - not the old NFCNDEFReaderSession. -->
+	<!-- Worker identity used to be Apple-only (decision-22). It is retired from the sign-in
+	     SCREEN as of decision-50: the app offers SMS OTP and the admin-issued enrolment code,
+	     and nothing else. This key STAYS anyway - removing a capability is an Xcode click plus
+	     a provisioning-profile regeneration, i.e. the owner's, per decision-49, not an agent's -
+	     and an unused entitlement is inert. It is retired in the same later run that deletes
+	     POST /auth/apple server-side, once every TestFlight build has re-signed in through a
+	     new door. -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
 	<!-- Background tap: iOS opens https://schimmer-glanz.exe.xyz/t?l=<uuid> straight into
 	     the app. Requires the AASA file served from the API host (decision-4). -->
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>applinks:schimmer-glanz.exe.xyz</string>
 	</array>
-	<!-- Worker identity (decision-22). Apple ONLY, no Google: AuthenticationServices is a
-	     native framework with no SDK and no client secret in the binary, every user is on
-	     an iPhone already, and App Store guideline 4.8 makes any third-party provider drag
-	     Sign in with Apple along with it anyway. Google is an Android-launch problem. -->
-	<key>com.apple.developer.applesignin</key>
+	<!-- IN-APP reader session, for an OPERATOR's tag write and test scan only (decision-49) -
+	     never for the background clock-in tap above, which needs no NFC entitlement at all.
+	     Building against the iOS 26 SDK, "NDEF" is rejected outright (App Store error 90778)
+	     and only "TAG" is accepted, so this is NFCTagReaderSession, not NFCNDEFReaderSession -
+	     TAG and never NDEF. -->
+	<key>com.apple.developer.nfc.readersession.formats</key>
 	<array>
-		<string>Default</string>
+		<string>TAG</string>
 	</array>
 </dict>
 </plist>
