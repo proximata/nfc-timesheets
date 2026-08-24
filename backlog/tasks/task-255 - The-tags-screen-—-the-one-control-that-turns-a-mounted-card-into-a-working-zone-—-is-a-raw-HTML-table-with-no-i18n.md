@@ -3,9 +3,10 @@ id: TASK-255
 title: >-
   The /tags/ screen — the one control that turns a mounted card into a working
   zone — is a raw HTML table with no i18n
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-24 19:05'
+updated_date: '2026-08-24 19:36'
 labels:
   - web
   - ux
@@ -34,10 +35,27 @@ decision-47 constraint that must survive verbatim: 'Neues Gebaeude' is GONE and 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The screen uses the same PageHeader / ListPanel / Drawer primitives as /workers/, /operators/ and /locations/ — no raw bordered table, no default OS-styled radios or selects
-- [ ] #2 web/app/tags/page.tsx goes through useTranslations for every user-visible string; a grep for useTranslations in that file returns a non-zero count
-- [ ] #3 Every RESOLVE_ERROR_SENTENCES entry moves to de.json and en.json with exact key parity, and still says what to DO rather than printing the server code
-- [ ] #4 The reporter name, the report timestamp in Europe/Vienna, and the 6-char token stay on the row — nothing true is dropped to lighten the screen
-- [ ] #5 The sentence explaining that a new building is created tag-free under Objekte and the card then becomes its first zone survives verbatim (decision-47)
-- [ ] #6 The screen earns its place in lib/nav.ts, or the task records the deliberate decision that it stays URL-only
+- [x] #1 The screen uses the same PageHeader / ListPanel / Drawer primitives as /workers/, /operators/ and /locations/ — no raw bordered table, no default OS-styled radios or selects
+- [x] #2 web/app/tags/page.tsx goes through useTranslations for every user-visible string; a grep for useTranslations in that file returns a non-zero count
+- [x] #3 Every RESOLVE_ERROR_SENTENCES entry moves to de.json and en.json with exact key parity, and still says what to DO rather than printing the server code
+- [x] #4 The reporter name, the report timestamp in Europe/Vienna, and the 6-char token stay on the row — nothing true is dropped to lighten the screen
+- [x] #5 The sentence explaining that a new building is created tag-free under Objekte and the card then becomes its first zone survives verbatim (decision-47)
+- [x] #6 The screen earns its place in lib/nav.ts, or the task records the deliberate decision that it stays URL-only
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-24 19:36
+---
+VERIFIED independently at 08b30f7 (not from the build agent's claims).
+AC1 ✓ PageHeader/ListPanel/Drawer/Field/EmptyState imported and used; table is class=data-table, the same primitive /workers/ (line 905) and /operators/ (line 450) use, styled by globals.css and turned into cards <=1279px by components/ResponsiveTableLabels.tsx; radios gone, every select sits inside <Field> so .field select (globals.css:552) styles it — no OS default left.
+AC2 ✓ grep -c useTranslations app/tags/page.tsx = 3 (import + t('tags') + tError('error')); was 0. No bare JSX literal remains.
+AC3 ✓ all 8 RESOLVE_ERROR_SENTENCES entries plus the 'Abgelehnt vom Server' fallback are in de.json/en.json as errorInvalidField..errorRejected, German text byte-identical to the old literals, still says what to DO, never the code (RESOLVE_ERROR_KEYS maps code -> key).
+AC4 ✓ row keeps full 36-char id + 'Token: {last6}' + reported_at via format.dateTime with BUSINESS_TIME_ZONE='Europe/Vienna' + reported_by_operator_name (fallback '(unbekannt)').
+AC5 ✓ decision-47 sentence survives verbatim as tags.buildingNote: 'Ein NEUES Gebaeude wird zuerst unter <locationsLink>Objekte</locationsLink> angelegt — ohne Tag. Danach kann dieser Tag hier als erste Zone darin zugeordnet werden.' — same words as the pre-rewrite <p>, now via t.rich with a live /locations/ link. NOTE: it now renders inside the Drawer instead of inline in the row, i.e. one click deeper; same conditional depth as the old per-row form, judged parity not regression.
+AC6 ✓ deliberate: stays URL-only. /tags/ is in OFF_NAV_ROUTES (lib/nav.ts:100) with its way in documented, and /locations/ line 1221 renders the link (TAGS_PATH). check.mjs reachability guard passes non-vacuously. Recording that decision here satisfies the 'or' branch.
+i18n parity: independent key-set diff — de 1337 keys, en 1337, zero one-sided; new tags namespace is real Austrian German, not English copy-paste (only 3 identical values in the namespace, all legitimately identical: 'Tag', 'Zone', 'Token: {token}').
+Gates re-run by me: tsc --noEmit exit 0, biome check clean, node scripts/check.mjs all passed, pnpm build succeeded with /tags in the static route list.
+---
+<!-- COMMENTS:END -->
