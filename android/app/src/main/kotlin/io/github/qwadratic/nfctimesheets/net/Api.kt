@@ -21,6 +21,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.time.Instant
 
 /**
@@ -267,6 +268,21 @@ class Api(
         Wire.shift(
             post("/shifts/$shiftId/resolve", ResolveShiftRequest(endTime).toJson()).getJSONObject("shift"),
         )
+
+    /**
+     * GET /shifts/mine?since=<iso8601> — this session's worker only, newest first
+     * (decision-22: no `?worker=`, and this function takes no worker id — the only
+     * identity in play is the ts_worker cookie [send] already attaches). TASK-189:
+     * repurposes this read-only, already-scoped endpoint (previously called only by
+     * iOS's on-device migration reconciliation) for a worker-facing own-hours screen.
+     * `since` is REQUIRED server-side (400 without it) and is the caller's choice, not
+     * this class's — [TimeSheetViewModel.loadMyHours] picks a 60-day lookback.
+     */
+    suspend fun myShifts(since: Instant): List<WireShift> {
+        val query = URLEncoder.encode(Wire.string(since), "UTF-8")
+        val array = get("/shifts/mine?since=$query").getJSONArray("shifts")
+        return (0 until array.length()).map { Wire.shift(array.getJSONObject(it)) }
+    }
 
     // ---- material requests --------------------------------------------------------
     //

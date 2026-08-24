@@ -104,6 +104,10 @@
     <string name="status_running">Läuft</string>
     <string name="status_auto_closed">Automatisch beendet</string>
     <string name="status_corrected">Korrigiert</string>
+    <!-- ShiftRow zeigt für den normal geschlossenen Fall bisher gar kein Wort (status?.let{}
+         -> null -> leere Zeile). „Meine Stunden“ (TASK-189) muss IMMER ein Wort zeigen,
+         darum dieser eine neue Status. -->
+    <string name="status_closed">Abgeschlossen</string>
     <string name="sync_sent">Gesendet</string>
     <string name="sync_sending">Wird gesendet …</string>
 
@@ -195,6 +199,27 @@
     <string name="hours_format">%1$s Std.</string>
     <!-- %1$d = Stunden, %2$d = Minuten -->
     <string name="duration_format">%1$d Std. %2$d Min.</string>
+
+    <!-- Meine Stunden (TASK-189): read-only, GET /shifts/mine, 60-Tage-Fenster ohne
+         Datumsauswahl. Bewusst OHNE Summe, Stundensatz oder Euro-Betrag - dieser
+         Bildschirm zeigt nur, was der Server über vergangene Schichten gespeichert hat,
+         kein Geld. Kein Button hier kann eine Schicht schließen (decision-19/47). -->
+    <string name="myhours_open">Meine Stunden</string>
+    <string name="myhours_title">Meine Stunden</string>
+    <string name="myhours_window">Ihre Schichten der letzten 60 Tage, wie vom Server gespeichert.</string>
+    <string name="myhours_empty">In diesem Zeitraum keine Schichten.</string>
+    <string name="myhours_offline">Keine Verbindung. Ihre Stunden können gerade nicht geladen werden.</string>
+    <string name="myhours_error">Ihre Stunden konnten nicht geladen werden.</string>
+    <!-- %1$s = Datum -->
+    <string name="myhours_date">Datum: %1$s</string>
+    <!-- %1$s = Uhrzeit -->
+    <string name="myhours_start">Beginn: %1$s</string>
+    <!-- %1$s = Uhrzeit -->
+    <string name="myhours_end">Ende: %1$s</string>
+    <string name="myhours_end_open">Noch kein Ende</string>
+    <!-- %1$s = Dauer, z. B. „3 Std. 15 Min.“ -->
+    <string name="myhours_duration">Dauer: %1$s</string>
+    <string name="back">Zurück</string>
 
     <!-- Einstellungen -->
     <string name="settings_title">Einstellungen</string>

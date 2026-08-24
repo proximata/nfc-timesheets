@@ -100,6 +100,23 @@ data class MaterialState(
     val busy: Boolean = false,
 )
 
+/**
+ * „Meine Stunden“ (TASK-189): a read-only mirror of GET /shifts/mine, entirely separate
+ * from [LogState] — same discipline as [MaterialState]: NONE of this is reachable from
+ * handleTap, refresh() or the launch path, and this screen is never on the tap path.
+ *
+ * No cache, no persistence: [Loaded] holding stale content is impossible by construction
+ * because every load resets to [Loading] first (see [TimeSheetViewModel.loadMyHours]),
+ * so “nothing stale shown without being labelled stale” is not a caveat bolted onto a
+ * cache, it is just what this state machine does.
+ */
+sealed interface MyHoursState {
+    data object Loading : MyHoursState
+    data class Loaded(val shifts: List<WireShift>) : MyHoursState
+    /** @param offline true for ApiFailure.status == 0 (DNS/timeout/TLS/no network). */
+    data class Failed(val offline: Boolean) : MyHoursState
+}
+
 class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
     // THE TWO init{} LAUNCHES BELOW USED TO LIVE HERE, ABOVE EVERY PROPERTY THEY TOUCH —
@@ -147,6 +164,11 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
     private val _materials = MutableStateFlow(MaterialState())
     val materials: StateFlow<MaterialState> = _materials.asStateFlow()
+
+    /** „Meine Stunden“ (TASK-189). Its own StateFlow, never read or written by
+     *  [LogState]/handleTap/armSignals/writeTap — see [loadMyHours]. */
+    private val _myHours = MutableStateFlow<MyHoursState>(MyHoursState.Loading)
+    val myHours: StateFlow<MyHoursState> = _myHours.asStateFlow()
 
     /** A material pass is in flight. Two overlapping passes could post the same row twice. */
     private var materialPassRunning = false
@@ -716,6 +738,29 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { app.materialSync.markSeen(worker.id, request.id) }
             readMaterials()
+        }
+    }
+
+    /**
+     * „Meine Stunden“ (TASK-189): GET /shifts/mine for a 60-day window, recomputed fresh
+     * on every call — never persisted, never cached. Called ONLY from MyHoursScreen's
+     * `LaunchedEffect(Unit)`, which is keyed to that composable's own lifetime, so leaving
+     * and reopening the screen always re-fires this and the old [MyHoursState.Loaded]
+     * content is gone from state before the new fetch even starts.
+     *
+     * 60 days, not iOS's migration-reconciliation window: different caller, different
+     * `since` — this covers the current and prior payroll period without a date picker.
+     */
+    fun loadMyHours() {
+        if (_session.value !is SessionState.SignedIn) return
+        _myHours.value = MyHoursState.Loading
+        viewModelScope.launch {
+            try {
+                val since = Instant.now().minusSeconds(60 * 86_400L)
+                _myHours.value = MyHoursState.Loaded(app.api.myShifts(since))
+            } catch (failure: ApiFailure) {
+                _myHours.value = MyHoursState.Failed(offline = failure.status == 0)
+            }
         }
     }
 

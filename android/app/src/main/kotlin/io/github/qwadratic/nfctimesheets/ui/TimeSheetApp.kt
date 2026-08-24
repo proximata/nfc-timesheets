@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -1694,6 +1695,19 @@ private fun HistoryScreen(model: TimeSheetViewModel) {
 private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Unit) {
     val worker = (model.session.collectAsStateWithLifecycle().value as? SessionState.SignedIn)?.worker
     val shiftRunning = model.log.collectAsStateWithLifecycle().value.open != null
+
+    // „Meine Stunden“ (TASK-189) as a plain composable toggle, NOT a bottom-nav tab and NOT
+    // a new Activity: ShiftSignal.Tab, visibleTabs and SignedInScaffold's NavigationBar are
+    // all untouched. Reached only by a worker already signed in who taps Einstellungen —
+    // one of the two tabs ShiftSignal.visibleTabs guarantees stays visible in every shift
+    // state — and then this button. None of that fires during, before or as a side effect
+    // of a tag tap.
+    var showMyHours by rememberSaveable { mutableStateOf(false) }
+    if (showMyHours) {
+        MyHoursScreen(model, onBack = { showMyHours = false })
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1727,6 +1741,17 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
+        // „Meine Stunden“ entry point: same „about you“ grouping as signed-in-as/sign-out
+        // above, before the settings sections below it. Read-only — no rate, no total, no
+        // control that writes a shift (decision-19/47).
+        HorizontalDivider()
+        OutlinedButton(
+            onClick = { showMyHours = true },
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
+        ) { Text(stringResource(R.string.myhours_open)) }
+
         HorizontalDivider()
         LanguageSection()
 
@@ -1736,6 +1761,138 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
         HorizontalDivider()
         UpdateSection(model, shiftRunning, openIntent)
     }
+}
+
+/**
+ * „Meine Stunden“ (TASK-189): read-only, GET /shifts/mine, same LazyColumn/heading/empty-item
+ * pattern as [HistoryScreen] (the house reference for a read-only list screen), NOT
+ * [LogScreen] — that screen is tap-path clutter this one must stay clear of. Fetches on
+ * every entry (no caching across visits): leaving Settings' toggle off and coming back
+ * destroys and recreates this composable, so [LaunchedEffect] re-fires and the state goes
+ * back to [MyHoursState.Loading] before anything is shown.
+ *
+ * NO total, NO sum, NO aggregate anywhere — deliberately narrower than [HistoryScreen]'s
+ * „Diese Woche/Gesamt“ block. NO rate, NO euro amount. NO control that writes a shift
+ * (decision-19/47): this screen is read-only about the past, full stop.
+ */
+@Composable
+private fun MyHoursScreen(model: TimeSheetViewModel, onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+    LaunchedEffect(Unit) { model.loadMyHours() }
+    val state by model.myHours.collectAsStateWithLifecycle()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        // Explicit control, not gesture-only (house rule: labelled controls rather than
+        // gestures).
+        TextButton(onClick = onBack) { Text(stringResource(R.string.back)) }
+        Text(
+            stringResource(R.string.myhours_title),
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.semantics { heading() },
+        )
+        // States the 60-day window + "from the server", distinguishing this from the
+        // local Verlauf tab, which is the phone's own log of what it wrote.
+        Text(
+            stringResource(R.string.myhours_window),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        when (val current = state) {
+            is MyHoursState.Loading -> Centered { CircularProgressIndicator() }
+            is MyHoursState.Failed -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    stringResource(if (current.offline) R.string.myhours_offline else R.string.myhours_error),
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                )
+                OutlinedButton(onClick = model::loadMyHours) { Text(stringResource(R.string.log_refresh)) }
+            }
+            is MyHoursState.Loaded -> LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (current.shifts.isEmpty()) {
+                    item {
+                        Text(
+                            stringResource(R.string.myhours_empty),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                items(current.shifts, key = { it.id }) { MyHoursRow(it) }
+            }
+        }
+    }
+}
+
+/** One row: building, state word, date, start, end, duration — never a rate, never a total. */
+@Composable
+private fun MyHoursRow(shift: WireShift) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                shift.locationName ?: stringResource(R.string.unknown_location),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            // The word always carries the meaning on its own (AC#2/#5); colour is the
+            // second signal, same rule ShiftRow already applies, only for the
+            // auto-closed-unconfirmed case.
+            Text(
+                stringResource(myHoursStatusRes(shift)),
+                style = MaterialTheme.typography.labelMedium,
+                color = if (shift.needsResolution) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.tertiary
+                },
+            )
+        }
+        Text(stringResource(R.string.myhours_date, viennaDate(shift.startTime)), style = MaterialTheme.typography.bodySmall)
+        Text(stringResource(R.string.myhours_start, viennaTime(shift.startTime)), style = MaterialTheme.typography.bodySmall)
+        Text(
+            shift.endTime?.let { stringResource(R.string.myhours_end, viennaTime(it)) }
+                ?: stringResource(R.string.myhours_end_open),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        // Omitted — not zero, not fake — for the currently-running row: the only case with
+        // endTime == null.
+        shift.endTime?.let { end ->
+            val seconds = java.time.Duration.between(shift.startTime, end).seconds
+            Text(
+                stringResource(
+                    R.string.myhours_duration,
+                    stringResource(R.string.duration_format, (seconds / 3600).toInt(), ((seconds % 3600) / 60).toInt()),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        HorizontalDivider()
+    }
+}
+
+/**
+ * The one thing this whole screen exists to communicate honestly (TASK-189). Order
+ * matters and mirrors [ShiftRow]'s existing `when` exactly: end_time-null is checked
+ * FIRST, so a currently-running shift (which by construction has autoClosed=false,
+ * correctedAt=null) can never fall into any other branch. [WireShift.correctedAt] is
+ * server-guaranteed to only ever be non-null on a row that WAS auto_closed (POST
+ * /shifts/:id/resolve 409s unless auto_closed AND corrected_at IS NULL — "no third flag
+ * exists to disagree with them", server's own comment), so the third branch is
+ * unambiguous. `else` is the one case [ShiftRow] renders as a blank line today
+ * (status_closed is the one new string this screen needed).
+ */
+private fun myHoursStatusRes(shift: WireShift): Int = when {
+    shift.endTime == null -> R.string.status_running
+    shift.needsResolution -> R.string.status_auto_closed
+    shift.correctedAt != null -> R.string.status_corrected
+    else -> R.string.status_closed
 }
 
 /**
@@ -2002,3 +2159,24 @@ private fun dateOnly(instant: Instant): String = dateFormat.format(instant)
 private fun timeOfDay(instant: Instant): String = timeFormat.format(instant)
 
 private fun hours(seconds: Long): String = String.format(Locale.getDefault(), "%.1f", seconds / 3600.0)
+
+// ---- „Meine Stunden“ (TASK-189) — Vienna-fixed formatting, deliberately NOT reusing
+// dateFormat/timeFormat above. Those use ZoneId.systemDefault(), which is only correct on
+// a phone whose system zone happens to already be Europe/Vienna — not a guarantee. The web
+// admin panel is zone-locked (web/lib/shifts.ts: BUSINESS_TIME_ZONE = 'Europe/Vienna'), and
+// this screen has to match it for the SAME shift, including across a DST boundary. Same
+// PATTERN (ofLocalizedDate/Time + FormatStyle), only the zone argument changes — that
+// argument is exactly where the drift risk lives. The three existing systemDefault() call
+// sites (HistoryScreen, ShiftRunningScreen's running clock, LogScreen) are untouched: none
+// of them are this task's job, and ShiftRunningScreen is tap-adjacent.
+private val viennaZone: ZoneId = ZoneId.of("Europe/Vienna")
+
+private val viennaDateFormat: DateTimeFormatter =
+    DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withZone(viennaZone)
+
+private val viennaTimeFormat: DateTimeFormatter =
+    DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withZone(viennaZone)
+
+private fun viennaDate(instant: Instant): String = viennaDateFormat.format(instant)
+
+private fun viennaTime(instant: Instant): String = viennaTimeFormat.format(instant)

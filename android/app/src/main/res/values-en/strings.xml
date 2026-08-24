@@ -70,6 +70,10 @@
     <string name="status_running">In progress</string>
     <string name="status_auto_closed">Auto-closed</string>
     <string name="status_corrected">Corrected</string>
+    <!-- ShiftRow shows no word at all for a normally-closed shift (status?.let{} -> null
+         -> a blank line). “My hours” (TASK-189) must always show a word, hence this one
+         new status. -->
+    <string name="status_closed">Closed</string>
     <string name="sync_sent">Sent</string>
     <string name="sync_sending">Sending …</string>
 
@@ -128,6 +132,23 @@
     <string name="history_empty">No shifts yet.</string>
     <string name="hours_format">%1$s h</string>
     <string name="duration_format">%1$dh %2$dm</string>
+
+    <!-- My hours (TASK-189): read-only, GET /shifts/mine, a 60-day window with no date
+         picker. Deliberately WITHOUT a total, an hourly rate or a euro amount — this
+         screen only shows what the server has stored about past shifts, never money. No
+         button here can close a shift (decision-19/47). -->
+    <string name="myhours_open">My hours</string>
+    <string name="myhours_title">My hours</string>
+    <string name="myhours_window">Your shifts from the last 60 days, as stored on the server.</string>
+    <string name="myhours_empty">No shifts in this period.</string>
+    <string name="myhours_offline">No connection. Your hours can’t be loaded right now.</string>
+    <string name="myhours_error">Your hours could not be loaded.</string>
+    <string name="myhours_date">Date: %1$s</string>
+    <string name="myhours_start">Start: %1$s</string>
+    <string name="myhours_end">End: %1$s</string>
+    <string name="myhours_end_open">No end yet</string>
+    <string name="myhours_duration">Duration: %1$s</string>
+    <string name="back">Back</string>
 
     <string name="settings_title">Settings</string>
     <string name="settings_signed_in_as">Signed in as</string>
