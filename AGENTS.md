@@ -140,6 +140,106 @@ Default language: German. For 3A: develop in English, i18n infrastructure in pla
 - Prefer latest stable minus one minor for major deps
 - Use pnpm, never npm or yarn
 
+### Local dev environment assumptions
+
+Gotchas discovered the hard way on this Mac. Not portable — see closing note.
+
+**Shell / tooling**
+- `rtk` (this project's shell wrapper) mangles output: prefixes `grep` with line numbers
+  unasked, strips `ls` fields so sizes read 0KB. For scripted/parsed output use absolute paths:
+  `/usr/bin/grep`, `/bin/ls`, `/usr/bin/awk`, `/usr/bin/git` — not the rtk-wrapped versions.
+- `setsid` does not exist here — use `nohup`.
+- `/usr/bin/cat` does not exist at that literal path — use plain `cat` via `PATH`, or verify first.
+- macOS `ps` has no Linux `etimes` field — parse BSD-style `etime` instead. When killing a
+  specific process (e.g. headless Chrome), match on `ps -o comm=` (actual executable), not the
+  full command line — an agent's own shell args can contain the same substring and get killed.
+- Headless Chrome with flags like `--dump-dom` can hang forever at 0% CPU if the page never
+  settles — always wrap it with an explicit timeout.
+
+**Android toolchain**
+- No system Java, no Android SDK by default. `apksigner`, `gradlew`, `apkanalyzer` all fail
+  with "Unable to locate a Java Runtime" unless exported first:
+  `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"` (Android Studio's
+  bundled JBR) and `ANDROID_HOME=/opt/homebrew/share/android-commandlinetools` (Homebrew's
+  cmdline-tools). Export both before any `android/`, `gradlew`, or `ops/publish-apk.sh` call.
+- NFC does not work on Android emulators — needs a physical device. Xcode Simulator likewise
+  can't receive a real universal-link NFC tap (Safari opens instead of the app) — DEBUG-only
+  mock hooks exist in both codebases for this, gated unreachable in release builds.
+
+**Secrets / psst**
+- `psst` is PROJECT-SCOPED. `psst get <NAME>` run outside the project root does not error — it
+  silently returns the literal string `Run: psst init` instead of the secret. Looks like a
+  missing-secret bug, is actually a cwd bug. Always `cd` to project root first.
+- `psst export --tag <tag>` silently IGNORES `--tag` and dumps the whole vault — never use it
+  to scope a sync. Instead `psst list --tag <tag>` then `psst get <name>` per name.
+- The pre-commit gate (`psst scan --staged` in `.githooks/pre-commit`) has no length/entropy
+  floor — can false-positive-block a commit on a short number that happens to match a vaulted
+  secret (e.g. a vaulted PORT number), or on a line that only REMOVES an already-committed
+  secret occurrence. Workaround: `PSST_SKIP_SCAN=1 git commit ...`. Never skip gitleaks too.
+- gitleaks has two different scopes: `gitleaks detect` scans commit HISTORY only. To scan the
+  working tree (uncommitted/untracked files) use `gitleaks dir .` instead.
+
+**SSH / remote**
+- Two long-lived-connection setups already configured for exe.dev VMs: (a) OpenSSH
+  ControlMaster in `~/.ssh/config` for `Host *.exe.xyz` / `exe.dev`
+  (`ControlPath ~/.ssh/cm/%C`, `ControlPersist 10m`) so plain ssh/scp/rsync reuse one
+  TCP+auth handshake; (b) `~/.pi/agent/bin/rsh`, a tmux-backed persistent shell tool
+  (open/run/send/peek/status/close/ls) for multi-step remote work where state (cwd, env,
+  sudo timestamp) must persist between commands. Prefer `rsh` over one-shot `ssh` whenever
+  more than one remote command is needed in sequence.
+- exe.dev VMs on the "exeuntu" base image ship pi/claude/codex as pre-installed static Bun
+  binaries but have NO system node/npm by default — `pi install npm:...` fails with
+  "Executable not found in $PATH: npm" until `sudo apt-get install -y nodejs npm` runs first.
+
+**Git hazards**
+- `git stash -u` (include untracked) creates a 3-parent stash commit (tracked+untracked+index).
+  A forced `filter-branch` across all refs afterward silently DROPS that third parent —
+  popping the stash later only restores tracked edits, losing untracked work silently.
+  Possible recovery: `git checkout refs/original/refs/stash^3 -- .`. Never rewrite history
+  while untracked work sits in a stash.
+- `gh` on this machine is authenticated as GitHub account `qwadratic`; the repo itself now
+  lives under the `proximata` org (transferred from qwadratic's personal account) —
+  pushes/PRs act as that authenticated user against the proximata org repo.
+
+**workflow tool quirks (pi-dynamic-workflows)**
+- The `workflow` tool's script parser is not plain JS: it statically scans the ENTIRE script
+  source — including prose inside agent prompt strings — for banned tokens before running
+  anything (includes certain nondeterministic built-ins and the backtick character). A
+  backtick-delimited code span in prompt prose, or array-destructuring a `parallel()` result
+  directly (e.g. three names from one `const`), both cause an immediate parser-level syntax
+  error with ZERO agents run. Avoid backticks in prompt prose; index `parallel()` results by
+  position instead of destructuring.
+- The `name` parameter only accepts the 5 built-in workflow names (deep-research,
+  adversarial-review, code-review, multi-perspective, codebase-audit). To run a custom
+  prepared `.mjs` script, pass its full text content via the `script` parameter — a file path
+  string does nothing.
+
+**Backlog.md CLI**
+- `backlog task create` (and similar interactive commands) HANG FOREVER on stdin when run by
+  an agent — always append `</dev/null`.
+- `backlog task list --plain` has been observed to return empty To-Do/In-Progress sections
+  even when such tasks exist on this project's board — when that happens, grep `status:`
+  directly in `backlog/tasks/*.md` instead of trusting the CLI output.
+
+**Local ports / services**
+- Port 3000 already has a pre-existing, unrelated node process listening and answering 307
+  redirects on this Mac — any local web preview/dev-server work must use port 8080 instead,
+  never assume 3000 is free.
+- The Google Maps browser API key for this project is HTTP-referrer-restricted to exactly
+  `https://schimmer-glanz.exe.xyz/*`, `http://localhost:3000/*`, and `http://127.0.0.1:8080/*`
+  — nothing else. Any local map prototype must be served over `http://127.0.0.1:8080` (a real
+  HTTP server, e.g. `python3 -m http.server`) with the key injected at serve time; opening it
+  as a `file://` URL always fails with `RefererNotAllowedMapError`, and other ports/hosts are
+  silently rejected too. This has caused repeated false "the map is broken" scares — check the
+  port before concluding the map itself is broken.
+- `gcloud` and the `supabase` CLI are pre-installed and pre-authenticated at
+  `/opt/homebrew/bin`; the `vercel` CLI is installed but NOT logged in (would need interactive
+  login before any vercel-dependent step — Vercel is not part of this project's current
+  architecture though, so likely moot).
+
+This section documents THIS machine's setup, discovered from real incidents — it is not a
+portability guarantee for any other machine.
+
 <!-- BACKLOG.MD GUIDELINES START -->
 <CRITICAL_INSTRUCTION>
 
