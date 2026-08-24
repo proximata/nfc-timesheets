@@ -18,6 +18,10 @@
     <string name="signin_submit">Sign in</string>
     <string name="signin_submitting">Signing in …</string>
 
+    <!-- Mirrors the German comment: reachable before any worker session exists, matching
+         the iOS SettingsView reachability fix. -->
+    <string name="signin_operator_heading">Operator? Write or test tags without signing in as a worker.</string>
+
     <string name="signin_sms_intro">Your admin has a phone number on file for you? You can also sign in with it by SMS.</string>
     <string name="signin_sms_phone_label">Phone number</string>
     <string name="signin_sms_phone_hint">For example 0664 1234567.</string>

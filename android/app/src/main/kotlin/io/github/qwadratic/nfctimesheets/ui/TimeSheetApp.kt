@@ -124,7 +124,7 @@ fun TimeSheetApp(
                     Spacer(Modifier.height(16.dp))
                     Text(stringResource(R.string.loading_session))
                 }
-                is SessionState.SignedOut -> SignInScreen(model, state.reasonKey)
+                is SessionState.SignedOut -> SignInScreen(model, state.reasonKey, openIntent)
                 is SessionState.SignedIn -> SignedInScaffold(model, nfcReadiness, openIntent)
             }
         }
@@ -140,7 +140,8 @@ fun TimeSheetApp(
 // every one of those would be a thing to get wrong while standing in a stairwell.
 // -------------------------------------------------------------------------------------
 @Composable
-private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?) {
+private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openIntent: (Intent) -> Unit) {
+    val context = LocalContext.current
     // rememberSaveable: a rotation, or Android tearing the activity down behind a
     // notification, must not eat the characters already typed. It is deliberately NOT in
     // the ViewModel and NOT on disk -- a bearer credential does not get persisted by us.
@@ -265,6 +266,29 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?) {
         if (model.smsAvailable.collectAsStateWithLifecycle().value) {
             SmsSignInSection(model)
         }
+
+        // BEFORE any worker session exists (TASK-252's Android half - the shape iOS's
+        // SettingsView bug had: a phone that is an operator's and NOTHING ELSE had no way
+        // into WriteTagActivity/VerifyZoneActivity at all, because both buttons used to
+        // live only on the WORKER'S post-sign-in log screen). Neither activity is
+        // duplicated here: both already show their own operator-code field the moment
+        // `operatorReady` is false (WriteTagActivity.kt, VerifyZoneActivity.kt), so this is
+        // only a second door onto the SAME screens - never a second door onto a shift
+        // (decision-45; nothing reachable from here can open or close one).
+        HorizontalDivider(Modifier.padding(top = 8.dp))
+        Text(
+            stringResource(R.string.signin_operator_heading),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+            onClick = { openIntent(Intent(context, WriteTagActivity::class.java)) },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) { Text(stringResource(R.string.write_open)) }
+        OutlinedButton(
+            onClick = { openIntent(Intent(context, VerifyZoneActivity::class.java)) },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) { Text(stringResource(R.string.verify_open)) }
     }
 }
 

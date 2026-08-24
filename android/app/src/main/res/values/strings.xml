@@ -31,6 +31,15 @@
     <string name="signin_submit">Anmelden</string>
     <string name="signin_submitting">Anmeldung läuft …</string>
 
+    <!-- Betreiber-Einstieg, direkt auf dem Anmeldebildschirm (vorher NUR über das
+         Mitarbeiter-Protokoll erreichbar, also für ein Telefon, das nie als Mitarbeiter
+         angemeldet war, gar nicht erreichbar - derselbe Fehler, der auf iOS bereits
+         behoben wurde: SettingsView lag nur im .eligible(worker)-Zweig). Öffnet
+         WriteTagActivity/VerifyZoneActivity direkt; beide zeigen selbst das
+         Betreiber-Code-Feld, wenn dieses Telefon noch nicht als Betreiber angemeldet ist -
+         hier wird nichts doppelt gebaut, nur der Einstieg vorgezogen. -->
+    <string name="signin_operator_heading">Betreiber? Tags beschreiben oder prüfen, ohne sich als Mitarbeiter anzumelden.</string>
+
     <!-- Anmeldung per SMS (decision-48 §6.6, additive: das Feld für den Anmeldecode oben
          bleibt unverändert und ist immer da). Dieser Abschnitt wird nur angezeigt, wenn
          der Server bestätigt, dass SMS eingerichtet ist — sonst erscheint hier nichts. -->
