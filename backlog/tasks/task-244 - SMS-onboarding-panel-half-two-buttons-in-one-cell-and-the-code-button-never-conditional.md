@@ -3,10 +3,10 @@ id: TASK-244
 title: >-
   SMS onboarding, panel half: two buttons in one cell, and the code button never
   conditional
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-08-22 21:53'
-updated_date: '2026-08-22 23:07'
+updated_date: '2026-08-24 13:48'
 labels:
   - decision-48
 dependencies: []
@@ -53,7 +53,7 @@ another, so this goes INSIDE the existing code cell and the existing phone cell.
 - [x] #1 SMS senden is rendered for every active worker and merely disabled when GET /admin/sms-status says configured=false, with the reason in words beside it
 - [x] #2 Zugangscode erstellen is unchanged and its render condition mentions no SMS name; ops/check-fallback-reachable.mjs stays green
 - [x] #3 A failed send still shows the code, because the 200 carries it
-- [ ] #4 Login-Nummer is shown, editable via PUT/DELETE .../phone, and never overwrites the free-text Telefon
+- [x] #4 Login-Nummer is shown, editable via PUT/DELETE .../phone, and never overwrites the free-text Telefon
 - [x] #5 de/en exact key parity; web/scripts/check.mjs green; 390px verified in a real browser via demo/cdp.mjs
 <!-- AC:END -->
 
@@ -138,5 +138,37 @@ not a string that exists in the bundle. Do not grep for it.
 AC4 REMAINS: PUT/DELETE /admin/workers/:id/phone are live and proven over HTTP but wired into
 no UI, so a worker cannot be given a Login-Nummer without curl — which means that even with
 Twilio credentials in place, nobody could be sent an SMS through the panel.
+---
+
+created: 2026-08-24 13:48
+---
+VERIFY PASS (independent, not the build agent's word).
+
+AC#4 evidence, measured:
+- commit d0b4320, files web/lib/api.ts + web/app/workers/page.tsx + de/en.json.
+- The control is REAL and UNCONDITIONAL: 'Login-Nummer (SMS-Anmeldung)' Field sits directly
+  under the free-text Telefonnummer in the same create/edit drawer, gated on nothing.
+- It is DEPLOYED: production JS chunk /_next/static/chunks/4f84d686c64ca782.js contains
+  'Login-Nummer (SMS-Anmeldung)'. bash ops/check-box-serves-head.sh -> OK, bundle built at
+  d0b43208772a, admin bundle on the box is web/out file-for-file.
+- The routes it calls are live: PUT /admin/workers/999999/phone -> 404 unknown_worker;
+  DELETE /admin/workers/999999/phone -> 200 (idempotent). Both against schimmer-glanz.exe.xyz.
+- Never overwrites the free-text Telefon: two SEQUENTIAL writes (saveWorker, then
+  PUT/DELETE .../phone) and a 409 phone_claimed leaves the drawer OPEN with the error bound
+  to the login-number field plus a form-level 'Stammdaten gespeichert, Login-Nummer NICHT'.
+  server/check-sms-flag.mjs section 6 proves the column separation server-side: 'the free-text
+  column is byte-identical after a login number is saved' -> ok.
+
+AC#1/2/3/5 re-verified, not assumed: node ops/check-fallback-reachable.mjs -> OK (the code
+button's condition still names no SMS symbol); node demo/check-sms-picker.mjs -> all checks
+green after this change, including the 390px 44px-floor assertions.
+
+de/en key parity re-counted independently: 1289 = 1289, zero orphans either way; all 9
+loginPhone* keys plus 9 rateLimit* keys present in BOTH files.
+
+NOT re-measured: the 390px height of the Telefon cell after its new second line
+('SMS-Login: +43...' / 'Keine Login-Nummer'). check-sms-picker's 390px probe measures the
+CODE cell's buttons, not this cell. Low risk (one short text line), but it is an assumption,
+not a measurement.
 ---
 <!-- COMMENTS:END -->
