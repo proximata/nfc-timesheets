@@ -1,12 +1,18 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "%@ at %@": {
+    "%@ – %@  ·  %@": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ in %2$@"
+            "value": "%1$@ – %2$@  ·  %3$@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ – %2$@  ·  %3$@"
           }
         }
       }
@@ -21,82 +27,76 @@
         }
       }
     },
-    "%@ – %@  ·  %@": {
+    "%@ at %@": {
       "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$@ – %2$@  ·  %3$@"
-          }
-        },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ – %2$@  ·  %3$@"
+            "value": "%1$@ in %2$@"
           }
         }
       }
     },
     "%lld h at %@. Hold your phone to the tag to finish.": {
       "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld h at %2$@. Hold your phone to the tag to finish."
-          }
-        },
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "%1$lld Std. bei %2$@. Halten Sie Ihr Telefon an den Tag, um zu beenden."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld h at %2$@. Hold your phone to the tag to finish."
           }
         }
       }
     },
     "%lld of %lld characters": {
       "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld of %2$lld characters"
-          }
-        },
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "%1$lld von %2$lld Zeichen"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld of %2$lld characters"
           }
         }
       }
     },
     "%lld of %lld confirmed": {
       "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld of %2$lld confirmed"
-          }
-        },
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "%1$lld von %2$lld bestätigt"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld of %2$lld confirmed"
           }
         }
       }
     },
     "%lld old shift%@ need your admin": {
       "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld old shift%2$@ need your admin"
-          }
-        },
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "%1$lld alte Schicht%2$@ braucht Ihre Verwaltung"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld old shift%2$@ need your admin"
           }
         }
       }
@@ -393,16 +393,16 @@
     },
     "Finished your open shift at %@ and started at %@. Confirm when you actually left %@ — it will not count until you do.": {
       "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finished your open shift at %1$@ and started at %2$@. Confirm when you actually left %3$@ — it will not count until you do."
-          }
-        },
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "Ihre offene Schicht bei %1$@ wurde beendet und bei %2$@ wurde eine neue begonnen. Bitte bestätigen Sie, wann Sie %3$@ wirklich verlassen haben – bis dahin zählt die Schicht nicht."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finished your open shift at %1$@ and started at %2$@. Confirm when you actually left %3$@ — it will not count until you do."
           }
         }
       }
@@ -567,22 +567,22 @@
         }
       }
     },
-    "NFC TimeSheets": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "NFC TimeSheets"
-          }
-        }
-      }
-    },
     "Name": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "Name"
+          }
+        }
+      }
+    },
+    "NFC TimeSheets": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NFC TimeSheets"
           }
         }
       }
@@ -877,26 +877,6 @@
         }
       }
     },
-    "SMS code": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SMS-Code"
-          }
-        }
-      }
-    },
-    "SMS sign-in isn't set up on this server. Please use the access code below.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SMS-Anmeldung ist auf diesem Server nicht eingerichtet. Bitte den Zugangscode verwenden."
-          }
-        }
-      }
-    },
     "Save finish time": {
       "localizations": {
         "de": {
@@ -1029,16 +1009,16 @@
     },
     "Shift running for %lld hours %lld minutes at %@": {
       "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shift running for %1$lld hours %2$lld minutes at %3$@"
-          }
-        },
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "Schicht läuft seit %1$lld Stunden %2$lld Minuten bei %3$@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shift running for %1$lld hours %2$lld minutes at %3$@"
           }
         }
       }
@@ -1149,6 +1129,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Das Abmelden hier hat keine Auswirkung auf Ihre Mitarbeiter-Anmeldung oben."
+          }
+        }
+      }
+    },
+    "SMS code": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SMS-Code"
+          }
+        }
+      }
+    },
+    "SMS sign-in isn't set up on this server. Please use the access code below.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SMS-Anmeldung ist auf diesem Server nicht eingerichtet. Bitte den Zugangscode verwenden."
           }
         }
       }
@@ -1735,16 +1735,16 @@
     },
     "We cleaned up %lld old record%@": {
       "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "We cleaned up %1$lld old record%2$@"
-          }
-        },
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "Wir haben %1$lld alte%2$@ Eintrag/Einträge bereinigt"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "We cleaned up %1$lld old record%2$@"
           }
         }
       }

@@ -5,8 +5,13 @@
 //  What the worker sees after an on-device migration touched their rows.
 //
 //  These are somebody's timesheets. Rows may not simply be fewer than they were the day
-//  before: the sheet below says what happened, once, and Settings > Migration history
-//  keeps saying it afterwards for anyone who dismissed it at a door at 06:00.
+//  before: the sheet below says what happened, once, at the moment it happens - that used
+//  to be backed up by a permanent Settings > Migration history entry, removed on request
+//  (it read as one more confusing screen to a worker, not as reassurance) once every archived
+//  row it could show was already surfaced by the one-time sheet or by a synced/blocked
+//  banner. MigrationReceipt.archived() (MigrationCore.swift) is untouched: the file on disk
+//  is still the audit trail decision-8's "nothing discarded without export first" needs -
+//  only the in-app second reading of it is gone.
 //
 //  ponytail: hardcoded English literals, matching the rest of this app.
 //  CEILING: decision-8 wants every user-visible string externalised; 3A does that work on
@@ -64,22 +69,6 @@ struct MigrationReceiptSheet: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
-    }
-}
-
-/// The same list, permanently, read back from the archive file rather than from memory.
-struct MigrationHistoryView: View {
-    @State private var shifts: [ArchivedShift] = []
-
-    var body: some View {
-        List {
-            if shifts.isEmpty {
-                Text("Nothing has been archived on this phone.").foregroundStyle(.secondary)
-            }
-            ForEach(shifts) { MigrationRow(shift: $0) }
-        }
-        .navigationTitle("Migration history")
-        .task { shifts = MigrationReceipt.archived() }
     }
 }
 

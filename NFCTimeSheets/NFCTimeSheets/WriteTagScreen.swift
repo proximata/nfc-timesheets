@@ -13,6 +13,10 @@ import SwiftUI
 
 struct WriteTagScreen: View {
     @State private var pendingId = UUID().uuidString.lowercased()
+    // The actual bytes this build would write, computed the SAME way TagWriter.plan() does
+    // (TagLink.uriFor), so what the operator sees here can never drift from what lands on
+    // the card. Shown on screen because "Card id" alone is not something a person can
+    // recognise as a scannable link - see the note on `pendingUri` below.
     @State private var writer = TagWriter()
     @State private var outcome: TagWriter.Outcome?
     @State private var confirmedFor: String?
@@ -31,6 +35,11 @@ struct WriteTagScreen: View {
                 Text("This never opens a shift. A fresh id is minted on this phone before anything is written.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                // THE ACTUAL LINK, not just its id - this is what a phone reads back when it
+                // taps the card, and the only thing on this screen an operator can visually
+                // recognise as "a working tag" versus "some text".
+                LabeledContent("Will write", value: pendingUri)
+                    .font(.system(.footnote, design: .monospaced))
                 LabeledContent("Card id", value: pendingId)
                     .font(.system(.footnote, design: .monospaced))
             }
@@ -67,6 +76,13 @@ struct WriteTagScreen: View {
     private var occupiedOutcome: (onTag: String, offered: String, token: String)? {
         guard case .refusedOccupied(let onTag, let offered, let token) = outcome else { return nil }
         return (onTag, offered, token)
+    }
+
+    /// The full link for [pendingId], for display only - TagWriter recomputes the real bytes
+    /// itself via NdefTag.plan(), this never feeds a write. Falls back to the bare id in the
+    /// impossible case TagLink can't build one (badId), so the label is never blank.
+    private var pendingUri: String {
+        TagLink.uriFor(pendingId)?.absoluteString ?? pendingId
     }
 
     private func write() async {
@@ -112,8 +128,9 @@ struct WriteTagScreen: View {
             return busy ? String(localized: "Hold your phone near the card.") : ""
         }
         switch outcome {
-        case .written(let locationId, _, let bytes, let capacity, let replaced):
-            let base = String(localized: "Written: \(locationId) — \(bytes) of \(capacity) bytes.")
+        case .written(let locationId, let uri, let bytes, let capacity, let replaced):
+            let base = String(localized: "Written: \(uri) — \(bytes) of \(capacity) bytes.")
+            _ = locationId // kept in the pattern to match TagWriter.Outcome; the URL is what matters here
             switch replaced {
             case .blank:
                 return base
