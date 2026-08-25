@@ -1,0 +1,92 @@
+name: Play Internal Testing
+
+# Push to main that touches the Android app -> build AAB, sign, upload to Play Console
+# Internal testing.
+#
+# Needs 5 repo secrets (Settings -> Secrets and variables -> Actions), all owner-only to
+# create - none of this can be generated from a checkout:
+#   PLAY_SERVICE_ACCOUNT_JSON   Play Console API service account key, full JSON contents
+#   TS_KEYSTORE_BASE64          the EXISTING upload keystore (android/keystore.properties'
+#                                storeFile), base64 - reuse it, do not generate a new one:
+#                                Play App Signing already has its cert fingerprint on file
+#                                (ops/branding.json android.sha256CertFingerprints); a new
+#                                keystore breaks App Links + rejects the upload outright.
+#   TS_KEYSTORE_PASSWORD        matches android/app/build.gradle.kts's `storePassword`
+#   TS_KEY_ALIAS                matches `keyAlias`
+#   TS_KEY_PASSWORD             matches `keyPassword`
+#
+# versionCode is bumped and COMMITTED BACK to android/branding.properties before every
+# build - unlike Xcode Cloud (which keeps its own build-number ledger server-side), a plain
+# GitHub Actions pipeline has no such ledger, and Play Console's rule is unforgiving: every
+# upload's versionCode must be strictly greater than every versionCode EVER uploaded to this
+# app, forever, with no reset. Committing first means the repo's number is always >= what's
+# live, so a failed build never leaves the next run stuck behind an already-used number (the
+# exact failure mode this project just spent an evening debugging on the iOS side - see
+# testflight.yml's build-number comment and TASK notes on 2026-08-25).
+#
+# branding.properties is ordinary tracked project config here, not owner-restricted (unlike
+# iOS's project.pbxproj/entitlements under decision-49) - TASK-254/268 already bumped it as
+# a normal commit, so a bot commit from CI is the same category of change.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/play-release.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump versionCode and commit
+        working-directory: android
+        run: |
+          set -euo pipefail
+          current=$(grep '^ts.versionCode=' branding.properties | cut -d= -f2)
+          next=$((current + 1))
+          sed -i "s/^ts.versionCode=.*/ts.versionCode=$next/" branding.properties
+          echo "versionCode: $current -> $next"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "android: bump versionCode $current -> $next [ci]"
+          git push
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Decode upload keystore
+        env:
+          TS_KEYSTORE_BASE64: ${{ secrets.TS_KEYSTORE_BASE64 }}
+        run: |
+          echo -n "$TS_KEYSTORE_BASE64" | base64 --decode -o "$RUNNER_TEMP/upload.jks"
+
+      - name: Build release AAB
+        working-directory: android
+        env:
+          TS_KEYSTORE_PASSWORD: ${{ secrets.TS_KEYSTORE_PASSWORD }}
+          TS_KEY_ALIAS: ${{ secrets.TS_KEY_ALIAS }}
+          TS_KEY_PASSWORD: ${{ secrets.TS_KEY_PASSWORD }}
+        run: |
+          export TS_KEYSTORE_PATH="$RUNNER_TEMP/upload.jks"
+          ./gradlew :app:bundleRelease
+
+      - name: Upload to Play Console (internal testing)
+        uses: google-github-actions/upload-google-play@v2
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: io.github.qwadratic.NFCTimeSheets
+          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
