@@ -4,7 +4,7 @@ title: Vienna map view with building pins + side panel
 status: In Progress
 assignee: []
 created_date: '2026-07-28 13:49'
-updated_date: '2026-08-04 16:49'
+updated_date: '2026-08-25 15:40'
 labels:
   - web
   - ux
@@ -35,28 +35,30 @@ Dashboard home = map of Vienna (Leaflet or Mapbox free tier). Buildings as pins 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-TRIAGE 2026-08-04 — CODE COMPLETE, BUT THE MAP IS BLANK IN PRODUCTION FOR TWO INDEPENDENT REASONS.
+TRIAGE 2026-08-25 — BOTH 2026-08-04 SUB-FIXES WERE ALREADY STALE. RE-VERIFIED LIVE.
 
-MET in code and live: web/app/page.tsx + web/lib/map.ts (Google Maps via a <script> tag and an
-eleven-line interface — no npm map package). AC4 side panel, AC5 five-period selector, AC6
-closable panel. `curl https://timesheets.exe.xyz/` -> 200. Frame: docs/media/admin-dashboard.png.
-The map has six NAMED states and never a blank rectangle: noKey, noPins, loading, ready, blocked
-(gm_authFailure), failed (10 s timeout). Buildings that cannot be pinned are listed in a table
-with the reason, so nothing is ever invisible.
+Fix #1 (deploy.sh missing NEXT_PUBLIC_GOOGLE_MAPS_KEY at build) was already fixed in ops/deploy.sh
+before today (line 134 wires it, sourced from psst). It just hadn't been DEPLOYED — the live
+bundle still shipped keyless. Ran ./ops/deploy.sh (migrations confirmed up to date first, clean
+code-refresh, no schema change). Verified: 'AIza' now present in the live root-page bundle
+(chunk 8f296802e3e55289.js at schimmer-glanz.exe.xyz/), dashboard now shows the honest
+'1 building has no coordinates, nothing to draw' state instead of the old noKey placeholder.
 
-NOT MET IN PRODUCTION — AC1, AC2, AC3. I checked the live site, not the source:
-1. NO KEY IN THE BUNDLE. I downloaded all 13 JS chunks of the live /locations/ page — 744 771
-   bytes — and grepped: no `AIza…` anywhere, and the string "no Google Maps key" IS present.
-   Cause: ops/deploy.sh:44 passes only `NEXT_PUBLIC_DEFAULT_LOCALE=de` to `pnpm verify`. The key
-   is a build-time inline; a build that is not given it ships without it. web/README.md:185
-   already documents this. FIX: one line in ops/deploy.sh. LOW effort.
-2. NOTHING IS GEOCODED. Production `locations` has one row and its `lat` IS NULL. Cause:
-   `GOOGLE_GEOCODING_KEY` is not on the server — /etc/nfc/env contains exactly APP_KEY,
-   DATABASE_URL, PORT and nothing else. `POST /admin/locations/:id/geocode` is live but has no
-   key to call Google with. FIX: install the key (it already exists in the psst vault) and run
-   the geocode route once per building.
+Fix #2 (GOOGLE_GEOCODING_KEY not on the VM) was ALSO already done before today — /etc/nfc/env
+already carries it (39-char value, matches vault). Ran server/bin/geocode-backfill.js on the box:
+'0 building(s) to look up' — not a key failure, the WHERE clause requires a non-empty address
+and the one production location ('test', id 5c96bb23-9d65-45f0-9eea-b18c70f4b867) has
+address = NULL. Confirmed via direct psql query.
 
-So even with the key inlined the map would draw zero pins. BOTH must be done, in that order.
-CONSEQUENCE if never done: the dashboard is a table instead of a map. Nothing is lost or
-mispaid — this is presentation, not payroll.
+REMAINING BLOCKER FOR AC1/AC2/AC3, and it is the only one: that building has no street address
+on file. Not a key, not an API, not code — a data-entry gap on a real client building. Someone
+with the real address needs to open Locations > test > edit and enter it (or use 'Get
+coordinates' on the dashboard row if that prompts for one); geocode-backfill.js is safe to
+re-run afterward (idempotent, only touches lat IS NULL rows) and will pin it immediately since
+the key chain (server key -> geocoding-backend.googleapis.com -> Street View too) is now fully
+live end-to-end. Also separately confirmed today: TASK-17's Street View gate on this same key
+now passes (status: OK on a real probe), so once an address lands here, AC1-3 on both TASK-16
+and TASK-17's AC1 close together.
+
+Not fabricating an address for a real client building — owner/admin data entry, not mine to guess.
 <!-- SECTION:NOTES:END -->
