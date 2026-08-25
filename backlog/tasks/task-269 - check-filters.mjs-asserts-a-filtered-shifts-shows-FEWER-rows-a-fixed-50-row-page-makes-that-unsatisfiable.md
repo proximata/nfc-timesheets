@@ -3,9 +3,10 @@ id: TASK-269
 title: >-
   check-filters.mjs asserts a filtered /shifts/ shows FEWER rows - a fixed
   50-row page makes that unsatisfiable
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-25 14:23'
+updated_date: '2026-08-25 15:49'
 labels:
   - checks
 dependencies:
@@ -48,13 +49,33 @@ Effort: low. One assertion, one file. No server or web change.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 demo/check-filters.mjs passes end to end against nfc_demo on a fresh web build, with zero FAIL lines
-- [ ] #2 The replacement assertion still goes RED when the location filter is removed from the fetch - shown red once before being made green
-- [ ] #3 No change to server/ or web/ - this is a check-only fix
+- [x] #1 demo/check-filters.mjs passes end to end against nfc_demo on a fresh web build, with zero FAIL lines
+- [x] #2 The replacement assertion still goes RED when the location filter is removed from the fetch - shown red once before being made green
+- [x] #3 No change to server/ or web/ - this is a check-only fix
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Found by the TASK-18 verification pass, not by the implementing run: that run ran pnpm check/lint/typecheck/build and server/check-api.js, none of which drives a browser.
+VERIFIED 2026-08-25. Root cause confirmed exactly as filed: SHIFT_PAGE_SIZE=50 (TASK-18) caps visible tbody rows, so a filtered and unfiltered /shifts/ read identically once either has >=50 matches.
+
+FIX: added matchingTotal(page), reads the AnswerBand's server-computed 'shown X of Y' cell
+(shift_matching_count) instead of counting tbody rows. Locale-agnostic (regex takes the
+trailing number, works for both 'X von Y' and 'X of Y').
+
+Fixed BOTH assertions with this exact blind spot, not just the flagged one: 'arrives FILTERED'
+(the one in the task title) AND 'removing the chip restores every row' 20 lines later, which
+had the identical coverage gap for the same reason (a stuck filter and a correct removal both
+read 50/50 on this building) - found while fixing the first, same root cause, same file, kept
+in scope.
+
+AC1: node demo/check-filters.mjs -> PASS, 0 failures, against nfc_demo (348 real shifts),
+fresh pnpm build. Real building now reads '71 of 348' / '83 of 348' etc, not '50 of 50'.
+AC2: shown red on a real mutant first - temporarily dropped &location= from the nav (filter
+genuinely ignored), reran: 4 assertions correctly FAILed including the fixed one
+('348 of 348 matching'), reverted via file backup, reran clean. Not reasoned, demonstrated.
+AC3: git diff --stat demo/check-filters.mjs only; no server/ or web/ change.
+
+Killed a 2-day-old orphaned demo-server on :8092 first (TASK-210's exact documented gotcha)
+and started a fresh one against the just-deployed build before running anything.
 <!-- SECTION:NOTES:END -->

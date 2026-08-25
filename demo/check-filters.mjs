@@ -65,6 +65,29 @@ const KEY_LEAK = `(() => (document.body.innerText.match(
   /\\b(home|shifts|workers|payroll|pl|analytics|locations|clients|materials|contracts|filters|overlay|nav)\\.[a-zA-Z]{3,}/g
 ) || []))()`;
 
+/**
+ * TASK-269: `/shifts/` is paged at SHIFT_PAGE_SIZE=50 (TASK-18), so `ROWS` (the visible
+ * tbody) tops out at 50 regardless of how many rows actually match — a filtered AND an
+ * unfiltered view both read 50 on any building/period with >=50 shifts, and a count built
+ * from ROWS alone cannot tell "fewer" from "page cap" and cannot tell "restored" from
+ * "still capped". The true count is server-computed (`shift_matching_count`) and printed
+ * verbatim in the AnswerBand's "shown X of Y" cell (web/app/shifts/page.tsx, t('shownOfTotal')
+ * — "{shown} von {total}" / "{shown} of {total}", locale-agnostic: the total is always the
+ * trailing number). Read that instead of counting rows.
+ */
+async function matchingTotal(page) {
+  const total = await page.eval(`(() => {
+    const cells = [...document.querySelectorAll('.answer .cell .v')]
+    for (const c of cells) {
+      const m = c.textContent.trim().match(/^(\\d+)\\D+(\\d+)$/)
+      if (m) return Number(m[2])
+    }
+    return null
+  })()`);
+  if (total === null) throw new Error("matchingTotal: no 'shown X of Y' cell found in .answer");
+  return total;
+}
+
 async function login(page) {
   await page.goto(`${BASE}/login/`, { settle: 700 });
   await page.type('input[name="email"]', ADMIN.email, { perChar: 0 });
@@ -99,7 +122,7 @@ async function main() {
     // ==== 0 · the baseline every filter assertion is measured against ====================
     await page.goto(`${BASE}/shifts/?period=all`, { settle: 1200 });
     await page.waitFor(`(${ROWS}) > 0`, { label: "the unfiltered shift log" });
-    const allShifts = await page.eval(ROWS);
+    const allShifts = await matchingTotal(page);
     assert("baseline: the shift log has rows to filter", allShifts > 5, `${allShifts} rows`);
 
     // ==== 1 · nav 12 → 9, and nothing was orphaned =======================================
@@ -211,12 +234,15 @@ async function main() {
     // /shifts/?location=…
     await page.goto(`${BASE}/shifts/?location=${uuid}&period=all`, { settle: 1400 });
     await page.waitFor(`document.querySelector('.filter-chip-text')`, { label: "the chip" });
-    const shiftsHere = await page.eval(ROWS);
+    // Counts the WINDOW (server-side matching total), not the page (TASK-269): on a
+    // building with >=50 shifts, visible tbody rows read 50 either way and cannot tell
+    // filtered from unfiltered.
+    const shiftsHere = await matchingTotal(page);
     const shiftChips = await page.eval(CHIPS);
     assert(
       "/shifts/?location= arrives FILTERED, not merely at /shifts/",
       shiftsHere > 0 && shiftsHere < allShifts,
-      `${shiftsHere} of ${allShifts} rows`,
+      `${shiftsHere} of ${allShifts} matching`,
     );
     assert(
       "/shifts/: the filter is visible as a chip naming the building",
@@ -234,13 +260,17 @@ async function main() {
     );
     await shoot(page, "shifts-filtered-1680");
 
-    // …and the chip's ✕ puts the table back.
+    // …and the chip's ✕ puts the table back. Same TASK-269 reasoning: this building has
+    // >=50 shifts, so a broken removal (still filtered) would ALSO show 50 visible rows,
+    // identical to a correct removal's first page — ROWS cannot tell them apart. The
+    // matching total can: it is 348-ish restored, or it is still 71-ish stuck.
     await page.eval(`document.querySelector('.filter-chip-remove')?.click()`);
     await sleep(600);
+    const afterRemoval = await matchingTotal(page);
     assert(
       "/shifts/: removing the chip restores every row",
-      (await page.eval(ROWS)) === allShifts,
-      `${await page.eval(ROWS)} rows after removal`,
+      afterRemoval === allShifts,
+      `${afterRemoval} of ${allShifts} matching after removal`,
     );
     assert(
       "/shifts/: removing the chip takes the parameter out of the URL too",
