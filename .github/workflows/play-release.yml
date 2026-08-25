@@ -70,7 +70,7 @@ jobs:
         env:
           TS_KEYSTORE_BASE64: ${{ secrets.TS_KEYSTORE_BASE64 }}
         run: |
-          echo -n "$TS_KEYSTORE_BASE64" | base64 --decode -o "$RUNNER_TEMP/upload.jks"
+          echo -n "$TS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
 
       - name: Build release AAB
         working-directory: android
