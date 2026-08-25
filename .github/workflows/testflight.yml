@@ -20,7 +20,7 @@ name: TestFlight
 
 on:
   push:
-    branches: [master]
+    branches: [main]   # the repo's actual default branch (checked: `git branch --show-current`)
     paths:
       - "NFCTimeSheets/**"
       - ".github/workflows/testflight.yml"
