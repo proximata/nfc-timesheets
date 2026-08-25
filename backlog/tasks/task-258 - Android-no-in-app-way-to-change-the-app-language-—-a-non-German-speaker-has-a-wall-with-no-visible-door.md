@@ -3,9 +3,10 @@ id: TASK-258
 title: >-
   Android: no in-app way to change the app language — a non-German speaker has a
   wall with no visible door
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-24 19:06'
+updated_date: '2026-08-24 20:13'
 labels:
   - android
   - i18n
@@ -40,3 +41,23 @@ MUST NOT REGRESS: the tap path. A locale change must never sit in, delay or reor
 - [ ] #4 android/checks/core-check.kt still passes: no tap is delayed, blocked or reordered
 - [ ] #5 de and en strings.xml both carry the new strings with exact key parity
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-24 20:13
+---
+VERIFIED independently at 6a104a3.
+
+AC1 LanguageSection() is unconditional in SettingsScreen (TimeSheetApp.kt:1731, tab reachable at :526) and NAMES the languages as text - Systemsprache / Deutsch / English, no flags, no icon-only. Also on SignInScreen:189 so an operator-only phone can reach it.
+AC2 switch = AppLocale.set(prefs) then Activity.recreate() - the same path as a rotation, so the ViewModelStore (session, running shift, sync queue) is retained, not destroyed. No sign-out call, no shift mutation anywhere in the composable.
+AC3 mechanism is Context.createConfigurationContext + Configuration.setLocale/setLayoutDirection, all API 17; minSdk is 23, so it works on the OLDEST supported version with no degraded row needed and no API-33 ACTION_APP_LOCALE_SETTINGS dependency. No new Gradle dependency; androidx.appcompat rejected with a stated reason in AppLocale.kt kdoc (not a dep, auto-recreate needs AppCompatActivity + Theme.AppCompat, app has neither).
+AC4 THE HARD GATE: git diff 5a71608..6a104a3 -- android/checks/ = 0 bytes, core-check.kt untouched. Ran android/checks/run.sh myself: core-check OK, known-tags-check OK, tag-writer-check OK, manifest-check OK, verify-no-shift-check OK. Tap path additionally untouched by construction - NfcTapActivity.kt has no attachBaseContext, no setContent and no R.string reference at all (headless trampoline), so the locale wrap sits nowhere near a clock-in.
+AC5 4 new keys settings_language_{title,system,de,en} in BOTH values/ and values-en/; whole-file parity 259=259, comm empty both ways.
+Persistence: SharedPreferences 'app-locale', read in attachBaseContext of MainActivity/ScanActivity/WriteTagActivity/VerifyZoneActivity - survives process death and restart, does not reset.
+
+BUILD: :app:compileDebugKotlin --rerun-tasks BUILD SUCCESSFUL (2 pre-existing unrelated warnings), assembleDebug produced app-debug.apk.
+
+TWO GAPS OUTSIDE THE AC TEXT, filed separately, neither blocking: (1) notify/ShiftSignals.kt builds notification copy off applicationContext, which is never wrapped - a worker on English still gets German reminders; (2) the three language buttons signal the current choice only visually (Button vs OutlinedButton), with no semantics selected / selectableGroup, so TalkBack cannot announce which is active.
+---
+<!-- COMMENTS:END -->

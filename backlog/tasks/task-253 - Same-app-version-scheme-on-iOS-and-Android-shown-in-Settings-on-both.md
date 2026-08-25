@@ -1,10 +1,10 @@
 ---
 id: TASK-253
 title: 'Same app-version scheme on iOS and Android, shown in Settings on both'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-24 14:57'
-updated_date: '2026-08-24 15:31'
+updated_date: '2026-08-24 22:33'
 labels:
   - ios
   - android
@@ -53,3 +53,35 @@ direct sideload (Desktop-APK-copy rule, project AGENTS.md), not self-update. Kee
 a named limit when scoping this, not an argument against it -- most future bugs will not
 be launch crashes.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-24 22:33
+---
+VERIFIED independently at d09e139 (all re-checked from source, builds re-run by verifier, not trusted from report).
+
+HARD GATE (decision-49) — PASS: git diff --stat c0f5db8..d09e139 -- project.pbxproj NFCTimeSheets.entitlements = EMPTY. Neither file appears in the commit filelist (only ContentView.swift, Localizable.xcstrings, decision-52). Re-checked git status after running xcodebuild: still clean.
+
+Scope 1 (pick ONE shared scheme, do not invent silently) — decision-52 'proposed', frontmatter shape matches decision-51 byte-for-byte (id/title>-/date/status), opens with the same 'PROPOSED. Not accepted.' line. Records the call: shared WORDING, NOT a shared version NUMBER, with both alternatives (synced semver, calendar version) rejected in writing. ⚠ CONSEQUENCE THE OWNER MUST ACCEPT OR REJECT: the two apps still show DIFFERENT numbers — Android 0.5.7 (14), iOS 1.0 (4) — and will keep drifting. Decision-52 makes the drift legible, not gone.
+
+Scope 2 (Android reads branding.properties) — PASS, zero code changes needed, already shipped. TimeSheetApp.kt:2067 stringResource(R.string.update_current_version, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE) — real BuildConfig fields, no literal. Source: branding.properties ts.versionName=0.5.7 / ts.versionCode=14.
+
+Scope 3 (iOS reads Bundle.main.infoDictionary) — PASS. ContentView.swift:834-838 CFBundleShortVersionString / CFBundleVersion, no hardcoded string. PROOF the fields are actually populated: built Debug-iphonesimulator/NFCTimeSheets.app/Info.plist reads 1.0 and 4 via PlistBuddy, so the line renders 'Installed: 1.0 (4)', not the '?' fallback.
+
+Scope 4 (Settings line on both, no dev tooling) — PASS, unconditional on both. Android: SettingsScreen:1789 calls UpdateSection unconditionally; UpdateSection has no early return, version Text is its 2nd child before any state branch. iOS: new trailing Form Section in SettingsView, no condition.
+
+Scope 5 (Settings, not a splash/about screen) — PASS, both lines are in the Settings tab only.
+
+Same format both platforms — verified side by side:
+  Android de 'Installiert: %1$s (%2$d)' / en 'Installed: %1$s (%2$d)'
+  iOS     de 'Installiert: %@ (%@)'      / en 'Installed: %@ (%@)'
+Identical wording; only placeholder syntax differs (platform mechanics).
+
+i18n (decision-8) — PASS. Android key exists in BOTH values/strings.xml:263 and values-en/strings.xml:185. New iOS key 'Installed: %@ (%@)' has a REAL German unit, state 'translated', value 'Installiert: %@ (%@)'. Whole-catalogue audit: 0 keys missing 'de'. sourceLanguage=en so en is implicit, matching every neighbouring entry.
+
+Builds — BOTH RE-RUN BY VERIFIER: xcodebuild Debug -destination 'generic/platform=iOS Simulator' -> ** BUILD SUCCEEDED **; gradlew :app:compileDebugKotlin -> BUILD SUCCESSFUL.
+
+NOT verified, stated plainly: no Simulator/device install, so the rendered line was not seen on a screen. Evidence is source + built Info.plist contents. No APK cut, no deploy, no docs/media, no version bumped on either platform (none was asked for).
+---
+<!-- COMMENTS:END -->

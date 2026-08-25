@@ -3,9 +3,10 @@ id: TASK-257
 title: >-
   Android: WriteTagActivity never says the phone has no NFC — an operator taps a
   card at a door forever with zero feedback
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-24 19:05'
+updated_date: '2026-08-24 20:13'
 labels:
   - android
   - operators
@@ -53,3 +54,21 @@ FIX SHAPE: give WriteTagActivity the SAME NfcState machine VerifyZoneActivity al
 - [ ] #5 The no-NFC short-circuit happens BEFORE the operator-code gate: no code is ever requested on a phone that cannot write
 - [ ] #6 de and en strings.xml both carry the new strings with exact key parity
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-24 20:13
+---
+VERIFIED independently at 6a104a3 (read the real source, not the build report).
+
+AC1 nfcState=UNSUPPORTED renders only R.string.scan_unsupported ('Dieses Telefon hat kein NFC.'); write instructions, pending-id, override field AND the Betreiber-Code field all live inside WriteBody(), which is the READY arm only. WriteTagActivity.kt:171-175.
+AC2 DISABLED renders scan_disabled = 'NFC ist ausgeschaltet. Bitte in den Einstellungen aktivieren.' - genuinely distinct sentence, names the fixable cause. EN pair equally distinct.
+AC3 onResume (WriteTagActivity.kt:288-294) recomputes nfcState from the adapter every resume, byte-identical when{} to VerifyZoneActivity.kt:249-254; toggling NFC and returning re-evaluates.
+AC4 grep 'NfcState' over the whole android/ tree: ONE definition, nfc/NfcState.kt:7. Zero other enum declarations. Two call sites (VerifyZoneActivity, WriteTagActivity), no reimplementation.
+AC5 structural, not an if: the operator-code OutlinedTextField is inside WriteBody(); on UNSUPPORTED/DISABLED that composable is never invoked, so no code can be requested on a phone that cannot write.
+AC6 exact key parity - values/ and values-en/ both 259 keys, comm both directions empty. No new keys needed for this task (existing scan_* reused).
+
+BUILD: ./gradlew :app:compileDebugKotlin --rerun-tasks -> BUILD SUCCESSFUL, only 2 pre-existing warnings in files this commit did not touch (WriteSimulation.kt, TagWriter.kt). assembleDebug -> app-debug.apk produced. android/checks/run.sh -> core/known-tags/tag-writer/manifest/verify-no-shift ALL OK.
+---
+<!-- COMMENTS:END -->

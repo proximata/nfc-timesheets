@@ -3,9 +3,10 @@ id: TASK-263
 title: >-
   iOS: the Test a tag button opens a screen that calls itself Testscan — one
   action, two names
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-24 19:08'
+updated_date: '2026-08-24 19:48'
 labels:
   - ios
   - i18n
@@ -33,8 +34,23 @@ RELATIONSHIP TO TASK-256: TASK-256 adds the missing German for 'Test a tag'. Thi
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The operator test action has exactly ONE label, used for the sign-in-screen button and for the destination screen title
-- [ ] #2 The chosen label matches Android's verify_open / verify_title in meaning, so both platforms name the action the same way
-- [ ] #3 Any admin-panel copy that quotes the button label (TASK-259) is updated to the same wording in the same pass
-- [ ] #4 The Write a tag pair stays consistent as it is today
+- [x] #1 The operator test action has exactly ONE label, used for the sign-in-screen button and for the destination screen title
+- [x] #2 The chosen label matches Android's verify_open / verify_title in meaning, so both platforms name the action the same way
+- [x] #3 Any admin-panel copy that quotes the button label (TASK-259) is updated to the same wording in the same pass
+- [x] #4 The Write a tag pair stays consistent as it is today
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED independently at f25e417 (not from build-agent claims).
+
+AC1 OK - ONE label. /usr/bin/grep -F 'Test a tag': ContentView.swift:185 + :850 (NavigationLink), VerifyZoneScreen.swift:47 (.navigationTitle). Three sites, byte-identical. 'Test scan' returns ZERO hits anywhere under NFCTimeSheets/ and the key is deleted from Localizable.xcstrings.
+AC2 OK - de value 'Tag pruefen' (umlaut u) == Android verify_open/verify_title 'Tag pruefen' (values/strings.xml:437-438; Android uses the ascii-oe transliteration project-wide). Meaning + register match. Nit only: EN source differs, iOS 'Test a tag' vs Android values-en 'Test tag'.
+AC3 OK - web/messages/de.json:539 and en.json:539 both quote the CURRENT iOS label 'Test a tag'. de/en key parity re-diffed BY HAND (1337 keys each, de-only=[], en-only=[]); node web/scripts/check.mjs passes.
+AC4 OK - Write pair untouched by this commit. ContentView.swift:184/:849 + WriteTagScreen.swift:58 all 'Write a tag' -> 'Tag beschreiben'. git diff 97a4d8c..HEAD touched only Localizable.xcstrings and VerifyZoneScreen.swift (1-line navigationTitle).
+
+STRONGEST EVIDENCE: decompiled the BUILT bundle, not just the source catalogue. DerivedData/.../Debug-iphonesimulator/NFCTimeSheets.app/de.lproj/Localizable.strings (184 keys) resolves 'Test a tag' -> 'Tag pruefen' and contains no 'Test scan'. So the unified label really reaches a de device.
+
+RESIDUAL, filed not blocking: de.json:539 tells a GERMAN reader to tap 'Test a tag' (the English source literal) while a German phone now renders 'Tag pruefen'. Both platforms are now 'Tag pruefen' in German, so the German admin sentence should collapse to ONE quoted label instead of naming Android and iOS separately. Not an AC3 failure - AC3 asked that the quoted label be the current one, and it is.
+<!-- SECTION:NOTES:END -->
