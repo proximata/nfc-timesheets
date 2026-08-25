@@ -936,7 +936,26 @@ export type ShiftSnapshot = {
    * anywhere" never look the same (TASK-235).
    */
   shift_outside_count: number
+  /** The OFFSET the server applied (0 for page one). Echoed, not assumed. */
+  shift_offset: number
+  /** The ORDER BY the server applied. Echoed so a header can show it, not guess it. */
+  shift_sort: { column: string; direction: 'asc' | 'desc' }
+  /**
+   * How many rows the period AND the filter keep, IGNORING limit/offset — the denominator of
+   * „Seite 2 von 9“ and of „50 von 431 angezeigt“. Counting the page would answer a different
+   * question with the same number.
+   */
+  shift_matching_count: number
+  /**
+   * Of those, how many block payroll — over the WHOLE period, not this page. The answer band
+   * reads this and never `shifts.filter(blocksPayroll).length`: once the log pages, the
+   * browser holds 50 rows and a headline computed from them silently means „this page“.
+   */
+  shift_blocked_count: number
 }
+
+/** Rows per page on `/shifts/` (TASK-18 AC3). The other callers of `/admin/data` do not page. */
+export const SHIFT_PAGE_SIZE = 50
 
 /**
  * What `/shifts/` currently has selected. Every field is optional/nullable because "any" is
@@ -955,6 +974,20 @@ export type ShiftQuery = {
    * `switch` did.
    */
   state?: 'open' | 'unresolved' | 'manual' | null
+  /**
+   * 1-based page. Set it and the request becomes `limit=SHIFT_PAGE_SIZE&offset=(page-1)*size`;
+   * leave it off and the request is the unpaged one every other caller makes.
+   */
+  page?: number | null
+  /** A key of `SHIFT_SORT` in server/routes/admin.js. Anything else is a 400, by design. */
+  sort?: string | null
+  dir?: 'asc' | 'desc' | null
+  /**
+   * One shift row, by id. A cross-link arriving as `?shift=123` narrows the SERVER query to
+   * it: at 50 rows a page the row it names is usually not on page one, and a drawer that
+   * cannot open is decision-38 rule 3 broken for every /payroll/ and / cross-link.
+   */
+  shift?: number | null
 }
 
 /**
@@ -978,12 +1011,18 @@ export function fetchShiftSnapshot(
   // Same page size as `fetchAdminSnapshot`. If the shift log asked for the server's 500
   // default while payroll asked for 2000, payroll would count shifts the log cannot show —
   // so "3 shifts need confirming" would link to a screen where they are not there.
-  const parts = [`limit=${ADMIN_SHIFT_LIMIT}`]
+  const parts =
+    query.page == null
+      ? [`limit=${ADMIN_SHIFT_LIMIT}`]
+      : [`limit=${SHIFT_PAGE_SIZE}`, `offset=${(query.page - 1) * SHIFT_PAGE_SIZE}`]
   const range = rangeQuery(query.range)
   if (range !== '') parts.push(range)
   if (query.worker != null) parts.push(`worker=${query.worker}`)
   if (query.location != null) parts.push(`location=${encodeURIComponent(query.location)}`)
   if (query.state != null) parts.push(`state=${query.state}`)
+  if (query.shift != null) parts.push(`shift=${query.shift}`)
+  if (query.sort != null) parts.push(`sort=${encodeURIComponent(query.sort)}`)
+  if (query.dir != null) parts.push(`dir=${query.dir}`)
   return apiFetch<ShiftSnapshot>(`/admin/data?${parts.join('&')}`, { signal })
 }
 

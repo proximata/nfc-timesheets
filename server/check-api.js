@@ -3239,6 +3239,225 @@ try {
       await admin.query("DELETE FROM locations WHERE id = $1", [ceilingLocation]);
     }
 
+    // ---- PAGING AND ORDERING the shift log (TASK-18, AC3 + AC5) ------------------------
+    //
+    // `?offset=` / `?sort=` / `?dir=` are what let /shifts/ show 50 rows at a time instead of
+    // holding a year of them in a browser. Two things below are not decoration:
+    //
+    //   the UNION assertion — paging is only correct if the three pages together are exactly
+    //   the 120 rows, with no id seen twice and none missing. "Each page returned 50 rows" is
+    //   the assertion that passes while rows silently vanish.
+    //
+    //   the TIE assertion — 60 rows sharing one start_time. Postgres may order ties however
+    //   it likes, and it does not have to choose the same order twice; without the `s.id DESC`
+    //   tiebreak in the ORDER BY, OFFSET paging over them drops and duplicates rows across
+    //   pages. Delete that tiebreak and this goes red, which is the point of writing it.
+    {
+      const pageWorker = await freshWorker("Paging Worker");
+      const pageLocation = await freshLocation("paging-site");
+      const seedPages = async (n, startTime) =>
+        admin.query(
+          startTime === undefined
+            ? `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+               SELECT $1, $2,
+                      '2026-08-02T00:00:00Z'::timestamptz + (g * interval '1 minute'),
+                      '2026-08-02T00:00:00Z'::timestamptz + (g * interval '1 minute') + interval '30 seconds'
+                 FROM generate_series(0, $3 - 1) AS g`
+            : `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
+               SELECT $1, $2, $4::timestamptz, $4::timestamptz + interval '30 seconds'
+                 FROM generate_series(0, $3 - 1) AS g`,
+          startTime === undefined ? [pageWorker, pageLocation, n] : [pageWorker, pageLocation, n, startTime],
+        );
+      const paged = async (params) =>
+        (
+          await asAdmin(
+            `/admin/data?${params}${range(VIENNA_AUGUST)}&worker=${pageWorker}&location=${pageLocation}`,
+          )
+        ).json();
+
+      await test("?offset= walks the whole result set exactly once: no row is dropped and none is served twice", async () => {
+        await seedPages(120);
+        const pages = [await paged("limit=50&offset=0"), await paged("limit=50&offset=50"), await paged("limit=50&offset=100")];
+        assert.deepEqual(pages.map((p) => p.shifts.length), [50, 50, 20]);
+
+        const walked = pages.flatMap(ids);
+        assert.equal(new Set(walked).size, 120, "three pages must cover 120 DISTINCT rows");
+        const everything = ids(await paged("limit=2000&offset=0"));
+        assert.deepEqual(new Set(walked), new Set(everything), "the pages together ARE the result set");
+
+        // The counts a paged screen states are about the WINDOW, never about the page: the
+        // denominator of „Seite 2 von 3“ cannot come from the 50 rows in hand.
+        for (const p of pages) assert.equal(p.shift_matching_count, 120);
+        for (const p of pages) assert.equal(p.shift_outside_count, 0, "every seeded row is INSIDE August");
+        assert.deepEqual(pages.map((p) => p.shift_offset), [0, 50, 100], "the offset is echoed, not assumed");
+
+        await admin.query("DELETE FROM shifts WHERE worker_id = $1", [pageWorker]);
+      });
+
+      await test("paging over rows that TIE on the sort column is still exact (the s.id tiebreak)", async () => {
+        await seedPages(60, "2026-08-03T09:00:00Z");
+        const first = ids(await paged("limit=25&offset=0"));
+        const second = ids(await paged("limit=25&offset=25"));
+        const third = ids(await paged("limit=25&offset=50"));
+        const walked = [...first, ...second, ...third];
+        assert.deepEqual(walked.map((n) => n).length, 60);
+        assert.equal(new Set(walked).size, 60, "a tied row must not appear on two pages");
+
+        const { rows: real } = await admin.query("SELECT id FROM shifts WHERE worker_id = $1", [pageWorker]);
+        assert.deepEqual(
+          new Set(walked),
+          new Set(real.map((r) => Number(r.id))),
+          "60 rows sharing one start_time must page exactly, or the ORDER BY has no tiebreak",
+        );
+        // And the same window asked for twice answers identically — a total order, not a
+        // stable-looking accident.
+        assert.deepEqual(await paged("limit=25&offset=25").then(ids), second);
+
+        await admin.query("DELETE FROM shifts WHERE worker_id = $1", [pageWorker]);
+      });
+
+      await test("every sort key, both directions, matches an independent JS ordering — including NULLS LAST", async () => {
+        // Deliberately varied, because `state`, `origin` and `duration` are DERIVED in SQL and
+        // mirror web/lib/shifts.ts. A fixture where they are all the same proves nothing.
+        await admin.query(
+          `INSERT INTO shifts (worker_id, location_id, start_time, end_time, auto_closed, corrected_at, client_uuid)
+           SELECT $1, $2,
+                  '2026-08-04T00:00:00Z'::timestamptz + (g * interval '1 minute'),
+                  '2026-08-04T00:00:00Z'::timestamptz + (g * interval '1 minute') + ((g % 7 + 1) * interval '1 minute'),
+                  g % 4 = 1,
+                  CASE WHEN g % 4 = 2 THEN '2026-08-05T00:00:00Z'::timestamptz ELSE NULL END,
+                  CASE WHEN g % 3 = 0 THEN NULL ELSE gen_random_uuid() END
+             FROM generate_series(0, 39) AS g`,
+          [pageWorker, pageLocation],
+        );
+        // One RUNNING shift, so `end` and `duration` have a NULL to sink. NULLS LAST must hold
+        // in BOTH directions: "unknown sinks" is one rule, not two.
+        await admin.query(
+          `INSERT INTO shifts (worker_id, location_id, start_time) VALUES ($1, $2, '2026-08-06T05:00:00Z')`,
+          [pageWorker, pageLocation],
+        );
+
+        const stateRank = (s) =>
+          s.end_time === null ? 0 : s.auto_closed && s.corrected_at === null ? 1 : s.corrected_at !== null ? 2 : 3;
+        const keyOf = {
+          start: (s) => Date.parse(s.start_time),
+          end: (s) => (s.end_time === null ? null : Date.parse(s.end_time)),
+          worker: (s) => s.worker_name,
+          location: (s) => s.location_name,
+          duration: (s) => (s.end_time === null ? null : Date.parse(s.end_time) - Date.parse(s.start_time)),
+          state: stateRank,
+          origin: (s) => (s.client_uuid === null ? 1 : 0),
+        };
+
+        for (const key of Object.keys(keyOf)) {
+          for (const dir of ["asc", "desc"]) {
+            const payload = await paged(`limit=2000&sort=${key}&dir=${dir}`);
+            const expected = [...payload.shifts].sort((a, b) => {
+              const x = keyOf[key](a);
+              const y = keyOf[key](b);
+              // NULLS LAST, whichever way the rest is going.
+              if (x === null && y === null) return Number(b.id) - Number(a.id);
+              if (x === null) return 1;
+              if (y === null) return -1;
+              if (x < y) return dir === "asc" ? -1 : 1;
+              if (x > y) return dir === "asc" ? 1 : -1;
+              return Number(b.id) - Number(a.id);
+            });
+            assert.deepEqual(
+              payload.shifts.map((s) => Number(s.id)),
+              expected.map((s) => Number(s.id)),
+              `sort=${key}&dir=${dir} must agree with an independent ordering of the same rows`,
+            );
+            assert.deepEqual(payload.shift_sort, { column: key, direction: dir }, "the applied order is echoed");
+          }
+        }
+
+        // The NULL row is LAST both ways, stated on its own rather than left implicit in the
+        // comparison above: a running shift has no end and no duration, and sorting by either
+        // must not float it to the top of an ascending page as if it were the earliest.
+        for (const dir of ["asc", "desc"]) {
+          for (const key of ["end", "duration"]) {
+            const rows = (await paged(`limit=2000&sort=${key}&dir=${dir}`)).shifts;
+            assert.equal(rows[rows.length - 1].end_time, null, `sort=${key}&dir=${dir} must sink the running shift`);
+          }
+        }
+
+        await admin.query("DELETE FROM shifts WHERE worker_id = $1", [pageWorker]);
+      });
+
+      await test("a malformed offset/sort/dir is a 400 naming the field, never a silent default", async () => {
+        for (const bad of ["offset=-1", "offset=abc", "offset=1.5", "sort=drop%20table", "sort=s.id", "dir=up"]) {
+          const res = await asAdmin(`/admin/data?${bad}`);
+          assert.equal(res.status, 400, `${bad} must be refused, not silently ignored`);
+          assert.equal((await res.json()).error, "invalid_field");
+        }
+        // `shift=` goes through the same `v.optionalId` the other id parameters use, so it
+        // answers `invalid_id` rather than `invalid_field`. Pinned as it is rather than
+        // normalised: the code word is part of the contract a client already parses.
+        const badShift = await asAdmin("/admin/data?shift=abc");
+        assert.equal(badShift.status, 400);
+        assert.equal((await badShift.json()).error, "invalid_id");
+      });
+
+      await test("?shift= narrows the query to one row, so a cross-link still opens its drawer on page 7", async () => {
+        await seedPages(120);
+        const all = ids(await paged("limit=2000&offset=0"));
+        // A row deliberately deep in the result set: at 50 a page this one is on page THREE,
+        // which is exactly the case that broke when the log started paging.
+        const wanted = all[110];
+        const one = await paged(`limit=50&offset=0&shift=${wanted}`);
+        assert.deepEqual(ids(one), [wanted], "?shift= must return that row and nothing else");
+        assert.equal(one.shift_matching_count, 1);
+        assert.equal(one.shift_outside_count, 0);
+
+        await admin.query("DELETE FROM shifts WHERE worker_id = $1", [pageWorker]);
+      });
+
+      await test("shift_blocked_count counts the WINDOW, not the page", async () => {
+        // 30 rows, 10 of them auto-closed and unconfirmed, plus one still running: 11 block
+        // payroll (decision-10). Paged 10 at a time, the number must not become „3“.
+        await admin.query(
+          `INSERT INTO shifts (worker_id, location_id, start_time, end_time, auto_closed)
+           SELECT $1, $2,
+                  '2026-08-07T00:00:00Z'::timestamptz + (g * interval '1 minute'),
+                  '2026-08-07T00:00:00Z'::timestamptz + (g * interval '1 minute') + interval '30 seconds',
+                  g % 3 = 0
+             FROM generate_series(0, 29) AS g`,
+          [pageWorker, pageLocation],
+        );
+        await admin.query(
+          `INSERT INTO shifts (worker_id, location_id, start_time) VALUES ($1, $2, '2026-08-08T05:00:00Z')`,
+          [pageWorker, pageLocation],
+        );
+        for (const offset of [0, 10, 20, 30]) {
+          const payload = await paged(`limit=10&offset=${offset}`);
+          assert.equal(payload.shift_matching_count, 31);
+          assert.equal(payload.shift_blocked_count, 11, "10 unconfirmed auto-closes + 1 running, on every page");
+          assert.equal(payload.shift_outside_count, 0);
+        }
+
+        await admin.query("DELETE FROM shifts WHERE worker_id = $1", [pageWorker]);
+      });
+
+      await test("a caller that sends none of the new parameters gets the payload it always got", async () => {
+        await seedPages(3);
+        const payload = await paged("limit=2000");
+        assert.equal(payload.shift_offset, 0, "no ?offset= means page one");
+        assert.deepEqual(payload.shift_sort, { column: "start", direction: "desc" }, "the default order is unchanged");
+        assert.deepEqual(
+          ids(payload),
+          [...ids(payload)].sort((a, b) => b - a),
+          "newest first, exactly as before the sort parameter existed",
+        );
+
+        await admin.query("DELETE FROM shifts WHERE worker_id = $1", [pageWorker]);
+      });
+
+      await admin.query("DELETE FROM shifts WHERE worker_id = $1", [pageWorker]);
+      await admin.query("DELETE FROM workers WHERE id = $1", [pageWorker]);
+      await admin.query("DELETE FROM locations WHERE id = $1", [pageLocation]);
+    }
+
     await admin.query("DELETE FROM shifts WHERE worker_id = $1", [rangeWorker]);
     await admin.query("DELETE FROM workers WHERE id = $1", [rangeWorker]);
   }

@@ -706,6 +706,49 @@ a {
   background: var(--bg-overlay);
 }
 
+/*
+ * A SORTABLE COLUMN HEADING. The button carries ONLY the column name as text, and the sort
+ * direction is drawn by the `::after` below rather than written into the heading — because
+ * ResponsiveTableLabels copies `thead th` textContent onto every card caption under 1280px,
+ * and an arrow glyph or a visually-hidden sentence inside the `th` would be printed beside
+ * every value on every card (and is checked, by demo/audit-band-shape.mjs). `aria-sort` is
+ * what a screen reader reads, which is the right mechanism for this regardless.
+ */
+.data-table thead th .th-sort {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: inherit;
+}
+
+.data-table thead th .th-sort:hover {
+  color: var(--text);
+}
+
+.data-table thead th[aria-sort="ascending"] .th-sort::after {
+  content: " \2191";
+}
+
+.data-table thead th[aria-sort="descending"] .th-sort::after {
+  content: " \2193";
+}
+
+/* The pager. Below the table, and only rendered when there is more than one page. */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
 .data-table tbody tr:last-child > * {
   border-bottom: 0;
 }

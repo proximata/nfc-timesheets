@@ -596,8 +596,21 @@ check('lib/filters.ts: every well-formed value survives a round trip', () => {
     status: 'open',
     open: uuid,
     zones: uuid,
+    // View state, not object filters, but they round-trip through the same vocabulary and
+    // MUST: `setFilters` rebuilds the whole query from FILTER_KEYS, so a parameter this file
+    // did not know about would be wiped by the next filter write (TASK-18).
+    page: 3,
+    sort: 'duration',
+    dir: 'asc',
   }
   assert.deepEqual(parseFilters(filterQuery(full)), full)
+  // A page number is a row id in shape, so the same rejections apply: no 0, no negative, no
+  // padding. And an unknown sort column is DROPPED at the boundary, never forwarded — the
+  // server would answer 400 and the director would see a broken link, not a default order.
+  assert.equal(parseFilters('?page=0').page, null)
+  assert.equal(parseFilters('?page=-2').page, null)
+  assert.equal(parseFilters('?sort=drop%20table').sort, null)
+  assert.equal(parseFilters('?dir=up').dir, null)
   // The zone editor is its own parameter, and it is normalised like every other uuid: a
   // tag writer that formats uppercase is exactly how this screen is reached.
   assert.equal(parseFilters(`?zones=${uuid.toUpperCase()}`).zones, uuid)

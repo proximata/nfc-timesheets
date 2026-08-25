@@ -297,6 +297,22 @@ export function optionalCount(value, field) {
   return n;
 }
 
+/**
+ * "How many rows to skip" (a page offset). ZERO IS THE NORMAL VALUE — page one — which is
+ * exactly why `optionalCount` cannot be reused here: it rejects 0 on purpose. Omitted means
+ * page one too, so a caller that never learned about paging keeps the payload it always got.
+ *
+ * `offset=abc` is a 400 and not a silent 0: this is a trust boundary, and a client that
+ * mistyped its paging parameter must be told, not quietly handed page one for ever while it
+ * believes it is on page seven.
+ */
+export function optionalOffset(value, field = "offset") {
+  if (value === undefined || value === null || value === "") return 0;
+  const n = typeof value === "string" ? Number(value) : value;
+  if (!Number.isSafeInteger(n) || n < 0 || n > 1_000_000) fail(400, "invalid_field", field);
+  return n;
+}
+
 /** Closed set of allowed strings (inventory kind). Mirrors a database CHECK; not a substitute for it. */
 export function oneOf(value, field, allowed) {
   if (typeof value !== "string" || !allowed.includes(value)) fail(400, "invalid_field", field);

@@ -34,6 +34,9 @@ import { isPeriod, type Period } from '@/lib/period'
  *   state=            open | unresolved | manual | noEmail | noTag
  *   status=           open | all | decide | order | deliver     (materials only)
  *   open=<uuid>       opens the edit drawer on /locations/ for that building
+ *   page=<n>          which page of the shift log, 1-based. VIEW STATE, only /shifts/ reads it
+ *   sort=<column>     which column the shift log is ordered by. VIEW STATE, only /shifts/
+ *   dir=asc|desc      which way. VIEW STATE, only /shifts/
  *   zones=<uuid>      opens the ZONE list on /locations/ for that building (decision-43).
  *                     Separate from `open=`, because they are two different jobs on one
  *                     screen and one parameter for both would make „Zonen verwalten“ and
@@ -41,6 +44,13 @@ import { isPeriod, type Period } from '@/lib/period'
  *                     `location=` narrows a REPORT to one building, `zones=` opens an
  *                     EDITOR for one, and /locations/ would otherwise have to guess which
  *                     was meant from a link written on another screen
+ *
+ * `page` / `sort` / `dir` are VIEW STATE rather than object filters: they change which slice
+ * of the answer you are looking at, not which rows the answer is about. They live here anyway,
+ * and they have to — `setFilters` rebuilds the WHOLE query string from `filterQuery(next)`,
+ * which emits only `FILTER_KEYS`, so any parameter managed outside this file is wiped the next
+ * time any control on the screen writes a filter. `hasObjectFilter` deliberately ignores all
+ * three: a sorted table is not a filtered one and must not claim to be.
  *
  * `status=all` is an addition to decision-38's list of four, and it is deliberate:
  * `/material-requests/` already ships an „alle" option on its own control, and a filter the
@@ -81,9 +91,39 @@ export const FILTER_KEYS = [
   'status',
   'open',
   'zones',
+  'page',
+  'sort',
+  'dir',
 ] as const
 
 export type FilterKey = (typeof FILTER_KEYS)[number]
+
+/**
+ * The columns the shift log can be ordered by. Mirrors `SHIFT_SORT` in
+ * server/routes/admin.js key for key — the server owns the SQL, this owns the vocabulary, and
+ * a key in one and not the other is a 400 the director sees as a broken link.
+ */
+export const SHIFT_SORTS = [
+  'worker',
+  'location',
+  'start',
+  'end',
+  'duration',
+  'state',
+  'origin',
+] as const
+export type ShiftSort = (typeof SHIFT_SORTS)[number]
+
+export function isShiftSort(value: string): value is ShiftSort {
+  return (SHIFT_SORTS as readonly string[]).includes(value)
+}
+
+export const SORT_DIRS = ['asc', 'desc'] as const
+export type SortDir = (typeof SORT_DIRS)[number]
+
+export function isSortDir(value: string): value is SortDir {
+  return (SORT_DIRS as readonly string[]).includes(value)
+}
 
 /**
  * The object states a link may ask for. Each screen understands the subset that means
@@ -121,6 +161,10 @@ export type AdminFilters = {
   status: FilterStatus | null
   open: string | null
   zones: string | null
+  /** 1-based page of the shift log. `null` is page one, and writes no parameter. */
+  page: number | null
+  sort: ShiftSort | null
+  dir: SortDir | null
 }
 
 export const EMPTY_FILTERS: AdminFilters = {
@@ -133,6 +177,9 @@ export const EMPTY_FILTERS: AdminFilters = {
   status: null,
   open: null,
   zones: null,
+  page: null,
+  sort: null,
+  dir: null,
 }
 
 /**
@@ -193,6 +240,8 @@ export function parseFilters(search: string): AdminFilters {
   const period = text('period')
   const state = text('state')
   const status = text('status')
+  const sort = text('sort')
+  const dir = text('dir')
 
   return {
     location: toUuid(location),
@@ -204,6 +253,11 @@ export function parseFilters(search: string): AdminFilters {
     status: status !== null && isFilterStatus(status) ? status : null,
     open: toUuid(open),
     zones: toUuid(text('zones')),
+    // A 1-based page number has EXACTLY the shape of a row id — positive, unpadded, integral
+    // — so it reuses the same parser rather than growing a second one that drifts from it.
+    page: toRowId(text('page')),
+    sort: sort !== null && isShiftSort(sort) ? sort : null,
+    dir: dir !== null && isSortDir(dir) ? dir : null,
   }
 }
 

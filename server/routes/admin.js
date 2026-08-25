@@ -41,6 +41,31 @@ import { newPortalToken, portalPath } from "./portal.js";
 
 const SHIFT_PAGE_DEFAULT = 500;
 const SHIFT_PAGE_MAX = 2000;
+
+/**
+ * The columns `/shifts/` may sort by (TASK-18 AC5). A LITERAL MAP, looked up by key and
+ * never interpolated from the request: this is the one place in this file where a query
+ * string would otherwise reach SQL as SQL. `sort=` that is not a key here is a 400.
+ *
+ * `state` and `origin` are expressions rather than columns because the shift log's state is
+ * not stored — it is derived, and the derivation lives in web/lib/shifts.ts. The CASE order
+ * below is `blocksPayroll` first (open, then auto-closed-unconfirmed), so "sort by state"
+ * means "put what is holding up payroll on top" and not "order by an internal enum".
+ */
+const SHIFT_SORT = {
+  start: "s.start_time",
+  end: "s.end_time",
+  worker: "w.name",
+  location: "l.name",
+  duration: "(s.end_time - s.start_time)",
+  state:
+    "(CASE WHEN s.end_time IS NULL THEN 0 " +
+    "WHEN s.auto_closed AND s.corrected_at IS NULL THEN 1 " +
+    "WHEN s.corrected_at IS NOT NULL THEN 2 ELSE 3 END)",
+  origin: "(s.client_uuid IS NULL)",
+};
+const SHIFT_SORT_KEYS = Object.keys(SHIFT_SORT);
+const SHIFT_DIRS = ["asc", "desc"];
 const MATERIAL_REQUEST_PAGE = 500;
 
 // Trend length for GET /admin/analytics, in Vienna calendar months.
@@ -307,10 +332,20 @@ async function changePassword({ body, session, ip }) {
  *
  * Boundaries arrive as UTC instants; Vienna wall time is converted by the caller
  * (web/lib/period.ts), which is where the DST arithmetic lives and is tested.
+ *
+ * `?offset=` / `?sort=` / `?dir=` / `?shift=` PAGE AND ORDER the shift list (TASK-18, AC3 +
+ * AC5). All four are optional and their defaults reproduce the payload this route returned
+ * before they existed, byte for byte — the dashboard, payroll, /workers/ and /locations/ all
+ * call this same route and none of them pages. Only `/shifts/` sends them.
  */
 async function adminData({ query }) {
   const rawLimit = query.get("limit");
   const limit = rawLimit === null ? SHIFT_PAGE_DEFAULT : Math.min(v.id(rawLimit, "limit"), SHIFT_PAGE_MAX);
+  const offset = v.optionalOffset(query.get("offset"), "offset");
+  const rawSort = query.get("sort");
+  const sort = rawSort === null ? "start" : v.oneOf(rawSort, "sort", SHIFT_SORT_KEYS);
+  const rawDir = query.get("dir");
+  const dir = rawDir === null ? "desc" : v.oneOf(rawDir, "dir", SHIFT_DIRS);
   const { from, to } = v.optionalRange(query.get("from"), query.get("to"));
   // Cast once: a NULL parameter has no type of its own, and `$1 IS NULL` on an untyped
   // parameter is a 42P08 from Postgres.
@@ -327,10 +362,17 @@ async function adminData({ query }) {
   const shiftLocationId = v.optionalUuid(query.get("location"), "location");
   const rawState = query.get("state");
   const shiftStateFilter = rawState === null ? null : v.oneOf(rawState, "state", ["open", "unresolved", "manual"]);
+  // `?shift=<id>` is a FILTER, not a lookup: /shifts/ opens its correction drawer on that row
+  // (decision-38 rule 3), and once the log is paged 50 at a time the row a cross-link names is
+  // usually not on page one. Narrowing here is what keeps that link working without a second
+  // route — the screen shows exactly that shift, and its own ‹Schicht: 123 ✕› chip is the one
+  // click back to the log.
+  const shiftId = v.optionalId(query.get("shift"), "shift");
   // Mirrors web/lib/shifts.ts `shiftState` / `isManualEntry` exactly — one rule, stated in
   // both places, or the two disagree about which rows a filter keeps.
-  const filterPredicate = (w, l, st) =>
+  const filterPredicate = (w, l, st, sh) =>
     `($${w}::bigint IS NULL OR s.worker_id = $${w}) AND ($${l}::uuid IS NULL OR s.location_id = $${l}) AND ` +
+    `($${sh}::bigint IS NULL OR s.id = $${sh}) AND ` +
     `($${st}::text IS NULL OR ` +
     `($${st} = 'open' AND s.end_time IS NULL) OR ` +
     `($${st} = 'unresolved' AND s.end_time IS NOT NULL AND s.auto_closed AND s.corrected_at IS NULL) OR ` +
@@ -443,10 +485,16 @@ async function adminData({ query }) {
        JOIN locations l ON l.id = s.location_id
        LEFT JOIN zones sz ON sz.id = s.start_zone_id
        LEFT JOIN zones ez ON ez.id = s.end_zone_id
-       WHERE ${inRange} AND ${filterPredicate(4, 5, 6)}
-       ORDER BY s.start_time DESC
-       LIMIT $3`,
-      [from, to, limit, shiftWorkerId, shiftLocationId, shiftStateFilter],
+       WHERE ${inRange} AND ${filterPredicate(5, 6, 7, 8)}
+       ORDER BY ${SHIFT_SORT[sort]} ${dir === "asc" ? "ASC" : "DESC"} NULLS LAST, s.id DESC
+       LIMIT $3 OFFSET $4`,
+      // NULLS LAST in BOTH directions, and `s.id DESC` as the tiebreak. Neither is cosmetic:
+      // an open shift has no end and no duration, and "unknown sinks" has to be ONE rule or
+      // ascending and descending disagree about where the running shifts went. Without the
+      // id tiebreak, OFFSET paging over rows that tie on the sort column silently DROPS and
+      // DUPLICATES rows across pages — Postgres is free to order ties differently per query,
+      // and it does. server/check-api.js pages a block of identical start_times to prove it.
+      [from, to, limit, offset, shiftWorkerId, shiftLocationId, shiftStateFilter, shiftId],
     ),
     // Same worker/location/state predicate as the row query above, but counted rather than
     // fetched, so a filtered screen can say what it is showing without paying for rows it
@@ -457,17 +505,22 @@ async function adminData({ query }) {
     // entirely, so `matchingTotal - matchingInRange` is the count of rows the SAME filter
     // keeps in every OTHER period — the number `/shifts/` needs to tell "nothing here" apart
     // from "nothing anywhere".
-    one(`SELECT count(*)::int AS n FROM shifts s WHERE ${inRangeFor(1, 2)} AND ${filterPredicate(3, 4, 5)}`, [
-      from,
-      to,
+    // `blocked` rides along on the SAME count query rather than a fourth round trip: it is a
+    // FILTER clause on a count that is already being taken. It mirrors `blocksPayroll` in
+    // web/lib/shifts.ts, and the screen needs it because once the log is paged, counting the
+    // blocking rows in the BROWSER counts this page's rows only — "2 hold up payroll" over a
+    // period that has 40 is the same class of lie `shift_outside_count` exists to prevent.
+    one(
+      `SELECT count(*)::int AS n,
+              count(*) FILTER (WHERE s.end_time IS NULL OR (s.auto_closed AND s.corrected_at IS NULL))::int AS blocked
+         FROM shifts s WHERE ${inRangeFor(1, 2)} AND ${filterPredicate(3, 4, 5, 6)}`,
+      [from, to, shiftWorkerId, shiftLocationId, shiftStateFilter, shiftId],
+    ),
+    one(`SELECT count(*)::int AS n FROM shifts s WHERE ${filterPredicate(1, 2, 3, 4)}`, [
       shiftWorkerId,
       shiftLocationId,
       shiftStateFilter,
-    ]),
-    one(`SELECT count(*)::int AS n FROM shifts s WHERE ${filterPredicate(1, 2, 3)}`, [
-      shiftWorkerId,
-      shiftLocationId,
-      shiftStateFilter,
+      shiftId,
     ]),
     // Payroll excludes open shifts (no end_time yet) and unresolved auto-closed ones
     // (decision-10): a start+8h stub is a placeholder, not hours worked. Once a human
@@ -554,6 +607,16 @@ async function adminData({ query }) {
       // `[from, to)` window. `/shifts/` reports this next to the period so "no rows" and
       // "no rows anywhere" never render the same way (TASK-235).
       shift_outside_count: shiftMatchingTotal.n - shiftMatchingInRange.n,
+      // Echoed so a paged screen can prove which window it is on rather than assume its own
+      // request arrived intact — same reason `shift_range` and `shift_limit` are echoed.
+      shift_offset: offset,
+      shift_sort: { column: sort, direction: dir },
+      // How many rows the filter AND the period keep, IGNORING limit/offset. Already counted
+      // above and previously thrown away after the subtraction, so exposing it costs nothing.
+      // This is the denominator of „Seite 2 von 9“ and of „50 von 431 angezeigt“.
+      shift_matching_count: shiftMatchingInRange.n,
+      // Of those, how many block payroll — the whole period, not this page.
+      shift_blocked_count: shiftMatchingInRange.blocked,
     },
   };
 }

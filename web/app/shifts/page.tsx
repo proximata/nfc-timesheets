@@ -18,12 +18,19 @@ import {
   ApiError,
   createShift,
   fetchShiftSnapshot,
+  SHIFT_PAGE_SIZE,
   type Shift,
   type ShiftPatch,
   type ShiftSnapshot,
   updateShift,
 } from '@/lib/api'
-import { type AdminFilters, filterHref, useFilters } from '@/lib/filters'
+import {
+  type AdminFilters,
+  filterHref,
+  type ShiftSort,
+  type SortDir,
+  useFilters,
+} from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
 import { loginPathWithReturn } from '@/lib/nav'
 import { isPeriod, PERIODS, type Period, periodContaining, periodRange } from '@/lib/period'
@@ -63,14 +70,22 @@ import {
  * both rules is exactly how the two drift apart and start disagreeing about what a shift is.
  * Owner decision, this turn, and it is not an implementation detail.
  *
- * Filtering and sorting happen in the browser over the single UNBOUNDED `/admin/data`
- * payload, even though the route now takes `?from=&to=`. That is deliberate: this screen
- * has to be able to say "no shifts in August — 5 exist in earlier periods", and it can only
- * count what it holds. A server-bounded fetch would answer the period question and destroy
- * the only fact that tells an empty FILTER apart from an empty DATABASE. On 3 August 2026
- * the difference between those two readings was the difference between "fine" and "our
- * payroll data is gone". The payload is still capped at `shift_limit` rows and that
- * truncation is surfaced, never hidden.
+ * FILTERING, ORDERING AND PAGING ALL HAPPEN IN POSTGRES (TASK-235, then TASK-18). This screen
+ * once fetched one UNBOUNDED payload and filtered it in the browser, on the argument that only
+ * the browser could say "no shifts in August — 5 exist in earlier periods". That argument
+ * ended when `/admin/data` learned to COUNT what it does not return: `shift_outside_count`
+ * answers exactly that question over the same filter, and `shift_matching_count` answers "how
+ * many rows does this period really have" without shipping them.
+ *
+ * The consequence for every headline on this screen: a number computed from the ROWS IN HAND
+ * now means "on this page", which is a different and quieter claim than the one it looks like.
+ * `blocked` and the triage overflow therefore read the SERVER's counts. Only the triage LIST
+ * itself is built from the rows here, because a list can only name what it holds.
+ *
+ * There is no "truncated" notice on this screen any more, and its absence is deliberate: with
+ * a fixed page size `rows.length >= limit` is true on every full page, so the notice would
+ * shout permanently. The pager IS that disclosure now. The four screens that still fetch
+ * unpaged (`/`, `/payroll/`, `/workers/`, `/locations/`) keep theirs.
  *
  * EVERY time on this screen — shown or typed — is Vienna wall-clock time, converted to and
  * from UTC in lib/shifts.ts and labelled as such. See BUSINESS_TIME_ZONE for why it is not
@@ -153,6 +168,67 @@ const CREATE_FORM_ID = 'shift-create-form'
 /** How many rows „Zu entscheiden" names before it stops listing and starts counting. */
 const TRIAGE_ROWS = 8
 
+/**
+ * The seven sortable columns, in the order they are printed. Each `column` is a key of both
+ * `SHIFT_SORTS` (lib/filters.ts) and `SHIFT_SORT` (server/routes/admin.js) — one vocabulary,
+ * three files. The actions column is not here: there is nothing to sort a button by.
+ */
+const SORTABLE_COLUMNS = [
+  { column: 'worker', label: 'colWorker' },
+  { column: 'location', label: 'colLocation' },
+  { column: 'start', label: 'colStart' },
+  { column: 'end', label: 'colEnd' },
+  { column: 'duration', label: 'colDuration' },
+  { column: 'state', label: 'colState' },
+  { column: 'origin', label: 'colOrigin' },
+] as const satisfies readonly { column: ShiftSort; label: string }[]
+
+/**
+ * One sortable column heading.
+ *
+ * THE HEADING'S TEXT MUST STAY EXACTLY THE COLUMN NAME, and that is a hard constraint rather
+ * than a preference: ResponsiveTableLabels copies `thead th` textContent onto every cell as
+ * the card caption below 1280px, and demo/audit-band-shape.mjs compares those captions to the
+ * headings at six widths. An arrow glyph or a `visually-hidden` „aufsteigend sortiert“ inside
+ * the `th` would print on every card and go red. So the direction indicator is a CSS `::after`
+ * on `th[aria-sort]` (globals.css), and `aria-sort` carries it for a screen reader — which is
+ * the correct mechanism for a sorted column anyway, not a workaround.
+ *
+ * Clicking the ALREADY sorted column flips the direction; clicking a new one starts at the
+ * direction that column is useful in — newest first for a time, A–Z for a name.
+ */
+function SortHeader({
+  column,
+  label,
+  sort,
+  dir,
+  onSort,
+  hint,
+}: {
+  column: ShiftSort
+  label: string
+  sort: ShiftSort
+  dir: SortDir
+  onSort: (column: ShiftSort, dir: SortDir) => void
+  hint: string
+}) {
+  const active = sort === column
+  const next: SortDir = active
+    ? dir === 'asc'
+      ? 'desc'
+      : 'asc'
+    : column === 'worker' || column === 'location'
+      ? 'asc'
+      : 'desc'
+  return (
+    <th scope="col" aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button type="button" className="th-sort" onClick={() => onSort(column, next)} title={hint}>
+        {label}
+      </button>
+    </th>
+  )
+}
+
 const ROW_CLASS: Record<ShiftState, string | undefined> = {
   open: 'is-open',
   unresolved: 'is-unres',
@@ -234,10 +310,11 @@ export default function ShiftsPage() {
    * unresolved — so arriving without a period lands on an empty table, which is the one
    * reading this product must never produce.
    *
-   * THE PARAMETERS SEED CLIENT-SIDE FILTER STATE AND NEVER BECOME A SERVER QUERY. The
-   * snapshot below is still fetched UNBOUNDED, because this screen has to be able to say
-   * „nothing in August — 5 shifts exist in earlier periods", and it can only count what it
-   * holds.
+   * The parameters ARE the server query (TASK-235/TASK-18), including `?shift=`: at 50 rows a
+   * page the row a cross-link names is usually not on page one, so it is sent to Postgres as a
+   * filter and the screen opens on exactly that shift. Its own „Schicht: 123 ✕“ chip is the
+   * one click back to the whole log. Note this is a change of BEHAVIOUR from the unpaged era,
+   * where the drawer opened over the full table.
    */
   const [filters, setFilters] = useFilters()
 
@@ -272,12 +349,26 @@ export default function ShiftsPage() {
       : null
 
   /**
+   * WHICH PAGE, AND IN WHAT ORDER — view state, read from the URL like everything else on this
+   * screen so a sorted page 3 is a link somebody can send. The defaults reproduce the order
+   * this screen has always had (newest first) and are written as `null`, i.e. no parameter, so
+   * an unsorted URL stays short and canonical.
+   */
+  const page = filters.page ?? 1
+  const sort: ShiftSort = filters.sort ?? 'start'
+  const dir: SortDir = filters.dir ?? 'desc'
+
+  /**
    * Every filter write is a 'replace'. These are CONTROLS on the screen you are already
    * looking at, and pushing a history entry per dropdown twiddle means the back button walks
    * the director through four of them before it leaves the screen. Nobody presses back four
    * times; they close the tab.
    */
-  const writeFilters = (patch: Partial<AdminFilters>) => setFilters(patch, 'replace')
+  const writeFilters = (patch: Partial<AdminFilters>) =>
+    // EVERY filter or sort write drops back to page one. Page 7 of "August, Marta" is not a
+    // meaningful position in "September, everyone" — it is an empty table with a pager on it.
+    // Spread first so a patch that names `page` (the pager itself) still wins.
+    setFilters({ page: null, ...patch }, 'replace')
   const setPeriod = (next: Period) => writeFilters({ period: next })
 
   /** A dead session must not render an empty table that reads as "no shifts". */
@@ -303,7 +394,16 @@ export default function ShiftsPage() {
       try {
         setSnapshot(
           await fetchShiftSnapshot(
-            { range, worker: filters.worker, location: filters.location, state: serverState },
+            {
+              range,
+              worker: filters.worker,
+              location: filters.location,
+              state: serverState,
+              shift: filters.shift,
+              page,
+              sort,
+              dir,
+            },
             signal,
           ),
         )
@@ -314,7 +414,17 @@ export default function ShiftsPage() {
         setLoadError(cause instanceof ApiError ? cause.messageKey : 'server')
       }
     },
-    [handleAuthLoss, range, filters.worker, filters.location, serverState],
+    [
+      handleAuthLoss,
+      range,
+      filters.worker,
+      filters.location,
+      filters.shift,
+      serverState,
+      page,
+      sort,
+      dir,
+    ],
   )
 
   useEffect(() => {
@@ -357,13 +467,21 @@ export default function ShiftsPage() {
   const latest = latestStart === null ? null : periodContaining(latestStart, now)
   const latestPeriod = latest === 'all' || latest === period ? null : latest
 
-  /** The shifts on screen the payroll total will silently leave out — the whole point. */
+  /**
+   * The shifts ON THIS PAGE the payroll total will silently leave out. Used ONLY to build the
+   * triage list, which can name no row it does not hold. Every COUNT the screen states comes
+   * from `blockedCount` below — see the file header.
+   */
   const blocked = visible.filter((shift) => blocksPayroll(shiftState(shift)))
 
-  // The server LIMITs the shift list, now to the WINDOW this request asked for rather than to
-  // the whole ledger. Hitting that limit means older shifts WITHIN THIS PERIOD exist and are
-  // NOT on this screen; saying nothing would present a truncated month as a complete one.
-  const truncated = snapshot !== null && snapshot.shifts.length >= snapshot.shift_limit
+  /**
+   * How many rows the period and the filter keep in total, and how many of those hold up
+   * payroll. Both counted by Postgres over the WHOLE window, so paging cannot quietly turn
+   * „40 halten die Abrechnung auf“ into „2“ by looking only at the rows in hand.
+   */
+  const matchingCount = snapshot?.shift_matching_count ?? 0
+  const blockedCount = snapshot?.shift_blocked_count ?? 0
+  const pageCount = Math.max(1, Math.ceil(matchingCount / SHIFT_PAGE_SIZE))
 
   /**
    * Opening a correction. There is no focus bookkeeping here on purpose: <Drawer> moves
@@ -778,20 +896,21 @@ export default function ShiftsPage() {
             cells={[
               {
                 k: t('answerBlocked'),
-                v: blocked.length,
+                v: blockedCount,
                 sub:
                   visible.length === 0
                     ? // A claim about an empty table is a claim about nothing, and saying
                       // "all of them count" over no rows is part of what made the empty
                       // table unreadable in the first place.
                       ''
-                    : blocked.length === 0
+                    : blockedCount === 0
                       ? t('noneBlocked')
                       : t('notPayable'),
               },
               {
                 k: t('answerShown'),
-                v: visible.length,
+                // „50 von 431“, not „50“. A page count printed alone reads as a period count.
+                v: t('shownOfTotal', { shown: visible.length, total: matchingCount }),
                 calm: true,
                 sub: [
                   rangeLabel,
@@ -873,10 +992,6 @@ export default function ShiftsPage() {
               </div>
             </div>
 
-            {truncated ? (
-              <p className="notice">{t('truncated', { limit: snapshot.shift_limit })}</p>
-            ) : null}
-
             <p className="field-hint">{t('timeZoneHint')}</p>
           </section>
 
@@ -886,8 +1001,8 @@ export default function ShiftsPage() {
             </ListPanel>
           )}
 
-          {blocked.length > TRIAGE_ROWS ? (
-            <p className="field-hint">{t('triageMore', { count: blocked.length - TRIAGE_ROWS })}</p>
+          {blockedCount > triage.length ? (
+            <p className="field-hint">{t('triageMore', { count: blockedCount - triage.length })}</p>
           ) : null}
 
           <ListPanel title={t('listHeading')} padded={!hasTable}>
@@ -946,13 +1061,17 @@ export default function ShiftsPage() {
                 <caption className="visually-hidden">{t('tableCaption')}</caption>
                 <thead>
                   <tr>
-                    <th scope="col">{t('colWorker')}</th>
-                    <th scope="col">{t('colLocation')}</th>
-                    <th scope="col">{t('colStart')}</th>
-                    <th scope="col">{t('colEnd')}</th>
-                    <th scope="col">{t('colDuration')}</th>
-                    <th scope="col">{t('colState')}</th>
-                    <th scope="col">{t('colOrigin')}</th>
+                    {SORTABLE_COLUMNS.map(({ column, label }) => (
+                      <SortHeader
+                        key={column}
+                        column={column}
+                        label={t(label)}
+                        sort={sort}
+                        dir={dir}
+                        onSort={(next, nextDir) => writeFilters({ sort: next, dir: nextDir })}
+                        hint={t('sortBy')}
+                      />
+                    ))}
                     <th scope="col">{t('colActions')}</th>
                   </tr>
                 </thead>
@@ -1034,6 +1153,31 @@ export default function ShiftsPage() {
                 </tbody>
               </table>
             )}
+
+            {/* The pager, and the only disclosure that the table is a window onto something
+                bigger. Inline rather than a <Pagination> component: exactly one screen in
+                this admin pages. ponytail: extract when a second one does. */}
+            {pageCount > 1 ? (
+              <nav className="pager" aria-label={t('pagerLabel')}>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={page <= 1}
+                  onClick={() => writeFilters({ page: page - 1 <= 1 ? null : page - 1 })}
+                >
+                  {t('pagePrev')}
+                </button>
+                <span aria-live="polite">{t('pageOf', { page, pages: pageCount })}</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={page >= pageCount}
+                  onClick={() => writeFilters({ page: page + 1 })}
+                >
+                  {t('pageNext')}
+                </button>
+              </nav>
+            ) : null}
           </ListPanel>
         </>
       )}
