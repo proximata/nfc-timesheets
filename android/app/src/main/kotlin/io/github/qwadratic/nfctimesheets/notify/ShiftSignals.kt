@@ -9,6 +9,7 @@ import android.os.Build
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import io.github.qwadratic.nfctimesheets.AppLocale
 import io.github.qwadratic.nfctimesheets.MainActivity
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.core.RunningShift
@@ -62,6 +63,24 @@ object ShiftSignals {
     internal const val EXTRA_LOCATION = "location"
 
     /**
+     * EVERY USER-VISIBLE STRING IN THIS FILE COMES FROM HERE (TASK-268).
+     *
+     * A notification has no Activity, and AppLocale.wrap is installed in
+     * `attachBaseContext` on the UI Activities ONLY — the Application object is
+     * deliberately untouched (see AppLocale.kt), so `applicationContext.getString`
+     * resolves against the OS locale, not the picker. Measured: a worker who picked
+     * English in Einstellungen got an English app and German shift reminders; the
+     * reverse held on an English phone that picked Deutsch.
+     *
+     * Resolved at the point of USE and never cached: the choice can change between two
+     * arms, and a cached Context would keep posting the old language until the process
+     * died. AppLocale.wrap hands back `context` itself for Choice.SYSTEM, so a phone
+     * that never opened the picker behaves exactly as it did before this existed.
+     */
+    internal fun strings(context: Context): Context =
+        AppLocale.wrap(context.applicationContext)
+
+    /**
      * Arm every out-of-app signal for [running], or tear all of them down when it is null.
      *
      * Unconditional and idempotent on purpose: it is cheaper to re-state the world than to
@@ -81,19 +100,20 @@ object ShiftSignals {
         }
 
         ensureChannel(app)
+        val text = strings(app)
         val overdue = plan.phase == ShiftSignal.Phase.OVERDUE
-        val where = running.locationName ?: app.getString(R.string.unknown_location)
+        val where = running.locationName ?: text.getString(R.string.unknown_location)
 
         val builder = NotificationCompat.Builder(app, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_shift)
             .setContentTitle(
-                app.getString(
+                text.getString(
                     if (overdue) R.string.notify_overdue_title else R.string.notify_running_title,
                     where,
                 ),
             )
             .setContentText(
-                app.getString(
+                text.getString(
                     if (overdue) R.string.notify_overdue_body else R.string.notify_running_body,
                 ),
             )
@@ -101,7 +121,7 @@ object ShiftSignals {
             // a surface a screen reader reads out of context.
             .setStyle(
                 NotificationCompat.BigTextStyle().bigText(
-                    app.getString(
+                    text.getString(
                         if (overdue) R.string.notify_overdue_body else R.string.notify_running_body,
                     ),
                 ),
@@ -178,7 +198,7 @@ object ShiftSignals {
     private fun scheduleLadder(context: Context, running: RunningShift) {
         val alarms = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
         val now = System.currentTimeMillis()
-        val where = running.locationName ?: context.getString(R.string.unknown_location)
+        val where = running.locationName ?: strings(context).getString(R.string.unknown_location)
         for (hour in ShiftSignal.REMINDER_HOURS) {
             val fireAt = running.startTime.toEpochMilli() + hour * 3_600_000L
             val intent = rungIntent(context, hour, where)
@@ -222,19 +242,20 @@ object ShiftSignals {
     /** Posted by [ShiftReminderReceiver] when a rung fires. */
     internal fun postReminder(context: Context, hour: Int, where: String) {
         ensureChannel(context)
+        val text = strings(context)
         val autoClose = ShiftSignal.isAutoCloseWarning(hour)
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_shift)
             .setContentTitle(
-                context.getString(
+                text.getString(
                     if (autoClose) R.string.notify_autoclose_title else R.string.notify_reminder_title,
                 ),
             )
             .setContentText(
                 if (autoClose) {
-                    context.getString(R.string.notify_autoclose_body, where)
+                    text.getString(R.string.notify_autoclose_body, where)
                 } else {
-                    context.getString(R.string.notify_reminder_body, hour, where)
+                    text.getString(R.string.notify_reminder_body, hour, where)
                 },
             )
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
@@ -270,12 +291,13 @@ object ShiftSignals {
         // early is the whole compatibility story here.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = notificationManager(context) ?: return
+        val text = strings(context)
         val channel = NotificationChannel(
             CHANNEL_ID,
-            context.getString(R.string.notify_channel_name),
+            text.getString(R.string.notify_channel_name),
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
-            description = context.getString(R.string.notify_channel_description)
+            description = text.getString(R.string.notify_channel_description)
             setShowBadge(true)
         }
         manager.createNotificationChannel(channel)

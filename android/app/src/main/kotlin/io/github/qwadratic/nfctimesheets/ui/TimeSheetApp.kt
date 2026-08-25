@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
@@ -66,6 +67,8 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -2009,19 +2012,37 @@ private fun LanguageSection() {
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.semantics { heading() },
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             for ((option, labelRes) in options) {
                 val pick: () -> Unit = {
                     choice = option
                     AppLocale.set(context, option)
                     (context as? Activity)?.recreate()
                 }
-                if (option == choice) {
-                    Button(onClick = pick, modifier = Modifier.heightIn(min = 48.dp)) {
+                // TASK-268: the active language used to be marked in PIXELS ALONE —
+                // filled Button vs outline — so TalkBack read three identical buttons on
+                // the one screen a worker who cannot read the current language most needs
+                // to operate by ear. selectableGroup() on the Row is what makes TalkBack
+                // say "2 of 3"; `selected` is what makes it say which one.
+                //
+                // `isSelected`, not `selected`: inside the semantics lambda the left side
+                // of `selected = selected` resolves to the local val and does not compile.
+                val isSelected = option == choice
+                val marked = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics {
+                        selected = isSelected
+                        role = Role.RadioButton
+                    }
+                if (isSelected) {
+                    Button(onClick = pick, modifier = marked) {
                         Text(stringResource(labelRes))
                     }
                 } else {
-                    OutlinedButton(onClick = pick, modifier = Modifier.heightIn(min = 48.dp)) {
+                    OutlinedButton(onClick = pick, modifier = marked) {
                         Text(stringResource(labelRes))
                     }
                 }

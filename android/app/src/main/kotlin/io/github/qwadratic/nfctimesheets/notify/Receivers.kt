@@ -19,7 +19,7 @@ class ShiftReminderReceiver : BroadcastReceiver() {
         if (hour <= 0) return
         val where = intent.getStringExtra(ShiftSignals.EXTRA_LOCATION)
             ?.takeIf { it.isNotBlank() }
-            ?: context.getString(R.string.unknown_location)
+            ?: ShiftSignals.strings(context).getString(R.string.unknown_location)
         ShiftSignals.postReminder(context, hour, where)
     }
 }
