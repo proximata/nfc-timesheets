@@ -1664,6 +1664,49 @@ a {
   border-right: 1px solid var(--border);
 }
 
+/* THE MAIN AREA SCROLLS; THE SHELL DOES NOT, desktop and up (≥768px, above the phone nav
+   strip — that layout already scrolls the whole document and demo/audit-phone.mjs already
+   proved it clean at 0px horizontal overflow, so it is untouched here).
+
+   Before this, `.app-shell` only set `min-height: 100dvh`, so on any page taller than the
+   viewport — fifty rows on /shifts/, a long /payroll/ — the GRID ITSELF grew past the
+   viewport and the whole document scrolled, header and sidebar included. `.sidebar`'s own
+   `.nav-group-bottom { margin-top: auto }` (pins "Account" to the bottom of the sidebar)
+   only ever pinned it to the bottom of that overgrown row — the bottom of the PAGE, not the
+   screen — which is the tell that a fixed-height shell was the original intent and the
+   height was never actually capped to get it.
+
+   Fixed height instead of min-height stops the shell growing; `.content` and `.sidebar` get
+   their own `overflow-y: auto` so each scrolls independently inside its own grid cell. The
+   header, the sidebar chrome and the footer notice now stay on screen while the table under
+   them scrolls — which is also why `.content`'s OWN overflow, not the shell's, is what has
+   to carry it: an `overflow: hidden` shell with no scrolling descendant just clips. */
+@media (min-width: 768px) {
+  /* html/body too, not only `.app-shell`: `overflow: hidden` on a nested block keeps ITS
+     OWN box from growing (confirmed — `.app-shell` stayed exactly 100dvh) but does not by
+     itself guarantee the window has nothing left to scroll; `document.documentElement`
+     (the actual `scrollingElement`) still reported a taller `scrollHeight` and `scrollTo()`
+     still moved the header off-screen. Setting `overflow: hidden` on the real scrolling
+     root removes the ambiguity outright — there is no root-level scroll range to have. */
+  html,
+  body {
+    overflow: hidden;
+  }
+
+  .app-shell {
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .content {
+    overflow-y: auto;
+  }
+
+  .sidebar {
+    overflow-y: auto;
+  }
+}
+
 /* Group labels are <p>, not headings: they sit inside the nav landmark and would otherwise
    put an h2 ahead of the page's h1. aria-labelledby gives the lists the same grouping. */
 .nav-group-heading {
