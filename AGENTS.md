@@ -6,7 +6,7 @@ NFC-based shift tracking for a Vienna cleaning company. Workers tap NFC tags at 
 ### Architecture
 
 - **iOS app** (`NFCTimeSheets/`): SwiftUI + SwiftData + CoreNFC. Background NFC via universal links. TestFlight distribution.
-- **Server** (`server/`): Node.js REST API on exe.dev VM (`timesheets.exe.xyz`). Postgres 16. PM2 process manager.
+- **Server** (`server/`): Node.js REST API on exe.dev VM (`schimmer-glanz.exe.xyz`, the `apiHost` — decision-40). Postgres 16. systemd (decision-18, replaced PM2).
 - **Web admin** (`web/`): Next.js App Router, pnpm, Biome, TypeScript. Desktop-first. Served from same VM.
 - **AASA + landing** page served from the same Node server at `/.well-known/apple-app-site-association` and `/t`.
 - **GitHub Pages** (`pages/`): DEPRECATED for AASA. Kept for reference only.
@@ -45,12 +45,23 @@ convenience copy; if they ever disagree with `branding.json`, `branding.json` wi
 
 ### Hosting
 
-- **API + DB**: exe.dev VM `timesheets.exe.xyz` (SSH: `ssh timesheets.exe.xyz`). **systemd** + Postgres on localhost. No Docker (decision-1); systemd replaced PM2 (decision-18). Supabase is deferred, not rejected (decision-16).
+- **API + DB**: exe.dev VM `schimmer-glanz.exe.xyz` (the `apiHost` — SSH: `ssh schimmer-glanz.exe.xyz`). **systemd** + Postgres on localhost. No Docker (decision-1); systemd replaced PM2 (decision-18). Supabase is deferred, not rejected (decision-16).
 - **Frontend**: static Next.js export served by the same Node API process (decision-16). NOT Vercel — decision-11 is superseded. Cloudflare Pages (decision-14) is deferred.
 - **AASA + assetlinks + `/t`**: served from the TAG host `timesheets.exe.xyz` — its own tiny VM,
   stock nginx, three static files, public proxy, no DB and no code (`ops/tag-host/`,
   decision-40). The API host serves the same bytes as a fallback.
 - Auto TLS via exe.dev proxy (API) and Vercel (frontend)
+
+**Why two domains at all** (decision-40, still `status: proposed` in the record but already the
+live split — flag this to the owner next time that decision is touched): a tag host written
+onto a physical NFC card cannot be renamed without a site visit per building, so it has to be
+permanent (`timesheets.exe.xyz`); the API/DB box is just a server, so it stays renameable
+(`schimmer-glanz.exe.xyz`, née `timesheets.exe.xyz` — the July rename that killed a live tag is
+the reason this split exists at all). The reason is **background NFC tap resolution and Android
+App Link verification** — the tag's host must serve `assetlinks.json`/AASA itself, and Android's
+`autoVerify` fails for every host in the intent filter if even one of them stops answering. It is
+**not** about push notifications: the 8h shift-timeout reminder (decision-10, TASK-12) is a local
+on-device notification and has no host dependency of any kind.
 
 ### Workflow Review Gate
 
@@ -64,6 +75,30 @@ When executing tasks via workflows, the decision compliance check is a **dedicat
 6. BLOCKS completion if violations found
 
 Each implementation task should be formulated to unambiguously specify HOW to implement with regards to decisions. But the review gate is the safety net.
+
+**The gate also runs this project's existing whole-surface checks, not just a re-read of the
+diff** — `node ops/check-branding.mjs` (host/appID drift across iOS/Android/web) and, for any
+run that touches `NFCTimeSheets/`, `NFCTimeSheets/checks/run.sh`. Both already exist and
+`deploy.sh` already runs `check-branding` as step 0 before a build — but that is DEPLOY time,
+after the workflow has already told the owner "done". A workflow's own final report must run
+these too and quote every non-`ok`/non-`FAIL`-free line (`check-branding` prints `TODO` lines
+for known, accepted gaps — e.g. iOS still names the renameable host, not the permanent tag
+host, TASK-188 — and those belong in the report a human actually reads, not only in a script's
+stdout nobody re-runs).
+
+Concrete case this caught (2026-08-25): the `ios_tag_writing_and_operator` run
+(TASK-246/decision-49) shipped new UI that shows an operator a `Will write https://…` URL, and
+its Verify phase proved the byte encoding, the overwrite guard and the untouched entitlement —
+rigorously — but never ran `check-branding.mjs`, so the pre-existing "iOS still names
+schimmer-glanz.exe.xyz, not the permanent tag host" TODO stayed buried in that one check's own
+output instead of reaching the run's summary. Separately, the entitlement's own doc
+(`docs/NFC-WRITE-SETUP.md`) has always said "NDEF is App Store error 90778 — read the array
+before you build", enforced by nothing but a human's eyes; it regressed for real the same day.
+Both gaps are now closed the same way — as a CHECK, not a paragraph:
+`NFCTimeSheets/checks/entitlement-format-check.swift` (wired into `checks/run.sh`) fails if
+`com.apple.developer.nfc.readersession.formats` is ever anything but exactly `["TAG"]` or
+absent; `check-branding.mjs`'s TODO line for TASK-188 already existed and just needed a workflow
+that actually runs it and repeats what it says.
 
 Decision checklist (keep updated as decisions are added):
 
@@ -147,6 +182,22 @@ screen done:
 - same rule for Android (`res/values/strings.xml` German default, `res/values-en/`) and iOS
   (`Localizable.xcstrings`) — a new screen on either app ships both languages too.
 
+**Adding a translatable string — same procedure on every platform, no matter which feature:**
+1. Never write a bare string literal in UI code. Add a key instead.
+2. Add that key to BOTH language files in the SAME commit — `web/messages/en.json` +
+   `de.json`, `res/values/strings.xml` (German) + `res/values-en/strings.xml`,
+   `Localizable.xcstrings`'s `de` AND `en` entries. There is no follow-up-commit exception.
+3. Reference it only through the platform's lookup, never interpolate around it:
+   `useTranslations()`/`t('namespace.key')` on web, `stringResource(R.string.key)` /
+   `context.getString()` on Android, `String(localized:)` / a `LocalizedStringKey` on iOS.
+4. Run the gate that exists: `pnpm verify` runs `web/scripts/check.mjs`, which checks
+   `en.json`/`de.json` key-SET parity, ICU/plural-argument parity, and non-empty values — web
+   only, and it proves the two files agree with EACH OTHER, not that your new file calls `t()`.
+   Grep your new file for `useTranslations` yourself; its absence is the tell (this is exactly
+   how `web/app/tags/page.tsx` shipped German-only, found 2026-08-24).
+5. Android and iOS have no automated parity gate yet — the check there is a manual read of
+   both files side by side before calling the screen done.
+
 ### Dependencies
 
 - Pin all npm versions exact (no `^` or `~`)
@@ -227,6 +278,11 @@ Gotchas discovered the hard way on this Mac. Not portable — see closing note.
   adversarial-review, code-review, multi-perspective, codebase-audit). To run a custom
   prepared `.mjs` script, pass its full text content via the `script` parameter — a file path
   string does nothing.
+- Overlapping runs sharing one git index and one working tree have already put one run's
+  uncommitted code into another run's commit, and left orphaned processes on the fixed ports
+  the demo probes use. Before launching any run whose agents will EDIT files, see
+  `ops/WORKTREES.md` (TASK-210) — one git worktree per run, or `git commit -o <path>` as the
+  cheap fallback for a short single-file run. Never `git add -A` either way.
 
 **Backlog.md CLI**
 - `backlog task create` (and similar interactive commands) HANG FOREVER on stdin when run by

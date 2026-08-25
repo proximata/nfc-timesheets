@@ -4,7 +4,7 @@ title: 'iOS writes tags again: the encoder and guard are ported, the Xcode tick 
 status: In Progress
 assignee: []
 created_date: '2026-08-23 21:18'
-updated_date: '2026-08-23 21:19'
+updated_date: '2026-08-25 13:26'
 labels:
   - ios
   - nfc
@@ -125,3 +125,12 @@ NFCTimeSheets/checks/run.sh: all 9 checks OK (171 localisation keys, all German)
 NOT DONE, and not doable from here: no device install, no TestFlight, no submission.
 Nothing about writing or test-scanning a card is proven on hardware until AC6 is ticked.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-25 13:26
+---
+2026 follow-up: owner added NDEF back to NFCTimeSheets.entitlements locally (uncommitted) while testing read+write, hit an error, and asked to fix it by raising IPHONEOS_DEPLOYMENT_TARGET. Recording why that path was declined, so the next reader doesn't retry it: (1) App Store 90778 is an SDK-build-time entitlement-content rejection ('NDEF' in the readersession.formats array, against the iOS 26 SDK), not a runtime NFC-API availability gate -- NFCNDEFReaderSession read+write has existed since iOS 13, so no deployment-target bump changes what error 90778 checks. (2) Read+write both already work via NFCTagReaderSession (TAG format) + the ported byte encoder (NdefTag.swift/WriteGuard.swift, AC1-5 here) -- TAG-only was always sufficient, NDEF was never required. (3) project.pbxproj (IPHONEOS_DEPLOYMENT_TARGET) and the entitlements file are both owner-only per decision-49/AC4; an agent won't touch either regardless. The actual fix is unchanged from this task's own plan: delete the NDEF line Xcode added, confirm the array reads TAG only, then AC6/AC7.
+---
+<!-- COMMENTS:END -->

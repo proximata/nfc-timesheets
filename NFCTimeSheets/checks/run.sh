@@ -56,6 +56,11 @@ run write-guard-check   "$SRC/Branding.swift" "$SRC/TagLink.swift" "$SRC/NdefTag
 # Reads Localizable.xcstrings off disk rather than being cat-ed together with source.
 if swift checks/localisation-check.swift; then :; else failed=1; fi
 
+# decision-49: reads NFCTimeSheets.entitlements off disk — never writes it (owner-only file).
+# Catches NDEF sneaking back into the array (App Store 90778) whether Xcode, a human or an
+# agent put it there. Green with the capability off entirely.
+if swift checks/entitlement-format-check.swift; then :; else failed=1; fi
+
 if [ "$failed" -ne 0 ]; then
   echo "checks: FAILED" >&2
   exit 1

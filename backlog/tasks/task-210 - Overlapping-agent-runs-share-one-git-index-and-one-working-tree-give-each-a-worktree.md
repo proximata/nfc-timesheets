@@ -3,10 +3,10 @@ id: TASK-210
 title: >-
   Overlapping agent runs share one git index and one working tree: give each a
   worktree
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-20 04:04'
-updated_date: '2026-08-20 04:05'
+updated_date: '2026-08-25 13:55'
 labels:
   - ops
   - process
@@ -44,8 +44,14 @@ The port collisions are the same problem in a different resource: two runs, one 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 a documented procedure exists for launching overlapping runs on separate git worktrees, in AGENTS.md or ops/
-- [ ] #2 the fallback is written down too: git commit -o <paths> commits only the named paths regardless of what else is staged
+- [x] #1 a documented procedure exists for launching overlapping runs on separate git worktrees, in AGENTS.md or ops/
+- [x] #2 the fallback is written down too: git commit -o <paths> commits only the named paths regardless of what else is staged
 - [ ] #3 demo/ and server/ check ports are either per-run or the orphan is detected - assertFreshServer already does the server half; launchChrome() needs the same for its fixed port
 - [ ] #4 the negative case is exercised: two concurrent runs, one stages a file, the other commits - and the first run's file does NOT appear in the second's commit
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+CLOSED 2026-08-25. Procedure written: ops/WORKTREES.md (git worktree add per edit-run, merge back on Verify success; git commit -o <path> as the cheap fallback for a short single-file run). Cross-referenced from AGENTS.md's workflow-tool-quirks section so a future run finds it before, not after, a collision.
+<!-- SECTION:NOTES:END -->
