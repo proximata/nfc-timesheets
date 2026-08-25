@@ -346,6 +346,13 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
                     onClick = { openIntent(Intent(context, VerifyZoneActivity::class.java)) },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 ) { Text(stringResource(R.string.verify_open)) }
+                // TASK-254. An operator-only phone never signs a worker in, so it never
+                // reaches Settings, so before this it had no way to pull a fix down to
+                // itself. Composed INLINE here -- the model is already in scope on this
+                // screen -- rather than through UpdateActivity, which is the same section
+                // hosted for the two NFC screens that do NOT have a model. GET /app/version
+                // is auth:"app": no worker session is needed to reach or use any of it.
+                UpdateSection(model, shiftRunning = pending.open != null, openIntent)
             }
         }
     }
@@ -2088,20 +2095,37 @@ private fun PushSection(model: TimeSheetViewModel) {
 }
 
 // -------------------------------------------------------------------------------------
-// Self-update (this iteration). Lives ONLY here — Settings, worker-initiated, never on
-// the tap or clock-out path. See update/UpdateManager.kt's own header for the whole
-// design; this composable is purely a rendering of [model.update].
+// Self-update. THREE hosts, all of them human-initiated, and NEVER the tap or clock-out
+// path — that last clause is the one that has always mattered and it still holds:
+//   1. Settings (the worker's tab)
+//   2. SignInScreen's Betreiber? section                 (TASK-254)
+//   3. UpdateActivity, opened from WriteTag/VerifyZone   (TASK-254)
+// 2 and 3 exist because an operator-only phone never signs a worker in and so never
+// reaches Settings — it had no self-service path to a fix at all. See
+// update/UpdateManager.kt's own header for the whole design; this composable is purely a
+// rendering of [model.update], and there is exactly ONE implementation behind all three.
+//
+// internal, not private: UpdateActivity.kt is a different file in this same package.
 // -------------------------------------------------------------------------------------
 @Composable
-private fun UpdateSection(model: TimeSheetViewModel, shiftRunning: Boolean, openIntent: (Intent) -> Unit) {
+internal fun UpdateSection(model: TimeSheetViewModel, shiftRunning: Boolean, openIntent: (Intent) -> Unit) {
     val state by model.update.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    // Checked once when Settings first appears and nothing has asked yet — covers the
+    // Checked once when this section first appears and nothing has asked yet — covers the
     // rare case where the silent launch-time check (TimeSheetViewModel.restoreSession)
-    // has not landed by the time the worker opens this tab.
+    // has not landed by the time the worker opens this tab, AND the two operator hosts,
+    // whose view model never resolves a worker session at all.
+    //
+    // SILENTLY, not checkForUpdate() (TASK-254). Load-bearing, not tidying: a fresh view
+    // model starts at Idle, and a plain checkForUpdate() would re-OFFER a download that is
+    // ALREADY IN FLIGHT — and startUpdateDownload -> enqueueDownload deletes the shared
+    // nfc-timesheets-update.apk before enqueuing a SECOND DownloadManager row onto that
+    // same path. Two writers, one file. checkForUpdateSilently() calls resumePending()
+    // first and ADOPTS the running row instead. Settings renders identically either way
+    // (Idle and Checking both print update_checking) and gains the same adoption.
     LaunchedEffect(Unit) {
-        if (state is UpdateState.Idle) model.checkForUpdate()
+        if (state is UpdateState.Idle) model.checkForUpdateSilently()
     }
 
     // A RESULT CALLBACK, not the fire-and-forget openIntent used everywhere else in this

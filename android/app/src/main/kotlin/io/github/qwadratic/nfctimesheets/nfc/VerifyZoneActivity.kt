@@ -1,6 +1,7 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.nfc.NfcAdapter
 import android.nfc.Tag
@@ -43,6 +44,7 @@ import io.github.qwadratic.nfctimesheets.core.WireOperatorZone
 import io.github.qwadratic.nfctimesheets.core.WireZoneVerifyResult
 import io.github.qwadratic.nfctimesheets.core.Zones
 import io.github.qwadratic.nfctimesheets.ui.TimeSheetsTheme
+import io.github.qwadratic.nfctimesheets.ui.UpdateActivity
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
@@ -141,6 +143,31 @@ class VerifyZoneActivity : ComponentActivity() {
                             NfcState.DISABLED -> Text(stringResource(R.string.scan_disabled))
                             NfcState.READY -> ReadyBody()
                         }
+
+                        // TASK-254: an operator-only phone never signs a worker in and so
+                        // never reaches Settings, where the update section used to live
+                        // ALONE.
+                        //
+                        // THIS SCREEN'S OWN THESIS IS UNBROKEN. It starts an EXPLICIT
+                        // in-app class -- never the view intent, never a tag URI, nothing
+                        // that could ever be routed to MainActivity -- and it calls no
+                        // server route itself, in particular nothing on the worker client.
+                        // Nothing here can open or close a shift (decision-45/47); see
+                        // checks/verify-no-shift-check.sh, which reads this very file and
+                        // whose forbidden tokens are why this comment spells none of them.
+                        // Reader mode is already correct across the trip: onPause tears it
+                        // down on the way out, onResume re-reads operatorReady and restarts
+                        // it on the way back, and selectedZone/pendingId survive.
+                        //
+                        // OUTSIDE the `when` ON PURPOSE -- UNSUPPORTED/DISABLED do not
+                        // compose ReadyBody(), and an emulator (no NFC) or a phone with NFC
+                        // off is exactly a phone that may need the update.
+                        OutlinedButton(
+                            onClick = {
+                                startActivity(Intent(this@VerifyZoneActivity, UpdateActivity::class.java))
+                            },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text(stringResource(R.string.update_check_button)) }
 
                         Button(
                             onClick = { finish() },

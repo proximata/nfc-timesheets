@@ -105,3 +105,9 @@ sh checks/manifest-check.sh
 # worker-session client — by reading its source the same way manifest-check.sh reads the
 # manifest. See checks/verify-no-shift-check.sh.
 sh checks/verify-no-shift-check.sh
+
+# AN OPERATOR-ONLY PHONE CAN REACH AN UPDATE (TASK-254). Same source-reading technique:
+# ui/UpdateActivity.kt and both NFC screens import Android, so no JVM check can compile
+# them, and "the Betreiber? section can pull a fix down to itself" is a fact about the
+# WIRING anyway. See checks/update-reach-check.sh.
+sh checks/update-reach-check.sh

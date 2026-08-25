@@ -288,5 +288,19 @@
             android:launchMode="singleTop"
             android:label="@string/verify_title" />
 
+        <!--
+          THE UPDATE SCREEN FOR AN OPERATOR-ONLY PHONE (TASK-254). exported="false" and no
+          intent filter of ANY kind, same clause as the two screens above: it is reached
+          only from a button inside the app.
+
+          singleTop: two presses must not stack two update screens over one DownloadManager
+          row.
+        -->
+        <activity
+            android:name=".ui.UpdateActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:label="@string/update_title" />
+
     </application>
 </manifest>
