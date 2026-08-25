@@ -1854,9 +1854,14 @@ private fun updateCheck() {
         "paused-for-network classifies as WAITING_FOR_NETWORK, not FAILED",
     )
     check(
+        UpdateCheck.classify(UpdateCheck.DM_STATUS_PAUSED, UpdateCheck.DM_PAUSED_WAITING_TO_RETRY) ==
+            UpdateCheck.DownloadOutcome.WAITING_TO_RETRY,
+        "paused-to-retry classifies as its own outcome, not folded into WAITING_FOR_NETWORK",
+    )
+    check(
         UpdateCheck.classify(UpdateCheck.DM_STATUS_PAUSED, UpdateCheck.DM_PAUSED_QUEUED_FOR_WIFI) ==
-            UpdateCheck.DownloadOutcome.WAITING_FOR_NETWORK,
-        "queued-for-wifi classifies as WAITING_FOR_NETWORK too",
+            UpdateCheck.DownloadOutcome.QUEUED_FOR_WIFI,
+        "queued-for-wifi classifies as its own outcome too, not WAITING_FOR_NETWORK",
     )
     check(
         UpdateCheck.classify(UpdateCheck.DM_STATUS_PAUSED, UpdateCheck.DM_PAUSED_UNKNOWN) ==

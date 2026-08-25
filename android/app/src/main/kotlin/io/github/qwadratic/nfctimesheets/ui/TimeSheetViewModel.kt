@@ -214,6 +214,11 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
      *  to write [_update]. */
     private var updatePollJob: Job? = null
 
+    /** DownloadManager's own id for the CURRENT [UpdateState.Downloading], if any --
+     *  needed by [cancelUpdateDownload]/[retryUpdateDownload] (TASK-264), which
+     *  otherwise have no way to reach the row [pollUpdateDownload] is watching. */
+    private var currentDownloadId: Long? = null
+
     // Placed HERE, after every property either launch touches (see the note at the top of
     // this class for why the position is load-bearing, not stylistic).
     init {
@@ -789,7 +794,8 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             val resumed = withContext(Dispatchers.IO) { app.updates.resumePending() }
             if (resumed != null) {
                 val (id, release) = resumed
-                _update.value = UpdateState.Downloading(release, percent = null, waitingForNetwork = false)
+                currentDownloadId = id
+                _update.value = UpdateState.Downloading(release, percent = null, pauseReason = null)
                 pollUpdateDownload(id, release)
                 return@launch
             }
@@ -809,8 +815,48 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
     fun startUpdateDownload(release: RemoteRelease) {
         viewModelScope.launch {
             val id = withContext(Dispatchers.IO) { app.updates.enqueueDownload(release) }
-            _update.value = UpdateState.Downloading(release, percent = null, waitingForNetwork = false)
+            currentDownloadId = id
+            _update.value = UpdateState.Downloading(release, percent = null, pauseReason = null)
             pollUpdateDownload(id, release)
+        }
+    }
+
+    /**
+     * The paused-state Abbrechen button (TASK-264). Only acts on a genuine
+     * [UpdateState.Downloading] -- pressing it from any other state (a race with the
+     * download finishing, say) is a no-op, never a crash or a wrong-state transition.
+     * Drops back to [UpdateState.Available], the SAME "offer the Herunterladen button
+     * again" state a first-time offer already renders, so no new UI state is needed.
+     */
+    fun cancelUpdateDownload() {
+        val current = _update.value
+        if (current !is UpdateState.Downloading) return
+        updatePollJob?.cancel()
+        val id = currentDownloadId
+        currentDownloadId = null
+        _update.value = UpdateState.Available(current.release)
+        if (id != null) {
+            viewModelScope.launch { withContext(Dispatchers.IO) { app.updates.cancelDownload(id) } }
+        }
+    }
+
+    /**
+     * The paused-state Erneut-versuchen button (TASK-264) -- literally the Failed
+     * state's own retry path, invoked one state earlier. The old DownloadManager row is
+     * cancelled and awaited BEFORE [startUpdateDownload] enqueues a new one: both
+     * requests write to the same fixed destination filename
+     * (update/UpdateManager.FILENAME), so this ordering is what stops the two from
+     * racing on that file.
+     */
+    fun retryUpdateDownload() {
+        val current = _update.value
+        if (current !is UpdateState.Downloading) return
+        updatePollJob?.cancel()
+        viewModelScope.launch {
+            val id = currentDownloadId
+            currentDownloadId = null
+            if (id != null) withContext(Dispatchers.IO) { app.updates.cancelDownload(id) }
+            startUpdateDownload(current.release)
         }
     }
 

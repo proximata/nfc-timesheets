@@ -18,12 +18,22 @@ sealed interface UpdateState {
     data object Checking : UpdateState
     data object UpToDate : UpdateState
     data class Available(val release: RemoteRelease) : UpdateState
-    data class Downloading(val release: RemoteRelease, val percent: Int?, val waitingForNetwork: Boolean) :
+    data class Downloading(val release: RemoteRelease, val percent: Int?, val pauseReason: DownloadPauseReason?) :
         UpdateState
     data class ReadyToInstall(val release: RemoteRelease, val uri: Uri) : UpdateState
     /** @param release null only for a check that never got far enough to name one. */
     data class Failed(val release: RemoteRelease?, val reasonKey: String) : UpdateState
 }
+
+/**
+ * Which of DownloadManager's PAUSED reasons is holding a [UpdateState.Downloading] up
+ * (TASK-264) -- null means the download is actively running or its pause reason is
+ * unrecognised (UpdateCheck.classify's own else-arm reads that as still RUNNING). Kept as
+ * its own 3-value enum here, next to [UpdateState], rather than passing the raw
+ * DownloadManager reason int through: the render side (ui/TimeSheetApp.kt) needs exactly
+ * these three shapes and nothing about DownloadManager's own constants.
+ */
+enum class DownloadPauseReason { NETWORK, RETRY, WIFI_ONLY }
 
 /**
  * Self-update (this iteration). "Is there a newer build" + "get it onto this phone" — the
@@ -139,9 +149,13 @@ class UpdateManager(context: Context, private val api: Api) {
 
             return when (UpdateCheck.classify(status, reason)) {
                 UpdateCheck.DownloadOutcome.RUNNING ->
-                    UpdateState.Downloading(release, percent, waitingForNetwork = false)
+                    UpdateState.Downloading(release, percent, pauseReason = null)
                 UpdateCheck.DownloadOutcome.WAITING_FOR_NETWORK ->
-                    UpdateState.Downloading(release, percent, waitingForNetwork = true)
+                    UpdateState.Downloading(release, percent, pauseReason = DownloadPauseReason.NETWORK)
+                UpdateCheck.DownloadOutcome.WAITING_TO_RETRY ->
+                    UpdateState.Downloading(release, percent, pauseReason = DownloadPauseReason.RETRY)
+                UpdateCheck.DownloadOutcome.QUEUED_FOR_WIFI ->
+                    UpdateState.Downloading(release, percent, pauseReason = DownloadPauseReason.WIFI_ONLY)
                 UpdateCheck.DownloadOutcome.STORAGE_FULL ->
                     UpdateState.Failed(release, "err_update_storage_full")
                 UpdateCheck.DownloadOutcome.FAILED ->
@@ -149,6 +163,19 @@ class UpdateManager(context: Context, private val api: Api) {
                 UpdateCheck.DownloadOutcome.SUCCESS -> verify(id, release)
             }
         }
+    }
+
+    /**
+     * Cancel/retry from a PAUSED download (TASK-264), reachable one state earlier than
+     * the terminal Failed screen's own retry button. Removes DownloadManager's own row
+     * for [id] -- `remove()` also deletes the partial file it was writing, so a later
+     * retry never resumes into a half-downloaded, possibly-truncated blob -- and clears
+     * this manager's OWN bookkeeping prefs, which doubles as making sure a cancelled id
+     * is never picked back up by [resumePending] after a process restart.
+     */
+    fun cancelDownload(id: Long) {
+        downloadManager.remove(id)
+        prefs.edit().clear().apply()
     }
 
     /**

@@ -9,7 +9,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -63,6 +65,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -98,6 +101,7 @@ import io.github.qwadratic.nfctimesheets.nfc.VerifyZoneActivity
 import io.github.qwadratic.nfctimesheets.nfc.WriteTagActivity
 import io.github.qwadratic.nfctimesheets.sync.SyncScheduler
 import io.github.qwadratic.nfctimesheets.update.UpdateReadiness
+import io.github.qwadratic.nfctimesheets.update.DownloadPauseReason
 import io.github.qwadratic.nfctimesheets.update.UpdateState
 import java.time.Instant
 import java.time.LocalDate
@@ -274,28 +278,44 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
             Text(stringResource(if (busy) R.string.signin_submitting else R.string.signin_submit))
         }
 
-        Text(
-            stringResource(R.string.signin_code_help),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        // Trap 2. Nothing in the app can fix a stopped-state install from inside the app,
-        // so the only useful thing is to tell the person holding the phone.
-        Text(
-            stringResource(R.string.nfc_first_run_note),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        // TASK-267: everything below the button used to render unconditionally, turning
+        // the first screen a new hire sees into a document. NOTHING TRUE IS DELETED --
+        // signin_code_help and nfc_first_run_note both still exist verbatim, just behind
+        // one disclosure instead of printed automatically.
+        RevealSection(label = {
+            Text(stringResource(R.string.signin_more_info), style = MaterialTheme.typography.bodyMedium)
+        }) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    stringResource(R.string.signin_code_help),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // Trap 2. Nothing in the app can fix a stopped-state install from inside
+                // the app, so the only useful thing is to tell the person holding the phone.
+                Text(
+                    stringResource(R.string.nfc_first_run_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
 
         // decision-48 §6.6, this iteration. ALWAYS the fallback's own condition, never the
         // other way round: the code field above is complete and correct with or without
         // this `if`. THE SERVER'S ANSWER DECIDES WHETHER THIS COMPOSES AT ALL — not a
         // disabled button, not an alpha, not a null string swapped in for a real one. A
         // build whose capability read is false, still pending, or failed offline draws
-        // nothing past the line above.
+        // nothing past the line above. The SMS door stays reachable in ONE tap (AC3): its
+        // own self-describing question is the reveal's trigger text, so it is discoverable
+        // without prior knowledge; SmsSignInSection no longer prints that same sentence a
+        // second time once revealed (see its own header comment).
         if (model.smsAvailable.collectAsStateWithLifecycle().value) {
-            SmsSignInSection(model)
+            RevealSection(label = {
+                Text(stringResource(R.string.signin_sms_intro), style = MaterialTheme.typography.bodyLarge)
+            }) {
+                SmsSignInSection(model)
+            }
         }
 
         // BEFORE any worker session exists (TASK-252's Android half - the shape iOS's
@@ -305,21 +325,52 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
         // duplicated here: both already show their own operator-code field the moment
         // `operatorReady` is false (WriteTagActivity.kt, VerifyZoneActivity.kt), so this is
         // only a second door onto the SAME screens - never a second door onto a shift
-        // (decision-45; nothing reachable from here can open or close one).
+        // (decision-45; nothing reachable from here can open or close one). This whole
+        // block composes unconditionally on SignInScreen -- reached from SessionState.
+        // SignedOut with no worker session required (TASK-267 AC4) -- and the reveal below
+        // is local Compose state only, so collapsing it by default touches no auth gate.
         HorizontalDivider(Modifier.padding(top = 8.dp))
-        Text(
-            stringResource(R.string.signin_operator_heading),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedButton(
-            onClick = { openIntent(Intent(context, WriteTagActivity::class.java)) },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-        ) { Text(stringResource(R.string.write_open)) }
-        OutlinedButton(
-            onClick = { openIntent(Intent(context, VerifyZoneActivity::class.java)) },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-        ) { Text(stringResource(R.string.verify_open)) }
+        RevealSection(label = {
+            Text(
+                stringResource(R.string.signin_operator_heading),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                OutlinedButton(
+                    onClick = { openIntent(Intent(context, WriteTagActivity::class.java)) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.write_open)) }
+                OutlinedButton(
+                    onClick = { openIntent(Intent(context, VerifyZoneActivity::class.java)) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.verify_open)) }
+            }
+        }
+    }
+}
+
+/**
+ * A ONE-WAY reveal (TASK-267), never a re-collapsing accordion: [SmsSignInSection] holds
+ * its own rememberSaveable phone/otp/sentTo state, and a toggle that could go back to
+ * collapsed would risk silently discarding a mid-flow OTP entry. No acceptance criterion
+ * here asks for a collapse-back control, so the smallest safe shape is the right one --
+ * there is no existing disclosure component anywhere in this codebase to reuse instead.
+ */
+@Composable
+private fun RevealSection(label: @Composable () -> Unit, content: @Composable () -> Unit) {
+    var revealed by rememberSaveable { mutableStateOf(false) }
+    if (revealed) {
+        content()
+    } else {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clickable(role = Role.Button) { revealed = true },
+            contentAlignment = Alignment.CenterStart,
+        ) { label() }
     }
 }
 
@@ -335,6 +386,11 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
 // function does not re-check the flag: it exists to be absent, not to render its own
 // "unavailable" state, because a server that has never heard of SMS must look IDENTICAL to
 // today, and a section that renders itself as a grey noticed absence is still a section.
+//
+// ONLY EVER COMPOSED INSIDE THE RevealSection ABOVE whose label is this section's own
+// signin_sms_intro sentence (TASK-267) -- so this composable no longer prints that same
+// sentence itself: it would otherwise appear twice, once as the tap trigger and once
+// again the instant it is revealed.
 // -------------------------------------------------------------------------------------
 @Composable
 private fun SmsSignInSection(model: TimeSheetViewModel) {
@@ -349,7 +405,6 @@ private fun SmsSignInSection(model: TimeSheetViewModel) {
     val busy by model.smsBusy.collectAsStateWithLifecycle()
 
     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-    Text(stringResource(R.string.signin_sms_intro), style = MaterialTheme.typography.bodyLarge)
 
     val target = sentTo
     if (target == null) {
@@ -2094,13 +2149,51 @@ private fun UpdateSection(model: TimeSheetViewModel, shiftRunning: Boolean, open
                 ) { Text(stringResource(R.string.update_download_button)) }
             }
 
-            is UpdateState.Downloading -> Text(
-                when {
-                    s.waitingForNetwork -> stringResource(R.string.update_waiting_network)
-                    s.percent != null -> stringResource(R.string.update_downloading, s.percent)
-                    else -> stringResource(R.string.update_downloading_unknown)
-                },
-            )
+            is UpdateState.Downloading -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    when (s.pauseReason) {
+                        DownloadPauseReason.NETWORK -> stringResource(R.string.update_waiting_network)
+                        DownloadPauseReason.RETRY -> stringResource(R.string.update_waiting_retry)
+                        DownloadPauseReason.WIFI_ONLY -> stringResource(R.string.update_waiting_wifi)
+                        null ->
+                            if (s.percent != null) {
+                                stringResource(R.string.update_downloading, s.percent)
+                            } else {
+                                stringResource(R.string.update_downloading_unknown)
+                            }
+                    },
+                )
+                // AC2's "or" clause: no DownloadManager API forces a wifi-only pause
+                // through from code (enqueueDownload() already sets
+                // setAllowedOverMetered/setAllowedOverRoaming), so the honest offer is
+                // the settings deep link, same pattern as update_install_blocked below.
+                if (s.pauseReason == DownloadPauseReason.WIFI_ONLY) {
+                    Text(
+                        stringResource(R.string.update_wifi_mobile_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(
+                        onClick = { openIntent(UpdateReadiness.wifiOnlySettingsIntent(context)) },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) { Text(stringResource(R.string.update_wifi_settings_button)) }
+                }
+                // AC3: cancel/retry reachable one state earlier than the terminal
+                // Fehlgeschlagen screen, only once there IS a pause reason to act on --
+                // not a general abort-while-healthy control, which no AC asks for.
+                if (s.pauseReason != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = model::cancelUpdateDownload,
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) { Text(stringResource(R.string.update_cancel_button)) }
+                        Button(
+                            onClick = model::retryUpdateDownload,
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) { Text(stringResource(R.string.update_retry_button)) }
+                    }
+                }
+            }
 
             is UpdateState.ReadyToInstall -> {
                 Text(stringResource(R.string.update_ready))

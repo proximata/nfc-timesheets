@@ -28,6 +28,10 @@
     <string name="signin_code_label">Anmeldecode</string>
     <string name="signin_code_hint">8 Zeichen. Groß- und Kleinschreibung, Leerzeichen und Bindestriche sind egal.</string>
     <string name="signin_code_help">Der Code gilt eine Stunde und kann nur einmal verwendet werden. Wenn er nicht mehr geht, fordern Sie bei Ihrer Verwaltung einen neuen an – das dauert einen Klick.</string>
+    <!-- Disclosure trigger for signin_code_help + nfc_first_run_note (TASK-267): a
+         one-way reveal, tapped by someone who wants the extra sentences, not shown by
+         default. -->
+    <string name="signin_more_info">Mehr Informationen</string>
     <string name="signin_submit">Anmelden</string>
     <string name="signin_submitting">Anmeldung läuft …</string>
 
@@ -271,7 +275,14 @@
     <!-- %1$d = Prozent -->
     <string name="update_downloading">Wird heruntergeladen … %1$d %%</string>
     <string name="update_downloading_unknown">Wird heruntergeladen …</string>
+    <!-- Three separate reasons DownloadManager can pause: only this one is genuinely no
+         internet (TASK-264). -->
     <string name="update_waiting_network">Warte auf Internetverbindung …</string>
+    <string name="update_waiting_retry">Kurze Pause, bevor der Download automatisch erneut versucht wird …</string>
+    <string name="update_waiting_wifi">Der Download wartet auf eine WLAN-Verbindung.</string>
+    <string name="update_wifi_mobile_note">Sie können das Herunterladen über Mobilfunkdaten in den Telefon-Einstellungen erlauben.</string>
+    <string name="update_wifi_settings_button">Einstellungen öffnen</string>
+    <string name="update_cancel_button">Abbrechen</string>
     <string name="update_ready">Bereit zur Installation.</string>
     <string name="update_install_button">Installieren</string>
     <string name="update_install_blocked_note">Diese App darf noch keine Updates installieren. Das ist eine einmalige Freigabe pro Telefon.</string>

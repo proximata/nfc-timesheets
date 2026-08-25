@@ -57,14 +57,24 @@ object UpdateCheck {
      * FAILED because "delete something" is a different instruction from "wait" or "try
      * again", and a worker cannot fix a mis-diagnosed problem.
      */
-    enum class DownloadOutcome { RUNNING, SUCCESS, WAITING_FOR_NETWORK, STORAGE_FULL, FAILED }
+    //
+    // The three PAUSED reasons are kept apart (TASK-264): only WAITING_FOR_NETWORK is
+    // genuinely "no internet" -- WAITING_TO_RETRY is a healthy backoff before
+    // DownloadManager tries again on its own, and QUEUED_FOR_WIFI is the OS's own
+    // metered/background-data policy, not a connectivity problem at all. Folding all
+    // three into one sentence told a worker with mobile data but no WiFi to go find a
+    // network that was never the issue.
+    enum class DownloadOutcome {
+        RUNNING, SUCCESS, WAITING_FOR_NETWORK, WAITING_TO_RETRY, QUEUED_FOR_WIFI, STORAGE_FULL, FAILED
+    }
 
     fun classify(status: Int, reason: Int): DownloadOutcome = when (status) {
         DM_STATUS_SUCCESSFUL -> DownloadOutcome.SUCCESS
         DM_STATUS_PENDING, DM_STATUS_RUNNING -> DownloadOutcome.RUNNING
         DM_STATUS_PAUSED -> when (reason) {
-            DM_PAUSED_WAITING_FOR_NETWORK, DM_PAUSED_WAITING_TO_RETRY, DM_PAUSED_QUEUED_FOR_WIFI ->
-                DownloadOutcome.WAITING_FOR_NETWORK
+            DM_PAUSED_WAITING_FOR_NETWORK -> DownloadOutcome.WAITING_FOR_NETWORK
+            DM_PAUSED_WAITING_TO_RETRY -> DownloadOutcome.WAITING_TO_RETRY
+            DM_PAUSED_QUEUED_FOR_WIFI -> DownloadOutcome.QUEUED_FOR_WIFI
             else -> DownloadOutcome.RUNNING
         }
         DM_STATUS_FAILED -> if (reason == DM_ERROR_INSUFFICIENT_SPACE) {
