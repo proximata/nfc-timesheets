@@ -4,9 +4,11 @@ title: >-
   The tag host is permanent and separate from the API host a hostname written
   onto a physical card is not a server name
 date: '2026-08-19 11:38'
-status: proposed
+status: accepted
 ---
-**PROPOSED. Not accepted. The owner accepts decisions.**
+**ACCEPTED 2026-08-25 by the owner.** Was already live/binding in code and gates before this;
+accepting makes the record match reality. TASK-188 (iOS not yet migrated off apiHost) stays
+open and tracked separately — accepting this decision does not close it.
 
 Amends decision-15 (which fixed the tag hostname at `timesheets.exe.xyz` and kept tags
 unlocked as migration insurance) and decision-24 (which made `ops/branding.json` the single

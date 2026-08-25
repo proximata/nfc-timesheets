@@ -4,8 +4,15 @@ title: >-
   Contract history makes revenue period-correct; labour stays valued at current
   rates until a worker_rates table is accepted
 date: '2026-08-03 15:30'
-status: proposed
+status: accepted
 ---
+**ACCEPTED 2026-08-25 by the owner, AS WRITTEN — scope only.** This accepts what's already
+shipped: contract history for revenue (migration 005), and labour staying valued at
+`workers.hourly_rate_cents` (today's rate, no history) until a `worker_rates` table is
+separately authorized. It does **not** authorize worker rate history. TASK-20 AC2/AC4 and
+TASK-22 AC5 stay blocked until the four open questions below are answered and that answer
+becomes an amendment (parallel to how decision-42 amended this one for revenue).
+
 ## Context
 
 Migration 005 adds `location_contracts`: a building's price is now period-scoped
