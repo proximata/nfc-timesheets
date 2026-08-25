@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-24 13:49'
-updated_date: '2026-08-24 16:14'
+updated_date: '2026-08-25 08:43'
 labels:
   - ios
   - release
@@ -79,5 +79,24 @@ DO NOT bump CURRENT_PROJECT_VERSION from an agent — project.pbxproj is the own
 created: 2026-08-24 16:14
 ---
 Same session also found and fixed a second, unrelated iOS blocker in this area: CoreNFC was SIGABRTing (__CRASHING_DUE_TO_PRIVACY_VIOLATION__) on any tag write because Info.plist had no NFCReaderUsageDescription key at all — commit 6c89860, confirmed present in a real Release build's Info.plist post-build. Device test for THIS task should now also exercise a tag write, not just sign-in, since both were broken.
+---
+
+created: 2026-08-25 08:43
+---
+Real progress via XCUITest (first-ever render+interaction, not just source read):
+
+PROVEN on a real Simulator against real production (schimmer-glanz.exe.xyz):
+- SignInView renders correctly, no crash, all doors present (phone+OTP, enrolment code, Write a tag, Test a tag)
+- AC3 BOTH halves: unregistered phone -> "This number isn't on file..." / wrong enrolment code -> "Code not accepted..." -- confirmed as two DIFFERENT sentences, live network round-trip
+- AC1/AC2 proxy: a real admin-issued enrolment code (worker 116, throwaway) signed in and left the sign-in screen -- worker+session then hard-deleted from prod, code is now spent and can't be reused
+- Operator "Write a tag" gate copy renders correctly and its operator-code field accepts real typed input via XCUITest
+
+4 of these are now permanent tests in NFCTimeSheetsUITests.swift (commit a72e01c), safe to rerun anytime (no cost, no data writes for the phone/code-mismatch cases).
+
+STILL NOT PROVEN: the real SMS round-trip (AC1's SMS half landing on the shift screen, AC5 sms_deliveries + a handset actually receiving the text -- needs either the owner's own phone or an explicitly consented number, since it spends real Twilio budget and I won't send an unconsented text. VoiceOver still unmeasured.
+
+Note for whoever reads this: manual coordinate-based simulator automation (cliclick) was unreliable for SwiftUI TextField focus specifically (worked for buttons/navigation, not text input) -- XCUITest's accessibility-based queries are the right tool and worked first try.
+EOF
+)
 ---
 <!-- COMMENTS:END -->
