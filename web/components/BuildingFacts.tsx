@@ -141,9 +141,11 @@ export function BuildingFacts({
       minimumFractionDigits: 0,
       maximumFractionDigits: 2,
     })
-    return sum.state === 'complete'
-      ? t('panelZonesTotal', { area: value, count: sum.zones })
-      : t('panelZonesFloor', { area: value, count: sum.zones, unmeasured: sum.unmeasured })
+    if (sum.state === 'incomplete') {
+      if (sum.hundredths === 0) return t('panelZonesAllUnmeasured', { unmeasured: sum.unmeasured })
+      return t('panelZonesFloor', { area: value, count: sum.zones, unmeasured: sum.unmeasured })
+    }
+    return t('panelZonesTotal', { area: value, count: sum.zones })
   }
 
   const month = periodRange('thisMonth', asOf)

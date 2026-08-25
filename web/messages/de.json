@@ -108,6 +108,7 @@
     "panelZonesNone": "Noch keine Zone angelegt – Fläche unbekannt, nicht null",
     "panelZonesTotal": "{area} m² aus {count, plural, one {# Zone} other {# Zonen}}",
     "panelZonesFloor": "mindestens {area} m² aus {count, plural, one {# Zone} other {# Zonen}} · {unmeasured, plural, one {# Zone ist noch nicht vermessen} other {# Zonen sind noch nicht vermessen}}",
+    "panelZonesAllUnmeasured": "Noch keine Fläche erfasst – {unmeasured, plural, one {# Zone ist noch nicht vermessen} other {# Zonen sind noch nicht vermessen}}",
     "panelZonesStillWorks": "Der Tag dieses Objekts startet trotzdem eine Schicht.",
     "panelLinkZones": "Zonen dieses Objekts verwalten",
     "panelLinkZonesFirst": "Erste Zone anlegen",

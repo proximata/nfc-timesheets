@@ -108,6 +108,7 @@
     "panelZonesNone": "No zone recorded yet – area unknown, not zero",
     "panelZonesTotal": "{area} m² across {count, plural, one {# zone} other {# zones}}",
     "panelZonesFloor": "at least {area} m² across {count, plural, one {# zone} other {# zones}} · {unmeasured, plural, one {# zone has not been measured} other {# zones have not been measured}}",
+    "panelZonesAllUnmeasured": "No area recorded yet – {unmeasured, plural, one {# zone has not been measured} other {# zones have not been measured}}",
     "panelZonesStillWorks": "The building’s own tag still starts a shift.",
     "panelLinkZones": "Manage this building’s zones",
     "panelLinkZonesFirst": "Create the first zone",
