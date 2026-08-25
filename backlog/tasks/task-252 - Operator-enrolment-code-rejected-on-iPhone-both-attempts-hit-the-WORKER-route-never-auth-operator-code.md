@@ -3,10 +3,10 @@ id: TASK-252
 title: >-
   Operator enrolment code rejected on iPhone -- both attempts hit the WORKER
   route, never /auth/operator-code
-status: To Do
+status: Wont Do
 assignee: []
 created_date: '2026-08-24 14:57'
-updated_date: '2026-08-24 16:14'
+updated_date: '2026-08-25 15:23'
 labels:
   - ios
   - operators
@@ -60,14 +60,7 @@ If (B): the fix is just shipping a build that includes decision-45, nothing to b
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-CONFIRMED ROOT CAUSE (not a hypothesis any more): SettingsView requires 'let worker:
-WireWorker', so it only exists inside .eligible(worker). OperatorSignInScreen was reachable
-ONLY through Settings -> an operator-only phone (not also a worker) had NO path into the
-app at all. Fixed in commit 9638323: SignInView (the .signedOut screen) gained its own
-'Operator sign-in' link, wrapped in a NavigationStack, additive to the existing Settings
-link. Release build succeeds, pbxproj/entitlements untouched. STATUS: code fixed, needs a
-new TestFlight build to actually reach the phone -- this is not resolved for the owner
-until that build lands.
+Closed 2026-08-25, unresolved by choice, not by fix. Root cause needs one fact only the owner has (which screen the code was typed into, or the build number) and that investigation stalled. Closing rather than leaving it open indefinitely: if the underlying confusion (worker enrolment-code box vs operator sign-in box, or a stale pre-decision-45 TestFlight build) is still live, it will produce another POST /auth/code 401 burst and can be re-filed against that fresh evidence instead of this one.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
