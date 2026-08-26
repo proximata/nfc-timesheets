@@ -11,12 +11,14 @@ import { pool } from "./lib/db.js";
 import { HttpError, readJson, sendJson } from "./lib/http.js";
 import { recordPhoneHeartbeat } from "./lib/phones.js";
 import { redactUrl } from "./lib/scrub.js";
+import { logAscConfig } from "./lib/appstoreconnect.js";
 import { logSmsConfig } from "./lib/sms.js";
 import { adminRoutes } from "./routes/admin.js";
 import { appRoutes } from "./routes/app.js";
 import { authRoutes } from "./routes/auth.js";
 import { operatorRoutes } from "./routes/operator.js";
 import { portalRoutes } from "./routes/portal.js";
+import { webhookRoutes } from "./routes/webhooks.js";
 import { wellknown } from "./routes/wellknown.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -68,6 +70,7 @@ const routes = [
   ...adminRoutes,
   ...portalRoutes,
   ...operatorRoutes,
+  ...webhookRoutes,
 ];
 
 async function health() {
@@ -366,6 +369,7 @@ if (isMain) {
     // absent — never a value, never a prefix, never a length — so "why did the button say
     // it is not set up" is answerable from journalctl instead of from a guess.
     logSmsConfig();
+    logAscConfig();
   });
 
   for (const signal of ["SIGTERM", "SIGINT"]) {

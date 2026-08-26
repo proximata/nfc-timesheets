@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { createHash, generateKeyPairSync, randomBytes, sign as rsaSign } from "node:crypto";
+import { createHash, createHmac, generateKeyPairSync, randomBytes, sign as rsaSign, verify as ecVerify } from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
 import pg from "pg";
 import { CODE_TTL_MS } from "./lib/enrolment.js";
@@ -6944,6 +6944,122 @@ try {
     }
   }
 
+
+  // ---- App Store Connect webhook (lib/appstoreconnect.js) ------------------------
+  //
+  // Same test-seam shape as the Twilio stub above: point APPSTORECONNECT_API_BASE at a
+  // local server instead of Apple's real one. The signing key is a REAL freshly-generated
+  // EC P-256 keypair (not a fake string) so the stub can actually verify the JWT this
+  // process mints, proving the ES256/ieee-p1363 signing path works end to end, not just
+  // that a Bearer header is present.
+  {
+    const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const INTERNAL_GROUP_ID = "7f583737-4a08-42c6-bc40-d98465f87466";
+    const asc = { groupAdds: [] };
+    const ascStub = createHttpServer((req, res) => {
+      const auth = req.headers.authorization ?? "";
+      const jwtParts = auth.replace(/^Bearer /, "").split(".");
+      const jwtOk =
+        jwtParts.length === 3 &&
+        ecVerify(
+          "sha256",
+          Buffer.from(`${jwtParts[0]}.${jwtParts[1]}`),
+          { key: publicKey, dsaEncoding: "ieee-p1363" },
+          Buffer.from(jwtParts[2].replace(/-/g, "+").replace(/_/g, "/"), "base64"),
+        );
+      if (!jwtOk) {
+        res.writeHead(401);
+        res.end();
+        return;
+      }
+      const url = new URL(req.url, "http://x");
+      if (req.method === "GET" && url.pathname === "/v1/builds") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            data: [
+              { id: "build-not-yet-grouped", attributes: { processingState: "VALID" } },
+              { id: "build-already-grouped", attributes: { processingState: "VALID" } },
+            ],
+          }),
+        );
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/v1/builds/build-not-yet-grouped/relationships/betaGroups") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ data: [] }));
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/v1/builds/build-already-grouped/relationships/betaGroups") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ data: [{ id: INTERNAL_GROUP_ID }] }));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === `/v1/betaGroups/${INTERNAL_GROUP_ID}/relationships/builds`) {
+        let raw = "";
+        req.on("data", (c) => (raw += c));
+        req.on("end", () => {
+          asc.groupAdds.push(JSON.parse(raw));
+          res.writeHead(204);
+          res.end();
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise((r) => ascStub.listen(0, "127.0.0.1", r));
+
+    const ASC_VARS = [
+      "APP_STORE_CONNECT_KEY_ID",
+      "APP_STORE_CONNECT_ISSUER_ID",
+      "APP_STORE_CONNECT_KEY_BASE64",
+      "APPSTORECONNECT_API_BASE",
+      "ASC_WEBHOOK_SECRET",
+    ];
+    const WEBHOOK_SECRET = "test-only-webhook-secret-not-real";
+    const rawBody = JSON.stringify({ data: { type: "BUILD_UPLOAD_STATE_UPDATED", id: "evt-1" } });
+    const sign = (secret) => `hmacsha256=${createHmac("sha256", secret).update(rawBody, "utf8").digest("hex")}`;
+
+    const callWebhook = (headers) => call("/webhooks/appstoreconnect", { method: "POST", body: rawBody, key: null, headers });
+
+    try {
+      await test("POST /webhooks/appstoreconnect answers 404, not 401, before a secret is configured", async () => {
+        for (const k of ASC_VARS) delete process.env[k];
+        const res = await callWebhook({ "x-apple-signature": sign("whatever") });
+        assert.equal(res.status, 404);
+      });
+
+      await test("POST /webhooks/appstoreconnect rejects a wrong signature — the payload is never trusted on its own", async () => {
+        process.env.ASC_WEBHOOK_SECRET = WEBHOOK_SECRET;
+        const res = await callWebhook({ "x-apple-signature": sign("the-wrong-secret") });
+        assert.equal(res.status, 401);
+        assert.equal((await res.json()).error, "bad_signature");
+      });
+
+      await test("POST /webhooks/appstoreconnect rejects a missing signature header outright", async () => {
+        const res = await callWebhook({});
+        assert.equal(res.status, 401);
+      });
+
+      await test("a genuine delivery syncs only the build that isn't in the TestFlight group yet", async () => {
+        process.env.APP_STORE_CONNECT_KEY_ID = "TESTKEYID01";
+        process.env.APP_STORE_CONNECT_ISSUER_ID = "00000000-0000-0000-0000-000000000000";
+        process.env.APP_STORE_CONNECT_KEY_BASE64 = Buffer.from(privateKey.export({ type: "pkcs8", format: "pem" })).toString("base64");
+        process.env.APPSTORECONNECT_API_BASE = `http://127.0.0.1:${ascStub.address().port}`;
+
+        asc.groupAdds.length = 0;
+        const res = await callWebhook({ "x-apple-signature": sign(WEBHOOK_SECRET) });
+        assert.equal(res.status, 200, JSON.stringify(await res.json().catch(() => null)));
+
+        assert.equal(asc.groupAdds.length, 1, "exactly the one ungrouped build was added, not the already-grouped one");
+        assert.deepEqual(asc.groupAdds[0], { data: [{ type: "builds", id: "build-not-yet-grouped" }] });
+      });
+    } finally {
+      for (const k of ASC_VARS) delete process.env[k];
+      await new Promise((r) => ascStub.close(r));
+    }
+  }
 
   await test("unknown route returns a 404 code, not a stack trace", async () => {
     const res = await call("/nope");

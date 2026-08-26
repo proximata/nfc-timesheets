@@ -3,6 +3,13 @@
 
 export const MAX_BODY_BYTES = 64 * 1024;
 
+// A webhook signature (routes/webhooks.js) has to be verified against the EXACT bytes
+// Apple sent, not JSON.stringify(JSON.parse(raw)) - key order/whitespace are not guaranteed
+// to round-trip. A Symbol keeps this invisible to every other handler: it never appears in
+// Object.keys, a spread, or JSON.stringify, so `body` behaves exactly as before everywhere
+// except the one route that explicitly imports this symbol to read it back.
+export const RAW_BODY = Symbol("rawBody");
+
 export class HttpError extends Error {
   /** @param headers extra response headers, e.g. `retry-after` on a 429. */
   constructor(status, code, detail, headers) {
@@ -89,6 +96,7 @@ export function readJson(req, limit = MAX_BODY_BYTES) {
         settle(reject, new HttpError(400, "bad_json"));
         return;
       }
+      Object.defineProperty(parsed, RAW_BODY, { value: raw, enumerable: false });
       settle(resolve, parsed);
     });
 
