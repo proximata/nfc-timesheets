@@ -101,7 +101,13 @@ final class TagWriter: NSObject, NFCTagReaderSessionDelegate {
         return await withCheckedContinuation { (cont: CheckedContinuation<Outcome, Never>) in
             self.continuation = cont
             guard let session = NFCTagReaderSession(
-                pollingOption: [.iso14443, .iso15693, .iso18092], delegate: self, queue: nil
+                // .iso18092 (FeliCa) dropped deliberately: it needs its OWN entitlement key
+                // (com.apple.developer.nfc.readersession.felica.systemcodes) beyond "TAG" in the
+                // formats array, or the WHOLE session fails readerErrorSecurityViolation - not just
+                // FeliCa detection. Confirmed against two independent reports of this exact error
+                // with this exact polling array (one on iOS 26.2, byte-identical code). This app
+                // targets MIFARE/NTAG (iso14443) building tags; FeliCa was never used or needed.
+                pollingOption: [.iso14443, .iso15693], delegate: self, queue: nil
             ) else {
                 self.continuation = nil
                 cont.resume(returning: .unavailable(message: String(localized: "This iPhone can't read NFC tags.")))

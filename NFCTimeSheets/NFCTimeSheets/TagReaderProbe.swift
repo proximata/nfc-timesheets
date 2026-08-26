@@ -59,7 +59,8 @@ final class TagReaderProbe: NSObject, NFCTagReaderSessionDelegate {
         return await withCheckedContinuation { (cont: CheckedContinuation<Outcome, Never>) in
             self.continuation = cont
             guard let session = NFCTagReaderSession(
-                pollingOption: [.iso14443, .iso15693, .iso18092], delegate: self, queue: nil
+                // .iso18092 (FeliCa) dropped - see TagWriter.swift's comment on this same line.
+                pollingOption: [.iso14443, .iso15693], delegate: self, queue: nil
             ) else {
                 self.continuation = nil
                 cont.resume(returning: .unavailable(message: String(localized: "This iPhone can't read NFC tags.")))
