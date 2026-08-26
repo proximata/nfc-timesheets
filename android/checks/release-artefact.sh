@@ -109,6 +109,10 @@ NEEDLES=(
   "a MOUNTED card"
   "holds somebody else's URL"
   "runSimulation"
+  # decision-54 §2's zone step. Shipped, it would put a building list nobody fetched and a
+  # "zone created" sentence on the screen of an operator whose zone was never created.
+  "Zone MIT Gebaeude"
+  "SIMULATED: Stiegengasse 3"
 )
 
 # decision-47's TEST SCAN gets the identical treatment (nfc/VerifySimulation.kt): a debug-
@@ -122,6 +126,10 @@ VERIFY_NEEDLES=(
   "kein Zonen-Tag"
   "eine leere oder unlesbare Karte"
   "verifyTapSimulations"
+  # decision-54 §§3/7's bind form and zone page. The worker names are the sharpest of these:
+  # a shipped fixture would show an operator people and hours at a door where nobody worked.
+  "SIMULATED: Zone ohne Gebaeude"
+  "SIMULATED: Anna B."
 )
 
 for needle in "${NEEDLES[@]}" "${VERIFY_NEEDLES[@]}"; do

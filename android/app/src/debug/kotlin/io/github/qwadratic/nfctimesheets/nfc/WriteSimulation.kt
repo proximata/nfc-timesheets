@@ -4,7 +4,11 @@ import android.nfc.FormatException
 import android.nfc.NdefMessage
 import io.github.qwadratic.nfctimesheets.core.NdefTag
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.core.Wire
+import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
+import io.github.qwadratic.nfctimesheets.core.WireResolvedZone
 import io.github.qwadratic.nfctimesheets.core.WriteGuard
+import org.json.JSONObject
 
 /**
  * DEBUG BUILDS ONLY. There is a file with this exact name and package in `src/release/`
@@ -91,6 +95,89 @@ fun writeSimulations(): List<WriteSimulation> = listOf(
         corrupt = { it },
     ),
 )
+
+// ---- decision-54 §2: what the card is FOR, without a server -----------------------------
+
+/**
+ * THE BUILDING LIST THE PICKER WOULD HAVE FETCHED. `GET /operator/locations`, canned.
+ *
+ * WHY THIS ONE MOCKS THE ANSWER when [writeSimulations] pointedly does not. The tag half of
+ * this screen has real decision functions to run — [NdefTag.plan], [WriteGuard.decide] — so a
+ * canned Outcome would prove nothing about them. The zone half has none: everything that
+ * decides anything (is the name free, does the building exist, is the tag already resolved)
+ * lives in Postgres, on the other side of a request. What is left on THIS side is the step
+ * sequence, the enabled-ness of the submit button and the two endings — and those are
+ * unreachable on an emulator, where there is no server and no card to have been written.
+ *
+ * IT STILL GOES THROUGH THE REAL DECODER. Every fixture below is JSON text handed to
+ * `core/Wire`, never a hand-built data class: the field names here are therefore checked
+ * against the ones the screen will really parse, and a rename in Wire breaks this file rather
+ * than quietly letting a simulation keep passing with the old shape.
+ */
+private const val LOCATIONS_JSON = """
+{"locations":[
+  {"id":"5111d0de-0000-4000-8000-0000000000a1","name":"SIMULATED: Stiegengasse 3"},
+  {"id":"5111d0de-0000-4000-8000-0000000000a2","name":"SIMULATED: Hauptplatz 12"}
+]}
+"""
+
+/**
+ * The buildings both pickers show with no server: this screen's (a fresh card) and
+ * nfc/VerifyZoneActivity's bind form, which reads it from here rather than keeping a second
+ * list — one question asked at two moments, one fixture, exactly as ui/BuildingPicker.kt is
+ * one composable for the same reason.
+ */
+fun simulatedLocations(): List<WireOperatorLocation> = Wire.operatorLocations(JSONObject(LOCATIONS_JSON))
+
+/**
+ * One canned entry into the zone step, as if a card had just been written AND reported —
+ * which is the only state that step is ever drawn in, and a state an emulator cannot reach.
+ *
+ * TWO SCENARIOS AND NOT ONE, because bound and unbound are the two ENDINGS of decision-54 §2
+ * and they diverge before the submit, not after it: [building] null preselects Skip. The
+ * picker itself stays live either way — the operator can tap a different building, or tap
+ * Skip after all — so this preselects the branch under test without disabling the form it is
+ * meant to exercise.
+ */
+data class ZoneSimulation(
+    val label: String,
+    val zoneName: String,
+    val building: WireOperatorLocation?,
+)
+
+fun zoneSimulations(): List<ZoneSimulation> {
+    val locations = simulatedLocations()
+    return listOf(
+        ZoneSimulation(
+            label = "SIMULATED: geschrieben und gemeldet \u2014 Zone MIT Gebaeude",
+            zoneName = "Stiege A",
+            building = locations.first(),
+        ),
+        ZoneSimulation(
+            label = "SIMULATED: geschrieben und gemeldet \u2014 Zone OHNE Gebaeude",
+            zoneName = "Stiege B",
+            building = null,
+        ),
+    )
+}
+
+/**
+ * `POST /operator/tags/:id/resolve-zone`, answered here instead of over the network — the
+ * route's own 201 body, decoded by the same [Wire.resolvedZone] the real call uses.
+ *
+ * ECHOES THE ARGUMENTS rather than returning a fixed row: the screen's ending depends on
+ * whether `location_id` came back null, so a fixture that always said "bound" would render
+ * the bound sentence for the Skip scenario and hide the only difference being tested.
+ */
+fun runZoneSimulation(name: String, locationId: String?): WireResolvedZone {
+    val building = if (locationId == null) "null" else JSONObject.quote(locationId)
+    return Wire.resolvedZone(
+        JSONObject(
+            "{\"id\":\"5111d0de-0000-4000-8000-0000000000b1\"" +
+                ",\"name\":${JSONObject.quote(name)},\"location_id\":$building}",
+        ),
+    )
+}
 
 /**
  * Run a scenario through the REAL decision functions. Mirrors TagWriter.write() step for

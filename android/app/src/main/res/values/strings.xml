@@ -43,6 +43,16 @@
          Betreiber-Code-Feld, wenn dieses Telefon noch nicht als Betreiber angemeldet ist -
          hier wird nichts doppelt gebaut, nur der Einstieg vorgezogen. -->
     <string name="signin_operator_heading">Betreiber? Tags beschreiben oder prüfen, ohne sich als Mitarbeiter anzumelden.</string>
+    <!-- decision-54 §4: Die beiden Schaltflächen „Tag beschreiben“/„Tag prüfen“ sind
+         nicht mehr direkt erreichbar. Ohne gültige Betreiber-Sitzung steht hier zuerst
+         dasselbe Anmeldeformular wie oben — nur gegen /auth/operator-*. Die
+         Betreiber-Code-Felder in WriteTagActivity/VerifyZoneActivity sind dafür entfallen:
+         ein Formular, an einer Stelle. -->
+    <string name="signin_operator_gate_intro">Bitte zuerst als Betreiber anmelden — mit dem Betreiber-Code oder per SMS an die hinterlegte Nummer.</string>
+    <!-- Nur für den Fall, dass die Sitzung abläuft, WÄHREND einer der beiden
+         Betreiber-Bildschirme offen ist. Kein zweites Code-Feld: der Weg zurück ist das
+         Formular, das den Bildschirm überhaupt geöffnet hat. -->
+    <string name="operator_session_expired">Die Betreiber-Anmeldung ist abgelaufen. Dieser Bildschirm liest jetzt keine Karte mehr. Bitte schließen und erneut als Betreiber anmelden.</string>
 
     <!-- Anmeldung per SMS (decision-48 §6.6, additive: das Feld für den Anmeldecode oben
          bleibt unverändert und ist immer da). Dieser Abschnitt wird nur angezeigt, wenn
@@ -431,17 +441,31 @@
     <string name="write_report_sending">Wird an das Büro gemeldet …</string>
     <string name="write_report_sent">An das Büro gemeldet. Der Tag kann jetzt montiert werden.</string>
     <string name="write_report_failed">Der Tag ist fertig, aber die Meldung an das Büro ist fehlgeschlagen (%1$s). Der Tag ist in Ordnung — später erneut senden.</string>
-    <string name="write_report_needs_operator">Der Tag ist fertig, aber dieses Telefon ist nicht als Betreiber angemeldet. Code eingeben, dann wird die Meldung nachgeholt.</string>
-    <string name="write_operator_code">Betreiber-Code</string>
-    <string name="write_operator_enrol">Anmelden</string>
+    <string name="write_report_needs_operator">Der Tag ist fertig, aber die Betreiber-Anmeldung dieses Telefons ist abgelaufen. Bildschirm schließen, erneut als Betreiber anmelden — die Meldung wird dann nachgeholt.</string>
     <string name="write_report_retry">Meldung erneut senden</string>
     <string name="write_open">Tag beschreiben</string>
-    <string name="write_needs_operator_to_write">Dieses Telefon ist nicht als Betreiber angemeldet. Tags können nur Betreiber beschreiben. Bitte den Betreiber-Code eingeben. Solange kein Code eingegeben ist, liest dieser Bildschirm gar keine Karte.</string>
     <string name="write_occupied">NICHT beschrieben. Diese Karte trägt bereits die ID %1$s — das ist eine montierte Karte an einer Tür. Wird sie überschrieben, funktioniert diese Tür für alle Reinigungskräfte nicht mehr, bis das Büro die neue ID zuordnet. Der Tag wurde nicht verändert.\n\nWenn die Karte wirklich überschrieben werden soll: die letzten sechs Zeichen der alten ID eingeben (%2$s) und bestätigen, dann die Karte erneut anhalten.</string>
     <string name="write_confirm_label">Letzte sechs Zeichen der alten ID (%1$s)</string>
     <string name="write_confirm_button">Überschreiben bestätigen</string>
     <string name="write_confirm_armed">Überschreiben freigegeben — nur für die Karte mit der ID %1$s. Karte jetzt erneut anhalten. Nach dem Schreiben gilt die Freigabe nicht mehr.</string>
     <string name="write_replaced_ours">ACHTUNG: Diese Karte trug vorher unsere ID %1$s. Diese ID ist jetzt weg. Falls die Karte an einer Tür montiert war, muss das Büro die neue ID dieser Tür zuordnen.</string>
+    <!-- Gebaeudeauswahl nach dem Schreiben (decision-54 §2). Eine Zone entsteht nur hier,
+         im Haus, in der Hand des Betreibers. Ohne Gebaeude bleibt sie ungebunden — das ist
+         ein zulaessiger Zustand und kein Fehler. -->
+    <string name="write_zone_hint">Wozu gehört diese Karte?</string>
+    <string name="write_zone_name_label">Name der Zone</string>
+    <string name="write_zone_loading">Objektliste wird geladen …</string>
+    <string name="write_zone_load_failed">Die Objektliste konnte nicht geladen werden (%1$s). Die Zone kann trotzdem angelegt werden — dann ohne Objekt, und das Büro ordnet sie später zu.</string>
+    <string name="write_zone_locations_empty">Kein Objekt zur Auswahl. Die Zone kann ohne Objekt angelegt werden.</string>
+    <string name="write_zone_no_building">Ohne Objekt anlegen</string>
+    <string name="write_zone_submit">Zone anlegen</string>
+    <string name="write_zone_submitting">Zone wird angelegt …</string>
+    <!-- %1$s = Name der Zone, %2$s = Name des Objekts -->
+    <string name="write_zone_done_bound">Zone „%1$s“ in %2$s angelegt. Jetzt noch mit „Tag prüfen“ testen — erst danach kann hier eingestempelt werden.</string>
+    <!-- %1$s = Name der Zone -->
+    <string name="write_zone_done_unbound">Zone „%1$s“ ohne Objekt angelegt. Hier kann noch niemand einstempeln, bis die Zone einem Objekt zugeordnet wurde.</string>
+    <string name="write_zone_failed">Die Zone konnte nicht angelegt werden (%1$s). Die Karte ist in Ordnung — erneut versuchen.</string>
+    <string name="write_zone_retry">Erneut versuchen</string>
     <string name="write_replaced_foreign">Hinweis: Die Karte war nicht leer, der Inhalt war aber keiner von uns (%1$s) und wurde überschrieben.</string>
 
     <!-- TESTSCAN (Betreiber), decision-47. Eine Zone ist erst ein gueltiges Einstempelziel,
@@ -451,7 +475,6 @@
     <string name="verify_open">Tag prüfen</string>
     <string name="verify_title">Tag prüfen</string>
     <string name="verify_hint">Zone auswählen, dann die Karte an das Telefon halten. Dieser Testscan startet und beendet niemals eine Schicht — er prüft nur, ob die Karte die gewählte Zone öffnet.</string>
-    <string name="verify_needs_operator">Dieses Telefon ist nicht als Betreiber angemeldet. Nur Betreiber können Zonen prüfen. Bitte den Betreiber-Code eingeben. Solange kein Code eingegeben ist, liest dieser Bildschirm gar keine Karte.</string>
     <string name="verify_zones_loading">Zonenliste wird geladen …</string>
     <string name="verify_zones_error">Zonenliste konnte nicht neu geladen werden. Letzte gespeicherte Liste wird angezeigt, falls vorhanden.</string>
     <string name="verify_zones_empty">Keine aktive Zone gefunden. Erst in „Objekte“ eine Zone anlegen.</string>
@@ -475,4 +498,39 @@
     <string name="verify_network_error">Keine Verbindung zum Server. Bitte prüfen und erneut versuchen.</string>
     <string name="verify_server_error">Serverproblem. Bitte erneut versuchen.</string>
     <string name="verify_scan_again">Nochmal prüfen</string>
+
+    <!-- ZONE OHNE OBJEKT BINDEN, decision-54 §3. Eine Zone ohne Objekt kann keine Karte
+         aufloesen, deshalb wird fuer sie NIE der Lesemodus gestartet: erst Objekt waehlen,
+         dann Testscan. Es gibt hier bewusst kein "Ueberspringen" wie beim Schreiben. -->
+    <string name="verify_zone_no_building">Kein Objekt</string>
+    <string name="verify_zone_status_unbound">Noch keinem Objekt zugeordnet</string>
+    <string name="verify_bind_hint">Diese Zone gehört noch zu keinem Objekt. Objekt auswählen — danach kann die Karte geprüft werden.</string>
+    <string name="verify_bind_loading">Objektliste wird geladen …</string>
+    <string name="verify_bind_locations_empty">Kein Objekt zur Auswahl. Bitte bei der Verwaltung melden.</string>
+    <!-- %1$s = Fehlercode vom Server -->
+    <string name="verify_bind_load_failed">Objektliste konnte nicht geladen werden (%1$s). Ohne Objekt kann die Karte nicht geprüft werden.</string>
+    <string name="verify_bind_retry">Erneut versuchen</string>
+    <string name="verify_bind_submit">Zone diesem Objekt zuordnen</string>
+    <string name="verify_bind_submitting">Zone wird zugeordnet …</string>
+    <!-- %1$s = Fehlercode vom Server -->
+    <string name="verify_bind_failed">Zuordnung fehlgeschlagen (%1$s). Bitte erneut versuchen.</string>
+    <!-- %1$s = Zonenname, %2$s = Objektname -->
+    <string name="verify_bind_done">„%1$s“ gehört jetzt zu %2$s. Jetzt die Karte an das Telefon halten.</string>
+
+    <!-- ZONENSEITE nach erfolgreichem Testscan, decision-54 §7. Bewusst OHNE Stundensatz,
+         ohne Betraege und ohne Kundennamen (decision-6/42/43): eine Zone ist keine
+         Kostenstelle. Die Monatssumme kommt vom Server und ist nicht die Summe dieser Seite. -->
+    <string name="verify_shifts_title">Schichten in diesem Monat</string>
+    <string name="verify_shifts_loading">Schichten werden geladen …</string>
+    <string name="verify_shifts_error">Schichten konnten nicht geladen werden. Die Zone ist trotzdem freigeschaltet.</string>
+    <string name="verify_shifts_empty">In diesem Monat wurde hier noch nicht eingestempelt.</string>
+    <!-- %1$s = Name, %2$s = Beginn, %3$s = Ende, %4$s = Dauer als Stunden:Minuten -->
+    <string name="verify_shifts_row">%1$s · %2$s – %3$s · %4$s</string>
+    <string name="verify_shifts_open">läuft</string>
+    <!-- %1$s = Summe als Stunden:Minuten -->
+    <string name="verify_shifts_total">Summe in diesem Monat: %1$s</string>
+    <!-- %1$d = Seitennummer -->
+    <string name="verify_shifts_page">Seite %1$d</string>
+    <string name="verify_shifts_previous">Vorherige Seite</string>
+    <string name="verify_shifts_next">Nächste Seite</string>
 </resources>

@@ -375,12 +375,15 @@ private fun theRendererHasNotDriftedFromTheScreen() {
     println("\n== 6 · the rendered German is the string the Activity actually uses")
     val activity = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/nfc/WriteTagActivity.kt").readText()
     val used = Regex("""R\.string\.(write_\w+)""").findAll(activity).map { it.groupValues[1] }.toSortedSet()
-    // Not outcome text: the title, the hint, the buttons, the report line, the enrol box.
+    // Not outcome text: the title, the hint, the buttons, the report line. The enrol box is
+    // gone with decision-54 §4 — this screen is unreachable without an operator session, so
+    // write_operator_code/write_operator_enrol/write_needs_operator_to_write no longer exist
+    // and the one sentence left for a session that dies mid-screen is operator_session_expired,
+    // which is not a write_* key and so never reaches this set.
     val notOutcome = setOf(
         "write_title", "write_hint", "write_pending_id", "write_report_sending", "write_report_sent",
-        "write_report_failed", "write_report_needs_operator", "write_report_retry", "write_operator_code",
-        "write_operator_enrol", "write_needs_operator_to_write", "write_waiting", "write_confirm_label",
-        "write_confirm_button",
+        "write_report_failed", "write_report_needs_operator", "write_report_retry",
+        "write_waiting", "write_confirm_label", "write_confirm_button",
     )
     val outcomeKeys = used - notOutcome
     for (key in outcomeKeys) {

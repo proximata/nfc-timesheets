@@ -197,6 +197,104 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
      *  an enrolment code above it are unrelated actions and must not disable each other. */
     val smsBusy: StateFlow<Boolean> = _smsBusy.asStateFlow()
 
+    // ---- the operator gate (decision-54 §4) ----------------------------------------
+    //
+    // A SECOND IDENTITY, NOT A SECOND SESSION STATE. Nothing below touches [_session],
+    // [_log] or anything the worker's screens read: an operator signing in on a phone must
+    // not sign a cleaner in, or out, or look like either happened. Every call goes out over
+    // `app.operatorApi`, which carries `ts_operator` and cannot open a shift (decision-45).
+
+    private val _operatorReady = MutableStateFlow(false)
+
+    /**
+     * Is this phone an operator's? THE STORED COOKIE, read from DISK — never a request:
+     * the operator is in a stairwell with no signal, and a gate that needs the network is a
+     * gate that fails shut at the one moment it is used. Byte for byte the same test
+     * WriteTagActivity/VerifyZoneActivity make on every resume, and the reason they can now
+     * stop offering a code field of their own: nothing reaches them without this being true.
+     */
+    val operatorReady: StateFlow<Boolean> = _operatorReady.asStateFlow()
+
+    private val _operatorBusy = MutableStateFlow(false)
+
+    /** Own flag again: an operator signing in must not disable the worker's own fields. */
+    val operatorBusy: StateFlow<Boolean> = _operatorBusy.asStateFlow()
+
+    /**
+     * Re-read the cookie. Called when the operator section appears AND on every resume of
+     * the screen behind it — a session can have died inside WriteTagActivity while this
+     * screen was in the background, and coming back to a gate that still says „signed in“
+     * is how an operator ends up at a card with no credential.
+     */
+    fun refreshOperatorReady() {
+        _operatorReady.value = app.operatorCookies.header() != null
+    }
+
+    /**
+     * The operator's enrolment code (decision-45). Same shape as [signIn]'s — normalise
+     * locally so a typo cannot spend a rate-limited attempt, then let the server be the one
+     * authority — but the refusal is reported through [onResult] instead of [_session],
+     * because there is no such thing as a „signed-out operator screen“ to drop to.
+     *
+     * @param onResult null on success. The code itself is never logged, stored or attached.
+     */
+    fun signInOperator(typedCode: String, onResult: (ApiFailure?) -> Unit) {
+        val code = EnrolmentCode.normalise(typedCode)
+        if (code == null) {
+            // Refused here, with the SAME 401 the server gives a wrong code (decision-26:
+            // no distinction is ever drawn), and without spending an attempt.
+            onResult(ApiFailure(status = 401, code = "invalid_code"))
+            return
+        }
+        viewModelScope.launch {
+            _operatorBusy.value = true
+            try {
+                app.operatorApi.operatorEnrol(code)
+                refreshOperatorReady()
+                onResult(null)
+            } catch (failure: ApiFailure) {
+                onResult(failure)
+            } finally {
+                _operatorBusy.value = false
+            }
+        }
+    }
+
+    /** POST /auth/operator-sms/request (decision-54 §5). [requestSmsCode]'s operator twin. */
+    fun requestOperatorSmsCode(typedPhone: String, onResult: (ApiFailure?) -> Unit) {
+        viewModelScope.launch {
+            _operatorBusy.value = true
+            try {
+                app.operatorApi.operatorSmsRequest(typedPhone)
+                onResult(null)
+            } catch (failure: ApiFailure) {
+                onResult(failure)
+            } finally {
+                _operatorBusy.value = false
+            }
+        }
+    }
+
+    /**
+     * POST /auth/operator-sms/verify (decision-54 §5). On success the ONLY thing that
+     * changes is [operatorReady] — no refresh(), no startMaterials(), no adopt(): those are
+     * the worker's tail and an operator has no roster, no queue and no shift.
+     */
+    fun verifyOperatorSmsCode(phone: String, typedCode: String, onResult: (ApiFailure?) -> Unit) {
+        viewModelScope.launch {
+            _operatorBusy.value = true
+            try {
+                app.operatorApi.operatorSmsVerify(phone, typedCode)
+                refreshOperatorReady()
+                onResult(null)
+            } catch (failure: ApiFailure) {
+                onResult(failure)
+            } finally {
+                _operatorBusy.value = false
+            }
+        }
+    }
+
     // Placed HERE, after every property either launch touches (see the note at the top of
     // this class for why the position is load-bearing, not stylistic).
     init {

@@ -60,8 +60,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.autofill.ContentType
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -149,30 +151,13 @@ fun TimeSheetApp(
 // -------------------------------------------------------------------------------------
 @Composable
 private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openIntent: (Intent) -> Unit) {
-    val context = LocalContext.current
-    // rememberSaveable: a rotation, or Android tearing the activity down behind a
-    // notification, must not eat the characters already typed. It is deliberately NOT in
-    // the ViewModel and NOT on disk -- a bearer credential does not get persisted by us.
-    var typed by rememberSaveable { mutableStateOf("") }
-    // What was in the field when the last refusal came back. The message belongs to THAT
-    // string, so it disappears the moment they start correcting it — a field that stays
-    // red while you retype tells you nothing and looks broken.
-    var attempted by rememberSaveable { mutableStateOf<String?>(null) }
-    val busy by model.signingIn.collectAsStateWithLifecycle()
     // Signing out does NOT delete a queued shift — it belongs to the worker who logged it
     // and goes out when that worker signs back in. So the count has to be on THIS screen,
     // or somebody hands the phone back believing their hours went with it (TASK-225).
     val pending by model.log.collectAsStateWithLifecycle()
-    // The refusal that is currently on screen, or null. Non-null exactly when there IS a
-    // reason AND the field still holds the string it was about.
-    val errorKey = reasonKey?.takeIf { typed == attempted }
-    val showError = errorKey != null
-    val submit = {
-        if (!busy) {
-            attempted = typed
-            model.signIn(typed)
-        }
-    }
+    val busy by model.signingIn.collectAsStateWithLifecycle()
+    val smsBusy by model.smsBusy.collectAsStateWithLifecycle()
+    val smsAvailable by model.smsAvailable.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -194,8 +179,9 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
         LanguageSection()
 
         // AC4 (TASK-262): a genuine session expiry used to bounce here with an empty code
-        // field and no explanation -- errorKey below only renders after THIS screen's own
-        // submit fails, so a reason set by dropToSignedOut() (the passive-drop path) was
+        // field and no explanation -- the field's own refusal line only renders after a
+        // submit from THIS screen fails (CodeSignInSection gates it on `typed == attempted`,
+        // which is where that rule now lives), so a reason set by dropToSignedOut() was
         // silently dropped on the very first composition, where typed="" and attempted=null
         // can never equal a real reasonKey. "err_no_session" is CLIENT-SYNTHESIZED --
         // unique to dropToSignedOut(), never echoed by the server (auth failures answer
@@ -218,65 +204,20 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
 
         PendingCard(pending.pending, signedOut = true, armed = pending.pushArmed)
 
-        OutlinedTextField(
-            value = typed,
-            // Capped at the same length the server will even look at. Everything else is
-            // accepted as typed and sorted out by EnrolmentCode.normalise() on submit:
-            // rewriting the text under the cursor is how input fields fight their user.
-            onValueChange = { typed = it.take(EnrolmentCode.MAX_INPUT) },
-            singleLine = true,
-            isError = showError,
-            label = { Text(stringResource(R.string.signin_code_label)) },
-            // ONE message for every refusal. Unknown, malformed, expired, already used,
-            // revoked, worker deactivated -- the server makes all six byte-identical on
-            // purpose (decision-26) and this screen must not invent a distinction it
-            // does not have. Only "no connection" is separate, because that one is not
-            // about the code at all.
-            //
-            // It goes IN the supporting text, not next to the field: that is what
-            // associates it with the input for TalkBack, so "Anmeldecode, ungültig" is
-            // followed by what to do about it instead of by silence. Assertive because
-            // the worker is looking at the keyboard, not at the field.
-            supportingText = {
-                if (errorKey != null) {
-                    Text(
-                        stringResource(stringIdFor(errorKey)),
-                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
-                    )
-                } else {
-                    Text(stringResource(R.string.signin_code_hint))
-                }
-            },
-            keyboardOptions = KeyboardOptions(
-                // Upper case because that is how the code was written down and read out,
-                // so what is on screen matches what is on the admin's screen. It is only
-                // cosmetic -- normalise() folds case anyway, so the shift key cannot
-                // cost anyone an attempt.
-                capitalization = KeyboardCapitalization.Characters,
-                // The one thing that MUST be off. Autocorrect on an 8-character
-                // non-word will happily replace it with a German noun mid-typing, and
-                // the worker would have no idea why a correct code keeps failing.
-                autoCorrectEnabled = false,
-                keyboardType = KeyboardType.Text,
-                imeAction = ImeAction.Go,
-            ),
-            keyboardActions = KeyboardActions(onGo = { submit() }),
-            // Plain text, NOT a password field: the whole point is that they can check
-            // what they typed against what was said to them.
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 56.dp),
+        // ONE FORM, the worker's instance of it (decision-54 §5). Everything role-specific
+        // is a lambda: this screen posts to /auth/code and /auth/sms/*, the operator gate
+        // below posts to the /auth/operator-* twins, and neither knows the other exists.
+        CodeSignInSection(
+            smsAvailable = smsAvailable,
+            busy = busy || smsBusy,
+            // The refusal [signIn] parked on the session flow. The form decides WHEN to
+            // show it (only while the field still holds the string it was about) — that
+            // rule used to live here and moved in with the field it belongs to.
+            refusal = reasonKey?.let { stringResource(stringIdFor(it)) },
+            onSubmitCode = { typed -> model.signIn(typed) },
+            onRequestSms = model::requestSmsCode,
+            onVerifySms = model::verifySmsCode,
         )
-
-        Button(
-            onClick = submit,
-            enabled = !busy,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 48.dp), // touch target floor
-        ) {
-            Text(stringResource(if (busy) R.string.signin_submitting else R.string.signin_submit))
-        }
 
         // TASK-267: everything below the button used to render unconditionally, turning
         // the first screen a new hire sees into a document. NOTHING TRUE IS DELETED --
@@ -301,34 +242,13 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
             }
         }
 
-        // decision-48 §6.6, this iteration. ALWAYS the fallback's own condition, never the
-        // other way round: the code field above is complete and correct with or without
-        // this `if`. THE SERVER'S ANSWER DECIDES WHETHER THIS COMPOSES AT ALL — not a
-        // disabled button, not an alpha, not a null string swapped in for a real one. A
-        // build whose capability read is false, still pending, or failed offline draws
-        // nothing past the line above. The SMS door stays reachable in ONE tap (AC3): its
-        // own self-describing question is the reveal's trigger text, so it is discoverable
-        // without prior knowledge; SmsSignInSection no longer prints that same sentence a
-        // second time once revealed (see its own header comment).
-        if (model.smsAvailable.collectAsStateWithLifecycle().value) {
-            RevealSection(label = {
-                Text(stringResource(R.string.signin_sms_intro), style = MaterialTheme.typography.bodyLarge)
-            }) {
-                SmsSignInSection(model)
-            }
-        }
-
         // BEFORE any worker session exists (TASK-252's Android half - the shape iOS's
         // SettingsView bug had: a phone that is an operator's and NOTHING ELSE had no way
         // into WriteTagActivity/VerifyZoneActivity at all, because both buttons used to
-        // live only on the WORKER'S post-sign-in log screen). Neither activity is
-        // duplicated here: both already show their own operator-code field the moment
-        // `operatorReady` is false (WriteTagActivity.kt, VerifyZoneActivity.kt), so this is
-        // only a second door onto the SAME screens - never a second door onto a shift
-        // (decision-45; nothing reachable from here can open or close one). This whole
-        // block composes unconditionally on SignInScreen -- reached from SessionState.
-        // SignedOut with no worker session required (TASK-267 AC4) -- and the reveal below
-        // is local Compose state only, so collapsing it by default touches no auth gate.
+        // live only on the WORKER'S post-sign-in log screen). This whole block composes
+        // unconditionally on SignInScreen -- reached from SessionState.SignedOut with no
+        // worker session required (TASK-267 AC4) -- and the reveal below is local Compose
+        // state only, so collapsing it by default touches no auth gate.
         HorizontalDivider(Modifier.padding(top = 8.dp))
         RevealSection(label = {
             Text(
@@ -337,23 +257,90 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }) {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                OutlinedButton(
-                    onClick = { openIntent(Intent(context, WriteTagActivity::class.java)) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                ) { Text(stringResource(R.string.write_open)) }
-                OutlinedButton(
-                    onClick = { openIntent(Intent(context, VerifyZoneActivity::class.java)) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                ) { Text(stringResource(R.string.verify_open)) }
-            }
+            OperatorSection(model, openIntent)
         }
     }
 }
 
+// -------------------------------------------------------------------------------------
+// THE OPERATOR GATE (decision-54 §4). The two links used to open WriteTagActivity and
+// VerifyZoneActivity with no login at all: each screen gated the ACTION (write, verify)
+// behind an inline operator-code field of its own, but never gated BEING in the screen.
+// The owner reversed that in as many words -- "don't reveal the screen at all" -- so the
+// door is here now, once, and both activities were relieved of their duplicate fields.
+//
+// A COOKIE READ, NOT A REQUEST. `operatorReady` is the stored `ts_operator` session read
+// off disk, re-read on every resume of this screen: an operator whose phone has no signal
+// in a stairwell walks straight through, and one whose session died inside WriteTagActivity
+// comes back to the form instead of to a button that cannot work.
+// -------------------------------------------------------------------------------------
+@Composable
+private fun OperatorSection(model: TimeSheetViewModel, openIntent: (Intent) -> Unit) {
+    val context = LocalContext.current
+    val ready by model.operatorReady.collectAsStateWithLifecycle()
+    val busy by model.operatorBusy.collectAsStateWithLifecycle()
+    val smsAvailable by model.smsAvailable.collectAsStateWithLifecycle()
+    // The refusal of the operator's OWN code, kept here and not in the ViewModel: it
+    // belongs to a field on this screen and to nothing else.
+    var refusal by rememberSaveable { mutableStateOf<ApiFailure?>(null) }
+
+    // Every resume, not once: see the header. onPauseOrDispose does nothing -- there is
+    // no listener to unregister, the read is a SharedPreferences field.
+    LifecycleResumeEffect(Unit) {
+        model.refreshOperatorReady()
+        onPauseOrDispose { }
+    }
+
+    if (!ready) {
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(
+                stringResource(R.string.signin_operator_gate_intro),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            // THE SAME FORM the worker uses, six lines up -- not a lookalike. Only the
+            // three lambdas differ, and each one names an /auth/operator-* route.
+            CodeSignInSection(
+                smsAvailable = smsAvailable,
+                busy = busy,
+                refusal = refusal?.let { operatorRefusalText(it) },
+                onSubmitCode = { typed -> model.signInOperator(typed) { refusal = it } },
+                onRequestSms = model::requestOperatorSmsCode,
+                onVerifySms = model::verifyOperatorSmsCode,
+            )
+        }
+        return
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        OutlinedButton(
+            onClick = { openIntent(Intent(context, WriteTagActivity::class.java)) },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) { Text(stringResource(R.string.write_open)) }
+        OutlinedButton(
+            onClick = { openIntent(Intent(context, VerifyZoneActivity::class.java)) },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) { Text(stringResource(R.string.verify_open)) }
+    }
+}
+
 /**
- * A ONE-WAY reveal (TASK-267), never a re-collapsing accordion: [SmsSignInSection] holds
- * its own rememberSaveable phone/otp/sentTo state, and a toggle that could go back to
+ * An operator's refused ENROLMENT CODE, in words. decision-26's "no reason is ever given"
+ * holds for the operator code exactly as it does for the worker's, so every 4xx collapses
+ * into the same sentence; only "no connection" is separate, because that one is not about
+ * the code at all. The SMS half of the same form maps its own failures through
+ * [smsErrorText] — those ARE distinguishable server-side and always were.
+ */
+@Composable
+private fun operatorRefusalText(failure: ApiFailure): String =
+    if (failure.status == 0) {
+        stringResource(R.string.err_signin_offline)
+    } else {
+        stringResource(R.string.err_invalid_code)
+    }
+
+/**
+ * A ONE-WAY reveal (TASK-267), never a re-collapsing accordion: [CodeSignInSection] holds
+ * its own rememberSaveable phone/code/sentTo state, and a toggle that could go back to
  * collapsed would risk silently discarding a mid-flow OTP entry. No acceptance criterion
  * here asks for a collapse-back control, so the smallest safe shape is the right one --
  * there is no existing disclosure component anywhere in this codebase to reuse instead.
@@ -375,44 +362,88 @@ private fun RevealSection(label: @Composable () -> Unit, content: @Composable ()
 }
 
 // -------------------------------------------------------------------------------------
-// SMS sign-in (decision-48 §6.6). A SECOND, entirely independent way to reach the SAME
-// worker_sessions row [SignInScreen]'s code field reaches — never a preference, never a
-// replacement: decision-48 answered the owner's own question ("choose how to onboard") by
-// making onboarding a repeatable ACTION, and this is that action's Android half. The admin
-// puts a worker's login number on file (PUT /admin/workers/:id/phone, web/app/workers);
-// this screen is what lets that worker use it.
+// THE ONE CODE-ENTRY FORM (decision-54 §5). Phone field + „SMS senden" + ONE code field +
+// ONE submit button, used by the worker's sign-in screen AND by the operator gate above.
 //
-// ONLY EVER COMPOSED BEHIND `if (model.smsAvailable...)` above — see that call site. This
-// function does not re-check the flag: it exists to be absent, not to render its own
-// "unavailable" state, because a server that has never heard of SMS must look IDENTICAL to
-// today, and a section that renders itself as a grey noticed absence is still a section.
+// TWO CREDENTIALS, ONE FIELD, AND THE FIELD DOES NOT ASK WHICH. A live SMS challenge
+// (`sentTo != null`) makes it a 6-digit OTP field; otherwise it is the 8-character
+// Crockford enrolment code. That is a LAYOUT unification and nothing more: the two remain
+// genuinely different credentials with two different security arguments on the server
+// (lib/enrolment.js's and lib/sms.js's arithmetic blocks are untouched), and every refusal
+// keeps the sentence it always had — decision-26's "no reason is ever given" for the
+// enrolment code, smsErrorText's five named cases for the SMS flow.
 //
-// ONLY EVER COMPOSED INSIDE THE RevealSection ABOVE whose label is this section's own
-// signin_sms_intro sentence (TASK-267) -- so this composable no longer prints that same
-// sentence itself: it would otherwise appear twice, once as the tap trigger and once
-// again the instant it is revealed.
+// WHAT IS PARAMETERISED IS THE ROLE, AND ONLY AS LAMBDAS. This composable names no route,
+// no cookie jar and no ViewModel method: the worker's caller wires /auth/code and
+// /auth/sms/*, the operator's wires the /auth/operator-* twins, and neither can reach the
+// other's — the same wiring-not-a-rule discipline VerifyZoneActivity's header describes.
+//
+// THE SMS HALF STILL COMPOSES ONLY BEHIND THE SERVER'S OWN ANSWER (decision-48 §6.6): a
+// build whose capability read is false, still pending, or failed offline draws no phone
+// field and no send button at all — not a disabled one, not a greyed one. The code field
+// below is complete and correct with or without it, which is why the flag is the SMS
+// half's own condition and never the form's.
 // -------------------------------------------------------------------------------------
 @Composable
-private fun SmsSignInSection(model: TimeSheetViewModel) {
+private fun CodeSignInSection(
+    smsAvailable: Boolean,
+    busy: Boolean,
+    refusal: String?,
+    onSubmitCode: (String) -> Unit,
+    onRequestSms: (String, (ApiFailure?) -> Unit) -> Unit,
+    onVerifySms: (String, String, (ApiFailure?) -> Unit) -> Unit,
+) {
+    // rememberSaveable: a rotation, or Android tearing the activity down behind a
+    // notification, must not eat the characters already typed. Deliberately NOT in the
+    // ViewModel and NOT on disk -- a bearer credential does not get persisted by us.
+    var typed by rememberSaveable { mutableStateOf("") }
+    // What was in the field when the last refusal came back. The message belongs to THAT
+    // string, so it disappears the moment they start correcting it — a field that stays
+    // red while you retype tells you nothing and looks broken.
+    var attempted by rememberSaveable { mutableStateOf<String?>(null) }
     var phone by rememberSaveable { mutableStateOf("") }
     // Non-null once a request has been ACCEPTED for this exact string. Clearing it (typing
     // a different number, or pressing "change number") is the only way back to phone entry,
-    // so the code field can never be shown next to a number nothing was sent to.
+    // so the code field can never be an OTP field next to a number nothing was sent to.
     var sentTo by rememberSaveable { mutableStateOf<String?>(null) }
-    var otp by rememberSaveable { mutableStateOf("") }
     var phoneFailure by rememberSaveable { mutableStateOf<ApiFailure?>(null) }
     var codeFailure by rememberSaveable { mutableStateOf<ApiFailure?>(null) }
-    val busy by model.smsBusy.collectAsStateWithLifecycle()
-
-    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
     val target = sentTo
-    if (target == null) {
+    val otpMode = target != null
+    // The caller's refusal, shown only while the field still holds the string it was about.
+    val enrolRefusal = refusal?.takeIf { typed == attempted }
+    val codeError = codeFailure?.let { smsErrorText(it) } ?: enrolRefusal
+
+    val submit = {
+        if (!busy && typed.isNotBlank()) {
+            if (target != null) {
+                if (typed.length == OTP_LENGTH) {
+                    onVerifySms(target, typed) { failure -> if (failure != null) codeFailure = failure }
+                }
+            } else {
+                attempted = typed
+                onSubmitCode(typed)
+            }
+        }
+    }
+
+    if (smsAvailable) {
+        // Its own self-describing question, so the phone field is discoverable without
+        // prior knowledge. Composed HERE and not by the caller: it belongs to the SMS half,
+        // which is the half that may be absent.
+        Text(stringResource(R.string.signin_sms_intro), style = MaterialTheme.typography.bodyMedium)
         val send = {
             if (!busy && phone.isNotBlank()) {
-                model.requestSmsCode(phone) { failure ->
+                onRequestSms(phone) { failure ->
                     if (failure == null) {
                         sentTo = phone
+                        // The field changes meaning under the cursor, so whatever is in it
+                        // is now the wrong shape. Cleared rather than filtered down to its
+                        // digits: a half-typed enrolment code truncated to six characters
+                        // would look like an OTP somebody typed.
+                        typed = ""
+                        attempted = null
                         phoneFailure = null
                     } else {
                         phoneFailure = failure
@@ -425,9 +456,10 @@ private fun SmsSignInSection(model: TimeSheetViewModel) {
             onValueChange = { phone = it; phoneFailure = null },
             singleLine = true,
             isError = phoneFailure != null,
+            enabled = !otpMode,
             label = { Text(stringResource(R.string.signin_sms_phone_label)) },
-            // Same rule as the code field above: ONE message, in words, associated with the
-            // field for TalkBack, colour never the only signal.
+            // ONE message, in words, associated with the field for TalkBack, colour never
+            // the only signal — the same rule the code field below follows.
             supportingText = {
                 val failure = phoneFailure
                 if (failure != null) {
@@ -442,62 +474,125 @@ private fun SmsSignInSection(model: TimeSheetViewModel) {
                 .fillMaxWidth()
                 .heightIn(min = 56.dp),
         )
-        Button(
-            onClick = send,
-            enabled = !busy && phone.isNotBlank(),
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 48.dp),
-        ) {
-            Text(stringResource(if (busy) R.string.signin_sms_sending else R.string.signin_sms_send))
-        }
-    } else {
-        val verify = {
-            if (!busy && otp.length == 6) {
-                model.verifySmsCode(target, otp) { failure -> if (failure != null) codeFailure = failure }
+        if (target == null) {
+            OutlinedButton(
+                onClick = send,
+                enabled = !busy && phone.isNotBlank(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+            ) {
+                Text(stringResource(if (busy) R.string.signin_sms_sending else R.string.signin_sms_send))
             }
+        } else {
+            Text(
+                stringResource(R.string.signin_sms_code_intro, target),
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
+    }
+
+    OutlinedTextField(
+        value = typed,
+        // TWO FILTERS, ONE FIELD, decided by which credential is live. In OTP mode: digits
+        // only, capped at 6 — an OTP has no alphabet to alias (decision-48 §6: copied off a
+        // notification, never spoken aloud). Otherwise: capped at the same length the server
+        // will even look at and accepted exactly as typed, because EnrolmentCode.normalise()
+        // sorts out case, spaces and hyphens on submit and rewriting the text under the
+        // cursor is how input fields fight their user.
+        onValueChange = {
+            typed = if (otpMode) it.filter(Char::isDigit).take(OTP_LENGTH) else it.take(EnrolmentCode.MAX_INPUT)
+            codeFailure = null
+        },
+        singleLine = true,
+        isError = codeError != null,
+        label = {
+            Text(stringResource(if (otpMode) R.string.signin_sms_code_label else R.string.signin_code_label))
+        },
+        // ONE message for every refusal of the enrolment code. Unknown, malformed, expired,
+        // already used, revoked, worker deactivated -- the server makes all six
+        // byte-identical on purpose (decision-26) and this form must not invent a
+        // distinction it does not have. Only "no connection" is separate, because that one
+        // is not about the code at all.
+        //
+        // It goes IN the supporting text, not next to the field: that is what associates it
+        // with the input for TalkBack, so "Anmeldecode, ungültig" is followed by what to do
+        // about it instead of by silence. Assertive because the person is looking at the
+        // keyboard, not at the field.
+        supportingText = {
+            if (codeError != null) {
+                Text(codeError, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive })
+            } else {
+                Text(stringResource(if (otpMode) R.string.signin_sms_code_hint else R.string.signin_code_hint))
+            }
+        },
+        keyboardOptions = if (otpMode) {
+            KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Go)
+        } else {
+            KeyboardOptions(
+                // Upper case because that is how the code was written down and read out,
+                // so what is on screen matches what is on the admin's screen. It is only
+                // cosmetic -- normalise() folds case anyway, so the shift key cannot cost
+                // anyone an attempt.
+                capitalization = KeyboardCapitalization.Characters,
+                // The one thing that MUST be off. Autocorrect on an 8-character non-word
+                // will happily replace it with a German noun mid-typing, and the worker
+                // would have no idea why a correct code keeps failing.
+                autoCorrectEnabled = false,
+                keyboardType = KeyboardType.Text,
+                imeAction = ImeAction.Go,
+            )
+        },
+        keyboardActions = KeyboardActions(onGo = { submit() }),
+        // Plain text, NOT a password field: the whole point is that they can check what
+        // they typed against what was said to them, or against the SMS still on screen.
+        //
+        // SMS AUTOFILL, and ONLY in OTP mode (decision-54 §6): the platform offers the code
+        // straight out of the notification. The enrolment code must never carry this hint —
+        // it does not arrive by SMS, and an autofill prompt over it would offer a stale OTP
+        // for a field that is not one. ContentType.SmsOtpCode is stable in the pinned
+        // Compose UI (androidx.compose.ui.autofill), so the SMS User Consent API — a Play
+        // Services dependency, a BroadcastReceiver and an app-hash in the message — is not
+        // needed and is not added.
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .then(
+                if (otpMode) Modifier.semantics { contentType = ContentType.SmsOtpCode } else Modifier,
+            ),
+    )
+
+    Button(
+        onClick = submit,
+        enabled = !busy && if (otpMode) typed.length == OTP_LENGTH else typed.isNotBlank(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp), // touch target floor
+    ) {
         Text(
-            stringResource(R.string.signin_sms_code_intro, target),
-            style = MaterialTheme.typography.bodyMedium,
+            stringResource(
+                when {
+                    otpMode && busy -> R.string.signin_sms_verifying
+                    otpMode -> R.string.signin_sms_verify
+                    busy -> R.string.signin_submitting
+                    else -> R.string.signin_submit
+                },
+            ),
         )
-        OutlinedTextField(
-            value = otp,
-            // Digits only, capped at 6 — an OTP has no alphabet to alias (decision-48 §6:
-            // copied off a notification, never spoken aloud), so there is nothing here for
-            // an EnrolmentCode-style normaliser to do.
-            onValueChange = { otp = it.filter(Char::isDigit).take(6); codeFailure = null },
-            singleLine = true,
-            isError = codeFailure != null,
-            label = { Text(stringResource(R.string.signin_sms_code_label)) },
-            supportingText = {
-                val failure = codeFailure
-                if (failure != null) {
-                    Text(smsErrorText(failure), modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive })
-                } else {
-                    Text(stringResource(R.string.signin_sms_code_hint))
-                }
-            },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Go),
-            keyboardActions = KeyboardActions(onGo = { verify() }),
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 56.dp),
-        )
-        Button(
-            onClick = verify,
-            enabled = !busy && otp.length == 6,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 48.dp),
+    }
+
+    if (otpMode) {
+        TextButton(
+            onClick = { sentTo = null; typed = ""; attempted = null; codeFailure = null },
+            enabled = !busy,
         ) {
-            Text(stringResource(if (busy) R.string.signin_sms_verifying else R.string.signin_sms_verify))
-        }
-        TextButton(onClick = { sentTo = null; otp = ""; codeFailure = null }, enabled = !busy) {
             Text(stringResource(R.string.signin_sms_change_number))
         }
     }
 }
+
+/** Digits in an OTP (server/lib/sms.js). The enrolment code's own length is EnrolmentCode.LENGTH. */
+private const val OTP_LENGTH = 6
 
 /**
  * Every ApiFailure [requestSmsCode]/[verifySmsCode][TimeSheetViewModel] can produce, mapped
@@ -717,32 +812,15 @@ private fun LogScreen(
                         .heightIn(min = 48.dp),
                 ) { Text(stringResource(R.string.scan_open)) }
             }
-            // WRITE A TAG. Deliberately here, on the log screen, and NOT on the idle screen
-            // or anywhere a worker lands by accident: the operator opens the app on purpose
-            // to mount tags, and a cleaner holding a phone to a wall must never be one
-            // mis-tap away from a screen that OVERWRITES the tag they are standing at.
-            // Nothing behind this button can open or close a shift (decision-45).
-            item {
-                OutlinedButton(
-                    onClick = { openIntent(Intent(logContext, WriteTagActivity::class.java)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp),
-                ) { Text(stringResource(R.string.write_open)) }
-            }
-            // THE TEST SCAN (decision-47). Right next to "write a tag", for the same reason:
-            // the operator opens the app on purpose, and a cleaner holding a phone to a wall
-            // must never be one mis-tap away from a screen that reads a card as anything but
-            // a clock-in. Nothing behind this button can open or close a shift (decision-45) —
-            // android/checks/verify-no-shift-check.sh pins that structurally.
-            item {
-                OutlinedButton(
-                    onClick = { openIntent(Intent(logContext, VerifyZoneActivity::class.java)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp),
-                ) { Text(stringResource(R.string.verify_open)) }
-            }
+            // WRITE A TAG / THE TEST SCAN (decision-45, decision-47), and since decision-54
+            // §4 behind the operator gate rather than loose on the screen: a signed-in WORKER
+            // is not an operator, and the two links used to be reachable by anyone who got
+            // this far. Same [OperatorSection] as the sign-in screen — not a lookalike — so
+            // there is exactly one place in the app that launches either activity, and a
+            // cleaner holding a phone to a wall is never one mis-tap away from a screen that
+            // OVERWRITES the tag they are standing at. Nothing behind either button can open
+            // or close a shift — android/checks/verify-no-shift-check.sh pins that.
+            item { OperatorSection(model, openIntent) }
         }
 
         if (log.unresolved.isNotEmpty()) {

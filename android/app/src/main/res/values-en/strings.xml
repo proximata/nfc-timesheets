@@ -22,6 +22,10 @@
     <!-- Mirrors the German comment: reachable before any worker session exists, matching
          the iOS SettingsView reachability fix. -->
     <string name="signin_operator_heading">Operator? Write or test tags without signing in as a worker.</string>
+    <!-- decision-54 §4: the two buttons are no longer reachable directly — without an
+         operator session the same form as above appears first, pointed at /auth/operator-*. -->
+    <string name="signin_operator_gate_intro">Sign in as an operator first — with the operator code, or by SMS to the number on file.</string>
+    <string name="operator_session_expired">Your operator sign-in has expired. This screen no longer reads a card. Close it and sign in as an operator again.</string>
 
     <string name="signin_sms_intro">Your admin has a phone number on file for you? You can also sign in with it by SMS.</string>
     <string name="signin_sms_phone_label">Phone number</string>
@@ -307,17 +311,31 @@
     <string name="write_report_sending">Reporting to the office …</string>
     <string name="write_report_sent">Reported to the office. The tag can be mounted now.</string>
     <string name="write_report_failed">The tag is done, but reporting it to the office failed (%1$s). The tag is fine — send it again later.</string>
-    <string name="write_report_needs_operator">The tag is done, but this phone is not signed in as an operator. Enter a code and the report is retried.</string>
-    <string name="write_operator_code">Operator code</string>
-    <string name="write_operator_enrol">Sign in</string>
+    <string name="write_report_needs_operator">The tag is done, but this phone\'s operator sign-in has expired. Close this screen, sign in as an operator again, and the report is retried.</string>
     <string name="write_report_retry">Send the report again</string>
     <string name="write_open">Write a tag</string>
-    <string name="write_needs_operator_to_write">This phone is not signed in as an operator. Only operators can write tags. Enter the operator code. Until you do, this screen does not read a card at all.</string>
     <string name="write_occupied">NOT written. This card already carries the id %1$s — that is a card mounted at a door. Overwriting it stops that door working for every cleaner until the office assigns the new id. The tag was not changed.\n\nIf you really mean to overwrite it: type the last six characters of the old id (%2$s), confirm, then present the card again.</string>
     <string name="write_confirm_label">Last six characters of the old id (%1$s)</string>
     <string name="write_confirm_button">Confirm overwrite</string>
     <string name="write_confirm_armed">Overwrite allowed — for the card carrying id %1$s only. Present that card again now. The permission is spent once it is written.</string>
     <string name="write_replaced_ours">WARNING: this card previously carried our id %1$s. That id is gone. If the card was mounted at a door, the office has to assign the new id to that door.</string>
+    <!-- Building picker after the write (decision-54 §2). A zone is born here, on site, in
+         the operator's hand, and nowhere else. With no building it stays unbound — a valid
+         resting state, not a failure. -->
+    <string name="write_zone_hint">What is this card for?</string>
+    <string name="write_zone_name_label">Zone name</string>
+    <string name="write_zone_loading">Loading the building list …</string>
+    <string name="write_zone_load_failed">Could not load the building list (%1$s). The zone can still be created — without a building, for the office to assign later.</string>
+    <string name="write_zone_locations_empty">No building to choose from. The zone can be created without one.</string>
+    <string name="write_zone_no_building">Create without a building</string>
+    <string name="write_zone_submit">Create the zone</string>
+    <string name="write_zone_submitting">Creating the zone …</string>
+    <!-- %1$s = the zone's name, %2$s = the building's name -->
+    <string name="write_zone_done_bound">Zone “%1$s” created in %2$s. Now test it with “Test tag” — nobody can clock in here until you do.</string>
+    <!-- %1$s = the zone's name -->
+    <string name="write_zone_done_unbound">Zone “%1$s” created with no building. Nobody can clock in here until the zone is assigned to a building.</string>
+    <string name="write_zone_failed">The zone could not be created (%1$s). The card is fine — try again.</string>
+    <string name="write_zone_retry">Try again</string>
     <string name="write_replaced_foreign">Note: the card was not empty, but what it held was not ours (%1$s) and has been overwritten.</string>
 
     <!-- TEST SCAN (operator), decision-47. A zone is not a valid clock-in target until an
@@ -327,7 +345,6 @@
     <string name="verify_open">Test tag</string>
     <string name="verify_title">Test tag</string>
     <string name="verify_hint">Pick a zone, then hold the card to the phone. This test scan never starts or closes a shift — it only checks whether the card opens the chosen zone.</string>
-    <string name="verify_needs_operator">This phone is not signed in as an operator. Only operators can verify zones. Enter the operator code. Until you do, this screen does not read a card at all.</string>
     <string name="verify_zones_loading">Loading the zone list …</string>
     <string name="verify_zones_error">Could not reload the zone list. Showing the last saved list, if there is one.</string>
     <string name="verify_zones_empty">No active zone found. Create one under “Locations” first.</string>
@@ -351,4 +368,39 @@
     <string name="verify_network_error">No connection to the server. Please check and try again.</string>
     <string name="verify_server_error">Server problem. Please try again.</string>
     <string name="verify_scan_again">Test again</string>
+
+    <!-- Binding a zone that has no building, decision-54 §3. No building means no card can
+         resolve to it, so reader mode never starts for such a zone. No Skip here, unlike the
+         write flow: "no building" is the state the operator came here to leave. -->
+    <string name="verify_zone_no_building">No building</string>
+    <string name="verify_zone_status_unbound">Not assigned to a building yet</string>
+    <string name="verify_bind_hint">This zone has no building yet. Pick one — then the card can be tested.</string>
+    <string name="verify_bind_loading">Loading the building list …</string>
+    <string name="verify_bind_locations_empty">No building to choose from. Ask your admin.</string>
+    <!-- %1$s = the server's error code -->
+    <string name="verify_bind_load_failed">Could not load the building list (%1$s). Without a building the card cannot be tested.</string>
+    <string name="verify_bind_retry">Try again</string>
+    <string name="verify_bind_submit">Assign the zone to this building</string>
+    <string name="verify_bind_submitting">Assigning the zone …</string>
+    <!-- %1$s = the server's error code -->
+    <string name="verify_bind_failed">The zone could not be assigned (%1$s). Please try again.</string>
+    <!-- %1$s = zone name, %2$s = building name -->
+    <string name="verify_bind_done">“%1$s” now belongs to %2$s. Hold the card against the phone.</string>
+
+    <!-- The zone page after a successful test scan, decision-54 §7. Deliberately no rate, no
+         money and no client name (decision-6/42/43): a zone is not a costing unit. The monthly
+         total comes from the server and is not the sum of the page on screen. -->
+    <string name="verify_shifts_title">Shifts this month</string>
+    <string name="verify_shifts_loading">Loading shifts …</string>
+    <string name="verify_shifts_error">Could not load the shifts. The zone is activated regardless.</string>
+    <string name="verify_shifts_empty">Nobody has clocked in here this month.</string>
+    <!-- %1$s = name, %2$s = start, %3$s = end, %4$s = duration as hours:minutes -->
+    <string name="verify_shifts_row">%1$s · %2$s – %3$s · %4$s</string>
+    <string name="verify_shifts_open">running</string>
+    <!-- %1$s = total as hours:minutes -->
+    <string name="verify_shifts_total">Total this month: %1$s</string>
+    <!-- %1$d = page number -->
+    <string name="verify_shifts_page">Page %1$d</string>
+    <string name="verify_shifts_previous">Previous page</string>
+    <string name="verify_shifts_next">Next page</string>
 </resources>

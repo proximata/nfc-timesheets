@@ -1,7 +1,12 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.core.Wire
+import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
 import io.github.qwadratic.nfctimesheets.core.WireOperatorZone
+import io.github.qwadratic.nfctimesheets.core.WireZoneShiftPage
+import io.github.qwadratic.nfctimesheets.core.WireZoneVerifyResult
+import org.json.JSONObject
 
 /**
  * DEBUG BUILDS ONLY. There is a file with this exact name and package in `src/release/`
@@ -82,3 +87,118 @@ fun verifyTapSimulations(
     }
     return scenarios
 }
+
+// ---- decision-54 §§3/7: the bind form and the zone page, without a server ----------------
+
+/**
+ * TWO ZONES THAT DO NOT EXIST, added to the worklist so the two branches decision-54 added to
+ * this screen are reachable at all. On an emulator `GET /operator/zones` answers nothing (no
+ * session, no server), so without these the screen never gets past "no zones" and neither the
+ * bind form nor the zone page can be seen before a client's stairwell.
+ *
+ * ONE UNBOUND AND ONE BOUND, because that is precisely the fork [VerifyZoneActivity.selectZone]
+ * takes: unbound goes to the building picker and starts no reader mode, bound goes to the test
+ * scan as it always did.
+ *
+ * THE IDS ARE REAL UUIDS and not the word "simulated": [TagLink.uriFor] returns null for
+ * anything that is not one, so a pretty placeholder here would silently produce a card with no
+ * URI and turn every tap scenario above into "unreadable".
+ */
+private const val SIM_ZONES_JSON = """
+{"zones":[
+  {"id":"5111d0de-0000-4000-8000-0000000000c1","location_id":null,"location_name":null,
+   "name":"SIMULATED: Zone ohne Gebaeude","tag_serial":null,
+   "tag_deployed_at":"2026-08-20T09:00:00Z","verified_at":null},
+  {"id":"5111d0de-0000-4000-8000-0000000000c2","location_id":"5111d0de-0000-4000-8000-0000000000a1",
+   "location_name":"SIMULATED: Stiegengasse 3","name":"SIMULATED: Zone mit Gebaeude",
+   "tag_serial":null,"tag_deployed_at":"2026-08-20T09:00:00Z","verified_at":null}
+]}
+"""
+
+fun simulatedZones(): List<WireOperatorZone> = Wire.operatorZones(JSONObject(SIM_ZONES_JSON))
+
+/**
+ * Is this row one of ours? The screen asks before every network call it would otherwise make
+ * for the selected zone — bind, verify, shifts — because a simulated zone has no row on any
+ * server and the real calls would answer 401 or 404 and prove nothing.
+ *
+ * BY IDENTITY, not by a flag on the screen: a mode the screen is in is a mode it can be left
+ * in, and "still simulating" over a REAL zone is exactly the accident this whole source-set
+ * split exists to make impossible.
+ */
+fun isSimulatedZone(zone: WireOperatorZone): Boolean = simulatedZones().any { it.id == zone.id }
+
+/** The buildings the bind picker offers: the write flow's fixture, not a second copy of it. */
+fun simulatedBindLocations(): List<WireOperatorLocation> = simulatedLocations()
+
+/**
+ * `POST /operator/zones/:id/bind`, answered here. Returns the zone WITH the building and with
+ * `verified_at` still null — not decoration: the real route CLEARS the stamp on a bind
+ * (decision-54 §3), so a fixture that came back verified would hide the very state the screen
+ * has to handle next, which is "bound, now go and prove the card".
+ */
+fun runBindSimulation(zone: WireOperatorZone, location: WireOperatorLocation): WireOperatorZone =
+    Wire.operatorZone(
+        JSONObject(
+            "{\"id\":${JSONObject.quote(zone.id)}" +
+                ",\"location_id\":${JSONObject.quote(location.id)}" +
+                ",\"location_name\":${JSONObject.quote(location.name)}" +
+                ",\"name\":${JSONObject.quote(zone.name)}" +
+                ",\"tag_serial\":null,\"tag_deployed_at\":\"2026-08-20T09:00:00Z\",\"verified_at\":null}",
+        ),
+    )
+
+/** `POST /operator/zones/:id/verify`'s 200 body: freshly stamped, never `already_verified`. */
+fun runVerifySimulation(zone: WireOperatorZone): WireZoneVerifyResult =
+    Wire.zoneVerifyResult(
+        JSONObject(
+            "{\"id\":${JSONObject.quote(zone.id)}" +
+                ",\"name\":${JSONObject.quote(zone.name)}" +
+                ",\"location_id\":${JSONObject.quote(zone.locationId ?: "")}" +
+                ",\"location_name\":${JSONObject.quote(zone.locationName ?: "")}" +
+                ",\"verified_at\":\"2026-08-26T10:15:00Z\",\"already_verified\":false}",
+        ),
+    )
+
+/**
+ * `GET /operator/zones/:id/shifts?page=N` — three shifts over TWO pages, and a month total
+ * that matches NEITHER page.
+ *
+ * THE NUMBERS ARE THE TEST. `page_size` is 2 here and 50 on the server, deliberately: fifty
+ * fixtures to see a second page would be fifty fixtures nobody reads, and the screen never
+ * assumes the size — it echoes the server's (core/Wire.kt WireZoneShiftPage.hasNext). And
+ * `total_minutes` is 615 while page 1 holds 240+195=435 and page 2 holds 180. If the screen
+ * ever starts summing the rows it can see and calling that the month, this fixture makes it
+ * say 435 where it should say 615 — which is the whole reason the endpoint runs a second,
+ * unpaginated query (decision-54 §7) rather than letting the client add up a page.
+ */
+private val SHIFT_PAGES = mapOf(
+    1 to """
+{"month":"2026-08","page":1,"page_size":2,"matching":3,"total_minutes":615,"shifts":[
+  {"worker_name":"SIMULATED: Anna B.","start_time":"2026-08-24T06:00:00Z",
+   "end_time":"2026-08-24T10:00:00Z","duration_minutes":240},
+  {"worker_name":"SIMULATED: Bojan K.","start_time":"2026-08-22T05:30:00Z",
+   "end_time":"2026-08-22T08:45:00Z","duration_minutes":195}
+]}
+""",
+    2 to """
+{"month":"2026-08","page":2,"page_size":2,"matching":3,"total_minutes":615,"shifts":[
+  {"worker_name":"SIMULATED: Carla D.","start_time":"2026-08-19T06:15:00Z",
+   "end_time":null,"duration_minutes":180}
+]}
+""",
+)
+
+/**
+ * A page past the end answers an EMPTY page rather than throwing, exactly as the route does:
+ * the screen's Next button is drawn from `matching`, so this is only reachable if that
+ * arithmetic breaks — and an empty list is how it would show.
+ */
+fun runShiftsSimulation(page: Int): WireZoneShiftPage =
+    Wire.zoneShiftPage(
+        JSONObject(
+            SHIFT_PAGES[page]
+                ?: "{\"month\":\"2026-08\",\"page\":$page,\"page_size\":2,\"matching\":3" +
+                ",\"total_minutes\":615,\"shifts\":[]}",
+        ),
+    )

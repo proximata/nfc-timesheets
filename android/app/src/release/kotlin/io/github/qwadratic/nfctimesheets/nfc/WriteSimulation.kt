@@ -1,6 +1,8 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
+import io.github.qwadratic.nfctimesheets.core.WireResolvedZone
 
 /**
  * RELEASE BUILDS. The debug counterpart of this file (`src/debug/.../WriteSimulation.kt`)
@@ -35,3 +37,31 @@ fun runSimulation(
     locationId: String?,
     confirmedOverwriteOf: String? = null,
 ): TagWriter.Outcome = TagWriter.Outcome.Refused.BadId(locationId)
+
+/**
+ * decision-54 §2's zone step, absent for the same reason as everything above it: in a release
+ * build there is no canned building list and no canned `resolve-zone` answer, so the screen
+ * cannot tell an operator a zone was created when no request was ever made.
+ */
+data class ZoneSimulation(
+    val label: String,
+    val zoneName: String,
+    val building: WireOperatorLocation?,
+)
+
+/** Always empty. Nothing constructs a [ZoneSimulation] here, so the picker is never entered. */
+fun zoneSimulations(): List<ZoneSimulation> = emptyList()
+
+/**
+ * Always empty — the real `GET /operator/locations` is the only source of buildings in a
+ * release build, on this screen and on nfc/VerifyZoneActivity's bind form both.
+ */
+fun simulatedLocations(): List<WireOperatorLocation> = emptyList()
+
+/**
+ * Unreachable by construction: the screen only calls this while a [ZoneSimulation] is the
+ * thing that entered the zone step, and none can exist here. Present so both source sets
+ * expose the same surface.
+ */
+fun runZoneSimulation(name: String, locationId: String?): WireResolvedZone =
+    WireResolvedZone(id = "", name = name, locationId = locationId)

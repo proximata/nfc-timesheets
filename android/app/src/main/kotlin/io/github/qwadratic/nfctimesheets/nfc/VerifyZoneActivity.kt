@@ -19,7 +19,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,11 +36,13 @@ import io.github.qwadratic.nfctimesheets.AppLocale
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
-import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
 import io.github.qwadratic.nfctimesheets.core.Wire
+import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
 import io.github.qwadratic.nfctimesheets.core.WireOperatorZone
+import io.github.qwadratic.nfctimesheets.core.WireZoneShiftPage
 import io.github.qwadratic.nfctimesheets.core.WireZoneVerifyResult
 import io.github.qwadratic.nfctimesheets.core.Zones
+import io.github.qwadratic.nfctimesheets.ui.BuildingPicker
 import io.github.qwadratic.nfctimesheets.ui.TimeSheetsTheme
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -76,7 +77,11 @@ import java.time.format.FormatStyle
  * ROLE-GATED THE SAME WAY [WriteTagActivity] gates its write: reader mode is never enabled
  * without a `ts_operator` session read from DISK on every resume — no network call, nothing
  * to be slow, nothing to fail at the one moment an operator is standing at a door with no
- * signal.
+ * signal. Since decision-54 §4 this screen is also UNREACHABLE without that session (the
+ * gate is ui/TimeSheetApp.kt's OperatorSection), so the inline operator-code field that used
+ * to live here is gone; the structural gate above it is untouched and still the thing that
+ * makes a card physically unreadable without a session. What remains for `!operatorReady` is
+ * one sentence for a session that dies mid-screen, never a second code form.
  *
  * ORDER, AND WHY THE ZONE IS PICKED BEFORE ANY CARD IS READ: the equality check in
  * `POST /operator/zones/:id/verify` — "does this card resolve to THIS zone" — only means
@@ -91,9 +96,6 @@ class VerifyZoneActivity : ComponentActivity() {
 
     private var nfcState by mutableStateOf(NfcState.READY)
     private var operatorReady by mutableStateOf(false)
-    private var operatorCode by mutableStateOf("")
-    private var enrolFailed by mutableStateOf(false)
-    private var busy by mutableStateOf(false)
 
     private var zones by mutableStateOf<List<WireOperatorZone>>(emptyList())
     private var zonesLoading by mutableStateOf(false)
@@ -102,6 +104,13 @@ class VerifyZoneActivity : ComponentActivity() {
     private var selectedZone by mutableStateOf<WireOperatorZone?>(null)
     private var checking by mutableStateOf(false)
     private var outcome by mutableStateOf<VerifyOutcome?>(null)
+
+    private var bindStep by mutableStateOf<BindStep>(BindStep.Idle)
+    private var bindBuilding by mutableStateOf<WireOperatorLocation?>(null)
+
+    private var shifts by mutableStateOf<WireZoneShiftPage?>(null)
+    private var shiftsLoading by mutableStateOf(false)
+    private var shiftsError by mutableStateOf(false)
 
     /** What a completed test scan showed. Rendered as a named sentence, never a raw code. */
     private sealed interface VerifyOutcome {
@@ -112,6 +121,35 @@ class VerifyZoneActivity : ComponentActivity() {
         data object UnknownZone : VerifyOutcome
         data class Unreadable(val techs: List<String>, val uid: String) : VerifyOutcome
         data class Failure(val serverSide: Boolean) : VerifyOutcome
+    }
+
+    /**
+     * BINDING AN UNBOUND ZONE (decision-54 §3) — the branch this screen takes INSTEAD of a
+     * test scan, never before one and never after one.
+     *
+     * A zone with no building cannot be verified, and that is not a policy in this file: the
+     * server's `activePlace` INNER JOINs `locations`, so no card on earth resolves to an
+     * unbound zone and the verify would answer 422 for every card the operator held up. So
+     * reader mode is never started for such a zone at all — the same absence-of-a-callback
+     * gate the operator session already uses, for the same reason: a refusal the operator can
+     * trigger is a refusal they will trigger, in a stairwell, with a card in their hand.
+     */
+    private sealed interface BindStep {
+        /** The zone is already bound, or none is selected. Renders nothing. */
+        data object Idle : BindStep
+        data object Loading : BindStep
+        data class Picking(val locations: List<WireOperatorLocation>) : BindStep
+
+        /** The list did not load. RETRYABLE, and a dead end until it does: no building, no scan. */
+        data class LoadFailed(val code: String) : BindStep
+        data object Submitting : BindStep
+
+        /**
+         * Bound just now. The zone is a scan target from here on, so this state renders one
+         * sentence and then gets out of the way of the ordinary scan body below it.
+         */
+        data class Bound(val building: String) : BindStep
+        data class Failed(val code: String) : BindStep
     }
 
     override fun attachBaseContext(newBase: Context) {
@@ -156,25 +194,10 @@ class VerifyZoneActivity : ComponentActivity() {
     private fun ReadyBody() {
         if (!operatorReady) {
             Text(
-                stringResource(R.string.verify_needs_operator),
+                stringResource(R.string.operator_session_expired),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
             )
-            if (enrolFailed) {
-                Text(stringResource(R.string.err_invalid_code), color = MaterialTheme.colorScheme.error)
-            }
-            OutlinedTextField(
-                value = operatorCode,
-                onValueChange = { operatorCode = it },
-                label = { Text(stringResource(R.string.write_operator_code)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Button(
-                onClick = ::enrolOperator,
-                enabled = !busy && EnrolmentCode.normalise(operatorCode) != null,
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) { Text(stringResource(R.string.write_operator_enrol)) }
             return
         }
 
@@ -196,9 +219,13 @@ class VerifyZoneActivity : ComponentActivity() {
                         .heightIn(min = 48.dp),
                 ) {
                     Column(Modifier.fillMaxWidth()) {
-                        Text("${z.locationName} \u00b7 ${z.name}")
+                        // An unbound zone is named as such rather than hidden: it is on this
+                        // worklist precisely so an operator can finish it (decision-54 §1).
+                        Text("${z.locationName ?: getString(R.string.verify_zone_no_building)} \u00b7 ${z.name}")
                         Text(
-                            if (z.isVerified) {
+                            if (!z.isBound) {
+                                stringResource(R.string.verify_zone_status_unbound)
+                            } else if (z.isVerified) {
                                 getString(R.string.verify_zone_status_verified, z.verifiedAt?.let(::formatted).orEmpty())
                             } else {
                                 stringResource(R.string.verify_zone_status_pending)
@@ -212,9 +239,34 @@ class VerifyZoneActivity : ComponentActivity() {
         }
 
         Text(
-            stringResource(R.string.verify_selected, zone.name, zone.locationName),
+            stringResource(
+                R.string.verify_selected,
+                zone.name,
+                zone.locationName ?: getString(R.string.verify_zone_no_building),
+            ),
             style = MaterialTheme.typography.titleMedium,
         )
+
+        // NO BUILDING, NO SCAN. The bind form replaces the scan body entirely — it does not
+        // sit above a screen that is simultaneously waiting for a card it could never accept.
+        if (!zone.isBound) {
+            BindBody(zone)
+            OutlinedButton(
+                onClick = ::changeZone,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.verify_change_zone)) }
+            return
+        }
+
+        (bindStep as? BindStep.Bound)?.let {
+            Text(
+                getString(R.string.verify_bind_done, zone.name, it.building),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
         // liveRegion: the operator is holding a phone against a wall and cannot hunt the
         // screen for what changed.
         Text(
@@ -236,12 +288,136 @@ class VerifyZoneActivity : ComponentActivity() {
             ) { Text("\u25b6 ${simulation.label}") }
         }
 
+        ZonePage(zone)
+
         OutlinedButton(
             onClick = ::changeZone,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 48.dp),
         ) { Text(stringResource(R.string.verify_change_zone)) }
+    }
+
+    /**
+     * The bind form: which building is this zone in? [BuildingPicker] is the SAME list the
+     * write flow uses to name a fresh card (ui/BuildingPicker.kt) — one question asked at two
+     * moments, not two lists that will disagree later.
+     *
+     * THERE IS NO SKIP HERE, unlike the write flow. "No building" is the state the operator
+     * came here to leave; walking away from it is picking a different zone off the worklist,
+     * which the button below this form already does.
+     */
+    @Composable
+    private fun BindBody(zone: WireOperatorZone) {
+        Text(stringResource(R.string.verify_bind_hint), style = MaterialTheme.typography.titleMedium)
+        when (val step = bindStep) {
+            BindStep.Idle, BindStep.Loading -> Text(stringResource(R.string.verify_bind_loading))
+            BindStep.Submitting -> Text(stringResource(R.string.verify_bind_submitting))
+            is BindStep.Bound -> Unit
+
+            is BindStep.LoadFailed -> {
+                Text(
+                    getString(R.string.verify_bind_load_failed, step.code),
+                    color = MaterialTheme.colorScheme.error,
+                )
+                OutlinedButton(
+                    onClick = ::loadBindLocations,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.verify_bind_retry)) }
+            }
+
+            is BindStep.Failed -> {
+                Text(
+                    getString(R.string.verify_bind_failed, step.code),
+                    color = MaterialTheme.colorScheme.error,
+                )
+                // Back to the picker with the pick still in place: nothing is retapped to retry.
+                OutlinedButton(
+                    onClick = ::loadBindLocations,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.verify_bind_retry)) }
+            }
+
+            is BindStep.Picking -> {
+                BuildingPicker(
+                    locations = step.locations,
+                    selectedId = bindBuilding?.id,
+                    emptyText = stringResource(R.string.verify_bind_locations_empty),
+                    onPick = { bindBuilding = it },
+                )
+                Button(
+                    onClick = { submitBind(zone) },
+                    enabled = bindBuilding != null,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.verify_bind_submit)) }
+            }
+        }
+    }
+
+    /**
+     * THE ZONE PAGE (decision-54 §7) — what this door actually did this month, shown only once
+     * the card in the operator's hand has been proved against this zone. Before that the
+     * operator has no reason to trust that this list is the door in front of them.
+     *
+     * WORKER, START, END, DURATION. No rate, no euro figure, no client name — the same line
+     * the endpoint itself holds (decision-6/42/43): a zone is not a costing unit.
+     *
+     * THE TOTAL IS THE SERVER'S, for the whole month, and is NOT summed from the page on
+     * screen. Fifty rows labelled "the month" would be a lie on the one figure here anybody
+     * would act on.
+     */
+    @Composable
+    private fun ZonePage(zone: WireOperatorZone) {
+        val page = shifts
+        if (page == null && !shiftsLoading && !shiftsError) return
+
+        Text(stringResource(R.string.verify_shifts_title), style = MaterialTheme.typography.titleMedium)
+        if (shiftsLoading) Text(stringResource(R.string.verify_shifts_loading))
+        if (shiftsError) {
+            Text(stringResource(R.string.verify_shifts_error), color = MaterialTheme.colorScheme.error)
+            OutlinedButton(
+                onClick = { loadShifts(zone, shifts?.page ?: 1) },
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.verify_bind_retry)) }
+        }
+        if (page == null) return
+
+        if (page.shifts.isEmpty()) Text(stringResource(R.string.verify_shifts_empty))
+        for (row in page.shifts) {
+            Text(
+                getString(
+                    R.string.verify_shifts_row,
+                    row.workerName,
+                    dateTimeFormat.format(row.startTime),
+                    row.endTime?.let(timeFormat::format) ?: getString(R.string.verify_shifts_open),
+                    hoursMinutes(row.durationMinutes),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
+        Text(
+            getString(R.string.verify_shifts_total, hoursMinutes(page.totalMinutes)),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            getString(R.string.verify_shifts_page, page.page),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (page.hasPrevious) {
+            OutlinedButton(
+                onClick = { loadShifts(zone, page.page - 1) },
+                enabled = !shiftsLoading,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.verify_shifts_previous)) }
+        }
+        if (page.hasNext) {
+            OutlinedButton(
+                onClick = { loadShifts(zone, page.page + 1) },
+                enabled = !shiftsLoading,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.verify_shifts_next)) }
+        }
     }
 
     override fun onResume() {
@@ -274,7 +450,10 @@ class VerifyZoneActivity : ComponentActivity() {
      * there is no code path on which an unpicked or unauthorised scan touches a card.
      */
     private fun startReaderMode() {
-        if (!operatorReady || selectedZone == null) return
+        // AND NO UNBOUND ZONE EITHER (decision-54 §3): no card can resolve to a zone with no
+        // building, so a scan here could only ever end in a 422. The gate is again the absence
+        // of the callback, not a message after the fact.
+        if (!operatorReady || selectedZone?.isBound != true) return
         val nfc = adapter ?: return
         if (!nfc.isEnabled) return
         val flags = NfcAdapter.FLAG_READER_NFC_A or
@@ -285,11 +464,25 @@ class VerifyZoneActivity : ComponentActivity() {
         nfc.enableReaderMode(this, ::onTag, flags, null)
     }
 
+    /**
+     * The zone is picked BEFORE any card is read — see this class's header for why that order
+     * is the whole point. Since decision-54 the choice forks here: a bound zone goes straight
+     * to the test scan as it always did, an unbound one goes to the building picker and does
+     * not start reader mode at all.
+     */
     private fun selectZone(zone: WireOperatorZone) {
         selectedZone = zone
         outcome = null
         checking = false
-        startReaderMode()
+        bindBuilding = null
+        shifts = null
+        shiftsError = false
+        if (zone.isBound) {
+            bindStep = BindStep.Idle
+            startReaderMode()
+        } else {
+            loadBindLocations()
+        }
     }
 
     private fun changeZone() {
@@ -297,6 +490,88 @@ class VerifyZoneActivity : ComponentActivity() {
         selectedZone = null
         outcome = null
         checking = false
+        bindStep = BindStep.Idle
+        bindBuilding = null
+        shifts = null
+        shiftsError = false
+    }
+
+    /** GET /operator/locations — the same list the write flow's picker loads. */
+    private fun loadBindLocations() {
+        bindStep = BindStep.Loading
+        // DEBUG BUILDS ONLY, and never for a zone the server sent: simulatedBindLocations()
+        // is empty in src/release/ and isSimulatedZone() is constantly false there, so this
+        // branch does not exist in a shipped build (nfc/VerifySimulation.kt).
+        val zone = selectedZone
+        if (zone != null && isSimulatedZone(zone)) {
+            bindStep = BindStep.Picking(simulatedBindLocations())
+            return
+        }
+        lifecycleScope.launch {
+            bindStep = try {
+                BindStep.Picking(app.operatorApi.operatorLocations())
+            } catch (e: ApiFailure) {
+                BindStep.LoadFailed(e.code)
+            } catch (_: Exception) {
+                BindStep.LoadFailed("unknown")
+            }
+        }
+    }
+
+    /**
+     * POST /operator/zones/:id/bind. The zone the server hands back REPLACES the worklist row,
+     * in [selectedZone] and in [zones] both: it now has a building (so reader mode may start)
+     * and its `verified_at` has been cleared by the bind (decision-54 §3), which is exactly the
+     * state the test scan below expects to find. Keeping the stale row would offer a scan
+     * against a zone this screen still believed was unbound.
+     */
+    private fun submitBind(zone: WireOperatorZone) {
+        val building = bindBuilding ?: return
+        bindStep = BindStep.Submitting
+        lifecycleScope.launch {
+            try {
+                val bound = if (isSimulatedZone(zone)) {
+                    runBindSimulation(zone, building)
+                } else {
+                    app.operatorApi.bindZone(zone.id, building.id)
+                }
+                zones = zones.map { if (it.id == bound.id) bound else it }
+                // The DISK cache is deliberately not rewritten here: it stores the worklist
+                // envelope's exact bytes (nfc/OperatorZoneCache), and this response is one zone,
+                // not that envelope. The next resume refreshes it from the server anyway.
+                selectedZone = bound
+                bindStep = BindStep.Bound(bound.locationName ?: building.name)
+                startReaderMode()
+            } catch (e: ApiFailure) {
+                bindStep = BindStep.Failed(e.code)
+            } catch (_: Exception) {
+                bindStep = BindStep.Failed("unknown")
+            }
+        }
+    }
+
+    /**
+     * GET /operator/zones/:id/shifts?page=N, after a verify landed. The MONTH is not sent — the
+     * server decides it from its own clock, so the rows and the total can never name different
+     * months (net/Api.kt says why).
+     */
+    private fun loadShifts(zone: WireOperatorZone, page: Int) {
+        shiftsLoading = true
+        lifecycleScope.launch {
+            try {
+                shifts = if (isSimulatedZone(zone)) {
+                    runShiftsSimulation(page)
+                } else {
+                    app.operatorApi.zoneShifts(zone.id, page)
+                }
+                shiftsError = false
+            } catch (_: Exception) {
+                // The verify already succeeded and the card is proved; a failed read of the
+                // month's history is a missing list, never a failed test scan.
+                shiftsError = true
+            }
+            shiftsLoading = false
+        }
     }
 
     /** Called off the main thread by the NFC service. */
@@ -333,7 +608,15 @@ class VerifyZoneActivity : ComponentActivity() {
         outcome = null
         lifecycleScope.launch {
             outcome = try {
-                val result = app.operatorApi.verifyZone(target.id, placeUuid)
+                val result = if (isSimulatedZone(target)) {
+                    runVerifySimulation(target)
+                } else {
+                    app.operatorApi.verifyZone(target.id, placeUuid)
+                }
+                // The zone page follows a proof and never precedes one (decision-54 §7) —
+                // including on a re-scan of an already-verified zone, which is the ordinary way
+                // an operator revisits a door to see what happened there.
+                loadShifts(target, 1)
                 VerifyOutcome.Verified(result)
             } catch (e: ApiFailure) {
                 when (e.code) {
@@ -380,7 +663,17 @@ class VerifyZoneActivity : ComponentActivity() {
     }.getOrNull()
 
     private fun loadZonesFromCache() {
-        if (zones.isEmpty()) zones = app.operatorZones.read()
+        if (zones.isEmpty()) show(app.operatorZones.read())
+    }
+
+    /**
+     * The worklist as drawn: the server's rows, plus the debug simulator's two (one unbound,
+     * one bound), which are an empty list in a release build and therefore not there at all.
+     * They are appended and never merged in — a simulated row cannot displace or shadow a real
+     * zone, it can only sit after the last of them.
+     */
+    private fun show(list: List<WireOperatorZone>) {
+        zones = list + simulatedZones()
     }
 
     private suspend fun refreshZones() {
@@ -388,32 +681,12 @@ class VerifyZoneActivity : ComponentActivity() {
         try {
             val envelope = app.operatorApi.operatorZones()
             app.operatorZones.write(envelope)
-            zones = Wire.operatorZones(envelope)
+            show(Wire.operatorZones(envelope))
             zonesError = false
         } catch (_: Exception) {
             zonesError = true
         } finally {
             zonesLoading = false
-        }
-    }
-
-    private fun enrolOperator() {
-        val code = EnrolmentCode.normalise(operatorCode) ?: return
-        busy = true
-        enrolFailed = false
-        lifecycleScope.launch {
-            try {
-                app.operatorApi.operatorEnrol(code)
-                operatorCode = ""
-                operatorReady = app.operatorCookies.header() != null
-                loadZonesFromCache()
-                lifecycleScope.launch { refreshZones() }
-                startReaderMode()
-            } catch (_: Exception) {
-                // decision-26: no reason is ever given for a rejected code, here either.
-                enrolFailed = true
-            }
-            busy = false
         }
     }
 
@@ -440,8 +713,22 @@ class VerifyZoneActivity : ComponentActivity() {
 
     private fun formatted(instant: Instant): String = dateTimeFormat.format(instant)
 
+    /**
+     * Minutes as h:mm. The minutes come from the SERVER, already derived in SQL from
+     * COALESCE(end_time, now()) — this phone rounds a number, and does no date arithmetic and
+     * no timezone work of its own.
+     */
+    private fun hoursMinutes(minutes: Double): String {
+        val whole = minutes.toLong()
+        return "%d:%02d".format(whole / 60, whole % 60)
+    }
+
     private companion object {
         val dateTimeFormat: DateTimeFormatter =
             DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault())
+
+        /** Ends are shown time-only: a shift's end is the same day as the start it sits beside. */
+        val timeFormat: DateTimeFormatter =
+            DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault())
     }
 }

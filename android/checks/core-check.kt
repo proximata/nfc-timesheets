@@ -1098,32 +1098,74 @@ private fun smsSignIn() {
 
     val app = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetApp.kt").readText()
     val signInScreen = app.substringAfter("private fun SignInScreen(").substringBefore("\n@Composable")
+    val form = app.substringAfter("private fun CodeSignInSection(").substringBefore("\n/** Digits in an OTP")
 
     // THE RED CASE, shown RED before it was fixed: this assertion was written FIRST
-    // against a version of SignInScreen that called `SmsSignInSection(model)` with no
-    // guard at all — composed unconditionally, on every build, including one whose server
-    // has never heard of the route. It failed exactly as intended (`if (model.smsAvailable`
-    // was absent from signInScreen), which is what makes the assertion below evidence and
-    // not decoration.
+    // against a version of the sign-in screen that composed the SMS half with no guard at
+    // all — on every build, including one whose server has never heard of the route. It
+    // failed exactly as intended, which is what makes the assertion evidence and not
+    // decoration. decision-54 §5 moved the guard INSIDE the one shared form (the phone
+    // field and the send button are the SMS half; the code field is not), so this now reads
+    // the form, not the screen — the invariant is unchanged: a false flag draws NOTHING.
     check(
-        signInScreen.contains("if (model.smsAvailable.collectAsStateWithLifecycle().value) {") &&
-            signInScreen.indexOf("if (model.smsAvailable") < signInScreen.indexOf("SmsSignInSection(model)"),
-        "the SMS section must be behind an if on the capability flag, guard textually BEFORE the call — " +
+        form.contains("if (smsAvailable) {") &&
+            form.indexOf("if (smsAvailable) {") < form.indexOf("R.string.signin_sms_phone_label"),
+        "the SMS half must be behind an if on the capability flag, guard textually BEFORE the phone field — " +
             "not merely styled invisible (alpha, visibility=Gone, an empty string swapped in)",
     )
-    // EXACTLY TWO occurrences in the whole file: the function's own declaration, and the
-    // ONE guarded call site just proven above. A third would be a second, unconditional door.
-    val callSites = Regex("""SmsSignInSection\(""").findAll(app).count()
-    check(callSites == 2, "SmsSignInSection( appears $callSites times — expected exactly 2 (declaration + the one guarded call)")
+    // ONE FORM, TWO CALL SITES, AND NO THIRD (decision-54 §5): the declaration, the worker's
+    // instance on SignInScreen, and the operator gate's instance in OperatorSection. A
+    // fourth would be a second, differently-laid-out code field, which is the exact thing
+    // this decision exists to delete.
+    val callSites = Regex("""CodeSignInSection\(""").findAll(app).count()
+    check(callSites == 3, "CodeSignInSection( appears $callSites times — expected exactly 3 (declaration + worker + operator)")
+    check(
+        Regex("""OutlinedTextField\(""").findAll(signInScreen).count() == 0,
+        "SignInScreen must not build a code field of its own — the shared form is the only one",
+    )
 
-    // THE ENROLMENT-CODE FIELD IS UNTOUCHED (decision-26). Nothing about the SMS section
-    // may be read, or composed, before it — the code path must not even glance at the flag.
+    // THE ENROLMENT-CODE FIELD IS UNTOUCHED (decision-26): same cap, same normalise-on-submit,
+    // same single message. The SMS half may not be read, or composed, before it inside the
+    // form — the code path must not even glance at the flag.
     check(signInScreen.contains("R.string.signin_code_intro"), "the enrolment-code intro is still there, unmoved")
     check(signInScreen.contains("model.signIn(typed)"), "the code field still calls signIn() directly, untouched")
     check(
-        !signInScreen.substringBefore("if (model.smsAvailable").contains("smsAvailable"),
-        "nothing above the SMS section's own guard may reference smsAvailable — the code path stays oblivious to it",
+        form.contains("it.take(EnrolmentCode.MAX_INPUT)"),
+        "outside OTP mode the field is capped at the server's own MAX_INPUT and otherwise accepted as typed",
     )
+    check(
+        form.contains("it.filter(Char::isDigit).take(OTP_LENGTH)"),
+        "in OTP mode the field is digits-only, capped at 6 — byte for byte the old SMS field's filter",
+    )
+
+    // SMS AUTOFILL (decision-54 §6), and ONLY in OTP mode: an enrolment code does not arrive
+    // by SMS, and hinting it would offer a stale OTP for a field that is not one.
+    check(
+        form.contains("if (otpMode) Modifier.semantics { contentType = ContentType.SmsOtpCode } else Modifier"),
+        "the code field carries ContentType.SmsOtpCode in OTP mode and nothing in enrolment mode",
+    )
+
+    // THE OPERATOR GATE (decision-54 §4). The two operator entry points must be behind the
+    // stored ts_operator session, and nothing else on this screen may open them.
+    val gate = app.substringAfter("private fun OperatorSection(").substringBefore("\n/**")
+    check(
+        gate.indexOf("if (!ready) {") < gate.indexOf("WriteTagActivity::class.java"),
+        "Write a tag / Test a tag compose only AFTER the !operatorReady branch has returned",
+    )
+    for (screen in listOf("WriteTagActivity::class.java", "VerifyZoneActivity::class.java")) {
+        check(
+            Regex(Regex.escape(screen)).findAll(app).count() == 1,
+            "$screen is launched from exactly one place — the gated OperatorSection",
+        )
+    }
+    // ...and the two activities no longer carry a code field of their own: one form, one place.
+    for (activity in listOf("WriteTagActivity", "VerifyZoneActivity")) {
+        val source = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/nfc/$activity.kt").readText()
+        check(
+            !source.contains("operatorEnrol("),
+            "$activity must not enrol an operator — the gate did that before this screen existed",
+        )
+    }
 
     // NO RAW ERROR CODE reaches this screen (decision-8's own rule, every screen in this
     // app). smsErrorText() is the one place an SMS-flow failure becomes a sentence, and

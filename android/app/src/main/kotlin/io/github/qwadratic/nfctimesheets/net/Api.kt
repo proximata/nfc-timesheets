@@ -2,19 +2,25 @@ package io.github.qwadratic.nfctimesheets.net
 
 import io.github.qwadratic.nfctimesheets.BuildConfig
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
+import io.github.qwadratic.nfctimesheets.core.BindZoneRequest
 import io.github.qwadratic.nfctimesheets.core.CloseShiftRequest
 import io.github.qwadratic.nfctimesheets.core.CreateMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.EnrolmentRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
 import io.github.qwadratic.nfctimesheets.core.PendingWork
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
+import io.github.qwadratic.nfctimesheets.core.ResolveZoneRequest
 import io.github.qwadratic.nfctimesheets.core.SmsRequestBody
 import io.github.qwadratic.nfctimesheets.core.SmsVerifyBody
 import io.github.qwadratic.nfctimesheets.core.VerifyZoneRequest
 import io.github.qwadratic.nfctimesheets.core.Wire
 import io.github.qwadratic.nfctimesheets.core.WireRoster
+import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
+import io.github.qwadratic.nfctimesheets.core.WireOperatorZone
+import io.github.qwadratic.nfctimesheets.core.WireResolvedZone
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.core.WireWorker
+import io.github.qwadratic.nfctimesheets.core.WireZoneShiftPage
 import io.github.qwadratic.nfctimesheets.core.WireZoneVerifyResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -175,6 +181,31 @@ class Api(
     }
 
     /**
+     * POST /auth/operator-sms/request {phone} — decision-54 §5. The operator's half of
+     * [smsRequest], and deliberately a SEPARATE PATH rather than a role field on the worker
+     * route: the server keeps its own rate-limit bucket for it (`smsotpop:`, never `smsotp:`)
+     * for the same reason `enrolop:` is not `enrol:` (decision-45 §6) — a stranger guessing
+     * one role's codes must not lock the other role out of enrolling from the same address.
+     *
+     * Same body shape, same status codes as the worker pair (202/422/429/503, and decision-51's
+     * 404 unknown_phone), so [SmsRequestBody] is reused rather than cloned under a new name:
+     * a second type with the identical single field would be two things to keep in step.
+     */
+    suspend fun operatorSmsRequest(phone: String) {
+        post("/auth/operator-sms/request", SmsRequestBody(phone).toJson(), sessionBearing = false)
+    }
+
+    /**
+     * POST /auth/operator-sms/verify {phone, code} — mints the SAME `ts_operator` session
+     * [operatorEnrol] mints, exactly as /auth/sms/verify mints the same `ts_worker` session
+     * /auth/code does. The return value is discarded for the same reason: what proves the
+     * cookie landed is the jar, which the caller reads back off disk.
+     */
+    suspend fun operatorSmsVerify(phone: String, code: String) {
+        post("/auth/operator-sms/verify", SmsVerifyBody(phone, code).toJson(), sessionBearing = false)
+    }
+
+    /**
      * POST /operator/tags {id} — "a tag carrying this id now physically exists".
      *
      * CALLED ONLY AFTER A VERIFIED WRITE. The id is on a card, in a building, before this
@@ -197,6 +228,78 @@ class Api(
      * with no signal, in the stairwell where the card actually is.
      */
     suspend fun operatorZones(): JSONObject = get("/operator/zones")
+
+    /**
+     * GET /operator/locations -> the building picker's list, id and name only (decision-54 §2).
+     *
+     * DECODED, not cached raw like [operatorZones]: the zone worklist is persisted to disk so
+     * the picker still works in a stairwell with no signal, whereas this list is only ever
+     * needed in the seconds after a successful write — a moment that already required the
+     * network, because the report that precedes it did.
+     */
+    suspend fun operatorLocations(): List<WireOperatorLocation> =
+        Wire.operatorLocations(get("/operator/locations"))
+
+    /**
+     * POST /operator/tags/:id/resolve-zone {name, location_id?} -> the card just written and
+     * reported becomes a zone (decision-54 §2). Replaces the admin route of the same shape,
+     * which is deleted: a zone is born in the field, in the operator's hand, or nowhere.
+     *
+     * `locationId` NULL means the operator skipped the building, and the field is then absent
+     * from the request rather than null (see [ResolveZoneRequest]). The zone lands UNBOUND,
+     * which no tap can resolve — that is a resting state, not a failure.
+     *
+     *   201 created                  {zone}
+     *   404 unknown_reported_tag     the report never landed (so retry the report first)
+     *   409 already_resolved         somebody already made this card into something
+     *   409 duplicate_zone_name      a live zone of that building already has that name
+     *   422 unknown_location         the picked building does not exist
+     */
+    suspend fun resolveZone(tagId: String, name: String, locationId: String?): WireResolvedZone =
+        Wire.resolvedZone(
+            post("/operator/tags/$tagId/resolve-zone", ResolveZoneRequest(name, locationId).toJson())
+                .getJSONObject("zone"),
+        )
+
+    /**
+     * POST /operator/zones/:id/bind {location_id} -> this zone is in this building
+     * (decision-54 §3). The other half of the write flow's [resolveZone] skip: a zone that was
+     * created with no building is bound here, in the field, when the operator is standing in
+     * front of the door and knows which building it is.
+     *
+     * BINDING CLEARS THE ZONE'S VERIFICATION server-side, deliberately — the earlier proof, if
+     * any, was taken against a zone no tap could resolve. So the caller must treat the returned
+     * zone as UNVERIFIED and send the operator back to the test scan; it is not a refusal.
+     *
+     *   200 bound                {zone}
+     *   404 unknown_zone         :id is not an active zone
+     *   409 already_bound        it has a building already; unbind first
+     *   409 duplicate_zone_name  a live zone in the target building already has that name
+     *   422 unknown_location     no such building
+     */
+    suspend fun bindZone(zoneId: String, locationId: String): WireOperatorZone =
+        Wire.operatorZone(
+            post("/operator/zones/$zoneId/bind", BindZoneRequest(locationId).toJson()).getJSONObject("zone"),
+        )
+
+    /**
+     * GET /operator/zones/:id/shifts?page=N -> who worked at this door this month, and for how
+     * long (decision-54 §7).
+     *
+     * `month` IS NOT SENT. Omitted, the server answers for the current month, decided by ONE
+     * clock — the database's. A phone that computed its own YYYY-MM would name a different
+     * month than the server's total across a month boundary, and the total is the one figure on
+     * this screen a human would act on.
+     *
+     * Page size is the SERVER's (50) and is echoed back rather than assumed here; the response
+     * also carries the month's whole-count, which is what makes "is there a next page" an
+     * answer instead of a guess (see [WireZoneShiftPage.hasNext]).
+     *
+     *   200 ok                   {shifts, page, page_size, matching, total_minutes, month}
+     *   404 unknown_zone         :id is not an active zone
+     */
+    suspend fun zoneShifts(zoneId: String, page: Int): WireZoneShiftPage =
+        Wire.zoneShiftPage(get("/operator/zones/$zoneId/shifts?page=$page"))
 
     /**
      * POST /operator/zones/:id/verify {place_uuid} -> "this card resolves to this zone;

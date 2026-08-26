@@ -115,12 +115,42 @@ object Wire {
      */
     fun operatorZone(o: JSONObject) = WireOperatorZone(
         id = o.getString("id"),
-        locationId = o.getString("location_id"),
-        locationName = o.optString("location_name", ""),
+        // BOTH NULLABLE SINCE decision-54 §1, and read with [stringOrNull] for that reason: the
+        // worklist now carries UNBOUND zones too, and an unbound zone has no building and
+        // therefore no building name. `getString` here would throw on exactly the rows the bind
+        // flow exists to fix — the whole worklist would fail to decode because one zone is
+        // waiting to be bound.
+        locationId = o.stringOrNull("location_id"),
+        locationName = o.stringOrNull("location_name"),
         name = o.optString("name", ""),
         tagSerial = o.stringOrNull("tag_serial"),
         tagDeployedAt = o.instantOrNull("tag_deployed_at"),
         verifiedAt = o.instantOrNull("verified_at"),
+    )
+
+    /** One row of GET /operator/locations (decision-54 §2): two columns, and it stops there. */
+    fun operatorLocation(o: JSONObject) = WireOperatorLocation(
+        id = o.getString("id"),
+        name = o.optString("name", ""),
+    )
+
+    /** GET /operator/locations's whole envelope: `{locations: [...]}`. */
+    fun operatorLocations(o: JSONObject): List<WireOperatorLocation> {
+        val array = o.getJSONArray("locations")
+        return (0 until array.length()).map { operatorLocation(array.getJSONObject(it)) }
+    }
+
+    /**
+     * POST /operator/tags/:id/resolve-zone's `{zone: {...}}` (decision-54 §2). `location_id`
+     * is read with [stringOrNull] and NOT [JSONObject.getString]: an unbound zone is the
+     * whole point of that route's optional building, so a null there is the ordinary case
+     * and never a decoding fault. The route returns no `location_name` — the screen already
+     * knows which building it just picked, so nothing has to be looked up to say so.
+     */
+    fun resolvedZone(o: JSONObject) = WireResolvedZone(
+        id = o.getString("id"),
+        name = o.optString("name", ""),
+        locationId = o.stringOrNull("location_id"),
     )
 
     /** GET /operator/zones's whole envelope: `{zones: [...]}`. */
@@ -143,6 +173,39 @@ object Wire {
         verifiedAt = instant(o.getString("verified_at")),
         alreadyVerified = o.optBoolean("already_verified", false),
     )
+
+    /**
+     * One row of GET /operator/zones/:id/shifts (decision-54 §7). `durationMinutes` is read,
+     * never computed: the server derives it in SQL from COALESCE(end_time, now()), so an OPEN
+     * shift arrives with the time so far already in it and this phone never does date
+     * arithmetic across two timestamps and a timezone.
+     *
+     * NO RATE AND NO MONEY, and that is the decision and not an omission (decision-6/42/43): a
+     * zone is not a costing unit and this screen is not the payroll screen.
+     */
+    fun zoneShift(o: JSONObject) = WireZoneShift(
+        workerName = o.optString("worker_name", ""),
+        startTime = instant(o.getString("start_time")),
+        endTime = o.instantOrNull("end_time"),
+        durationMinutes = o.optDouble("duration_minutes", 0.0),
+    )
+
+    /**
+     * GET /operator/zones/:id/shifts's envelope. `totalMinutes` is the WHOLE month's total,
+     * computed by a second, unpaginated query server-side — it is deliberately NOT the sum of
+     * [WireZoneShiftPage.shifts], because summing the 50 rows this page happens to hold and
+     * calling it "the month" is the lie the second query exists to prevent.
+     */
+    fun zoneShiftPage(o: JSONObject): WireZoneShiftPage {
+        val array = o.getJSONArray("shifts")
+        return WireZoneShiftPage(
+            shifts = (0 until array.length()).map { zoneShift(array.getJSONObject(it)) },
+            page = o.optInt("page", 1),
+            pageSize = o.optInt("page_size", 0),
+            matching = o.optInt("matching", 0),
+            totalMinutes = o.optDouble("total_minutes", 0.0),
+        )
+    }
 
     fun shift(o: JSONObject) = WireShift(
         id = o.getInt("id"),
@@ -211,15 +274,56 @@ data class WireRoster(val locations: List<WireLocation>, val zones: List<WireZon
  */
 data class WireOperatorZone(
     val id: String,
-    val locationId: String,
-    val locationName: String,
+    val locationId: String?,
+    val locationName: String?,
     val name: String,
     val tagSerial: String?,
     val tagDeployedAt: Instant?,
     val verifiedAt: Instant?,
 ) {
     val isVerified: Boolean get() = verifiedAt != null
+
+    /**
+     * NO BUILDING YET (decision-54 §1). Not a broken row: `activePlace` cannot resolve such a
+     * zone at all, so there is nothing for a test scan to prove — the operator binds it first.
+     */
+    val isBound: Boolean get() = locationId != null
 }
+
+/** One row of this month's shifts at one zone (decision-54 §7). */
+data class WireZoneShift(
+    val workerName: String,
+    val startTime: Instant,
+    val endTime: Instant?,
+    val durationMinutes: Double,
+)
+
+/** One page of GET /operator/zones/:id/shifts, plus the month's total that is NOT of this page. */
+data class WireZoneShiftPage(
+    val shifts: List<WireZoneShift>,
+    val page: Int,
+    val pageSize: Int,
+    val matching: Int,
+    val totalMinutes: Double,
+) {
+    /** Is there a page after this one? Answered from the month's count, never from a guess. */
+    val hasNext: Boolean get() = pageSize > 0 && page * pageSize < matching
+    val hasPrevious: Boolean get() = page > 1
+}
+
+/**
+ * One row of GET /operator/locations (decision-54 §2): everything the building picker on the
+ * write and bind flows needs, which is a name to tap and an id to post. NOT [WireLocation] —
+ * that carries a `slug` this list does not return and the picker has no use for.
+ */
+data class WireOperatorLocation(val id: String, val name: String)
+
+/**
+ * The zone POST /operator/tags/:id/resolve-zone just created. `locationId` is NULLABLE and
+ * that is the decision, not an accident (decision-54 §1): an operator who skipped the
+ * building leaves the zone unbound, unreachable by any tap, until somebody binds it later.
+ */
+data class WireResolvedZone(val id: String, val name: String, val locationId: String?)
 
 /** The outcome of POST /operator/zones/:id/verify (decision-47). */
 data class WireZoneVerifyResult(
@@ -323,6 +427,35 @@ data class EnrolmentRequest(val code: String) {
  */
 data class VerifyZoneRequest(val placeUuid: String) {
     fun toJson(): String = Wire.obj("place_uuid" to placeUuid)
+}
+
+/**
+ * POST /operator/tags/:id/resolve-zone — the tag id is in the PATH; the body is the zone's
+ * name and, OPTIONALLY, the building it belongs to.
+ *
+ * AN OMITTED BUILDING IS OMITTED, never sent as an explicit null. The server reads it with
+ * `v.optionalUuid`, which treats absent and null alike today — but the difference is what the
+ * request MEANS: "the operator did not decide yet" is the absence of a field, and writing
+ * `"location_id": null` would be this client asserting a value the operator never gave. That
+ * is also why this is the one request body in this file that does not hand a fixed key list
+ * to [Wire.obj].
+ */
+data class ResolveZoneRequest(val name: String, val locationId: String?) {
+    fun toJson(): String = if (locationId == null) {
+        Wire.obj("name" to name)
+    } else {
+        Wire.obj("name" to name, "location_id" to locationId)
+    }
+}
+
+/**
+ * POST /operator/zones/:id/bind — the zone id is in the PATH; the body is the building, and
+ * the building is REQUIRED here (decision-54 §3). Unlike [ResolveZoneRequest] there is no
+ * omitted-building case: "leave it unbound" is not a bind, it is walking away and picking a
+ * different zone off the worklist.
+ */
+data class BindZoneRequest(val locationId: String) {
+    fun toJson(): String = Wire.obj("location_id" to locationId)
 }
 
 /**

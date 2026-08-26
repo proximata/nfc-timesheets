@@ -35,8 +35,9 @@ import io.github.qwadratic.nfctimesheets.AppLocale
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
-import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
+import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
 import io.github.qwadratic.nfctimesheets.core.WriteGuard
+import io.github.qwadratic.nfctimesheets.ui.BuildingPicker
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -74,7 +75,13 @@ import java.util.UUID
  *      never even handed a tag by the NFC service — the write is unreachable rather than
  *      refused. It used to be the other way round: anybody could open this screen from
  *      Erfassen and write a card, and the `ts_operator` cookie only decided whether the
- *      OFFICE was told about it afterwards.
+ *      OFFICE was told about it afterwards. THAT GATE IS UNTOUCHED by decision-54's own
+ *      gate, which is a different one at a different place: this screen is now unreachable
+ *      without an operator session (ui/TimeSheetApp.kt's OperatorSection), so the inline
+ *      operator-code field that used to live here is gone. What is left is the structural
+ *      refusal plus ONE sentence for the case that outlives the gate — a session that dies
+ *      while this screen is already open. It does NOT come back as a second code field:
+ *      one form, in one place, is the whole point of decision-54 §5.
  *   2. A CARD THAT ALREADY HOLDS ONE OF OUR IDS IS REFUSED (core/WriteGuard), and the
  *      override is not a shrug: the operator types back the last six characters of the id
  *      they are about to destroy, and that authorises that ONE card.
@@ -99,7 +106,6 @@ class WriteTagActivity : ComponentActivity() {
 
     private var outcome by mutableStateOf<TagWriter.Outcome?>(null)
     private var report by mutableStateOf<ReportState>(ReportState.Idle)
-    private var operatorCode by mutableStateOf("")
     private var busy by mutableStateOf(false)
 
     /**
@@ -121,6 +127,36 @@ class WriteTagActivity : ComponentActivity() {
     /** What the operator has typed into the confirmation box. */
     private var confirmText by mutableStateOf("")
 
+    /**
+     * The id that has been REPORTED and is therefore resolvable into a zone (decision-54 §2).
+     * Held separately from [pendingId] because that one is re-minted the moment a report
+     * lands — the picker below must post the id that is on the card in the operator's hand,
+     * never the id the next card will get.
+     */
+    private var zoneTagId by mutableStateOf<String?>(null)
+
+    private var zoneStep by mutableStateOf<ZoneStep>(ZoneStep.Idle)
+
+    /** The zone's name, typed here: a freshly written card has no name anywhere yet. */
+    private var zoneName by mutableStateOf("")
+
+    /**
+     * The building the operator picked, and — separately — whether they deliberately chose to
+     * pick none. Two fields and not one nullable one, because "not decided yet" and "decided
+     * to leave it unbound" are different states and only the second may be submitted: an
+     * unbound zone resolves to no tap at all, so it must be chosen out loud.
+     */
+    private var zoneBuilding by mutableStateOf<WireOperatorLocation?>(null)
+    private var zoneSkipped by mutableStateOf(false)
+
+    /**
+     * Was the zone step entered by a debug simulation rather than by a real write+report? Only
+     * ever true in a debug build, because [zoneSimulations] is empty in the other source set
+     * and this is set nowhere else. It exists because the step's ONE network call has no card
+     * and no reported tag behind it in that case, so it must not be made (nfc/WriteSimulation.kt).
+     */
+    private var zoneSimulated by mutableStateOf(false)
+
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(AppLocale.wrap(newBase))
     }
@@ -135,6 +171,39 @@ class WriteTagActivity : ComponentActivity() {
 
         /** No operator session on this phone. The card is still fine. */
         data object NeedsOperator : ReportState
+    }
+
+    /**
+     * WHAT THE CARD IS FOR — the step after the report (decision-54 §2). A written, reported
+     * card is a physical object nobody has named yet; this is where it becomes a zone, in the
+     * field, in the operator's hand, because since decision-54 there is nowhere else it can
+     * become one at all.
+     *
+     * SEPARATE FROM [ReportState] on purpose, and downstream of it: the report is what makes
+     * the id exist server-side, so this cannot even start before [ReportState.Sent], and a
+     * failure here — like a failed report — never touches the card, which is already correct
+     * and already mountable.
+     */
+    private sealed interface ZoneStep {
+        /** Nothing written yet, or written and not yet reported. */
+        data object Idle : ZoneStep
+        data object Loading : ZoneStep
+
+        /** The buildings to choose between. Empty is legitimate: everything can be skipped. */
+        data class Picking(val locations: List<WireOperatorLocation>) : ZoneStep
+
+        /**
+         * The list did not load. RETRYABLE, and not a dead end: the zone can still be created
+         * unbound from here, which is exactly the state the picker's Skip produces anyway.
+         */
+        data class LoadFailed(val code: String) : ZoneStep
+        data object Submitting : ZoneStep
+
+        /** `building` null = the operator skipped it and the zone is unbound. */
+        data class Done(val zoneName: String, val building: String?) : ZoneStep
+
+        /** The zone was not created. The card is still fine; this is retryable. */
+        data class Failed(val code: String) : ZoneStep
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -192,12 +261,14 @@ class WriteTagActivity : ComponentActivity() {
             style = MaterialTheme.typography.bodySmall,
         )
 
-        // THE ROLE GATE, said out loud. The reader mode behind it is simply
-        // never started, so this is an explanation and not a warning about
-        // something that might still happen.
+        // THE ROLE GATE, said out loud. Reaching this screen already required an operator
+        // session (decision-54 §4), so this line is not the ordinary case any more: it means
+        // the session died while the screen was open. Reader mode is simply never restarted,
+        // so it is an explanation and not a warning about something that might still happen —
+        // and the way out is the gate that let them in, not a code field duplicated here.
         if (!operatorReady) {
             Text(
-                stringResource(R.string.write_needs_operator_to_write),
+                stringResource(R.string.operator_session_expired),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -235,21 +306,6 @@ class WriteTagActivity : ComponentActivity() {
             ) { Text(stringResource(R.string.write_confirm_button)) }
         }
 
-        if (!operatorReady || report is ReportState.NeedsOperator) {
-            OutlinedTextField(
-                value = operatorCode,
-                onValueChange = { operatorCode = it },
-                label = { Text(stringResource(R.string.write_operator_code)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Button(
-                onClick = ::enrolOperator,
-                enabled = !busy && EnrolmentCode.normalise(operatorCode) != null,
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) { Text(stringResource(R.string.write_operator_enrol)) }
-        }
-
         val written = outcome as? TagWriter.Outcome.Written
         if (written != null && report !is ReportState.Sent) {
             OutlinedButton(
@@ -258,6 +314,8 @@ class WriteTagActivity : ComponentActivity() {
                 modifier = Modifier.heightIn(min = 48.dp),
             ) { Text(stringResource(R.string.write_report_retry)) }
         }
+
+        ZoneSection()
 
         // DEBUG BUILDS ONLY. writeSimulations() is defined twice — once in
         // src/debug/ with these scenarios, once in src/release/ returning an
@@ -271,6 +329,127 @@ class WriteTagActivity : ComponentActivity() {
                 modifier = Modifier.heightIn(min = 48.dp),
             ) { Text("▶ ${simulation.label}") }
         }
+
+        // AND THE STEP AFTER THE WRITE (decision-54 §2), same split, same file. A real entry
+        // into the picker needs a card, a report and a server; these jump straight to it with
+        // a canned building list and preselect the branch under test, leaving the form itself
+        // — the name field, the picker, Skip, the submit — exactly as an operator meets it.
+        for (simulation in zoneSimulations()) {
+            OutlinedButton(
+                onClick = {
+                    zoneSimulated = true
+                    zoneTagId = pendingId
+                    zoneName = simulation.zoneName
+                    zoneBuilding = simulation.building
+                    zoneSkipped = simulation.building == null
+                    zoneStep = ZoneStep.Picking(simulatedLocations())
+                },
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text("▶ ${simulation.label}") }
+        }
+    }
+
+    /**
+     * THE BUILDING PICKER (decision-54 §2). Drawn only once the card is written AND reported
+     * — [ZoneStep.Idle] renders nothing at all — because the id has to exist server-side
+     * before it can be resolved into anything.
+     *
+     * The name field is REQUIRED and the building is NOT. That asymmetry is the decision: a
+     * zone with no name is a row nobody can pick off a worklist afterwards, while a zone with
+     * no building is a documented resting state ("card written, building not yet decided")
+     * that a later bind resolves.
+     */
+    @Composable
+    private fun ZoneSection() {
+        when (val step = zoneStep) {
+            ZoneStep.Idle -> return
+            ZoneStep.Loading -> Text(stringResource(R.string.write_zone_loading))
+            ZoneStep.Submitting -> Text(stringResource(R.string.write_zone_submitting))
+
+            is ZoneStep.Done -> Text(
+                text = if (step.building == null) {
+                    getString(R.string.write_zone_done_unbound, step.zoneName)
+                } else {
+                    getString(R.string.write_zone_done_bound, step.zoneName, step.building)
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+
+            is ZoneStep.Failed -> {
+                Text(
+                    getString(R.string.write_zone_failed, step.code),
+                    color = MaterialTheme.colorScheme.error,
+                )
+                // Back to the picker with the typed name and the pick still in place: the
+                // operator retypes nothing to try again.
+                OutlinedButton(
+                    onClick = ::loadZoneLocations,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.write_zone_retry)) }
+            }
+
+            is ZoneStep.LoadFailed -> {
+                Text(
+                    getString(R.string.write_zone_load_failed, step.code),
+                    color = MaterialTheme.colorScheme.error,
+                )
+                OutlinedButton(
+                    onClick = ::loadZoneLocations,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.write_zone_retry)) }
+                ZoneForm(emptyList())
+            }
+
+            is ZoneStep.Picking -> ZoneForm(step.locations)
+        }
+    }
+
+    /** The name field, the buildings, Skip, and submit. Shared by picking and load-failed. */
+    @Composable
+    private fun ZoneForm(locations: List<WireOperatorLocation>) {
+        Text(stringResource(R.string.write_zone_hint), style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = zoneName,
+            onValueChange = { zoneName = it },
+            label = { Text(stringResource(R.string.write_zone_name_label)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        // The list itself is ui/BuildingPicker.kt, shared with the bind flow in
+        // nfc/VerifyZoneActivity — same question, asked at two moments (decision-54 §2/§3).
+        // The name field above and the Skip below are this screen's alone and stay here.
+        BuildingPicker(
+            locations = locations,
+            selectedId = zoneBuilding?.id,
+            emptyText = stringResource(R.string.write_zone_locations_empty),
+            onPick = {
+                zoneBuilding = it
+                zoneSkipped = false
+            },
+        )
+        OutlinedButton(
+            onClick = {
+                zoneBuilding = null
+                zoneSkipped = true
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
+        ) {
+            Text(
+                if (zoneSkipped) {
+                    "\u2713 " + stringResource(R.string.write_zone_no_building)
+                } else {
+                    stringResource(R.string.write_zone_no_building)
+                },
+            )
+        }
+        Button(
+            onClick = ::submitZone,
+            enabled = zoneName.isNotBlank() && (zoneBuilding != null || zoneSkipped),
+            modifier = Modifier.heightIn(min = 48.dp),
+        ) { Text(stringResource(R.string.write_zone_submit)) }
     }
 
     /**
@@ -368,8 +547,13 @@ class WriteTagActivity : ComponentActivity() {
                 // report (POST /operator/tags is idempotent) — never a card the operator
                 // was never asked to retry.
                 app.pendingTagReport.clear()
-                // The id has now left this phone, so the NEXT card must not reuse it.
+                // The id has now left this phone, so the NEXT card must not reuse it. It is
+                // kept in zoneTagId first: the picker below resolves the card in the
+                // operator's hand, not the blank one they pick up next.
+                zoneTagId = locationId
+                zoneSimulated = false
                 pendingId = UUID.randomUUID().toString()
+                loadZoneLocations()
                 ReportState.Sent
             } catch (e: ApiFailure) {
                 if (e.status == 401) ReportState.NeedsOperator else ReportState.Failed(e.code)
@@ -380,28 +564,50 @@ class WriteTagActivity : ComponentActivity() {
         }
     }
 
-    private fun enrolOperator() {
-        val code = EnrolmentCode.normalise(operatorCode) ?: return
-        busy = true
+    /**
+     * GET /operator/locations, straight after the report landed (decision-54 §2). A failure is
+     * NOT a dead end: the operator can still name the zone and leave it unbound, which is the
+     * same row the Skip button produces on purpose — so this fails INTO the form, never over it.
+     */
+    private fun loadZoneLocations() {
+        zoneStep = ZoneStep.Loading
         lifecycleScope.launch {
-            try {
-                app.operatorApi.operatorEnrol(code)
-                operatorCode = ""
-                busy = false
-                // The gate opens here, and reader mode has to be started by hand: onResume
-                // already ran, and without this the operator enrols, sees nothing change,
-                // and presents a card to a screen that is not listening.
-                operatorReady = app.operatorCookies.header() != null
-                startReaderMode()
-                // Straight back to the thing the operator was trying to do.
-                (outcome as? TagWriter.Outcome.Written)?.let { sendReport(it.locationId) }
-                    ?: run { report = ReportState.Idle }
+            zoneStep = try {
+                ZoneStep.Picking(app.operatorApi.operatorLocations())
             } catch (e: ApiFailure) {
-                report = ReportState.Failed(e.code)
-                busy = false
+                ZoneStep.LoadFailed(e.code)
             } catch (_: Exception) {
-                report = ReportState.Failed("unknown")
-                busy = false
+                ZoneStep.LoadFailed("unknown")
+            }
+        }
+    }
+
+    /**
+     * POST /operator/tags/:id/resolve-zone. The building is sent only when one was actually
+     * picked; Skip omits the field entirely (core/Wire.kt ResolveZoneRequest says why).
+     *
+     * The BUILDING NAME shown afterwards is the one that was tapped, not one read back off the
+     * response — the route returns ids only, and the operator already knows which name they
+     * chose, so a second request to render a word they just read would be a round trip for
+     * nothing.
+     */
+    private fun submitZone() {
+        val tagId = zoneTagId ?: return
+        val building = zoneBuilding
+        val name = zoneName.trim()
+        zoneStep = ZoneStep.Submitting
+        lifecycleScope.launch {
+            zoneStep = try {
+                val zone = if (zoneSimulated) {
+                    runZoneSimulation(name, building?.id)
+                } else {
+                    app.operatorApi.resolveZone(tagId, name, building?.id)
+                }
+                ZoneStep.Done(zone.name, if (zone.locationId == null) null else building?.name)
+            } catch (e: ApiFailure) {
+                ZoneStep.Failed(e.code)
+            } catch (_: Exception) {
+                ZoneStep.Failed("unknown")
             }
         }
     }
