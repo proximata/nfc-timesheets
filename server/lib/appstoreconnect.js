@@ -74,21 +74,28 @@ async function ascFetch(path, init = {}) {
   return res;
 }
 
-/** Most recent builds for this app that finished processing (processingState VALID). */
+/**
+ * Most recent builds for this app that finished processing (processingState VALID), each
+ * with its current TestFlight group membership already attached.
+ *
+ * `include=betaGroups` - NOT a per-build `GET builds/{id}/relationships/betaGroups` call,
+ * which looks like the obvious way to ask this and is what the first version of this file
+ * did. Proven wrong against the live API (2026-08-26): that relationship link only allows
+ * CREATE/DELETE, not GET - Apple's 403 says so explicitly ("Allowed operations are: CREATE,
+ * DELETE"). The JSON:API `include` param sidesteps it entirely by embedding each build's
+ * betaGroups directly in this one response instead of a link you're expected to follow.
+ */
 async function recentValidBuilds(limit = 5) {
-  const url = `builds?filter[app]=${APP_ID}&filter[processingState]=VALID&sort=-uploadedDate&limit=${limit}`;
+  const url = `builds?filter[app]=${APP_ID}&filter[processingState]=VALID&sort=-uploadedDate&limit=${limit}&include=betaGroups`;
   const res = await ascFetch(url);
   if (!res.ok) throw new Error(`GET builds failed: ${res.status} ${await res.text()}`);
   const json = await res.json();
   return json.data ?? [];
 }
 
-/** True iff `buildId` is already a member of the internal TestFlight group. */
-async function inInternalGroup(buildId) {
-  const res = await ascFetch(`builds/${buildId}/relationships/betaGroups`);
-  if (!res.ok) throw new Error(`GET betaGroups failed: ${res.status} ${await res.text()}`);
-  const json = await res.json();
-  return (json.data ?? []).some((g) => g.id === INTERNAL_GROUP_ID);
+/** True iff `build` (as returned by recentValidBuilds, include=betaGroups already resolved) is already a member of the internal TestFlight group. */
+function inInternalGroup(build) {
+  return (build.relationships?.betaGroups?.data ?? []).some((g) => g.id === INTERNAL_GROUP_ID);
 }
 
 async function addToInternalGroup(buildId) {
@@ -115,7 +122,7 @@ export async function syncLatestBuildsToInternalGroup() {
   const builds = await recentValidBuilds();
   const added = [];
   for (const build of builds) {
-    if (await inInternalGroup(build.id)) continue;
+    if (inInternalGroup(build)) continue;
     await addToInternalGroup(build.id);
     added.push(build.id);
   }

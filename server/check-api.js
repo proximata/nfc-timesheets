@@ -6973,26 +6973,27 @@ try {
         return;
       }
       const url = new URL(req.url, "http://x");
-      if (req.method === "GET" && url.pathname === "/v1/builds") {
+      // Real shape, proven against the live API on 2026-08-26: betaGroups membership rides
+      // along on the `include=betaGroups` builds response - GET builds/{id}/relationships/
+      // betaGroups is a 403 ("Allowed operations are: CREATE, DELETE"), not a real endpoint.
+      if (req.method === "GET" && url.pathname === "/v1/builds" && url.searchParams.get("include") === "betaGroups") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(
           JSON.stringify({
             data: [
-              { id: "build-not-yet-grouped", attributes: { processingState: "VALID" } },
-              { id: "build-already-grouped", attributes: { processingState: "VALID" } },
+              {
+                id: "build-not-yet-grouped",
+                attributes: { processingState: "VALID" },
+                relationships: { betaGroups: { data: [] } },
+              },
+              {
+                id: "build-already-grouped",
+                attributes: { processingState: "VALID" },
+                relationships: { betaGroups: { data: [{ type: "betaGroups", id: INTERNAL_GROUP_ID }] } },
+              },
             ],
           }),
         );
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/v1/builds/build-not-yet-grouped/relationships/betaGroups") {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ data: [] }));
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/v1/builds/build-already-grouped/relationships/betaGroups") {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ data: [{ id: INTERNAL_GROUP_ID }] }));
         return;
       }
       if (req.method === "POST" && url.pathname === `/v1/betaGroups/${INTERNAL_GROUP_ID}/relationships/builds`) {
