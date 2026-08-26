@@ -31,6 +31,14 @@
 	<key>TSTagHost</key>
 	<string>$(TS_TAG_HOST)</string>
 
+	<!-- REST API host, i.e. where the app TALKS — never the same value as TSTagHost above once
+	     a rebrand moves either one (decision-40). Filled by Xcode from TS_API_HOST in
+	     NFCTimeSheets/Branding.xcconfig; same detached-by-default, no-op-until-attached shape
+	     as TSTagHost. Read by API.swift via Branding.apiHost, which is the ONLY thing that
+	     builds API.base — TagLink.host (the tag host) must never be used for that again. -->
+	<key>TSApiHost</key>
+	<string>$(TS_API_HOST)</string>
+
 	<!-- Live Activities: the running shift on the Lock Screen and in the Dynamic Island,
 	     with a timer the SYSTEM ticks. Apple requires this key in the APP target's
 	     Info.plist; this file is already wired via INFOPLIST_FILE, so it needs no

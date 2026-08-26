@@ -18,12 +18,15 @@
 import Foundation
 
 enum API {
-    // Derived from TagLink.host, never a second host literal: the REST host and the
-    // universal-link host are the same machine, and two literals is two chances to point
-    // half the app at a host whose AASA does not name this app. The fallback on the right
-    // is unreachable in practice - Branding.tagHost is already validated non-empty - and is
-    // there so a typo'd host cannot turn into a force-unwrap crash on launch.
-    static let base = URL(string: "https://\(TagLink.host)") ?? URL(string: "https://\(Branding.defaultTagHost)")!
+    // Derived from Branding.apiHost, and ONLY Branding.apiHost (decision-40, TASK-188).
+    // TagLink.host (the tag host) must never appear here: it is a different, PERMANENT
+    // machine, written on physical cards, and this app already shipped one bug where the
+    // two were conflated - it worked only because they happened to hold the same value,
+    // until the tag host was corrected and would have taken every API call down with it.
+    // The fallback on the right is unreachable in practice - Branding.apiHost is already
+    // validated non-empty - and is there so a typo'd host cannot turn into a force-unwrap
+    // crash on launch.
+    static let base = URL(string: "https://\(Branding.apiHost)") ?? URL(string: "https://\(Branding.defaultApiHost)")!
 
     // This key is NOT a secret, and is deliberately committed in cleartext.
     //

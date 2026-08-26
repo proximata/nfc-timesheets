@@ -26,7 +26,8 @@ enum Branding {
     // These are the fallbacks, not merely examples. They must stay equal to ops/branding.json;
     // `node ops/check-branding.mjs` fails if they drift.
 
-    static let defaultTagHost = "schimmer-glanz.exe.xyz"
+    static let defaultTagHost = "timesheets.exe.xyz"
+    static let defaultApiHost = "schimmer-glanz.exe.xyz"
     static let defaultBundleId = "io.github.qwadratic.NFCTimeSheets"
 
     // MARK: - Resolved values
@@ -38,6 +39,18 @@ enum Branding {
     /// cannot read this value - it is evaluated by codesign, not by Swift - so the two are
     /// kept in step by ops/check-branding.mjs rather than by hope.
     static var tagHost: String { infoString("TSTagHost") ?? defaultTagHost }
+
+    /// REST API host, i.e. where the app TALKS. Overridden by the `TSApiHost` Info.plist
+    /// key, which Xcode fills from `TS_API_HOST` in Branding.xcconfig.
+    ///
+    /// Deliberately SEPARATE from [tagHost] (decision-40): `tagHost` is permanent, written
+    /// on physical cards, and cannot be renamed without a site visit; `apiHost` is
+    /// renameable from a keyboard. API.swift's `base` must be built from this property and
+    /// NEVER from `tagHost` or `TagLink.host` - conflating the two was this app's own
+    /// pre-decision-40 bug (fixed alongside TASK-188), and it is exactly the failure mode
+    /// the split exists to name: the two happened to be equal, so nobody noticed until the
+    /// day `tagHost` alone moved and every request would have gone to the wrong machine.
+    static var apiHost: String { infoString("TSApiHost") ?? defaultApiHost }
 
     /// Apple audience for the identity token, i.e. what the SERVER checks `aud` against.
     /// Taken from the running bundle so it is automatically right under any signing identity;

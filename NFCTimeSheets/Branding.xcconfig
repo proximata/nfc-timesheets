@@ -10,17 +10,21 @@
 //
 // KEEP IN SYNC WITH ops/branding.json. `node ops/check-branding.mjs` fails if they drift.
 
-// ---- the four values a new signing entity changes ------------------------------------
+// ---- the five values a new signing entity changes -------------------------------------
 TS_TEAM_ID   = 6Y842FE8Q4
 TS_BUNDLE_ID = io.github.qwadratic.NFCTimeSheets
 TS_APP_NAME  = NFC TimeSheets
-TS_TAG_HOST  = schimmer-glanz.exe.xyz
+TS_TAG_HOST  = timesheets.exe.xyz
+TS_API_HOST  = schimmer-glanz.exe.xyz
 
 // ---- what those drive ----------------------------------------------------------------
-// Xcode substitutes build settings into Info.plist, so TS_TAG_HOST reaches Swift through
-// the TSTagHost key in NFCTimeSheets/Info.plist. Read by Branding.swift, which falls back
-// to the literal below when the key is missing OR EMPTY — and an undefined build setting
-// expands to the empty string, which is precisely why the fallback exists.
+// Xcode substitutes build settings into Info.plist, so TS_TAG_HOST and TS_API_HOST reach
+// Swift through the TSTagHost / TSApiHost keys in NFCTimeSheets/Info.plist. Read by
+// Branding.swift, which falls back to the literals below when a key is missing OR EMPTY —
+// and an undefined build setting expands to the empty string, which is precisely why the
+// fallback exists. TAG and API are deliberately different values (decision-40): the tag
+// host is permanent and written on physical cards, the API host is renameable. Do not
+// "simplify" these back to one value — that coupling was this app's own bug once already.
 DEVELOPMENT_TEAM                  = $(TS_TEAM_ID)
 PRODUCT_BUNDLE_IDENTIFIER         = $(TS_BUNDLE_ID)
 INFOPLIST_KEY_CFBundleDisplayName = $(TS_APP_NAME)
@@ -31,7 +35,8 @@ INFOPLIST_KEY_CFBundleDisplayName = $(TS_APP_NAME)
 //    entitlement would silently become `applinks:` and universal links would die on the
 //    NEXT build — shipping a dead tap to TestFlight with a green build. So
 //    NFCTimeSheets/NFCTimeSheets.entitlements keeps its LITERAL host and
-//    ops/check-branding.mjs enforces that it mirrors ops/branding.json.
+//    ops/check-branding.mjs enforces that it mirrors ops/branding.json. TS_API_HOST has no
+//    entitlement counterpart — the API host is never in Associated Domains at all.
 //    Edit that file by hand. It is step 5 of ops/REBRAND.md.
 // 2. Anything in the Apple Developer portal: registering the App ID, enabling Sign in with
 //    Apple and Associated Domains on it, provisioning, the App Store Connect record.

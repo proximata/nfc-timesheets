@@ -97,23 +97,48 @@ for (const { path, body } of targets(branding)) {
   })
 }
 
-// 2-4. THE iOS SURFACE, WHICH IS STILL ON ONE HOST.
+// 2-4. THE iOS SURFACE, HALF MIGRATED ON PURPOSE.
 //
 //    Three files name the host iOS parses and associates: the entitlement (a literal - an
 //    undefined Xcode build setting expands to the EMPTY STRING, so `applinks:$(TS_TAG_HOST)`
 //    with the xcconfig detached becomes `applinks:` and universal links die on the next
 //    build, green and silent), Branding.xcconfig, and the Branding.swift fallback.
 //
-//    They all say apiHost today. That is not yet a bug - the API host still serves both
-//    association files, so iOS universal links still work - but it is the coupling
-//    decision-40 removes, and moving it is an iOS build's job, not a config edit.
+//    Branding.xcconfig and Branding.swift are ordinary source - an agent edits them like any
+//    other file, and TASK-188's fix (decision-40) moved both to the permanent tag host. The
+//    entitlement is different: it is codesign input, owner-only (decision-49), and moving it
+//    is one atomic Xcode click (+ Capability, re-provision) that also re-syncs the Apple
+//    Developer portal - editing the XML by hand without that click is worse than leaving it,
+//    because automatic signing can silently strip an entitlement it does not recognise as a
+//    ticked capability.
 //
-//    So what is asserted is what can be true right now and still fail on a real mistake:
-//    the three files AGREE with each other, and the host they agree on is a host this
-//    project actually serves. A typo, a half-migration, or a stale operator's host all go
-//    red. The remaining move is printed, not assumed.
+//    So the two agent-controlled files are held to the REAL answer unconditionally - they
+//    have no excuse to lag ops/branding.json - and the entitlement is allowed to still name
+//    the apiHost, with the gap printed rather than asserted away.
 const iosHosts = {}
-check('iOS names ONE host across entitlement, xcconfig and Branding.swift', () => {
+check('Branding.xcconfig and Branding.swift both name the PERMANENT tag host', () => {
+  iosHosts.xcconfig = xcconfigValue(read('NFCTimeSheets/Branding.xcconfig'), 'TS_TAG_HOST')
+  const m = read('NFCTimeSheets/NFCTimeSheets/Branding.swift').match(/static let defaultTagHost = "([^"]*)"/)
+  assert.ok(m, 'Branding.swift has no defaultTagHost')
+  iosHosts.swift = m[1]
+
+  assert.strictEqual(iosHosts.xcconfig, branding.tagHost, 'Branding.xcconfig TS_TAG_HOST != ops/branding.json tagHost')
+  assert.strictEqual(iosHosts.swift, branding.tagHost, 'Branding.swift defaultTagHost != ops/branding.json tagHost')
+})
+
+// The split, on the iOS side, asserted as text — same reasoning as the Android mirror
+// below: building the app is not this script's job, but API.swift silently reverting to
+// TagLink.host is exactly the bug TASK-188 exposed, and it must never be free to recur.
+check('iOS talks to apiHost and claims tagHost', () => {
+  const api = read('NFCTimeSheets/NFCTimeSheets/API.swift')
+  assert.match(
+    api,
+    /static let base = URL\(string: "https:\/\/\\\(Branding\.apiHost\)"\)/,
+    'API.swift must build its base from Branding.apiHost, never TagLink.host or Branding.tagHost',
+  )
+})
+
+check('the entitlement names a host this project actually serves (tagHost or apiHost)', () => {
   const entitlement = Array.from(
     read('NFCTimeSheets/NFCTimeSheets/NFCTimeSheets.entitlements').matchAll(
       /<string>applinks:([^<]*)<\/string>/g,
@@ -122,16 +147,6 @@ check('iOS names ONE host across entitlement, xcconfig and Branding.swift', () =
   )
   assert.strictEqual(entitlement.length, 1, `entitlement lists ${JSON.stringify(entitlement)}`)
   iosHosts.entitlement = entitlement[0]
-  iosHosts.xcconfig = xcconfigValue(read('NFCTimeSheets/Branding.xcconfig'), 'TS_TAG_HOST')
-  const m = read('NFCTimeSheets/NFCTimeSheets/Branding.swift').match(/static let defaultTagHost = "([^"]*)"/)
-  assert.ok(m, 'Branding.swift has no defaultTagHost')
-  iosHosts.swift = m[1]
-
-  assert.strictEqual(iosHosts.xcconfig, iosHosts.entitlement, 'TS_TAG_HOST != entitlement applinks host')
-  assert.strictEqual(iosHosts.swift, iosHosts.entitlement, 'Branding.swift defaultTagHost != entitlement applinks host')
-})
-
-check('the host iOS names is one this project serves (tagHost or apiHost)', () => {
   assert.ok(
     [branding.tagHost, branding.apiHost].includes(iosHosts.entitlement),
     `iOS names ${iosHosts.entitlement}, which is neither tagHost ${branding.tagHost} nor apiHost ${branding.apiHost}`,
@@ -140,10 +155,13 @@ check('the host iOS names is one this project serves (tagHost or apiHost)', () =
 
 if (iosHosts.entitlement !== undefined && iosHosts.entitlement !== branding.tagHost) {
   process.stdout.write(
-    `  TODO iOS is still associated with the RENAMEABLE host ${iosHosts.entitlement}, not the ` +
+    `  TODO the entitlement still names the RENAMEABLE host ${iosHosts.entitlement}, not the ` +
       `permanent tag host ${branding.tagHost}.\n` +
-      '       Universal links work today because the API host also serves the association files.\n' +
-      '       Moving it is an iOS build: entitlement + Branding.xcconfig + Branding.swift, then Xcode.\n',
+      '       Branding.xcconfig and Branding.swift already name the permanent host - only the\n' +
+      '       entitlement lags, and it is owner-only: Signing & Capabilities in Xcode, which\n' +
+      '       also re-provisions. Universal links keep working meanwhile because the API host\n' +
+      '       still serves the association files too.\n' +
+      '       Passive tap on a card written to the permanent host will not work until this moves.\n',
   )
 }
 

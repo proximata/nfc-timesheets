@@ -23,8 +23,12 @@ func check(_ ok: Bool, _ what: String) {
 // the current TestFlight build uses. If these four lines fail, the config surface has
 // changed live behaviour, which is the one thing it is not allowed to do.
 check(Branding.infoString("TSTagHost") == nil, "no Info.plist value is present in this harness")
-check(TagLink.host == "schimmer-glanz.exe.xyz", "unconfigured tag host: \(TagLink.host)")
+check(TagLink.host == "timesheets.exe.xyz", "unconfigured tag host: \(TagLink.host)")
 check(API.base.absoluteString == "https://schimmer-glanz.exe.xyz", "unconfigured API base: \(API.base)")
+// API.base is Branding.apiHost, deliberately a DIFFERENT host from TagLink.host above
+// (decision-40) - this line would have caught the pre-TASK-188 bug where both were built
+// from the same value and happened to agree by accident.
+check(API.base.absoluteString != "https://\(TagLink.host)", "API.base must never equal the tag host")
 check(API.bundleId == "io.github.qwadratic.NFCTimeSheets", "unconfigured bundle id: \(API.bundleId)")
 // An UNDEFINED Xcode build setting expands to the EMPTY STRING, not to nothing, so "" is the
 // exact byte sequence a build with Branding.xcconfig detached hands Branding. It must read as
@@ -35,11 +39,11 @@ check(Branding.normalize("   ") == nil, "whitespace-only key is unconfigured")
 check(Branding.normalize("$(TS_TAG_HOST)") == nil, "unsubstituted $(VAR) is unconfigured")
 check(Branding.normalize(" cleanco.example ") == "cleanco.example", "a real value is trimmed and used")
 
-let good = "https://schimmer-glanz.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+let good = "https://timesheets.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301"
 
 // Accepted shapes.
 check(TagLink.locationId(from: URL(string: good)!) == "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "canonical link")
-check(TagLink.locationId(from: URL(string: "https://schimmer-glanz.exe.xyz/t/?l=3F2504E0-4F89-11D3-9A0C-0305E82C3301")!)
+check(TagLink.locationId(from: URL(string: "https://timesheets.exe.xyz/t/?l=3F2504E0-4F89-11D3-9A0C-0305E82C3301")!)
         == "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "trailing slash + uppercase uuid -> lowercased")
 // The host is INTERPOLATED from TagLink.host, uppercased — not typed out. This line used
 // to carry a literal `TIMESHEETS.EXE.XYZ`, which stopped being this app's host the day the
@@ -54,26 +58,26 @@ check(TagLink.locationId(from: URL(string: "https://\(TagLink.host.uppercased())
 // WRITES — the Android writer refuses the id outright — so the only way to meet one is a
 // card someone else made. What matters is that the two platforms agree about it; a change
 // to either decoder that made one of them start refusing it turns this line red.
-check(TagLink.locationId(from: URL(string: "https://schimmer-glanz.exe.xyz/t?l=%203f2504e0-4f89-11d3-9a0c-0305e82c3301")!)
+check(TagLink.locationId(from: URL(string: "https://timesheets.exe.xyz/t?l=%203f2504e0-4f89-11d3-9a0c-0305e82c3301")!)
         == "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "a %20-prefixed uuid is accepted, as on Android")
 
 // Rejected shapes. Everything here would otherwise reach the server off an unlocked tag.
 let bad = [
-    "https://schimmer-glanz.exe.xyz/t?l=westbahnhof",              // a SLUG, not a uuid (decision-21)
-    "https://schimmer-glanz.exe.xyz/t?l=",                         // empty
-    "https://schimmer-glanz.exe.xyz/t",                            // no l at all
-    "https://schimmer-glanz.exe.xyz/t?l=3f2504e04f8911d39a0c0305e82c3301", // unhyphenated
-    "https://schimmer-glanz.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301'--", // sql-ish
+    "https://timesheets.exe.xyz/t?l=westbahnhof",              // a SLUG, not a uuid (decision-21)
+    "https://timesheets.exe.xyz/t?l=",                         // empty
+    "https://timesheets.exe.xyz/t",                            // no l at all
+    "https://timesheets.exe.xyz/t?l=3f2504e04f8911d39a0c0305e82c3301", // unhyphenated
+    "https://timesheets.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301'--", // sql-ish
     "https://evil.example.com/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",      // wrong host
-    "http://schimmer-glanz.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",     // not https
-    "https://schimmer-glanz.exe.xyz/admin?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301", // wrong path
-    "https://schimmer-glanz.exe.xyz/tag?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",   // path PREFIX is not the path
+    "http://timesheets.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",     // not https
+    "https://timesheets.exe.xyz/admin?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301", // wrong path
+    "https://timesheets.exe.xyz/tag?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",   // path PREFIX is not the path
     // URI userinfo trick: the string STARTS with our host but the authority is not ours.
-    "https://schimmer-glanz.exe.xyz@evil.example.com/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+    "https://timesheets.exe.xyz@evil.example.com/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301",
     // java.util.UUID.fromString ACCEPTS this; Foundation's UUID(uuidString:) does not, and
     // the server's regex does not. Pinned on BOTH sides so the platforms cannot drift into
     // Android queueing rows the server answers 400 to while iOS refuses the same tag.
-    "https://schimmer-glanz.exe.xyz/t?l=1-1-1-1-1",
+    "https://timesheets.exe.xyz/t?l=1-1-1-1-1",
     // THE '+' TRAP, and the reason it is HERE and not only in the Kotlin corpus.
     // Android decodes the query with java.net.URLDecoder, which implements
     // application/x-www-form-urlencoded, where `+` MEANS space — so "?l=+<uuid>" would
@@ -83,8 +87,8 @@ let bad = [
     // %2B before decoding to close it, and core-check.kt pins the Kotlin half with a comment
     // that says "verified against Swift" — a claim nothing on this side had ever RUN. It runs
     // now: these two lines are the other half of that sentence.
-    "https://schimmer-glanz.exe.xyz/t?l=+3f2504e0-4f89-11d3-9a0c-0305e82c3301",
-    "https://schimmer-glanz.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301+",
+    "https://timesheets.exe.xyz/t?l=+3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+    "https://timesheets.exe.xyz/t?l=3f2504e0-4f89-11d3-9a0c-0305e82c3301+",
 ]
 for s in bad {
     check(TagLink.locationId(from: URL(string: s)!) == nil, "must reject \(s)")
