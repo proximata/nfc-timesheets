@@ -48,6 +48,14 @@ jobs:
         # locally, so no version is hardcoded here.
         run: corepack enable
 
+      - name: pre-install server deps
+        # deploy.sh's own step 0 checks (check-fallback-reachable.mjs) import server/lib and
+        # server/routes modules before deploy.sh's own step 2 installs them - fine on a dev
+        # machine that already has server/node_modules from ordinary local use, not fine on a
+        # bare CI checkout. Same command deploy.sh runs at step 2; running it once more there
+        # is a no-op.
+        run: (cd server && pnpm install --prod --frozen-lockfile)
+
       - name: ssh key + pinned host key
         env:
           SERVER_DEPLOY_SSH_KEY: ${{ secrets.SERVER_DEPLOY_SSH_KEY }}
