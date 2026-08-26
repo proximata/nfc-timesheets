@@ -12,7 +12,6 @@ import io.github.qwadratic.nfctimesheets.core.MaterialQueue
 import io.github.qwadratic.nfctimesheets.core.PendingWork
 import io.github.qwadratic.nfctimesheets.core.RunningShift
 import io.github.qwadratic.nfctimesheets.core.ShiftSignal
-import io.github.qwadratic.nfctimesheets.core.RemoteRelease
 import io.github.qwadratic.nfctimesheets.core.TapInbox
 import io.github.qwadratic.nfctimesheets.core.WireMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.WireShift
@@ -21,11 +20,9 @@ import io.github.qwadratic.nfctimesheets.core.Zones
 import io.github.qwadratic.nfctimesheets.data.LocalShift
 import io.github.qwadratic.nfctimesheets.notify.ShiftSignals
 import io.github.qwadratic.nfctimesheets.sync.SyncScheduler
-import io.github.qwadratic.nfctimesheets.update.UpdateState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -200,25 +197,6 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
      *  an enrolment code above it are unrelated actions and must not disable each other. */
     val smsBusy: StateFlow<Boolean> = _smsBusy.asStateFlow()
 
-    // ---- self-update (this iteration) -----------------------------------------------
-    //
-    // READ ONLY FROM SETTINGS. Nothing below is reachable from handleTap, refresh() or
-    // the material paths — an update is never the reason a clock-in or clock-out is
-    // slow, delayed or blocked. See update/UpdateManager.kt's own header.
-
-    private val _update = MutableStateFlow<UpdateState>(UpdateState.Idle)
-    val update: StateFlow<UpdateState> = _update.asStateFlow()
-
-    /** The polling loop for whichever download is currently in flight, if any. Cancelled
-     *  and replaced whenever a NEW download starts, so two overlapping polls never race
-     *  to write [_update]. */
-    private var updatePollJob: Job? = null
-
-    /** DownloadManager's own id for the CURRENT [UpdateState.Downloading], if any --
-     *  needed by [cancelUpdateDownload]/[retryUpdateDownload] (TASK-264), which
-     *  otherwise have no way to reach the row [pollUpdateDownload] is watching. */
-    private var currentDownloadId: Long? = null
-
     // Placed HERE, after every property either launch touches (see the note at the top of
     // this class for why the position is load-bearing, not stylistic).
     init {
@@ -227,9 +205,8 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
         viewModelScope.launch {
             app.sessionRejected.collect { rejected -> if (rejected) dropToSignedOut() }
         }
-        // THE APP'S ONE PUBLIC CAPABILITY READ, at launch, silently — same idiom as
-        // checkForUpdateSilently(): no spinner, no screen anywhere waits on it. Runs
-        // regardless of session state because the ONE screen that needs the answer,
+        // THE APP'S ONE PUBLIC CAPABILITY READ, at launch, silently — no spinner, no
+        // screen anywhere waits on it. Runs regardless of session state because the ONE screen that needs the answer,
         // SignInScreen, is exactly the screen a phone with no session yet is showing.
         //
         // ANY FAILURE — offline, an old server that predates the route, a timeout — is
@@ -325,10 +302,6 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 // warehouse, and a badge that only appears once you have looked is not a
                 // badge. Its own coroutine, so it cannot delay the log.
                 startMaterials()
-                // Silent, own coroutine, same reasoning: a worker who visits Settings for
-                // an unrelated reason (signing out) already sees whether a fix is
-                // waiting, without a manual check — and nothing here can delay the log.
-                checkForUpdateSilently()
             }
         }
     }
@@ -780,119 +753,6 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
         )
     }
 
-    // ---- self-update (this iteration) -----------------------------------------------
-
-    /**
-     * Called once after the session resolves (restoreSession). Silent: never surfaces a
-     * spinner or an error outside Settings, exactly like a roster refresh failing is
-     * invisible. If a download from a previous session is still in flight — or was left
-     * running by a process DownloadManager kept alive after this app's own process died
-     * — resumes watching it instead of asking the server again.
-     */
-    fun checkForUpdateSilently() {
-        viewModelScope.launch {
-            val resumed = withContext(Dispatchers.IO) { app.updates.resumePending() }
-            if (resumed != null) {
-                val (id, release) = resumed
-                currentDownloadId = id
-                _update.value = UpdateState.Downloading(release, percent = null, pauseReason = null)
-                pollUpdateDownload(id, release)
-                return@launch
-            }
-            _update.value = withContext(Dispatchers.IO) { app.updates.checkForUpdate() }
-        }
-    }
-
-    /** The "nach Updates suchen" button. Same call as [checkForUpdateSilently], but the
-     *  caller may show [UpdateState.Checking] because a human just asked for it. */
-    fun checkForUpdate() {
-        viewModelScope.launch {
-            _update.value = UpdateState.Checking
-            _update.value = withContext(Dispatchers.IO) { app.updates.checkForUpdate() }
-        }
-    }
-
-    fun startUpdateDownload(release: RemoteRelease) {
-        viewModelScope.launch {
-            val id = withContext(Dispatchers.IO) { app.updates.enqueueDownload(release) }
-            currentDownloadId = id
-            _update.value = UpdateState.Downloading(release, percent = null, pauseReason = null)
-            pollUpdateDownload(id, release)
-        }
-    }
-
-    /**
-     * The paused-state Abbrechen button (TASK-264). Only acts on a genuine
-     * [UpdateState.Downloading] -- pressing it from any other state (a race with the
-     * download finishing, say) is a no-op, never a crash or a wrong-state transition.
-     * Drops back to [UpdateState.Available], the SAME "offer the Herunterladen button
-     * again" state a first-time offer already renders, so no new UI state is needed.
-     */
-    fun cancelUpdateDownload() {
-        val current = _update.value
-        if (current !is UpdateState.Downloading) return
-        updatePollJob?.cancel()
-        val id = currentDownloadId
-        currentDownloadId = null
-        _update.value = UpdateState.Available(current.release)
-        if (id != null) {
-            viewModelScope.launch { withContext(Dispatchers.IO) { app.updates.cancelDownload(id) } }
-        }
-    }
-
-    /**
-     * The paused-state Erneut-versuchen button (TASK-264) -- literally the Failed
-     * state's own retry path, invoked one state earlier. The old DownloadManager row is
-     * cancelled and awaited BEFORE [startUpdateDownload] enqueues a new one: both
-     * requests write to the same fixed destination filename
-     * (update/UpdateManager.FILENAME), so this ordering is what stops the two from
-     * racing on that file.
-     */
-    fun retryUpdateDownload() {
-        val current = _update.value
-        if (current !is UpdateState.Downloading) return
-        updatePollJob?.cancel()
-        viewModelScope.launch {
-            val id = currentDownloadId
-            currentDownloadId = null
-            if (id != null) withContext(Dispatchers.IO) { app.updates.cancelDownload(id) }
-            startUpdateDownload(current.release)
-        }
-    }
-
-    private fun pollUpdateDownload(id: Long, release: RemoteRelease) {
-        updatePollJob?.cancel()
-        updatePollJob = viewModelScope.launch {
-            while (true) {
-                val next = withContext(Dispatchers.IO) { app.updates.pollDownload(id, release) }
-                _update.value = next
-                if (next is UpdateState.ReadyToInstall || next is UpdateState.Failed) break
-                delay(700)
-            }
-        }
-    }
-
-    /**
-     * Control returned to us from the install hand-off. Read update/UpdateManager.kt's
-     * own comment on [io.github.qwadratic.nfctimesheets.update.UpdateManager.installIntent]:
-     * a SUCCESSFUL self-update kills this process as part of applying it, so a process
-     * that is still here to run this callback is, almost always, evidence the install did
-     * NOT go through — declined, or refused by the system (wrong signing key, no space).
-     * Made LEGIBLE rather than left as a silent return to a screen that still says
-     * "bereit zur Installation", which would look like nothing happened at all.
-     */
-    fun onReturnedFromInstallAttempt() {
-        val current = _update.value
-        if (current is UpdateState.ReadyToInstall) {
-            _update.value = UpdateState.Failed(current.release, "err_update_not_installed")
-        }
-    }
-
-    /** The one place ui/TimeSheetApp.kt needs an [android.content.Intent] built from
-     *  update/UpdateManager — kept a one-line pass-through rather than exposing [app]
-     *  itself to Compose. */
-    fun installIntentFor(uri: android.net.Uri): android.content.Intent = app.updates.installIntent(uri)
-
     /** A 401 came back from somewhere: expired, revoked, or the worker was deactivated. */
     private fun dropToSignedOut() {
         app.sessionRejected.value = false
@@ -942,9 +802,5 @@ fun stringIdFor(key: String): Int = when (key) {
     "err_wrong_account_request" -> R.string.err_wrong_account_request
     "err_rejected" -> R.string.err_rejected
     "err_server" -> R.string.err_server
-    "err_update_failed" -> R.string.err_update_failed
-    "err_update_storage_full" -> R.string.err_update_storage_full
-    "err_update_corrupt" -> R.string.err_update_corrupt
-    "err_update_not_installed" -> R.string.err_update_not_installed
     else -> R.string.err_server
 }

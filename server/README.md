@@ -15,7 +15,6 @@ routes/auth.js     Sign in with Apple (iOS), worker + operator codes /auth/*
 lib/apple.js       Apple identity token verification (RS256 + JWKS, stdlib only)
 routes/admin.js    session-cookie routes (web) /admin/*  (+ /admin/login, unauthenticated)
 routes/operator.js operator-session action routes /operator/tags (decision-45, this iteration)
-routes/release.js  app self-update /app/version /app/download (this iteration, no session)
 routes/wellknown.js AASA / assetlinks / /t, mounted before auth (decision-4)
 lib/db.js          pg pool
 lib/auth.js        app-key compare, scrypt passwords, sessions, login rate limit
@@ -29,7 +28,6 @@ bin/create-admin.js  interactive CLI to create/re-password an admin
 bin/geocode-backfill.js  pin buildings entered before geocoding existed; safe to re-run
 check-api.js       runnable self-check (assert, no framework)
 public/            static root for the Next.js admin export, override with PUBLIC_DIR
-releases/          the APK + its manifest for GET /app/version|download, override with RELEASES_DIR
 ```
 
 ## Auth
@@ -498,45 +496,6 @@ Why a link and not accounts: the director cannot administer passwords for other 
 staff, and email delivery would mean running SMTP on the VM. Ceiling: anyone holding the link
 sees that building's cleaning history. Upgrade path: contact accounts + magic-link email.
 
-## App self-update (`routes/release.js`, this iteration)
-
-```
-GET /app/version   auth: "app" (X-App-Key only, no session)
-    { published: true,  version_code, version_name, sha256, notes, url: "/app/download" }
-    { published: false }                                    <- nothing published yet
-
-GET /app/download  auth: "app"
-    the current .apk's bytes, streamed from disk (lib/http.js `sendFile`, not sendJson —
-    a multi-MB binary has no business being JSON.stringify'd)
-    404 no_release_published | 404 release_file_missing
-```
-
-**Who may call it, in two lines:** unauthenticated would let a stranger download the app off
-the open internet; requiring a live worker/operator *session* would mean the phone that most
-needs an update — one whose session just expired — could not fetch the fix for it. The app
-key is the middle ground already used for sign-in itself: baked into every build that could
-possibly be asking, off the open web for a stray browser or curl, and never depends on the
-session the update might exist to repair.
-
-**Where the APK actually lives on the box:** `server/releases/`, a directory beside
-`server.js` exactly like `public/` and `ops/` (see `ops/deploy.sh`'s own "Artifact layout on
-the VM" comment) — `/srv/nfc/releases/` once deployed. Getting a real `.apk` there is a
-**deploy change** (one more `rsync` line in `ops/deploy.sh`) and is explicitly **not done by
-this task**: `sql/` and `server/` only, and this iteration deploys nothing. The route works
-the moment the directory holds two files, however they got there:
-
-```
-releases/latest.json   { "version_code": 5, "version_name": "0.4.0",
-                          "file": "nfc-timesheets-0.4.0-5-release.apk", "sha256": "..." }
-releases/<that file>.apk
-```
-
-A static file plus a tiny JSON document, on purpose — no migration, no admin screen to edit
-it, one fewer route that could leak the wrong environment's shape. Ship a new build by
-rsyncing the `.apk` and rewriting `latest.json`; **no database dependency at all**, so the
-update check answers even when Postgres is down, which is exactly when a worker most needs to
-know a fix already shipped.
-
 ## Config (env only, systemd EnvironmentFile)
 
 | var            | required | notes                                                |
@@ -545,7 +504,6 @@ know a fix already shipped.
 | `APP_KEY`      | yes      | `X-App-Key`, baked into the iOS build                |
 | `PORT`         | yes      | exe.dev proxy terminates TLS in front of it          |
 | `PUBLIC_DIR`   | no       | static root, defaults to `server/public`             |
-| `RELEASES_DIR` | no       | APK + manifest root, defaults to `server/releases`    |
 | `PG_POOL_MAX`  | no       | pool size, default 10                                |
 | `SENTRY_DSN`   | no       | **absent = the SDK is disabled**, see below          |
 | `SENTRY_ENVIRONMENT` | no | defaults to `production`                            |

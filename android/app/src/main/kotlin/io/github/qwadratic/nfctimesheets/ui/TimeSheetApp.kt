@@ -103,9 +103,6 @@ import io.github.qwadratic.nfctimesheets.nfc.ScanActivity
 import io.github.qwadratic.nfctimesheets.nfc.VerifyZoneActivity
 import io.github.qwadratic.nfctimesheets.nfc.WriteTagActivity
 import io.github.qwadratic.nfctimesheets.sync.SyncScheduler
-import io.github.qwadratic.nfctimesheets.update.UpdateReadiness
-import io.github.qwadratic.nfctimesheets.update.DownloadPauseReason
-import io.github.qwadratic.nfctimesheets.update.UpdateState
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -349,13 +346,6 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
                     onClick = { openIntent(Intent(context, VerifyZoneActivity::class.java)) },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 ) { Text(stringResource(R.string.verify_open)) }
-                // TASK-254. An operator-only phone never signs a worker in, so it never
-                // reaches Settings, so before this it had no way to pull a fix down to
-                // itself. Composed INLINE here -- the model is already in scope on this
-                // screen -- rather than through UpdateActivity, which is the same section
-                // hosted for the two NFC screens that do NOT have a model. GET /app/version
-                // is auth:"app": no worker session is needed to reach or use any of it.
-                UpdateSection(model, shiftRunning = pending.open != null, openIntent)
             }
         }
     }
@@ -1786,7 +1776,6 @@ private fun HistoryScreen(model: TimeSheetViewModel) {
 @Composable
 private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Unit) {
     val worker = (model.session.collectAsStateWithLifecycle().value as? SessionState.SignedIn)?.worker
-    val shiftRunning = model.log.collectAsStateWithLifecycle().value.open != null
 
     // „Meine Stunden“ (TASK-189) as a plain composable toggle, NOT a bottom-nav tab and NOT
     // a new Activity: ShiftSignal.Tab, visibleTabs and SignedInScaffold's NavigationBar are
@@ -1850,8 +1839,17 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
         HorizontalDivider()
         PushSection(model)
 
+        // TASK-253: a plain version line, visible without any dev tooling -- the whole
+        // point is turning "which build is this phone running" from a log dive into a
+        // 30-second glance. NOT tied to self-update in any way (that mechanism is gone;
+        // Play Store owns delivery now) -- this is the same one-line, non-interactive
+        // fact iOS's SettingsView shows via Bundle.main.infoDictionary.
         HorizontalDivider()
-        UpdateSection(model, shiftRunning, openIntent)
+        Text(
+            stringResource(R.string.app_version_line, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -2115,177 +2113,6 @@ private fun PushSection(model: TimeSheetViewModel) {
     }
 }
 
-// -------------------------------------------------------------------------------------
-// Self-update. THREE hosts, all of them human-initiated, and NEVER the tap or clock-out
-// path — that last clause is the one that has always mattered and it still holds:
-//   1. Settings (the worker's tab)
-//   2. SignInScreen's Betreiber? section                 (TASK-254)
-//   3. UpdateActivity, opened from WriteTag/VerifyZone   (TASK-254)
-// 2 and 3 exist because an operator-only phone never signs a worker in and so never
-// reaches Settings — it had no self-service path to a fix at all. See
-// update/UpdateManager.kt's own header for the whole design; this composable is purely a
-// rendering of [model.update], and there is exactly ONE implementation behind all three.
-//
-// internal, not private: UpdateActivity.kt is a different file in this same package.
-// -------------------------------------------------------------------------------------
-@Composable
-internal fun UpdateSection(model: TimeSheetViewModel, shiftRunning: Boolean, openIntent: (Intent) -> Unit) {
-    val state by model.update.collectAsStateWithLifecycle()
-    val context = LocalContext.current
-
-    // Checked once when this section first appears and nothing has asked yet — covers the
-    // rare case where the silent launch-time check (TimeSheetViewModel.restoreSession)
-    // has not landed by the time the worker opens this tab, AND the two operator hosts,
-    // whose view model never resolves a worker session at all.
-    //
-    // SILENTLY, not checkForUpdate() (TASK-254). Load-bearing, not tidying: a fresh view
-    // model starts at Idle, and a plain checkForUpdate() would re-OFFER a download that is
-    // ALREADY IN FLIGHT — and startUpdateDownload -> enqueueDownload deletes the shared
-    // nfc-timesheets-update.apk before enqueuing a SECOND DownloadManager row onto that
-    // same path. Two writers, one file. checkForUpdateSilently() calls resumePending()
-    // first and ADOPTS the running row instead. Settings renders identically either way
-    // (Idle and Checking both print update_checking) and gains the same adoption.
-    LaunchedEffect(Unit) {
-        if (state is UpdateState.Idle) model.checkForUpdateSilently()
-    }
-
-    // A RESULT CALLBACK, not the fire-and-forget openIntent used everywhere else in this
-    // file: this is the ONE navigation in the app whose OUTCOME the screen needs to read
-    // back (see TimeSheetViewModel.onReturnedFromInstallAttempt for why that is possible
-    // at all, and what it does and does not prove).
-    val installLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) { model.onReturnedFromInstallAttempt() }
-
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            stringResource(R.string.update_title),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.semantics { heading() },
-        )
-        Text(
-            stringResource(R.string.update_current_version, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        when (val s = state) {
-            UpdateState.Idle, UpdateState.Checking ->
-                Text(stringResource(R.string.update_checking))
-
-            UpdateState.UpToDate -> {
-                Text(stringResource(R.string.update_up_to_date))
-                OutlinedButton(
-                    onClick = model::checkForUpdate,
-                    modifier = Modifier.heightIn(min = 48.dp),
-                ) { Text(stringResource(R.string.update_check_button)) }
-            }
-
-            is UpdateState.Available -> {
-                Text(
-                    stringResource(
-                        R.string.update_available,
-                        s.release.versionName ?: stringResource(R.string.update_unknown_version),
-                    ),
-                )
-                Button(
-                    onClick = { model.startUpdateDownload(s.release) },
-                    modifier = Modifier.heightIn(min = 48.dp),
-                ) { Text(stringResource(R.string.update_download_button)) }
-            }
-
-            is UpdateState.Downloading -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    when (s.pauseReason) {
-                        DownloadPauseReason.NETWORK -> stringResource(R.string.update_waiting_network)
-                        DownloadPauseReason.RETRY -> stringResource(R.string.update_waiting_retry)
-                        DownloadPauseReason.WIFI_ONLY -> stringResource(R.string.update_waiting_wifi)
-                        null ->
-                            if (s.percent != null) {
-                                stringResource(R.string.update_downloading, s.percent)
-                            } else {
-                                stringResource(R.string.update_downloading_unknown)
-                            }
-                    },
-                )
-                // AC2's "or" clause: no DownloadManager API forces a wifi-only pause
-                // through from code (enqueueDownload() already sets
-                // setAllowedOverMetered/setAllowedOverRoaming), so the honest offer is
-                // the settings deep link, same pattern as update_install_blocked below.
-                if (s.pauseReason == DownloadPauseReason.WIFI_ONLY) {
-                    Text(
-                        stringResource(R.string.update_wifi_mobile_note),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    OutlinedButton(
-                        onClick = { openIntent(UpdateReadiness.wifiOnlySettingsIntent(context)) },
-                        modifier = Modifier.heightIn(min = 48.dp),
-                    ) { Text(stringResource(R.string.update_wifi_settings_button)) }
-                }
-                // AC3: cancel/retry reachable one state earlier than the terminal
-                // Fehlgeschlagen screen, only once there IS a pause reason to act on --
-                // not a general abort-while-healthy control, which no AC asks for.
-                if (s.pauseReason != null) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = model::cancelUpdateDownload,
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        ) { Text(stringResource(R.string.update_cancel_button)) }
-                        Button(
-                            onClick = model::retryUpdateDownload,
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        ) { Text(stringResource(R.string.update_retry_button)) }
-                    }
-                }
-            }
-
-            is UpdateState.ReadyToInstall -> {
-                Text(stringResource(R.string.update_ready))
-                // NEVER an interruption: a running shift is stated as unaffected, never
-                // gated on or blocked by any of this.
-                if (shiftRunning) {
-                    Text(
-                        stringResource(R.string.update_running_shift_note),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                when (UpdateReadiness.of(context)) {
-                    UpdateReadiness.ALLOWED -> Button(
-                        onClick = { installLauncher.launch(model.installIntentFor(s.uri)) },
-                        modifier = Modifier.heightIn(min = 48.dp),
-                    ) { Text(stringResource(R.string.update_install_button)) }
-
-                    UpdateReadiness.BLOCKED -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            stringResource(R.string.update_install_blocked_note),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        OutlinedButton(
-                            onClick = { openIntent(UpdateReadiness.settingsIntent(context)) },
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        ) { Text(stringResource(R.string.update_install_blocked_button)) }
-                    }
-                }
-            }
-
-            is UpdateState.Failed -> {
-                Text(
-                    stringResource(stringIdFor(s.reasonKey)),
-                    color = MaterialTheme.colorScheme.error,
-                )
-                OutlinedButton(
-                    onClick = {
-                        val release = s.release
-                        if (release != null) model.startUpdateDownload(release) else model.checkForUpdate()
-                    },
-                    modifier = Modifier.heightIn(min = 48.dp),
-                ) { Text(stringResource(R.string.update_retry_button)) }
-            }
-        }
-    }
-}
 
 // ---- small shared pieces -------------------------------------------------------------
 

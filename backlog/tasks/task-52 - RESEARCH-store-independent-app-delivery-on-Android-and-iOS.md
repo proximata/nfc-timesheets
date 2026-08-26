@@ -1,9 +1,10 @@
 ---
 id: TASK-52
 title: 'RESEARCH: store-independent app delivery on Android and iOS'
-status: To Do
+status: Wont Do
 assignee: []
 created_date: '2026-08-11 23:04'
+updated_date: '2026-08-26 08:18'
 labels:
   - research
   - android
@@ -58,3 +59,9 @@ risks, and a recommendation. Include the null result if that is the truth: 'iOS 
 this meaningfully and TestFlight is the answer' is a valuable finding and stops this being
 re-litigated every few months.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Closed 2026-08-26: moot. Android and iOS both now ship through their real stores (Play Console internal testing via play-release.yml CI; Xcode Cloud -> TestFlight). The self-update mechanism this research was scoping around was itself deleted the same day. Re-file if store distribution ever becomes untenable again.
+<!-- SECTION:NOTES:END -->

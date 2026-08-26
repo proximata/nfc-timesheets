@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-24 19:08'
-updated_date: '2026-08-25 06:29'
+updated_date: '2026-08-26 08:26'
 labels:
   - android
   - ux
@@ -40,6 +40,12 @@ RELATED: TASK-254 (operator-only phones cannot reach this screen at all) and TAS
 - [x] #4 de and en strings.xml both carry the new strings with exact key parity
 - [x] #5 Verified against a server with a trusted certificate, not the self-signed demo front, so the download actually starts
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+MOOT 2026-08-26: the entire self-update subsystem this bug lived in was deleted once Android distribution moved to the Play Store. No action needed — nothing to regress.
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 

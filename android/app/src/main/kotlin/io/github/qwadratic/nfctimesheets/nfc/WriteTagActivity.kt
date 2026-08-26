@@ -1,7 +1,6 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
 import android.content.Context
-import android.content.Intent
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
@@ -38,7 +37,6 @@ import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
 import io.github.qwadratic.nfctimesheets.core.WriteGuard
-import io.github.qwadratic.nfctimesheets.ui.UpdateActivity
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -175,23 +173,6 @@ class WriteTagActivity : ComponentActivity() {
                             NfcState.DISABLED -> Text(stringResource(R.string.scan_disabled))
                             NfcState.READY -> WriteBody()
                         }
-
-                        // TASK-254: an operator-only phone never signs a worker in and so
-                        // never reaches Settings, where the update section used to live
-                        // ALONE. This is a plain startActivity onto an explicit in-app
-                        // class -- never the view intent, no tap path, no call from here.
-                        //
-                        // OUTSIDE the `when` ON PURPOSE. UNSUPPORTED and DISABLED do not
-                        // compose WriteBody(), so a button placed inside it would be
-                        // invisible on an emulator (no NFC hardware at all) AND on a phone
-                        // with NFC switched off -- which is precisely a phone that may need
-                        // an update in order to work.
-                        OutlinedButton(
-                            onClick = {
-                                startActivity(Intent(this@WriteTagActivity, UpdateActivity::class.java))
-                            },
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                        ) { Text(stringResource(R.string.update_check_button)) }
 
                         Button(
                             onClick = { finish() },

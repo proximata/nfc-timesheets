@@ -3,9 +3,10 @@ id: TASK-53
 title: >-
   RESEARCH: how Pear/Holepunch ship updates outside the App Store, and how Keet
   is built on iOS
-status: To Do
+status: Wont Do
 assignee: []
 created_date: '2026-08-11 23:04'
+updated_date: '2026-08-26 08:18'
 labels:
   - research
   - ios
@@ -61,3 +62,9 @@ these people do it', with each claim marked as source-read, observed, or inferre
 distinction is the entire value - an inferred mechanism presented as fact is how we would
 end up designing against a story we made up.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Closed 2026-08-26: companion to TASK-52, closed for the same reason — store distribution is live on both platforms and the self-update mechanism this research supported has been deleted.
+<!-- SECTION:NOTES:END -->

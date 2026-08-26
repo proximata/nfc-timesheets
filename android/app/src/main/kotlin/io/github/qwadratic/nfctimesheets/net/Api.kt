@@ -99,10 +99,10 @@ class Api(
     }
 
     /**
-     * GET /auth/capabilities — auth: "app" only, no session, exactly like [appVersion]: the
-     * sign-in screen has to ask this BEFORE it has drawn anything, so a phone that has never
-     * enrolled must still be able to call it. `sessionBearing = false` for the same reason
-     * as [appVersion] — a 401 here means a bad X-App-Key, never a dead session.
+     * GET /auth/capabilities — auth: "app" only, no session: the sign-in screen has to ask
+     * this BEFORE it has drawn anything, so a phone that has never enrolled must still be
+     * able to call it. `sessionBearing = false` for the same reason — a 401 here means a
+     * bad X-App-Key, never a dead session.
      *
      * ONE FIELD (server/routes/auth.js): `{sms: boolean}`. A failure of ANY kind — offline,
      * an old server that predates this route, a timeout — is swallowed by the caller
@@ -156,17 +156,6 @@ class Api(
      * (decision-44). The `workers` array is deliberately not read (decision-22).
      */
     suspend fun roster(): WireRoster = Wire.roster(get("/roster"))
-
-    /**
-     * GET /app/version — auth: "app" only, no session (server/routes/release.js). This
-     * is the ONE call in this class that must survive an expired or missing worker
-     * session: a phone whose session just died is exactly the phone that most needs to
-     * know a fix is already out. `sessionBearing = false`: a 401 here means a bad or
-     * missing X-App-Key, never an expired session, and firing [onSessionRejected] over
-     * it would wrongly sign a worker out of a route their session was never checked
-     * against.
-     */
-    suspend fun appVersion(): JSONObject = get("/app/version", sessionBearing = false)
 
     // ---- operator: the person who mounts tags --------------------------------------
     //

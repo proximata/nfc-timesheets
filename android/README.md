@@ -220,30 +220,6 @@ confirmed it knows. It does NOT persist *why* the report failed, only *that* one
 so a restored screen shows a blank status line and an available retry button rather than a
 remembered error it cannot vouch for after a process restart.
 
-### Self-update: offers a newer build, refuses a different key
-
-`GET /app/version`'s server contract (published/not-published, the manifest shape, a
-malformed manifest read as "nothing published", a missing file a clean 404, the apk
-streaming byte-for-byte) is `check-api.js`'s, and this pass re-drove it directly against a
-scratch `RELEASES_DIR` pointed at a fake `latest.json` with `version_code: 999999` — `GET
-/app/version` answered `published: true` with a `sha256` that matched the downloaded bytes
-exactly. `core/UpdateCheck.kt`'s `isNewer` classification is `checks/run.sh`'s.
-
-What was NOT proven before this pass: **the signature refusal `UpdateManager.kt`'s own
-comment claims** ("Android refuses an update signed with a different key... that is the
-behaviour you want") had never actually been asked to refuse anything. Driven for real —
-installing the upload-key-signed `app-release.apk` over the debug-key-signed build already on
-`ts-demo` — the answer is immediate and exactly as legible as claimed:
-
-```
-$ adb install -r app/build/outputs/apk/release/app-release.apk
-Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package
-io.github.qwadratic.NFCTimeSheets signatures do not match newer version; ignoring!]
-```
-
-The same OS check runs behind `PackageInstaller`'s own confirmation UI on the install-intent
-path `UpdateManager.installIntent` hands the user to — this is not a special case of `adb`.
-
 Proven by `checks/run.sh` on a plain JVM (see § Checks):
 
 - tag-URI parsing and rejection, including the traps iOS already hit

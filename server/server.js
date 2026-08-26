@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import * as Sentry from "@sentry/node";
 import { requireAdminSession, requireAppKey, requireOperatorSession, requireWorkerSession } from "./lib/auth.js";
 import { pool } from "./lib/db.js";
-import { HttpError, readJson, sendFile, sendJson } from "./lib/http.js";
+import { HttpError, readJson, sendJson } from "./lib/http.js";
 import { recordPhoneHeartbeat } from "./lib/phones.js";
 import { redactUrl } from "./lib/scrub.js";
 import { logSmsConfig } from "./lib/sms.js";
@@ -17,7 +17,6 @@ import { appRoutes } from "./routes/app.js";
 import { authRoutes } from "./routes/auth.js";
 import { operatorRoutes } from "./routes/operator.js";
 import { portalRoutes } from "./routes/portal.js";
-import { releaseRoutes } from "./routes/release.js";
 import { wellknown } from "./routes/wellknown.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -61,10 +60,7 @@ export function assertEnv(env = process.env) {
 //
 // operatorRoutes (routes/operator.js) is `auth: "operator"` throughout — the operator's
 // own action routes (today: reporting a freshly written tag), as opposed to adminRoutes'
-// operator CRUD or authRoutes' operator sign-in. releaseRoutes (routes/release.js) is
-// `auth: "app"`: the Android self-update check and download, gated the same coarse way as
-// sign-in itself and for the same reason — a route that helps a device recover from a
-// broken session cannot itself require a live one.
+// operator CRUD or authRoutes' operator sign-in.
 const routes = [
   { method: "GET", path: "/health", auth: null, handler: health },
   ...authRoutes,
@@ -72,7 +68,6 @@ const routes = [
   ...adminRoutes,
   ...portalRoutes,
   ...operatorRoutes,
-  ...releaseRoutes,
 ];
 
 async function health() {
@@ -284,15 +279,7 @@ async function handle(req, res, ctx) {
     session,
     ip: clientIp(req),
   });
-  // Handlers are `(ctx) -> { status, body }` almost everywhere (decision-16's "no
-  // framework" note in routes/app.js). `{ status, file }` is the ONE exception, used by
-  // exactly one route (GET /app/download): a multi-MB APK has no business being buffered
-  // into a JSON-quoted Buffer when it is already sitting on disk as bytes.
-  if (result.file) {
-    await sendFile(res, result.status, result.file.path, result.file, result.headers);
-  } else {
-    sendJson(res, result.status, result.body, result.headers);
-  }
+  sendJson(res, result.status, result.body, result.headers);
 }
 
 /**

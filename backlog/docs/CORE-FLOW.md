@@ -172,8 +172,7 @@ file is already true; this is the part that is not.
    adb install -r android/dist/nfc-timesheets-0.4.1-6-release.apk
    ```
    **Never uninstall first** — that wipes the worker's login. `-r` works because 0.4.1 and
-   the build already on the phone carry the same signing certificate (`6c786899…996c`),
-   which `prove-live` § 9 checks every run.
+   the build already on the phone carry the same signing certificate (`6c786899…996c`).
 2. Open the app once. Android does not deliver NFC to an app that has never been opened.
 3. `Einstellungen` must read **`Installiert: 0.4.1 (6)`**. If it says 0.4.0 (5) or 0.3.0 (4),
    the install did not take. Stop and redo it.
@@ -323,19 +322,6 @@ Tap the **second** card you wrote, before anybody resolves it in step 5.
 
 ---
 
-### Step 8 — self-update
-
-`Einstellungen` → `Nach Updates suchen`.
-
-- ✓ it offers **0.4.1 (6)** when the phone is on an older build, downloads it, checks the
-  sha256, and hands it to Android's installer. Android's own confirmation dialogue appears.
-- it never blocks anything and never touches a running shift.
-- ✗ if Android says the app is **not compatible with the installed version**, the build was
-  signed with a different key. Do not sideload around it — report it. `prove-live` § 9
-  checks this every run and has been shown red by re-signing the same APK with another key.
-
----
-
 ### The three sentences that mean STOP
 
 1. **`Geschrieben und geprueft`** shown for the **Ultralight** (step 1) — capacity gate
@@ -383,4 +369,4 @@ closed from a laptop, and production has nothing to say about any of it.
 - ~~Decisions 41–44 are PROPOSED~~ — ACCEPTED 2026-08-19; decision-37 superseded, with the
   four contradictions written into its own file. HOIV stays active, keeps its pin and still
   answers 201 after 006 — grey on the map, never gone (decision-43, re-asserted live in
-  `prove-live` § 10).
+  `prove-live` § 9).

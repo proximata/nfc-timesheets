@@ -21,7 +21,6 @@
 #   server.js, instrument.mjs, lib/, routes/, db/, wellknown/, node_modules/   <- server/
 #   public/                                                    <- web/out/  (static admin export)
 #   ops/                                                       <- ops/      (units, sql, backups)
-#   releases/                                        <- ops/publish-apk.sh (the APK + manifest)
 
 set -euo pipefail
 
@@ -155,14 +154,7 @@ echo "==> 3/8 rsync server -> $HOST:$DEST"
 # seed.sql inserts demo workers. Neither belongs next to a payroll database where a
 # stray `node check-api.js` in the wrong directory is a very bad afternoon.
 #
-# releases/ IS EXCLUDED FOR THE SAME REASON public/ AND ops/ ARE: it is the other half of an
-# artifact that this rsync does not carry. server/releases/ holds one README.md in git and no
-# APK (a binary is not source), so WITHOUT this exclude every deploy would --delete the
-# published build off the box and leave a latest.json naming a file that no longer exists:
-# /app/version keeps saying "published", /app/download starts answering 404, and the worker in
-# the field sees an update offered and then failing. The APK is put there by
-# ops/publish-apk.sh and only by it.
-rsync -az --delete --exclude 'public/' --exclude 'ops/' --exclude 'releases/' \
+rsync -az --delete --exclude 'public/' --exclude 'ops/' \
   --exclude 'check-*.js' --exclude 'check-*.mjs' \
   --exclude '*.test.js' --exclude 'db/seed.sql' \
   ./server/ "$HOST:$DEST/"
@@ -219,26 +211,13 @@ echo "==> 7/8 verify association files (an NFC tag is worthless if these regress
 # the split. --host-override says "yes, on purpose, this is not the tag host".
 ./server/wellknown/verify.sh "$HOST" --host-override
 
-echo "==> 7b/8 self-update: does the version document still describe the file next to it?"
-# NOT a publish — this only READS the live host. It exists because releases/ is the one part
-# of the artifact this script deliberately does not ship, so it is the one part that can rot
-# without anybody noticing: a manifest and its APK can drift apart through a half-finished
-# publish or a hand edit, and the failure surfaces on a phone in a stairwell, not here.
-# A box with nothing published yet is not a failure of THIS deploy (self-update is optional
-# infrastructure), so it warns; a manifest that LIES is fatal.
-if ./ops/publish-apk.sh --verify --host "$HOST"; then
-  :
-else
-  echo "WARNING: the self-update surface on $HOST did not verify (see above)." >&2
-  echo "         Publish a build with: ./ops/publish-apk.sh" >&2
-fi
-
-echo "==> 7c/8 and is the box serving THIS tree, file for file?"
+echo "==> 7b/8 and is the box serving THIS tree, file for file?"
 # The last thing, on purpose: everything above can succeed and still leave the box serving
 # something else — a partial rsync, an rsync to the wrong host, a build that never ran. This
 # hashes the deployed artefact against the local one and refuses if they differ. FATAL,
-# unlike 7b: "the deploy said ok and the box served the old bug" has happened three times in
-# one week (see the file's own header), and every time the next person believed the ok.
+# unlike step 7's association-file check: "the deploy said ok and the box served the old
+# bug" has happened three times in one week (see the file's own header), and every time the
+# next person believed the ok.
 ./ops/check-box-serves-head.sh "$HOST"
 
 echo "==> and the TAG host, which is what is actually on the walls"

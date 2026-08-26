@@ -226,7 +226,7 @@ Gotchas discovered the hard way on this Mac. Not portable — see closing note.
   with "Unable to locate a Java Runtime" unless exported first:
   `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"` (Android Studio's
   bundled JBR) and `ANDROID_HOME=/opt/homebrew/share/android-commandlinetools` (Homebrew's
-  cmdline-tools). Export both before any `android/`, `gradlew`, or `ops/publish-apk.sh` call.
+  cmdline-tools). Export both before any `android/`, `gradlew`, or `apksigner`/`apkanalyzer` call.
 - NFC does not work on Android emulators — needs a physical device. Xcode Simulator likewise
   can't receive a real universal-link NFC tap (Safari opens instead of the app) — DEBUG-only
   mock hooks exist in both codebases for this, gated unreachable in release builds.

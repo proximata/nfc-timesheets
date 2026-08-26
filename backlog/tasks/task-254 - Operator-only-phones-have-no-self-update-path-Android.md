@@ -4,7 +4,7 @@ title: Operator-only phones have no self-update path (Android)
 status: Done
 assignee: []
 created_date: '2026-08-24 17:44'
-updated_date: '2026-08-25 14:27'
+updated_date: '2026-08-26 08:18'
 labels:
   - android
   - reliability
@@ -142,4 +142,6 @@ AC4 is DOCUMENTATION ONLY and is recorded above; no file under NFCTimeSheets/ wa
 edited or built for it. One line: iOS cannot self-update (App Store rule) - an operator-only
 iPhone gets builds through TestFlight's internal track, and off TestFlight only by a manual
 re-signed sideload.
+
+REVERSED 2026-08-26: the whole self-update subsystem this task built (UpdateManager, UpdateActivity, UpdateSection, GET /app/version|/app/download, ops/publish-apk.sh) was deleted once Android distribution moved to the Play Store (play-release.yml CI, confirmed live upload). Play Store's own updater only reaches Play-Store-origin installs, so this reachability work is now moot rather than wrong — it was correct for the sideload era it shipped in. TASK-253's version-line deliverable was carved out and kept as a standalone, self-update-independent Text line in Settings (it was the only thing this subsystem's removal would otherwise have taken down).
 <!-- SECTION:NOTES:END -->

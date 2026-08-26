@@ -108,23 +108,6 @@ object Wire {
     }
 
     /**
-     * GET /app/version (this iteration, routes/release.js). `{published:false}` decodes
-     * to `null` — there is nothing to offer, and "nothing published" and "offline" are
-     * deliberately indistinguishable to UpdateManager.checkForUpdate() past this point;
-     * both mean "no update to show".
-     */
-    fun release(o: JSONObject): RemoteRelease? {
-        if (!o.optBoolean("published", false)) return null
-        return RemoteRelease(
-            versionCode = o.getInt("version_code"),
-            versionName = o.stringOrNull("version_name"),
-            sha256 = o.stringOrNull("sha256"),
-            notes = o.stringOrNull("notes"),
-            url = o.getString("url"),
-        )
-    }
-
-    /**
      * One row of GET /operator/zones (decision-47) — the operator's worklist entry.
      * NOT [zone]/[WireZone]: this carries fields a cleaner's roster must never see
      * (`tag_deployed_at`, `verified_at`) and a worker-facing name (`location_name`) the

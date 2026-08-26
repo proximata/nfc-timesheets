@@ -181,31 +181,8 @@
     <string name="settings_language_de">Deutsch</string>
     <string name="settings_language_en">English</string>
 
-    <string name="update_title">App version</string>
     <!-- %1$s = version name, %2$d = version code -->
-    <string name="update_current_version">Installed: %1$s (%2$d)</string>
-    <string name="update_check_button">Check for updates</string>
-    <string name="update_checking">Checking for updates …</string>
-    <string name="update_up_to_date">You have the current version.</string>
-    <!-- %1$s = version name of the available build -->
-    <string name="update_available">Version %1$s is available.</string>
-    <string name="update_unknown_version">unknown</string>
-    <string name="update_download_button">Download</string>
-    <!-- %1$d = percent -->
-    <string name="update_downloading">Downloading … %1$d %%</string>
-    <string name="update_downloading_unknown">Downloading …</string>
-    <string name="update_waiting_network">Waiting for a connection …</string>
-    <string name="update_waiting_retry">Brief pause before the download tries again automatically …</string>
-    <string name="update_waiting_wifi">The download is waiting for a Wi-Fi connection.</string>
-    <string name="update_wifi_mobile_note">You can allow downloading over mobile data in your phone\'s settings.</string>
-    <string name="update_wifi_settings_button">Open settings</string>
-    <string name="update_cancel_button">Cancel</string>
-    <string name="update_ready">Ready to install.</string>
-    <string name="update_install_button">Install</string>
-    <string name="update_install_blocked_note">This app is not yet allowed to install updates. A one-time permission per phone.</string>
-    <string name="update_install_blocked_button">Open settings</string>
-    <string name="update_retry_button">Try again</string>
-    <string name="update_running_shift_note">Installing restarts the app. Your running shift is not affected and will not be closed.</string>
+    <string name="app_version_line">Installed: %1$s (%2$d)</string>
 
     <string name="nfc_missing_title">This phone has no NFC</string>
     <string name="nfc_missing_body">Without NFC you can\'t clock in at the tags. Tell your admin.</string>
@@ -246,10 +223,6 @@
     <string name="err_missing_location">This shift is missing its location and can\'t be sent.</string>
     <string name="err_wrong_account">This shift was logged by a different account and can\'t be sent.</string>
     <string name="err_server">Server trouble — will retry.</string>
-    <string name="err_update_failed">The download failed. Please try again.</string>
-    <string name="err_update_storage_full">Not enough storage for the update. Free up space and try again.</string>
-    <string name="err_update_corrupt">The downloaded file is corrupt. Please try again.</string>
-    <string name="err_update_not_installed">The install did not go through — either cancelled or refused by Android (usually a different signing key, or not enough storage). If this keeps happening, tell your admin.</string>
     <string name="err_rejected">Rejected by the server. Report this shift to your admin.</string>
     <string name="err_unknown_request">The server doesn\'t have this request any more. Ask your admin.</string>
     <string name="err_rejected_request">Rejected by the server. Report this request to your admin.</string>

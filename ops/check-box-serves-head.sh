@@ -145,25 +145,7 @@ for d in lib routes; do
   [ "$l" = "$r" ] && ok "server/$d/ is on the box" || bad "server/$d/ DIFFERS (local $l, box $r)"
 done
 
-# ---- 3 · the APK the field phone is offered ---------------------------------------------
-# The same trap, one artefact over: the fix can be built, signed, committed and still not be
-# what /app/version names.
-manifest=$(ssh "$HOST" "cat /srv/nfc/releases/latest.json")
-apk_file=$(echo "$manifest" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).file))')
-apk_code=$(echo "$manifest" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).version_code)))')
-newest_apk=$(ls android/dist/*.apk 2>/dev/null | LC_ALL=C sort -V | tail -1 | xargs -r basename)
-if [ -z "$newest_apk" ]; then
-  ok "no android/dist/*.apk in this tree — nothing to compare"
-elif [ "$newest_apk" = "$apk_file" ]; then
-  la=$(shasum -a 256 "android/dist/$apk_file" | cut -d' ' -f1)
-  ra=$(ssh "$HOST" "sha256sum /srv/nfc/releases/$apk_file | cut -d' ' -f1")
-  [ "$la" = "$ra" ] && ok "the published APK is $apk_file (versionCode $apk_code), byte for byte" \
-                    || bad "the published APK has the right NAME and the wrong BYTES"
-else
-  bad "the newest local APK is $newest_apk but the box publishes $apk_file (versionCode $apk_code) — run ./ops/publish-apk.sh"
-fi
-
-# ---- 3a · WHICH COMMIT was the bundle on the box built from? ----------------------------
+# ---- 3 · WHICH COMMIT was the bundle on the box built from? ----------------------------
 # Now that web/next.config.mjs derives the build id from the commit, the box TELLS US this
 # instead of us having to infer it. That answers the real question directly:
 #

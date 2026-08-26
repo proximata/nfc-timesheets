@@ -560,7 +560,7 @@ logline "POST /shifts/open 422 .* err=zone_unverified" "the refusal, in the log"
 
 # THE TAP. The body is the OLD SHAPE the APK in the field sends — client_uuid, location_uuid,
 # start_time, and no zone field anywhere — posted at the VERIFIED ZONE card, which the server
-# resolves to its building. § 9 proves that shape is the one the field APK actually carries.
+# resolves to its building.
 TAP1=$(uuid)
 expect 201 POST /shifts/open --key --jar "$WORKER_JAR" \
   --data "{\"client_uuid\":\"$TAP1\",\"location_uuid\":\"$TAG_ZONE\",\"start_time\":\"$(ago 45)\"}"
@@ -634,100 +634,9 @@ expect 422 POST /shifts/open --key --jar "$WORKER_JAR" \
   --data "{\"client_uuid\":\"$(uuid)\",\"location_uuid\":\"$(uuid)\",\"start_time\":\"$(now)\"}"
 ok "a card the office has never heard of: $(jget error)"
 
-# =========================================================================================
-section "9 · self-update, from the field phone's point of view"
-FIELD_APK=android/dist/nfc-timesheets-0.4.0-5-release.apk
-[ -f "$FIELD_APK" ] || bad "the field build $FIELD_APK is missing — § 9 cannot compare against it"
-if [ -f "$FIELD_APK" ]; then
-  # THE FIELD BUILD'S OWN NUMBER, out of its binary manifest — never a filename, which is
-  # what lied the last time this was measured (ops/publish-apk.sh's header).
-  export JAVA_HOME="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
-  FIELD_CODE=$(apkanalyzer manifest version-code "$FIELD_APK" 2>/dev/null)
-  case "$FIELD_CODE" in
-    ''|*[!0-9]*) bad "could not read the field APK's versionCode (JAVA_HOME=$JAVA_HOME)"; FIELD_CODE=0 ;;
-    *) ok "the phone in the field runs versionCode $FIELD_CODE" ;;
-  esac
-
-  # AND ITS CLOCK-IN SHAPE, out of its own DEX. § 6 and § 7 post client_uuid/location_uuid/
-  # start_time and claim that is "what the APK in the field sends". This is where that stops
-  # being a claim: the three keys are in the shipped bytes of the build on the phone.
-  # NOT `unzip | strings | grep -q`. `grep -q` exits on its first match, `strings` takes
-  # SIGPIPE, and `set -o pipefail` turns the whole success into a 141 — the exact inversion
-  # that made release-artefact.sh unable to fail (CORE-FLOW § 3). Materialise, then count.
-  unzip -p "$FIELD_APK" 'classes*.dex' > "$TMP/field.dex" 2>/dev/null
-  strings "$TMP/field.dex" > "$TMP/field.strings"
-  DEX_KEYS=0
-  for k in client_uuid location_uuid start_time end_time; do
-    [ "$(/usr/bin/grep -cx "$k" "$TMP/field.strings")" -gt 0 ] && DEX_KEYS=$((DEX_KEYS + 1))
-  done
-  [ "$DEX_KEYS" = "4" ] && ok "the field APK's own DEX carries client_uuid, location_uuid, start_time, end_time" \
-                        || bad "only $DEX_KEYS of the 4 clock-in keys are in the field APK"
-
-  expect 200 GET /app/version --key
-  PUB=$(jget published); VC=$(jget version_code); VN=$(jget version_name); SHA=$(jget sha256)
-  [ "$PUB" = "true" ] && ok "published: $VN ($VC)" || bad "published=$PUB"
-  [ "$VC" -gt "$FIELD_CODE" ] 2>/dev/null \
-    && ok "$VC > $FIELD_CODE ∴ UpdateCheck.isNewer offers it to the field phone" \
-    || bad "version_code $VC does not beat the field build's $FIELD_CODE"
-  logline "GET /app/version 200"
-
-  curl -sS --max-time 90 -H "X-App-Key: $APP_KEY" -o "$TMP/update.apk" "$BASE/app/download"
-  GOT=$(shasum -a 256 "$TMP/update.apk" | cut -d' ' -f1)
-  [ "$GOT" = "$SHA" ] && ok "the bytes match the manifest's sha256 ∴ UpdateManager.verify() accepts them" \
-                      || bad "downloaded sha $GOT != published $SHA"
-  logline "GET /app/download 200"
-
-  # SIGNATURES. Android refuses an update signed with a different key than the installed
-  # build — that is the property, and it is checked here the only way it can be off a
-  # device: the certificate digests. Same digest = `adb install -r` lands. Different = the
-  # OS refuses with INSTALL_FAILED_UPDATE_INCOMPATIBLE, and no amount of sha256 matching
-  # helps, which is exactly why UpdateManager's own hash check is not the security boundary.
-  APKSIGNER="${APKSIGNER:-$(/bin/ls -d /opt/homebrew/share/android-commandlinetools/build-tools/*/apksigner 2>/dev/null | tail -1)}"
-  certof() { "$APKSIGNER" verify --print-certs "$1" 2>/dev/null | /usr/bin/awk '/SHA-256 digest/ {print $NF; exit}'; }
-  if [ -x "$APKSIGNER" ]; then
-    FIELD_CERT=$(certof "$FIELD_APK")
-    NEW_CERT=$(certof "$TMP/update.apk")
-    [ -n "$NEW_CERT" ] && [ "$NEW_CERT" = "$FIELD_CERT" ] \
-      && ok "the published APK is signed with the SAME key as the field build ($NEW_CERT) ∴ it installs over it" \
-      || bad "published cert $NEW_CERT != field cert $FIELD_CERT — the update would be REFUSED by the OS"
-
-    # The tag host publishes that fingerprint too, which is what makes a passive tap open
-    # the app instead of Chrome. A differently-signed build fails App Link verification as
-    # well as installation, so this is the same key doing two jobs.
-    ASSET=$(curl -sS "https://$TAG_HOST/.well-known/assetlinks.json" \
-      | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s)[0].target.sha256_cert_fingerprints[0].replace(/:/g,"").toLowerCase()))')
-    [ "$ASSET" = "$NEW_CERT" ] && ok "the TAG host publishes that same fingerprint ∴ a tap opens the app" \
-                              || bad "assetlinks fingerprint $ASSET != the published APK's $NEW_CERT"
-
-    # THE NEGATIVE CASE, MADE REAL. A copy of the very same APK, re-signed with a key that
-    # is not ours. Same bytes of code, same version code, same everything the manifest says
-    # — and a certificate the phone has never seen.
-    keytool -genkeypair -keystore "$TMP/rogue.jks" -storepass rogue123 -keypass rogue123 \
-      -alias rogue -keyalg RSA -keysize 2048 -validity 30 \
-      -dname "CN=Not Us, O=Rogue, C=AT" >/dev/null 2>&1
-    cp "$TMP/update.apk" "$TMP/rogue.apk"
-    if "$APKSIGNER" sign --ks "$TMP/rogue.jks" --ks-pass pass:rogue123 --key-pass pass:rogue123 \
-         --ks-key-alias rogue "$TMP/rogue.apk" >/dev/null 2>&1; then
-      ROGUE_CERT=$(certof "$TMP/rogue.apk")
-      [ -n "$ROGUE_CERT" ] && [ "$ROGUE_CERT" != "$NEW_CERT" ] \
-        && ok "a build signed with another key carries cert $ROGUE_CERT ∴ the OS refuses it over ours" \
-        || bad "re-signing produced cert '$ROGUE_CERT' — the negative case did not separate"
-      [ "$ROGUE_CERT" != "$ASSET" ] && ok "…and the tag host does not vouch for it either" || bad "assetlinks vouches for the rogue key"
-      # And it is still a VALID apk — the refusal is about identity, not corruption, which
-      # is the distinction UpdateManager's sha256 check cannot make.
-      "$APKSIGNER" verify "$TMP/rogue.apk" >/dev/null 2>&1 \
-        && ok "the rogue build is perfectly well-formed and signed — only by the wrong hand" \
-        || bad "the rogue apk does not verify at all, so it proves nothing about key identity"
-    else
-      bad "could not re-sign a copy — the different-key case was not exercised"
-    fi
-  else
-    bad "apksigner not found — the signing key claims were NOT checked"
-  fi
-fi
 
 # =========================================================================================
-section "10 · the director's own screens, with this run's data on them"
+section "9 · the director's own screens, with this run's data on them"
 RANGE="from=$(date -u -v-30d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '30 days ago' +%Y-%m-%dT00:00:00Z)&to=$(date -u +%Y-%m-%dT23:59:59Z)"
 expect 200 GET "/admin/analytics?$RANGE" --jar "$ADMIN_JAR"
 # `location_id`, not `id` — lib/reporting.js names it that, and a lookup on the wrong key

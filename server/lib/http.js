@@ -1,7 +1,5 @@
 // HTTP plumbing: machine-readable errors, JSON responses, bounded body reader.
 // Kept framework-free on purpose (decision-16): handlers stay portable to Hono/Edge later.
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
 
 export const MAX_BODY_BYTES = 64 * 1024;
 
@@ -36,38 +34,6 @@ export function sendJson(res, status, obj, extra) {
     "cache-control": "no-store",
   });
   res.end(payload);
-}
-
-/**
- * Stream a file from disk as the response body. Used by exactly one route today —
- * GET /app/download (the Android self-update path), where the payload is a multi-MB APK
- * and routing it through `sendJson` would mean buffering the whole thing into one Buffer
- * and JSON-quoting it for something that is already sitting on disk as raw bytes.
- *
- * `contentType` and `filename` are supplied by the CALLER, never sniffed from the file:
- * sniffing an attacker-writable directory's content type is how a served path becomes a
- * script. The caller's job is to have already resolved `absPath` against a trusted,
- * non-attacker-writable directory (see routes/release.js) — this function does no path
- * validation of its own, the same division of labour `sendJson` has with its callers.
- *
- * `cache-control: no-store`, matching `sendJson`: the manifest that names the current file
- * can change between two requests and a cached APK is a worker stuck on an old build.
- */
-export async function sendFile(res, status, absPath, { contentType, filename } = {}, extra) {
-  const info = await stat(absPath); // ENOENT propagates — the caller's job to 404 first
-  res.writeHead(status, {
-    ...extra,
-    "content-type": contentType ?? "application/octet-stream",
-    "content-length": info.size,
-    "cache-control": "no-store",
-    ...(filename ? { "content-disposition": `attachment; filename="${filename}"` } : {}),
-  });
-  await new Promise((resolve, reject) => {
-    const stream = createReadStream(absPath);
-    stream.on("error", reject);
-    stream.pipe(res);
-    res.on("finish", resolve);
-  });
 }
 
 /**

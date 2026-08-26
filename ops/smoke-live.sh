@@ -172,8 +172,6 @@ section "1 · the gates: every protected surface refuses before it is asked nice
 expect 401 GET  /admin/data
 expect 401 GET  /admin/analytics
 expect 401 POST /admin/workers --data '{"name":"nope","hourly_rate_cents":100}'
-expect 401 GET  /app/version                       # no X-App-Key at all
-expect 401 GET  /app/download
 expect 401 GET  /roster              --key         # app key, but no WORKER session
 expect 401 POST /shifts/open         --key --data '{"client_uuid":"3f2504e0-4f89-11d3-9a0c-0305e82c3301","location_uuid":"00000000-0000-4000-9999-000000000000","start_time":"2026-08-20T10:00:00Z"}'
 expect 401 GET  /shifts/mine         --key
@@ -325,13 +323,7 @@ SZONE2=$(jget shift.start_zone_id)
 [ "$SZONE2" = "$TAG_ID" ] && ok "the shift carries start_zone_id = the tag" || bad "start_zone_id='$SZONE2'"
 
 # =========================================================================================
-section "6 · self-update, from the phone's point of view"
-expect 200 GET /app/version --key
-PUB=$(jget published); VC=$(jget version_code)
-[ "$PUB" = "true" ] && ok "published=true, version_code $VC" || bad "published=$PUB"
-
-# =========================================================================================
-section "7 · the association files, from the outside"
+section "6 · the association files, from the outside"
 ./server/wellknown/verify.sh "$HOST" --host-override >/dev/null 2>&1 \
   && ok "API host serves both association files (full check ran in deploy.sh step 7)" \
   || bad "the API host's association files did NOT verify"

@@ -14,7 +14,6 @@ import io.github.qwadratic.nfctimesheets.data.WorkerCache
 import io.github.qwadratic.nfctimesheets.net.Api
 import io.github.qwadratic.nfctimesheets.net.CookieJar
 import io.github.qwadratic.nfctimesheets.net.PrefsCookieJar
-import io.github.qwadratic.nfctimesheets.update.UpdateManager
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
@@ -114,11 +113,4 @@ class TimeSheetsApplication : Application() {
     val materials: MaterialStore by lazy { MaterialStore(this) }
 
     val materialSync: MaterialSync by lazy { MaterialSync(api, materials) }
-
-    /**
-     * Self-update (this iteration). `by lazy`: a phone that never opens Settings never
-     * even touches DownloadManager, so a feature that is not the product costs a
-     * clock-in nothing — same reasoning as [materials].
-     */
-    val updates: UpdateManager by lazy { UpdateManager(this, api) }
 }

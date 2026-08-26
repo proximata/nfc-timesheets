@@ -4,10 +4,8 @@
 // Runs against a throwaway Postgres schema; it never touches the real tables.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createHash, generateKeyPairSync, randomBytes, sign as rsaSign } from "node:crypto";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import pg from "pg";
 import { CODE_TTL_MS } from "./lib/enrolment.js";
 import { redactUrl, scrubBreadcrumb, scrubEvent, scrubLogAttributes } from "./lib/scrub.js";
@@ -683,13 +681,6 @@ try {
   process.env.APP_KEY = APP_KEY;
   delete process.env.ADMIN_PIN; // decision-20: must not be required any more
   process.env.PORT = "0";
-  // A scratch directory, empty to start — GET /app/version must answer {published:false}
-  // against a directory with NOTHING in it, not 500. Individual releases cases write a
-  // manifest (and, when they need one, a fake .apk) into this SAME directory mid-run:
-  // routes/release.js re-reads the manifest on every request, so there is no server
-  // restart needed between "nothing published" and "a build exists".
-  const RELEASES_DIR = mkdtempSync(path.join(tmpdir(), "ts-check-releases-"));
-  process.env.RELEASES_DIR = RELEASES_DIR;
 
   const { hashPassword, resetLoginRate } = await import("./lib/auth.js");
   await admin.query("INSERT INTO admins (email, password_hash) VALUES ($1, $2)", [
@@ -6371,82 +6362,6 @@ try {
     });
   }
 
-  // ===================================================================================
-  // the app self-update surface (routes/release.js, this iteration): GET /app/version and
-  // GET /app/download. No database dependency at all — a directory read is the whole
-  // mechanism — so this block never touches `admin`.
-  // ===================================================================================
-  {
-    const RELEASES_DIR = process.env.RELEASES_DIR;
-    const manifestPath = path.join(RELEASES_DIR, "latest.json");
-    const writeManifest = (obj) => writeFileSync(manifestPath, JSON.stringify(obj));
-    const removeManifest = () => {
-      try {
-        unlinkSync(manifestPath);
-      } catch {
-        // already gone — fine, this is cleanup
-      }
-    };
-
-    await test("GET /app/version answers {published:false} against an EMPTY releases directory, not an error", async () => {
-      const res = await call("/app/version");
-      assert.equal(res.status, 200);
-      assert.deepEqual(await res.json(), { published: false });
-    });
-
-    await test("GET /app/version and /app/download need the app key; no session is required or accepted as a substitute", async () => {
-      assert.equal((await call("/app/version", { key: null })).status, 401);
-      assert.equal((await call("/app/version", { key: "wrong" })).status, 401);
-      // A worker or admin session is NOT a wider credential than the app key here — the app
-      // key is what is checked, full stop.
-      assert.equal((await call("/app/version", { key: null, cookie: workerCookie })).status, 401);
-    });
-
-    await test("a published release answers version_code, version_name and a download url; the apk streams byte-for-byte", async () => {
-      const apkBytes = Buffer.from("not a real apk, just some bytes to stream\n".repeat(50), "utf8");
-      writeFileSync(path.join(RELEASES_DIR, "nfc-timesheets-9.9.9-9-release.apk"), apkBytes);
-      writeManifest({
-        version_code: 9,
-        version_name: "9.9.9",
-        file: "nfc-timesheets-9.9.9-9-release.apk",
-        sha256: "deadbeef",
-        notes: "check-api fixture build",
-      });
-
-      const version = await (await call("/app/version")).json();
-      assert.equal(version.published, true);
-      assert.equal(version.version_code, 9);
-      assert.equal(version.version_name, "9.9.9");
-      assert.equal(version.url, "/app/download");
-
-      const res = await call("/app/download");
-      assert.equal(res.status, 200);
-      assert.equal(res.headers.get("content-type"), "application/vnd.android.package-archive");
-      assert.equal(Number(res.headers.get("content-length")), apkBytes.length);
-      const body = Buffer.from(await res.arrayBuffer());
-      assert.ok(body.equals(apkBytes), "the downloaded bytes must match the file on disk exactly");
-    });
-
-    await test("a malformed manifest is read as 'nothing published', never a 500", async () => {
-      writeFileSync(manifestPath, "{ this is not json");
-      const res = await call("/app/version");
-      assert.equal(res.status, 200);
-      assert.deepEqual(await res.json(), { published: false });
-      assert.equal((await call("/app/download")).status, 404);
-      assert.equal((await (await call("/app/download")).json()).error, "no_release_published");
-    });
-
-    await test("a manifest naming a file that is not actually on disk is a clean 404, not a crash", async () => {
-      writeManifest({ version_code: 10, version_name: "10.0.0", file: "does-not-exist.apk" });
-      const version = await (await call("/app/version")).json();
-      assert.equal(version.published, true, "the manifest itself is well-formed");
-      const dl = await call("/app/download");
-      assert.equal(dl.status, 404);
-      assert.equal((await dl.json()).error, "release_file_missing");
-    });
-
-    removeManifest();
-  }
 
   await test("unknown route returns a 404 code, not a stack trace", async () => {
     const res = await call("/nope");

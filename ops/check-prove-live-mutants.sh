@@ -204,9 +204,9 @@ prod_seed "an unmarked row is planted that no cleanup will remove" \
 echo
 echo "== C · the production half, mutated in the SCRIPT"
 #
-# These four cannot be seeded in the database, because what they assert is not a row: that
-# the answer came from THIS process (the access log), that the update is the build we
-# published (the sha and the signature), and that a screenshot is of the thing it names.
+# These two cannot be seeded in the database, because what they assert is not a row: that
+# the answer came from THIS process (the access log), and that a screenshot is of the thing
+# it names.
 
 script_mutant() {
   local label="$1" expr="$2" needle="$3"
@@ -239,22 +239,6 @@ script_mutant() {
 script_mutant "the access-log window is moved past every request this run makes" \
   's/\nSINCE=[^\n]*\n/\nSINCE=9999999999\n/' \
   'nothing in the access log matched'
-
-# THE PUBLISHED APK IS THE ONE WE BUILT. Point the comparison at a build signed by another
-# hand and the same-signer assertion must fall over — this is the property that decides
-# whether `adb install -r` lands or the OS refuses the update outright.
-# EVERY `$` IS ESCAPED. perl interpolates its own variables in the replacement, so an
-# unescaped $TMP becomes the empty string and the mutant then fails for the wrong reason —
-# which still looks like a red, and is the way a mutation harness lies to you.
-script_mutant "the 'field build' is swapped for one signed with a different key" \
-  's{^FIELD_APK=android/dist/[^\n]*}{FIELD_APK="\$TMP/rogue-field.apk"\ncp android/dist/nfc-timesheets-0.4.0-5-release.apk "\$FIELD_APK"\nexport JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"\nexport PATH="\$JAVA_HOME/bin:\$PATH"\nkeytool -genkeypair -keystore "\$TMP/rk.jks" -storepass rogue123 -keypass rogue123 -alias r -keyalg RSA -keysize 2048 -validity 30 -dname "CN=Not Us" >/dev/null 2>\&1\n"\$(/bin/ls -d /opt/homebrew/share/android-commandlinetools/build-tools/*/apksigner | tail -1)" sign --ks "\$TMP/rk.jks" --ks-pass pass:rogue123 --key-pass pass:rogue123 --ks-key-alias r "\$FIELD_APK" >/dev/null 2>\&1}m' \
-  'the update would be REFUSED by the OS'
-
-# THE DOWNLOADED BYTES ARE THE PUBLISHED BYTES. UpdateManager refuses a truncated download
-# that DownloadManager still calls successful; this is that check, from the outside.
-script_mutant "one byte of the downloaded APK is flipped" \
-  's{  GOT=\$\(shasum}{  printf x >> "\$TMP/update.apk"\n  GOT=\$(shasum}' \
-  'downloaded sha'
 
 # A SCREENSHOT OF THE WRONG THING. `shot` must fail when the page never renders what it
 # names, or "it appears in the admin" is satisfied by any page at all.
