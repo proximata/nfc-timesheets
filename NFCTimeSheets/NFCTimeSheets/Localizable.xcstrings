@@ -115,18 +115,42 @@
         }
       }
     },
-    "%lld old shift%@ need your admin" : {
+    "%lld old shifts need your admin" : {
       "localizations" : {
         "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld alte Schicht%2$@ braucht Ihre Verwaltung"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld alte Schicht braucht Ihre Verwaltung"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld alte Schichten brauchen Ihre Verwaltung"
+                }
+              }
+            }
           }
         },
         "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld old shift%2$@ need your admin"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld old shift needs your admin"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld old shifts need your admin"
+                }
+              }
+            }
           }
         }
       }
@@ -2236,18 +2260,42 @@
         }
       }
     },
-    "We cleaned up %lld old record%@" : {
+    "We cleaned up %lld old records" : {
       "localizations" : {
         "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wir haben %1$lld alte%2$@ Eintrag/Einträge bereinigt"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Wir haben %lld alten Eintrag bereinigt"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Wir haben %lld alte Einträge bereinigt"
+                }
+              }
+            }
           }
         },
         "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "We cleaned up %1$lld old record%2$@"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "We cleaned up %lld old record"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "We cleaned up %lld old records"
+                }
+              }
+            }
           }
         }
       }

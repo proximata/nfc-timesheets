@@ -37,7 +37,12 @@ struct MigrationReceiptSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     Text(cleared.isEmpty
                          ? "We checked your old records"
-                         : "We cleaned up \(cleared.count) old record\(cleared.count == 1 ? "" : "s")")
+                         // ponytail: was a Swift-side 's' suffix smuggled across the
+                         // language boundary via %@ (TASK-40) - German doesn't pluralise by
+                         // adding s, so "Eintrags" isn't a word. A plain %lld interpolation
+                         // lets Localizable.xcstrings carry a real one/other plural variation
+                         // per language instead, where noun AND verb can both agree.
+                         : "We cleaned up \(cleared.count) old records")
                         .font(.title2.bold())
                         .accessibilityAddTraits(.isHeader)
 
@@ -50,7 +55,7 @@ struct MigrationReceiptSheet: View {
 
                     if !needsAdmin.isEmpty {
                         Divider()
-                        Text("\(needsAdmin.count) old shift\(needsAdmin.count == 1 ? "" : "s") need your admin")
+                        Text("\(needsAdmin.count) old shifts need your admin")  // ponytail: see TASK-40 comment above - plural variation lives in the catalog, not a Swift suffix
                             .font(.headline)
                             .foregroundStyle(.orange)
                             .accessibilityAddTraits(.isHeader)

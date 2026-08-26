@@ -75,25 +75,50 @@ for key in strings.keys {
           + "one is never looked up and its sentence ships in English.")
 }
 
+// A German localization is either a flat stringUnit or a plural variation (TASK-40: "4 alte
+// Schichts" was a Swift-side 's' suffix smuggled past the catalogue - the fix is CLDR
+// one/other variants, where noun and verb can both agree, not another string trick). Both
+// shapes are checked the same way: translated, non-empty, and the same placeholder TYPES
+// as the key.
+func checkUnit(_ unit: [String: Any]?, key: String, label: String) -> Bool {
+    guard let unit,
+          let text = unit["value"] as? String
+    else {
+        check(false, "'\(key)' (\(label)) has no German translation (decision-8: German is the default language)")
+        return false
+    }
+    check(unit["state"] as? String == "translated",
+          "'\(key)' (\(label)) is not marked translated - a 'needs_review' string ships as English")
+    check(!text.isEmpty, "'\(key)' (\(label)) has an EMPTY German translation, which renders as nothing at all")
+    check(placeholders(key) == placeholders(text),
+          "'\(key)' (\(label)) -> '\(text)': the placeholders do not match")
+    return true
+}
+
 var translated = 0
 for (key, value) in strings {
     guard let entry = value as? [String: Any] else {
         check(false, "'\(key)' is not an object"); continue
     }
     guard let locales = entry["localizations"] as? [String: Any],
-          let german = locales["de"] as? [String: Any],
-          let unit = german["stringUnit"] as? [String: Any],
-          let text = unit["value"] as? String
+          let german = locales["de"] as? [String: Any]
     else {
         check(false, "'\(key)' has no German translation (decision-8: German is the default language)")
         continue
     }
-    check(unit["state"] as? String == "translated",
-          "'\(key)' is not marked translated - a 'needs_review' string ships as English")
-    check(!text.isEmpty, "'\(key)' has an EMPTY German translation, which renders as nothing at all")
-    check(placeholders(key) == placeholders(text),
-          "'\(key)' -> '\(text)': the placeholders do not match")
-    translated += 1
+    if let unit = german["stringUnit"] as? [String: Any] {
+        if checkUnit(unit, key: key, label: "stringUnit") { translated += 1 }
+    } else if let plural = (german["variations"] as? [String: Any])?["plural"] as? [String: Any] {
+        check(plural["other"] != nil, "'\(key)' has a plural variation with no 'other' form - every count needs one")
+        var allOk = true
+        for (category, unitBox) in plural {
+            let unit = (unitBox as? [String: Any])?["stringUnit"] as? [String: Any]
+            allOk = checkUnit(unit, key: key, label: "plural.\(category)") && allOk
+        }
+        if allOk { translated += 1 }
+    } else {
+        check(false, "'\(key)' has no German translation (decision-8: German is the default language)")
+    }
 }
 check(translated == strings.count, "every key is translated (\(translated)/\(strings.count))")
 
@@ -106,6 +131,13 @@ for word in ["Objekt", "Schicht", "Mitarbeiter", "eingestempelt", "Verwaltung"] 
     check(all.contains(word), "the German catalogue uses the house word '\(word)' (web/messages/de.json)")
 }
 check(!all.contains("Gebäude"), "buildings are Objekte, never Gebäude - that is the admin panel's word")
+
+// TASK-40: the migration receipt's two counts must be real plural variations, not a Swift
+// 's' suffix smuggled through a second %@ - RED if either regresses to a flat stringUnit.
+for key in ["%lld old shifts need your admin", "We cleaned up %lld old records"] {
+    let hasPluralVariation = ((((strings[key] as? [String: Any])?["localizations"] as? [String: Any])?["de"] as? [String: Any])?["variations"] as? [String: Any])?["plural"] != nil
+    check(hasPluralVariation, "'\(key)' must use a plural variation (TASK-40), not a Swift-side 's' suffix")
+}
 
 // MARK: - Literals in the source that never reached the catalogue (TASK-278)
 //
