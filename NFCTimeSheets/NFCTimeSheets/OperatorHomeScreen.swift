@@ -13,11 +13,15 @@
 //  OperatorSignInScreen.swift is back, in substance, under a new name and using the SAME
 //  form the worker's door uses.
 //
-//  NO NETWORK CALL DECIDES WHAT IS ON SCREEN. `OperatorSession` reads its cached identity
-//  out of UserDefaults at init, beside the ts_operator cookie URLSession already holds, so
-//  an operator who signed in yesterday walks into a basement today and gets the two
-//  actions with no signal and nothing to fail. Whether the cookie is still good is the
-//  server's answer to the FIRST real call, not a gate at the door.
+//  NO NETWORK CALL DECIDES WHAT IS ON SCREEN. `OperatorSession.refresh()` reads the
+//  ts_operator cookie URLSession already holds on disk, so an operator who signed in
+//  yesterday walks into a basement today and gets the two actions with no signal and
+//  nothing to fail. Whether the cookie is still GOOD is the server's answer to the first
+//  real call, not a gate at the door.
+//
+//  EVERY APPEARANCE, not once at launch (TASK-276). The cookie can go away underneath
+//  this screen - a worker sign-out clears every cookie for API.base, a 401 elsewhere
+//  drops the session - and a gate answered once at process start never notices.
 //
 
 import SwiftUI
@@ -58,5 +62,6 @@ struct OperatorHomeScreen: View {
         }
         .navigationTitle("Operator")
         .scrollDismissesKeyboard(.interactively)
+        .onAppear { operatorSession.refresh() }
     }
 }

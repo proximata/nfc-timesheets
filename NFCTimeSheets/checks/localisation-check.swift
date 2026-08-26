@@ -107,5 +107,37 @@ for word in ["Objekt", "Schicht", "Mitarbeiter", "eingestempelt", "Verwaltung"] 
 }
 check(!all.contains("Gebäude"), "buildings are Objekte, never Gebäude - that is the admin panel's word")
 
+// MARK: - Literals in the source that never reached the catalogue (TASK-278)
+//
+// The header above says only Xcode can prove the key set still matches what the compiler
+// extracts. That was true and it cost four release-visible German sentences: 'Write or
+// test tags' (twice), 'Sign in as an operator...' and .navigationTitle('Operator') shipped
+// in English because nobody re-ran -exportLocalizations after adding them.
+//
+// This is the POOR MAN'S EXTRACTOR and it is deliberately narrow: the one-argument, plain
+// string-literal form of the handful of view builders this app actually uses. It cannot
+// see an interpolated literal, a string built in a variable, or a modifier not listed
+// here - so it is a floor, not a proof, and -exportLocalizations stays the real answer.
+// What it DOES catch is exactly how those four got in: someone typed Text("...") and
+// stopped.
+//
+// RED CASE: delete 'Write or test tags' from the catalogue and this fails naming
+// ContentView.swift.
+let literal = try! NSRegularExpression(
+    pattern: #"(?:Text|Button|NavigationLink|Section|navigationTitle)\("([^"\\%]{4,})"\)?"#)
+let sources = (try? FileManager.default.contentsOfDirectory(atPath: "NFCTimeSheets"))?
+    .filter { $0.hasSuffix(".swift") }.sorted() ?? []
+check(!sources.isEmpty, "the source directory was found")
+
+for file in sources where file != "DemoHooks.swift" {  // demo builds only, see TASK-278
+    guard let text = try? String(contentsOfFile: "NFCTimeSheets/\(file)", encoding: .utf8) else { continue }
+    for match in literal.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+        let key = String(text[Range(match.range(at: 1), in: text)!])
+        check(strings[key] != nil,
+              "\(file) shows the literal '\(key)' and the catalogue has no entry for it, so it "
+              + "renders in English on a German phone (AGENTS.md: both languages, same commit)")
+    }
+}
+
 if failed { exit(1) }
 print("localisation-check: OK (\(strings.count) keys, all German)")

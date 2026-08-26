@@ -74,6 +74,13 @@ enum OperatorFlowAPI {
         return try await OperatorTagAPI.bindZone(zoneId: zoneId, locationId: locationId)
     }
 
+    static func unbindZone(zoneId: String) async throws -> WireCreatedZone {
+        #if DEBUG
+        if OperatorMocks.active != nil { return try OperatorMocks.unboundZone(zoneId: zoneId) }
+        #endif
+        return try await OperatorTagAPI.unbindZone(zoneId: zoneId)
+    }
+
     static func verifyZone(zoneId: String, placeUuid: String) async throws -> WireZoneVerifyResult {
         #if DEBUG
         if OperatorMocks.active != nil { return OperatorMocks.verifyResult(zoneId: zoneId) }
@@ -120,6 +127,8 @@ enum OperatorMockFlow: String, CaseIterable, Identifiable {
     case writeThenSkipBuilding
     case bindUnboundZone
     case verifyBoundZone
+    case unbindBoundZone
+    case unbindZoneWithShifts
 
     var id: String { rawValue }
 
@@ -129,6 +138,8 @@ enum OperatorMockFlow: String, CaseIterable, Identifiable {
         case .writeThenSkipBuilding: return "Mock: write, then skip the building"
         case .bindUnboundZone: return "Mock: bind an unbound zone"
         case .verifyBoundZone: return "Mock: verify a bound zone, then its zone page"
+        case .unbindBoundZone: return "Mock: unbind a bound zone (works)"
+        case .unbindZoneWithShifts: return "Mock: unbind a zone somebody clocked in at (refused)"
         }
     }
 }
@@ -145,6 +156,18 @@ enum OperatorMocks {
     /// cannot accidentally arm the radio mock.
     static var scannedPlaceId: String? {
         active == .verifyBoundZone ? boundZoneId : nil
+    }
+
+    /// `POST /operator/zones/:id/unbind`, both answers - and WHICH answer is decided by the
+    /// armed scenario, not by the zone, because the difference lives in shift rows this side
+    /// has never seen. The refusal is a composite FK in migration 013; it needs a real shift
+    /// to trigger, so without a canned 409 the one branch that has to render as a sentence
+    /// rather than a code would be unreachable on a simulator.
+    static func unboundZone(zoneId: String) throws -> WireCreatedZone {
+        if active == .unbindZoneWithShifts {
+            throw APIFailure(status: 409, code: "zone_has_shifts")
+        }
+        return WireCreatedZone(id: zoneId, locationId: nil, name: "Haupteingang (mock)")
     }
 
     static func arm(_ flow: OperatorMockFlow?) {

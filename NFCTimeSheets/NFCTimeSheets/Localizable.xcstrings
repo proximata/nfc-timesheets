@@ -281,6 +281,16 @@
         }
       }
     },
+    "Cancel" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abbrechen"
+          }
+        }
+      }
+    },
     "Card id" : {
       "localizations" : {
         "de" : {
@@ -777,6 +787,16 @@
         }
       }
     },
+    "No NFC, no network. A simulator has neither." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kein NFC, kein Netz. Ein Simulator hat beides nicht."
+          }
+        }
+      }
+    },
     "No building yet" : {
       "localizations" : {
         "de" : {
@@ -948,6 +968,16 @@
         }
       }
     },
+    "Operator" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Operator"
+          }
+        }
+      }
+    },
     "Operator code" : {
       "localizations" : {
         "de" : {
@@ -1109,12 +1139,52 @@
         }
       }
     },
+    "Remove" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufheben"
+          }
+        }
+      }
+    },
+    "Remove this zone from %@? This does not delete anything, and it can be undone by assigning a building again." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Zone von %@ trennen? Es wird nichts gelöscht — die Zone kann jederzeit wieder einem Objekt zugeordnet werden."
+          }
+        }
+      }
+    },
+    "Remove this zone from its building" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zuordnung zum Objekt aufheben"
+          }
+        }
+      }
+    },
     "Removes this from the ready-to-collect list" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Entfernt den Eintrag aus der Liste „Zum Abholen bereit“"
+          }
+        }
+      }
+    },
+    "Removing the building…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zuordnung wird aufgehoben …"
           }
         }
       }
@@ -1335,6 +1405,16 @@
         }
       }
     },
+    "Sign in as an operator to write and test tags. This never opens a shift." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Als Operator anmelden, um Karten zu schreiben und zu prüfen. Dabei wird nie eine Schicht geöffnet."
+          }
+        }
+      }
+    },
     "Sign in by SMS" : {
       "localizations" : {
         "de" : {
@@ -1416,6 +1496,16 @@
         }
       }
     },
+    "Simulate (debug builds only)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simulation (nur Debug-Builds)"
+          }
+        }
+      }
+    },
     "Skip for now" : {
       "localizations" : {
         "de" : {
@@ -1452,6 +1542,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Jemand hat aus dieser Karte bereits eine Zone gemacht."
+          }
+        }
+      }
+    },
+    "Somebody has already clocked in at this door, so it stays with this building." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hier wurde bereits eingestempelt, deshalb bleibt diese Zone bei diesem Objekt."
           }
         }
       }
@@ -1672,6 +1772,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Das Schreiben konnte nicht geprüft werden (%@). Halten Sie diese Karte erneut hin."
+          }
+        }
+      }
+    },
+    "The zone no longer has a building. Pick one now." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Zone gehört zu keinem Objekt mehr. Jetzt ein Objekt auswählen."
           }
         }
       }
@@ -1966,6 +2076,16 @@
         }
       }
     },
+    "This zone has no building anyway." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Zone gehört ohnehin zu keinem Objekt."
+          }
+        }
+      }
+    },
     "This zone has no building yet, so a tap on its card resolves to nothing. Pick its building first." : {
       "localizations" : {
         "de" : {
@@ -2182,6 +2302,16 @@
         }
       }
     },
+    "Write or test tags" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Karten schreiben oder prüfen"
+          }
+        }
+      }
+    },
     "Written and checked." : {
       "localizations" : {
         "de" : {
@@ -2268,6 +2398,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Zonenname"
+          }
+        }
+      }
+    },
+    "this building" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "diesem Objekt"
           }
         }
       }

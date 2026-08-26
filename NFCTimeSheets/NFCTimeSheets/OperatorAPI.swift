@@ -56,6 +56,16 @@ private struct WireOperatorError: Decodable {
     let error: String
 }
 
+/// The OPERATOR's session died server-side (expired, revoked, code withdrawn). A SECOND
+/// notification, never `.sessionRejected`: that one is the worker's and Auth.swift's
+/// Session observes it, so posting it here would sign a cleaner out of a running shift
+/// because a tag write 401'd. Android's operatorApi passes a no-op onSessionRejected for
+/// exactly this reason (TimeSheetsApplication.kt). Observed only by OperatorSession.
+extension Notification.Name {
+    static let operatorSessionRejected =
+        Notification.Name("io.github.qwadratic.NFCTimeSheets.operatorSessionRejected")
+}
+
 /// Mirrors API.swift's private `send`, minus the `.sessionRejected` post. See the header
 /// above for why that difference is load-bearing and not an oversight.
 private func sendOperator(_ request: URLRequest) async throws -> Data {
@@ -69,6 +79,15 @@ private func sendOperator(_ request: URLRequest) async throws -> Data {
 
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     guard (200..<300).contains(status) else {
+        // The gate reads the cookie, but a cookie that is still on disk can already be
+        // dead server-side. This is the only moment the app can learn that (there is no
+        // GET /auth/operator-session), so it tells OperatorSession directly (TASK-276).
+        // Sign-in itself 401s on a wrong code and is NOT a dying session - but the state
+        // it would drop to is the one that door is already showing, so no exception is
+        // carved out for it.
+        if status == 401 {
+            NotificationCenter.default.post(name: .operatorSessionRejected, object: nil)
+        }
         let parsed = try? Wire.decoder.decode(WireOperatorError.self, from: data)
         throw APIFailure(status: status, code: parsed?.error ?? "http_\(status)", body: data)
     }
@@ -295,6 +314,10 @@ struct WireCreatedZone: Decodable {
 
 private struct WireCreatedZoneEnvelope: Decodable { let zone: WireCreatedZone }
 
+/// `{}`. For the routes whose whole request is the path (currently only unbind): the server
+/// still parses a JSON body, so sending nothing at all is not the same thing as sending this.
+private struct EmptyBody: Encodable {}
+
 private struct ResolveZoneRequest: Encodable {
     let name: String
     let locationId: String?
@@ -360,6 +383,23 @@ enum OperatorTagAPI {
     static func bindZone(zoneId: String, locationId: String) async throws -> WireCreatedZone {
         let envelope: WireCreatedZoneEnvelope =
             try await operatorPost("/operator/zones/\(zoneId)/bind", BindZoneRequest(locationId: locationId))
+        return envelope.zone
+    }
+
+    /// POST /operator/zones/:id/unbind {} -> take the building away again.
+    ///
+    /// THE ONLY WAY BACK from a zone bound to the wrong building: `bindZone` refuses a zone
+    /// that already has one (409 already_bound - rebinding is unbind-then-bind, never a silent
+    /// move) and decision-54 §2/§3 took the same power out of the admin panel.
+    ///
+    /// IT DOES NOT CLEAR `verified_at`, unlike `bindZone` - the server keeps the stamp because
+    /// it stays true of what was proved. Nothing here reimplements that either way.
+    ///
+    /// The body is empty: the zone in the path is the whole request.
+    ///   200 {zone} · 404 unknown_zone · 409 already_unbound · 409 zone_has_shifts
+    static func unbindZone(zoneId: String) async throws -> WireCreatedZone {
+        let envelope: WireCreatedZoneEnvelope =
+            try await operatorPost("/operator/zones/\(zoneId)/unbind", EmptyBody())
         return envelope.zone
     }
 

@@ -35,24 +35,57 @@ final class OperatorSession {
         return nil
     }
 
-    // Same idiom as Auth.swift's Cache: an optimistic local echo of who is signed in,
-    // kept in UserDefaults because it is not a secret — the credential is the
-    // ts_operator cookie, held by URLSession's own jar exactly the way ts_worker already
-    // is (see the header of OperatorAPI.swift). There is no GET /auth/operator-session to
-    // reconcile against at launch — decision-45 ships sign-in and sign-out only — so this
-    // cache is trusted until the next operator call 401s and this screen is opened again,
-    // at which point signIn overwrites it and signOut clears it.
+    // Same idiom as Auth.swift's Cache: an optimistic local echo of WHO is signed in,
+    // kept in UserDefaults because it is not a secret. IT IS NOT THE GATE, and saying so
+    // is the whole of TASK-276: this cache used to BE the gate, it is written once at
+    // first sign-in and nothing but signOut() ever cleared it, so a worker sign-out (which
+    // deletes every cookie for API.base, ts_operator included — Auth.swift) left the two
+    // actions on screen behind a dead credential with no way back to the code form short
+    // of a reinstall. The credential is the ts_operator cookie and the cookie is what is
+    // read now — the cache only supplies the name printed next to it.
     private enum Cache {
         static let id = "operator.id"
         static let name = "operator.name"
     }
 
     init() {
+        // A 401 from an operator call, and ONLY from an operator call. Deliberately not
+        // .sessionRejected: that one is the worker's, posted from API.swift's choke point,
+        // and an operator code going stale must never sign a cleaner out mid-shift (see
+        // the header of OperatorAPI.swift). Same reason Android's operatorApi passes a
+        // no-op where the worker's passes sessionRejected. Never removed and does not need
+        // to be: exactly one OperatorSession exists and the App owns it.
+        NotificationCenter.default.addObserver(
+            forName: .operatorSessionRejected, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.serverRejectedSession() }
+        }
+        refresh()
+    }
+
+    /// Re-derive the gate from the cookie on disk. NO NETWORK CALL — a basement with no
+    /// signal must still let a signed-in operator through (decision-54 §4). Called from
+    /// OperatorHomeScreen every time it appears, not once at launch: the session can have
+    /// died while that screen sat in the background, and coming back to a gate that still
+    /// says "signed in" is how an operator ends up at a card with no credential. Android's
+    /// TimeSheetViewModel.refreshOperatorReady() is the same three lines.
+    func refresh() {
+        guard hasSessionCookie else {
+            if case .signedOut = state { return }  // don't stomp an existing reason
+            clearCache()
+            state = .signedOut(reason: nil)
+            return
+        }
         let defaults = UserDefaults.standard
         let cachedId = defaults.integer(forKey: Cache.id)
-        state = cachedId > 0
-            ? .signedIn(WireOperator(id: cachedId, name: defaults.string(forKey: Cache.name) ?? ""))
-            : .signedOut(reason: nil)
+        state = .signedIn(WireOperator(id: cachedId,
+                                       name: defaults.string(forKey: Cache.name) ?? ""))
+    }
+
+    /// The credential itself, read out of the jar URLSession already keeps across launches
+    /// (OperatorAPI.swift). By NAME, never by host: ts_worker lives in the same jar.
+    private var hasSessionCookie: Bool {
+        (HTTPCookieStorage.shared.cookies(for: API.base) ?? []).contains { $0.name == "ts_operator" }
     }
 
     /// Redeem an operator enrolment code. `code` is already EnrolmentCode.normalise()'d by
@@ -96,6 +129,16 @@ final class OperatorSession {
         state = .signedOut(reason: nil)
     }
 
+    /// A 401 came back from an operator call: expired, revoked, or the code was withdrawn.
+    /// Drop to signed-out once so WriteTagScreen/VerifyZoneScreen's existing
+    /// onChange(of: operatorInfo == nil) dismiss actually fires and the code form comes
+    /// back. The worker's session is not touched.
+    private func serverRejectedSession() {
+        if case .signedOut = state { return }
+        clearLocalSession()
+        state = .signedOut(reason: String(localized: "Your session ended. Sign in again."))
+    }
+
     private func store(_ op: WireOperator) {
         UserDefaults.standard.set(op.id, forKey: Cache.id)
         UserDefaults.standard.set(op.name, forKey: Cache.name)
@@ -108,11 +151,17 @@ final class OperatorSession {
     /// here, never by host, means an operator signing out on a phone that also holds a
     /// worker session leaves ts_worker exactly as it was.
     private func clearLocalSession() {
-        UserDefaults.standard.removeObject(forKey: Cache.id)
-        UserDefaults.standard.removeObject(forKey: Cache.name)
+        clearCache()
         let storage = HTTPCookieStorage.shared
         for cookie in storage.cookies(for: API.base) ?? [] where cookie.name == "ts_operator" {
             storage.deleteCookie(cookie)
         }
+    }
+
+    /// The display echo only. The cookie is gone already (or was never there) whenever
+    /// this runs on its own from refresh().
+    private func clearCache() {
+        UserDefaults.standard.removeObject(forKey: Cache.id)
+        UserDefaults.standard.removeObject(forKey: Cache.name)
     }
 }

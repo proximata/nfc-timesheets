@@ -45,12 +45,31 @@ struct VerifyZoneScreen: View {
     @State private var shiftsPage = 1
     @State private var shiftsBusy = false
     @State private var shiftsError = false
+    @State private var unbind: UnbindState = .idle
+    @State private var confirmingUnbind = false
 
     /// The bind step for an UNBOUND zone, modelled the same way WriteTagScreen models its
     /// zone step: one enum, one sentence per case, no scattered booleans. `.failed` carries
     /// the server's CODE, because the sentence belongs next to the field.
     private enum BindState: Equatable {
         case idle, loading, picking, submitting, bound
+        case failed(String)
+    }
+
+    /// UNBIND (TASK-277), the way back out of a wrong building - and the only one there is:
+    /// `bindZone` refuses a zone that already has a building, and decision-54 §2/§3 removed
+    /// the admin panel's ability to touch a zone's building at all.
+    ///
+    /// IT IS NOT A DELETE, and the confirmation says so. The zone, its card, its name and its
+    /// proof all survive - only the building goes, and binding it again puts one back.
+    ///
+    /// `zone_has_shifts` IS ITS OWN CASE, not a code inside `.failed`. The server refuses a
+    /// zone any shift has ever referenced (a composite FK in migration 013, not a check in
+    /// this app), and that refusal is a fact an operator standing at the door can act on -
+    /// "this is the right building after all" - where a code is not.
+    private enum UnbindState: Equatable {
+        case idle, submitting, unbound
+        case hasShifts
         case failed(String)
     }
 
@@ -104,6 +123,14 @@ struct VerifyZoneScreen: View {
             }
             Button(OperatorMockFlow.verifyBoundZone.label) {
                 simulate(OperatorMockFlow.verifyBoundZone, zoneId: OperatorMocks.boundZoneId)
+            }
+            // Two scenarios, one screen, visibly different endings: the first drops the zone
+            // into the building picker, the second leaves it exactly where it is and says why.
+            Button(OperatorMockFlow.unbindBoundZone.label) {
+                simulate(OperatorMockFlow.unbindBoundZone, zoneId: OperatorMocks.boundZoneId)
+            }
+            Button(OperatorMockFlow.unbindZoneWithShifts.label) {
+                simulate(OperatorMockFlow.unbindZoneWithShifts, zoneId: OperatorMocks.boundZoneId)
             }
         }
     }
@@ -170,6 +197,7 @@ struct VerifyZoneScreen: View {
             } else {
                 bindRows(zone)
             }
+            unbindRows(zone)
             Button("Choose a different zone") { select(nil) }
         }
         if zone.isBound, verifyResult != nil {
@@ -196,6 +224,91 @@ struct VerifyZoneScreen: View {
             }
             Button("Put this zone in that building") { Task { await bindZone(zone) } }
                 .disabled(pickedLocationId == nil)
+        }
+    }
+
+    /// The unbind outcome sentence, plus - for a BOUND zone only - the button and its
+    /// confirmation. Both live here rather than in the bound branch above because a successful
+    /// unbind flips the zone to UNBOUND and therefore to the bind form: the sentence that
+    /// explains why the building picker just appeared has to outlive the branch that caused it.
+    ///
+    /// The dialog NAMES THE BUILDING. An operator with a worklist of near-identical stairwells
+    /// is exactly who this is for, and "are you sure?" over an unnamed building is a question
+    /// nobody can answer.
+    @ViewBuilder
+    private func unbindRows(_ zone: WireOperatorZone) -> some View {
+        if let text = unbindText {
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(unbind == .unbound || unbind == .submitting ? Color.primary : Color.red)
+                .accessibilityLabel(text)
+        }
+        if zone.isBound {
+            Button("Remove this zone from its building") { confirmingUnbind = true }
+                .disabled(unbind == .submitting)
+                .confirmationDialog(
+                    Text("Remove this zone from \(zone.locationName ?? String(localized: "this building"))? This does not delete anything, and it can be undone by assigning a building again."),
+                    isPresented: $confirmingUnbind,
+                    titleVisibility: .visible
+                ) {
+                    Button("Remove", role: .destructive) { Task { await unbindZone(zone) } }
+                    Button("Cancel", role: .cancel) {}
+                }
+        }
+    }
+
+    private var unbindText: String? {
+        switch unbind {
+        case .idle: return nil
+        case .submitting: return String(localized: "Removing the building…")
+        case .unbound: return String(localized: "The zone no longer has a building. Pick one now.")
+        case .hasShifts:
+            return String(localized: "Somebody has already clocked in at this door, so it stays with this building.")
+        case .failed(let code):
+            switch code {
+            case "already_unbound": return String(localized: "This zone has no building anyway.")
+            case "unknown_zone": return String(localized: "This zone isn't active any more.")
+            case "network": return String(localized: "No connection - try again.")
+            default: return String(localized: "Server trouble - try again.")
+            }
+        }
+    }
+
+    /// POST /operator/zones/:id/unbind. The zone comes back with no building, so the row is
+    /// patched in place exactly as `bindZone` patches it and the screen falls through to the
+    /// building picker - the honest next question. `verifiedAt` is carried through UNCHANGED:
+    /// the server deliberately does not clear it on an unbind, and clearing it here would be
+    /// this screen inventing a rule the API does not have.
+    private func unbindZone(_ zone: WireOperatorZone) async {
+        unbind = .submitting
+        do {
+            let unboundZone = try await OperatorFlowAPI.unbindZone(zoneId: zone.id)
+            let renamed = WireOperatorZone(
+                id: zone.id,
+                locationId: nil,
+                locationName: nil,
+                name: unboundZone.name,
+                tagSerial: zone.tagSerial,
+                tagDeployedAt: zone.tagDeployedAt,
+                verifiedAt: zone.verifiedAt)
+            selected = renamed
+            zones = zones.map { $0.id == renamed.id ? renamed : $0 }
+            OperatorFlowAPI.cacheZones(zones)
+            // The scan's leftovers name a door this zone no longer resolves to.
+            outcome = nil
+            verifyResult = nil
+            lastFailureCode = nil
+            shifts = nil
+            shiftsPage = 1
+            shiftsError = false
+            pickedLocationId = nil
+            unbind = .unbound
+            await loadLocations()
+        } catch let failure as APIFailure {
+            // The refusal an operator can act on gets a sentence; everything else a code.
+            unbind = failure.code == "zone_has_shifts" ? .hasShifts : .failed(failure.code)
+        } catch {
+            unbind = .failed("network")
         }
     }
 
@@ -269,6 +382,8 @@ struct VerifyZoneScreen: View {
         shiftsError = false
         bind = .idle
         pickedLocationId = nil
+        unbind = .idle
+        confirmingUnbind = false
         if let zone, !zone.isBound { Task { await loadLocations() } }
     }
 
