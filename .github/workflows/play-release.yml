@@ -22,7 +22,7 @@ name: Play Internal Testing
 # app, forever, with no reset. Committing first means the repo's number is always >= what's
 # live, so a failed build never leaves the next run stuck behind an already-used number (the
 # exact failure mode this project just spent an evening debugging on the iOS side - see
-# testflight.yml's build-number comment and TASK notes on 2026-08-25).
+# the deleted testflight.yml's build-number comment, replaced by Xcode Cloud - see ci_scripts/ci_post_xcodebuild.sh).
 #
 # branding.properties is ordinary tracked project config here, not owner-restricted (unlike
 # iOS's project.pbxproj/entitlements under decision-49) - TASK-254/268 already bumped it as
