@@ -60,3 +60,5 @@ docs/media/break-look/
 
 # every screenshot is regenerable; none of them are worth a public blob
 docs/media/
+AuthKey_*.p8
+*.p8
