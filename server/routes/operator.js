@@ -404,6 +404,207 @@ async function getZone({ params }) {
   return { status: 200, body: { zone } };
 }
 
+/**
+ * GET /operator/tags/:id -> "what IS this card", for a human holding it (decision-55 §1).
+ *
+ * READ-ONLY, NO SIDE EFFECT OF ANY KIND. It stamps nothing, creates nothing and resolves
+ * nothing; scanning a card must be as free as looking at it, or an operator will hesitate to
+ * scan the odd card in the drawer — which is the whole case this route exists for.
+ *
+ * *** NOT BUILT ON `activePlace`, AND MUST NEVER BE. *** That function is THE TAP PATH
+ * (server/lib/validate.js) and its header forbids exactly the branch this route needs: an
+ * UNBOUND zone must keep collapsing into `unknown_location` there, because a real cleaner's
+ * tap against a buildingless zone has to fail exactly like a tap against nothing. Here the
+ * question is different — "what does this id mean, for somebody who can act on the answer" —
+ * so it earns its own small query rather than bending the one tap resolution depends on
+ * (decision-55 §1, and its Consequences: a maintainer extending one of the two must not
+ * assume it also changes the other).
+ *
+ * FIVE KINDS, checked IN THIS ORDER, and the order is what makes each answer unambiguous:
+ *
+ *   {kind: "zone", zone}   an ACTIVE zone, bound OR not — the SAME body shape
+ *                          GET /operator/zones/:id returns, so the client feeds it straight
+ *                          into the existing zone page (decision-54 §7: bound shows the
+ *                          building card, unbound shows the building picker). No new UI
+ *                          concept, only a new way to arrive at the one that exists.
+ *   {kind: "building"}     an ACTIVE building — the grandfathered HOIV-style building card
+ *                          (decision-47). There is no building-level operator screen and none
+ *                          is added here; this is told apart from "unknown" ONLY so the phone
+ *                          can say "that is a building card, not a zone".
+ *   {kind: "retired"}      an INACTIVE zone — precisely what a reassignment (§3 below) leaves
+ *                          behind. An honest answer for a card that very much used to be
+ *                          ours beats "not ours".
+ *   {kind: "tag_reported"} a `reported_tags` row that never became anything. Written, known,
+ *                          undecided. NO ACTION IS OFFERED FROM THIS SCREEN — turning a
+ *                          report into a zone stays POST /operator/tags/:id/resolve-zone,
+ *                          reached the way it always was.
+ *   {kind: "unknown"}      a stranger's tag, a typo, a torn-off sticker — and also an
+ *                          INACTIVE building, which decision-55 does not name a kind for and
+ *                          which no operator action can address.
+ *
+ * `tag_aliases` IS DELIBERATELY NOT RESOLVED (decision-55 §1, named there as a real cost
+ * with a small blast radius). That id space names an existing zone through a different table
+ * and is an admin concern in practice — the HOIV grandfather is effectively its only
+ * occupant. An alias id answers `unknown` here, ON PURPOSE. Widening this route to cover it
+ * is a decision record, not a patch.
+ *
+ *   200  always, for every one of the five kinds. There is no 404: "I do not know this card"
+ *        IS the answer, and a 404 would make the phone show a transport error instead of it.
+ *   400  the :id is not a uuid at all — `v.uuid`'s own refusal, before any query runs.
+ */
+async function classifyTag({ params }) {
+  const tagId = v.uuid(params.id, "id");
+
+  // FIRST, because an active zone is the only kind with an action behind it. LEFT JOIN and
+  // not INNER for the same reason getZone uses one: an UNBOUND zone must come back as a
+  // zone with a null building, never as "not found" — it is the state with work left on it.
+  const zone = await one(
+    `SELECT z.id, z.name, z.location_id, l.name AS location_name, z.verified_at
+       FROM zones z
+       LEFT JOIN locations l ON l.id = z.location_id
+      WHERE z.id = $1 AND z.active`,
+    [tagId],
+  );
+  if (zone) return { status: 200, body: { kind: "zone", zone } };
+
+  // `active` and nothing else decides whether a BUILDING card means something — the same
+  // rule `activePlace`'s load-bearing second branch states, and for the same reason: the
+  // card physically on the wall at HOIV carries a building uuid and that building has zero
+  // zones. No zone predicate belongs here either.
+  if (await one("SELECT 1 AS hit FROM locations WHERE id = $1 AND active", [tagId])) {
+    return { status: 200, body: { kind: "building" } };
+  }
+
+  // Reached only when the id is NOT an active zone, so no `active` filter is needed on the
+  // way in: any zones row still standing here is an inactive one.
+  if (await one("SELECT 1 AS hit FROM zones WHERE id = $1", [tagId])) {
+    return { status: 200, body: { kind: "retired" } };
+  }
+
+  // Likewise no `resolved_at IS NULL` filter: the two checks above already proved no zone
+  // row of ANY state carries this id, so a report reaching this line has nothing behind it
+  // whatever its stamp says. Filtering on the stamp as well would answer `unknown` for a
+  // report whose resolution left no zone — a state nothing creates today, and "unknown"
+  // would be the wrong word for it if anything ever did.
+  if (await one("SELECT 1 AS hit FROM reported_tags WHERE id = $1", [tagId])) {
+    return { status: 200, body: { kind: "tag_reported" } };
+  }
+
+  return { status: 200, body: { kind: "unknown" } };
+}
+
+/**
+ * POST /operator/zones/:id/reassign-building {new_tag_id, location_id} -> this door now
+ * belongs to a different building: retire the old zone, mint a fresh one on the rewritten
+ * card (decision-55 §3).
+ *
+ * IT DOES NOT `UPDATE zones SET location_id`, and could not if it wanted to. A zone with any
+ * shift history structurally CANNOT have its building changed in place —
+ * `shifts_start_zone_fk` / `shifts_end_zone_fk` are composite FKs on (zone_id, location_id)
+ * with a NOT NULL `shifts.location_id` (migration 013 does the MATCH SIMPLE arithmetic), so
+ * Postgres itself refuses to retarget a referenced row. decision-55 declines to special-case
+ * "but if it has no shifts yet, just update it": that buys one extra, less-tested path for
+ * the rare zone reassigned before its first tap, and leaves it with a stale
+ * `tag_deployed_at` and no requirement to prove the card again in its new context — the very
+ * gap bindZone already closes by clearing `verified_at`.
+ *
+ * THE OLD ZONE IS SOFT-DEACTIVATED, exactly as DELETE /admin/zones/:id already does when a
+ * tag comes off a wall. `verified_at`, `location_id` and every shift that ever named it are
+ * UNTOUCHED and stay queryable under its own id for ever. No new shift can reference it (an
+ * inactive zone is unresolvable by `activePlace`), and a future scan of the dead card reports
+ * `kind: "retired"` through the route above.
+ *
+ * THE NEW ZONE is keyed by `new_tag_id` — an id the OPERATOR'S PHONE minted and WROTE to the
+ * physical card BEFORE this call, through the unchanged POST /operator/tags. It carries the
+ * old zone's `name` and `note` forward (same door, same physical description; only the
+ * building changed), takes `tag_deployed_at` from the REPORT rather than from now() — the
+ * same rule resolveTagToZone follows — and starts `verified_at NULL` with zero shifts: a
+ * fresh worklist entry that needs its own test scan before it can open a shift.
+ *
+ * *** NO PARTIAL APPLICATION, AND THAT IS WHAT THE CTE SHAPE IS FOR (decision-55 §3). ***
+ * ONE statement, four CTEs, each gated on the previous one by EXISTS/derivation:
+ *   old     the zone, read ONLY if it is ACTIVE and BOUND — no row here and nothing below
+ *           can produce one either.
+ *   claim   stamps `reported_tags.resolved_at`, gated `EXISTS (SELECT 1 FROM old)`: a card
+ *           is never consumed against a zone that was not live and bound at that instant.
+ *   minted  the new zone, SELECTed from claim CROSS JOIN old: it exists only if BOTH did.
+ *   retired the deactivation, gated `EXISTS (SELECT 1 FROM minted)`: the old zone is only
+ *           retired if the new tag was actually claimed and the new row actually landed.
+ * A unique-index violation anywhere aborts the WHOLE statement, so there is no reachable
+ * state in which a door loses its zone without gaining a replacement, or a freshly written
+ * tag is silently discarded. A SELECT-then-write sequence could not promise either.
+ *
+ *   201 reassigned              {zone, retired_zone_id}
+ *   404 unknown_zone            :id is not an active zone
+ *   409 zone_unbound            it has no building — there is nothing to reassign; bind it
+ *   404 unknown_reported_tag    new_tag_id was never reported (resolvedOrUnknown)
+ *   409 already_resolved        new_tag_id is already something (resolvedOrUnknown)
+ *   409 duplicate_zone_name     the TARGET building already has a live zone by that name
+ *   409 id_in_use               UUIDv4 collision on new_tag_id itself (vanishingly unlikely)
+ *   422 unknown_location        no such building, or it is deactivated
+ */
+async function reassignZoneBuilding({ params, body }) {
+  const zoneId = v.uuid(params.id, "id");
+  const newTagId = v.uuid(body.new_tag_id, "new_tag_id");
+  const locationId = v.uuid(body.location_id, "location_id");
+
+  // ACTIVE, unlike bindZone's existence-only check: this route is reached from a screen that
+  // just offered a picker of ACTIVE buildings (GET /operator/locations), so an inactive id
+  // here is a stale phone, and moving a door into a building nobody cleans any more is not a
+  // thing to accept quietly.
+  if (!(await one("SELECT id FROM locations WHERE id = $1 AND active", [locationId]))) {
+    fail(422, "unknown_location");
+  }
+
+  let row;
+  try {
+    row = await one(
+      `WITH old AS (
+         SELECT id, name, note FROM zones WHERE id = $1 AND active AND location_id IS NOT NULL
+       ),
+       claim AS (
+         UPDATE reported_tags SET resolved_at = now()
+          WHERE id = $2 AND resolved_at IS NULL AND EXISTS (SELECT 1 FROM old)
+         RETURNING id, reported_at
+       ),
+       minted AS (
+         INSERT INTO zones (id, location_id, name, note, tag_deployed_at)
+           SELECT c.id, $3, o.name, o.note, c.reported_at FROM claim c CROSS JOIN old o
+         RETURNING ${OP_ZONE_COLS}
+       ),
+       retired AS (
+         UPDATE zones SET active = false WHERE id = $1 AND EXISTS (SELECT 1 FROM minted)
+         RETURNING id
+       )
+       SELECT m.*, r.id AS retired_zone_id FROM minted m JOIN retired r ON true`,
+      [zoneId, newTagId, locationId],
+    );
+  } catch (err) {
+    // Two indexes are reachable. `zones_one_live_name_idx` on (location_id,
+    // lower(btrim(name))) fires when the TARGET building already has a live zone by the
+    // carried-forward name — the same index resolveTagToZone and bindZone map. `zones_pkey`
+    // fires only on a uuid collision against new_tag_id. `zones_tag_serial_idx` cannot: the
+    // new row's serial is left NULL, because the serial belongs to the physical card and the
+    // card was just rewritten.
+    if (err?.code === "23505") fail(409, err?.constraint === "zones_pkey" ? "id_in_use" : "duplicate_zone_name");
+    throw err;
+  }
+  if (row) {
+    const { retired_zone_id, ...zone } = row;
+    return { status: 201, body: { zone, retired_zone_id } };
+  }
+
+  // Nothing happened — and by the CTE gating above, NOTHING happened, not "some of it". One
+  // read to say which end was at fault, because the operator's next move differs completely:
+  // pick another zone, bind this one first, or write a fresh card.
+  const existing = await one("SELECT location_id FROM zones WHERE id = $1 AND active", [zoneId]);
+  if (!existing) fail(404, "unknown_zone");
+  if (existing.location_id === null) fail(409, "zone_unbound");
+  // The old zone was fine, so the tag is what refused: 404 never reported, 409 already
+  // something. Same two-way split every other resolve in this file uses.
+  await resolvedOrUnknown(newTagId);
+}
+
 // 50 rows, fixed, not a client-supplied `limit`. The operator screen is a phone showing one
 // month at one door; there is no caller with a reason to ask for a different page size, and
 // a parameter nobody sets is a parameter nobody validates.
@@ -510,6 +711,8 @@ async function listLocations() {
 export const operatorRoutes = [
   { method: "POST", path: "/operator/tags", auth: "operator", handler: reportTag },
   { method: "POST", path: "/operator/tags/:id/resolve-zone", auth: "operator", handler: resolveTagToZone },
+  { method: "GET", path: "/operator/tags/:id", auth: "operator", handler: classifyTag },
+  { method: "POST", path: "/operator/zones/:id/reassign-building", auth: "operator", handler: reassignZoneBuilding },
   { method: "GET", path: "/operator/locations", auth: "operator", handler: listLocations },
   { method: "GET", path: "/operator/zones", auth: "operator", handler: listZones },
   { method: "GET", path: "/operator/zones/:id", auth: "operator", handler: getZone },

@@ -6764,6 +6764,216 @@ try {
       await admin.query("DELETE FROM shifts WHERE start_zone_id = $1", [zone.id]);
     });
 
+    // ---- decision-55: classify any scanned card, and reassign a bound zone's building ----
+    //
+    // Every case below is a REAL row through the REAL route. The reassign cases in
+    // particular are worth nothing mocked: the claim being tested is that ONE statement's
+    // EXISTS-gated CTEs leave no partial state, and only Postgres can demonstrate that.
+
+    await test("GET /operator/tags/:id classifies all five kinds off real rows (decision-55 §1)", async () => {
+      const house = await newHouse("klassifizier-haus", "Klassifizierhaus");
+      const boundZone = (await newZoneRow({ location_id: house, name: "Stiege gebunden K" })).zone;
+      const looseZone = (await newZoneRow({ name: "Stiege lose K" })).zone;
+      const deadZone = (await newZoneRow({ location_id: house, name: "Stiege stillgelegt K", active: false })).zone;
+
+      const classify = (id) => call(`/operator/tags/${id}`, { cookie: op1.cookie });
+
+      const bound = await expect(await classify(boundZone.id), 200);
+      assert.equal(bound.kind, "zone");
+      assert.equal(bound.zone.location_id, house);
+      assert.equal(bound.zone.location_name, "Klassifizierhaus");
+      // The SAME shape GET /operator/zones/:id returns, because the client feeds it straight
+      // into the existing zone page rather than into a new screen (decision-55 §1).
+      const viaZonePage = await expect(await call(`/operator/zones/${boundZone.id}`, { cookie: op1.cookie }), 200);
+      assert.deepEqual(bound.zone, viaZonePage.zone, "the zone body must be byte-identical to the zone page's");
+
+      // RED: make classifyTag's join an INNER one and this becomes kind "unknown" — the one
+      // answer that hides the screen an unbound zone can be bound from.
+      const loose = await expect(await classify(looseZone.id), 200);
+      assert.equal(loose.kind, "zone", "an UNBOUND zone is still a zone");
+      assert.equal(loose.zone.location_id, null);
+      assert.equal(loose.zone.location_name, null);
+
+      const building = await expect(await classify(house), 200);
+      assert.deepEqual(building, { kind: "building" }, "a grandfathered building card is named, not called a stranger");
+
+      const retired = await expect(await classify(deadZone.id), 200);
+      assert.deepEqual(retired, { kind: "retired" });
+
+      const reported = uuid(71);
+      await expect(await reportTag(reported, op1.cookie), 201);
+      assert.deepEqual(await expect(await classify(reported), 200), { kind: "tag_reported" });
+
+      assert.deepEqual(await expect(await classify(uuid(72)), 200), { kind: "unknown" });
+
+      // An INACTIVE building has no kind of its own and no operator action behind it.
+      const deadHouse = await newHouse("klassifizier-haus-tot", "Stillgelegtes Klassifizierhaus");
+      await admin.query("UPDATE locations SET active = false WHERE id = $1", [deadHouse]);
+      assert.deepEqual(await expect(await classify(deadHouse), 200), { kind: "unknown" });
+
+      // NO SIDE EFFECT: scanning must be as free as looking.
+      assert.equal(
+        (await admin.query("SELECT resolved_at FROM reported_tags WHERE id = $1", [reported])).rows[0].resolved_at,
+        null,
+        "a classify must never claim the card it just looked at",
+      );
+      assert.equal(await countOf("SELECT count(*) AS n FROM zones WHERE id = $1", [uuid(72)]), 0);
+
+      assert.equal((await call(`/operator/tags/${boundZone.id}`)).status, 401, "the app key alone is not an operator");
+      assert.equal((await call(`/operator/tags/${boundZone.id}`, { cookie: workerCookie })).status, 401);
+      assert.equal((await call("/operator/tags/not-a-uuid", { cookie: op1.cookie })).status, 400);
+    });
+
+    await test("reassign-building retires the old zone and mints a fresh one on the rewritten card", async () => {
+      const from = await newHouse("umzug-haus-alt", "Alte Hausverwaltung");
+      const to = await newHouse("umzug-haus-neu", "Neue Hausverwaltung");
+      const zone = (await newZoneRow({ location_id: from, name: "Stiege 3", note: "Tag neben der Gegensprechanlage" })).zone;
+      await admin.query("UPDATE zones SET verified_at = now() WHERE id = $1", [zone.id]);
+      // A REAL shift at the old door: this is the case that makes an in-place UPDATE
+      // impossible (the composite FK), and the history must survive the reassignment intact.
+      await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, start_zone_id, start_time, end_time)
+         VALUES ($1, $2, $3, now() - interval '5 hours', now() - interval '4 hours')`,
+        [workerId, from, zone.id],
+      );
+
+      // The phone mints and WRITES the new card first, then reports it — the unchanged
+      // Write-a-tag sequence. Nothing about reassignment invents a second way to get an id.
+      const newTag = uuid(73);
+      await expect(await reportTag(newTag, op1.cookie), 201);
+
+      const body = await expect(
+        await call(`/operator/zones/${zone.id}/reassign-building`, {
+          method: "POST",
+          cookie: op1.cookie,
+          body: { new_tag_id: newTag, location_id: to },
+        }),
+        201,
+      );
+      assert.equal(body.retired_zone_id, zone.id);
+      assert.equal(body.zone.id, newTag, "the new zone is keyed by the id physically on the new card");
+      assert.equal(body.zone.location_id, to);
+      assert.equal(body.zone.verified_at, null, "a fresh worklist entry: it must be test-scanned before it can be tapped");
+
+      const oldRow = (await admin.query("SELECT * FROM zones WHERE id = $1", [zone.id])).rows[0];
+      assert.equal(oldRow.active, false, "retired, not deleted and not moved");
+      assert.equal(oldRow.location_id, from, "THE OLD ROW'S BUILDING IS NEVER UPDATED — its history is nailed to it");
+      assert.ok(oldRow.verified_at !== null, "and what was once proved stays proved");
+      assert.equal(
+        await countOf("SELECT count(*) AS n FROM shifts WHERE start_zone_id = $1", [zone.id]),
+        1,
+        "every shift that ever named the old zone stays queryable under its own id",
+      );
+
+      const newRow = (await admin.query("SELECT * FROM zones WHERE id = $1", [newTag])).rows[0];
+      assert.equal(newRow.active, true);
+      assert.equal(newRow.name, "Stiege 3", "same door, same name");
+      assert.equal(newRow.note, "Tag neben der Gegensprechanlage", "...and the same physical description");
+      assert.ok(newRow.tag_deployed_at !== null, "stamped from the REPORT, the same rule resolve-zone follows");
+      assert.equal(await countOf("SELECT count(*) AS n FROM shifts WHERE start_zone_id = $1 OR end_zone_id = $1", [newTag]), 0);
+      assert.equal(
+        (await admin.query("SELECT resolved_at FROM reported_tags WHERE id = $1", [newTag])).rows[0].resolved_at !== null,
+        true,
+        "the report is claimed in the SAME statement that mints the zone",
+      );
+
+      // AC#6: scanning the DEAD card afterwards must say so, not "not ours".
+      const scanned = await expect(await call(`/operator/tags/${zone.id}`, { cookie: op1.cookie }), 200);
+      assert.deepEqual(scanned, { kind: "retired" });
+      // ...and the NEW card resolves to the new zone, from the same route.
+      const scannedNew = await expect(await call(`/operator/tags/${newTag}`, { cookie: op1.cookie }), 200);
+      assert.equal(scannedNew.kind, "zone");
+      assert.equal(scannedNew.zone.location_name, "Neue Hausverwaltung");
+
+      await admin.query("DELETE FROM shifts WHERE start_zone_id = $1", [zone.id]);
+    });
+
+    await test("reassign-building refuses every bad end, and NEVER applies half of itself", async () => {
+      const from = await newHouse("umzug-refuse-alt", "Ablehnhaus Alt");
+      const to = await newHouse("umzug-refuse-neu", "Ablehnhaus Neu");
+      const deadHouse = await newHouse("umzug-refuse-tot", "Ablehnhaus Stillgelegt");
+      await admin.query("UPDATE locations SET active = false WHERE id = $1", [deadHouse]);
+      const zone = (await newZoneRow({ location_id: from, name: "Stiege Ablehnung" })).zone;
+
+      const reassign = (id, body) =>
+        call(`/operator/zones/${id}/reassign-building`, { method: "POST", cookie: op1.cookie, body });
+      /** The old zone, exactly as it was: live and bound to the building it started in. */
+      const oldIsUntouched = async (msg) => {
+        const row = (await admin.query("SELECT active, location_id FROM zones WHERE id = $1", [zone.id])).rows[0];
+        assert.equal(row.active, true, msg);
+        assert.equal(row.location_id, from, msg);
+      };
+
+      // Unknown zone.
+      const missing = await reassign(uuid(74), { new_tag_id: uuid(75), location_id: to });
+      assert.equal(missing.status, 404);
+      assert.equal((await missing.json()).error, "unknown_zone");
+
+      // An UNBOUND zone has nothing to reassign — bind it instead.
+      const loose = (await newZoneRow({ name: "Stiege ohne Objekt Ablehnung" })).zone;
+      const looseTag = uuid(76);
+      await expect(await reportTag(looseTag, op1.cookie), 201);
+      const unbound = await reassign(loose.id, { new_tag_id: looseTag, location_id: to });
+      assert.equal(unbound.status, 409);
+      assert.equal((await unbound.json()).error, "zone_unbound");
+      assert.equal(
+        (await admin.query("SELECT resolved_at FROM reported_tags WHERE id = $1", [looseTag])).rows[0].resolved_at,
+        null,
+        "a card is never consumed against a zone the statement refused",
+      );
+
+      // Inactive target building, then an unknown one.
+      for (const target of [deadHouse, uuid(78)]) {
+        const res = await reassign(zone.id, { new_tag_id: looseTag, location_id: target });
+        assert.equal(res.status, 422);
+        assert.equal((await res.json()).error, "unknown_location");
+      }
+      await oldIsUntouched("a refused building must leave the old zone exactly where it was");
+
+      // AC#4: a VALID old zone plus a new_tag_id that was never reported. This is the
+      // no-partial-application proof — RED: split the CTE into two statements and the old
+      // zone is retired here, leaving a door with no zone at all.
+      const never = await reassign(zone.id, { new_tag_id: uuid(79), location_id: to });
+      assert.equal(never.status, 404);
+      assert.equal((await never.json()).error, "unknown_reported_tag");
+      await oldIsUntouched("NO PARTIAL APPLICATION: an unusable card must not cost the door its zone");
+
+      // ...and the same for a card somebody already turned into something.
+      const spent = uuid(80);
+      await expect(await reportTag(spent, op1.cookie), 201);
+      await expect(await resolveZone(spent, op1.cookie, { name: "Schon vergeben" }), 201);
+      const already = await reassign(zone.id, { new_tag_id: spent, location_id: to });
+      assert.equal(already.status, 409);
+      assert.equal((await already.json()).error, "already_resolved");
+      await oldIsUntouched("a spent card must not retire anything either");
+
+      // AC#5: the TARGET building already has a live zone by the carried-forward name.
+      await newZoneRow({ location_id: to, name: "stiege ablehnung" });
+      const clashTag = uuid(81);
+      await expect(await reportTag(clashTag, op1.cookie), 201);
+      const clash = await reassign(zone.id, { new_tag_id: clashTag, location_id: to });
+      assert.equal(clash.status, 409, "never a 500 with a constraint name on the wire");
+      assert.equal((await clash.json()).error, "duplicate_zone_name");
+      await oldIsUntouched("a name clash aborts the WHOLE statement — the old zone is not retired");
+      assert.equal(
+        (await admin.query("SELECT resolved_at FROM reported_tags WHERE id = $1", [clashTag])).rows[0].resolved_at,
+        null,
+        "...and the fresh card is still unclaimed, ready for another try",
+      );
+      assert.equal(await countOf("SELECT count(*) AS n FROM zones WHERE id = $1", [clashTag]), 0);
+
+      // Malformed input never reaches SQL, and it is an OPERATOR route.
+      for (const body of [{}, { new_tag_id: uuid(82) }, { location_id: to }, { new_tag_id: "x", location_id: to }]) {
+        assert.equal((await reassign(zone.id, body)).status, 400, JSON.stringify(body));
+      }
+      assert.equal(
+        (await asAdmin(`/operator/zones/${zone.id}/reassign-building`, { method: "POST", body: { new_tag_id: uuid(83), location_id: to } })).status,
+        401,
+        "an ADMIN session is not a path into the field",
+      );
+      await oldIsUntouched("and none of the refusals above moved anything");
+    });
+
     // ---- operator SMS sign-in (decision-54 §5) --------------------------------------
     //
     // NO REAL SMS IS SENT BY ANY OF THIS, AND NONE CAN BE. The mechanism is the one
