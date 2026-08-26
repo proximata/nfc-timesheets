@@ -1,0 +1,64 @@
+name: Deploy (API + admin)
+
+# Manual only, on purpose. ops/deploy.sh's own header names "a GitHub Action running these
+# same lines against a deploy key" as its upgrade path, so this job does exactly that and
+# nothing else - no logic is duplicated in YAML, ops/deploy.sh stays the one place deploy
+# order is encoded.
+#
+# NOT push-triggered. Unlike the Android/iOS pipelines (which only ever reach internal test
+# tracks), this ships straight to the production box real workers clock in against. GitHub's
+# environment-approval gate would be the native way to require a human click before that -
+# this repo's role (org member, not admin) got a 403 trying to create one - so
+# workflow_dispatch is the substitute gate: nothing runs until a human presses Run workflow.
+# An org owner can add a protected "production" environment later and this workflow can move
+# to it with one `environment: production` line.
+#
+# Needs 2 repo secrets (Settings -> Secrets and variables -> Actions), both created this
+# session:
+#   SERVER_DEPLOY_SSH_KEY   CI-only ed25519 keypair; the public half was appended to
+#                           exedev's ~/.ssh/authorized_keys on schimmer-glanz.exe.xyz - same
+#                           account (passwordless sudo) ops/deploy.sh already assumes.
+#   WEB_MAPS_KEY            NEXT_PUBLIC_GOOGLE_MAPS_KEY. deploy.sh reads this env var before
+#                           falling back to `psst get`, which doesn't exist on a runner.
+#
+# ops/deploy-known-hosts is schimmer-glanz.exe.xyz's real SSH host key (public, safe to
+# commit - captured once via ssh-keyscan) and is pinned here instead of
+# StrictHostKeyChecking=no.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: enable corepack
+        # web/ and server/ pin different pnpm versions in their own package.json
+        # ("packageManager"); corepack resolves per-directory, same as running deploy.sh
+        # locally, so no version is hardcoded here.
+        run: corepack enable
+
+      - name: ssh key + pinned host key
+        env:
+          SERVER_DEPLOY_SSH_KEY: ${{ secrets.SERVER_DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SERVER_DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          cp ops/deploy-known-hosts ~/.ssh/known_hosts
+
+      - name: deploy
+        env:
+          NEXT_PUBLIC_GOOGLE_MAPS_KEY: ${{ secrets.WEB_MAPS_KEY }}
+        run: ./ops/deploy.sh
