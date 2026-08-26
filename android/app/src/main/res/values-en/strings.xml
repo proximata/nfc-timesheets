@@ -344,7 +344,7 @@
          route accepts that cookie. -->
     <string name="verify_open">Test tag</string>
     <string name="verify_title">Test tag</string>
-    <string name="verify_hint">Pick a zone, then hold the card to the phone. This test scan never starts or closes a shift — it only checks whether the card opens the chosen zone.</string>
+    <string name="verify_hint">Hold a card to the phone right away — or pick a zone first and then test it. This test scan never starts or closes a shift.</string>
     <string name="verify_zones_loading">Loading the zone list …</string>
     <string name="verify_zones_error">Could not reload the zone list. Showing the last saved list, if there is one.</string>
     <string name="verify_zones_empty">No active zone found. Create one under “Locations” first.</string>
@@ -417,4 +417,42 @@
     <string name="verify_unbind_has_shifts">Somebody has already clocked in at this door, so it stays with this building.</string>
     <!-- %1$s = server error code -->
     <string name="verify_unbind_failed">The building could not be removed (%1$s). Please try again.</string>
+
+    <!-- SCAN FIRST, decision-55 §1. No prior selection: the card says what it is. Four of the
+         five answers are one sentence and offer no action at all. -->
+    <string name="verify_scan_any_hint">Card you do not recognise? Just hold it to the phone — it is only read, nothing is changed.</string>
+    <string name="verify_scan_any_checking">Looking the card up …</string>
+    <string name="verify_scan_any_building">That is a building card, not a zone card. There is nothing to test here for building cards.</string>
+    <string name="verify_scan_any_retired">This card belonged to a zone that has since been retired. It no longer opens anything.</string>
+    <string name="verify_scan_any_reported">This card is reported but has not been made into a zone yet. Do that in “Write a tag”.</string>
+    <string name="verify_scan_any_unknown">This card does not belong to this system.</string>
+    <!-- %1$s = server error code -->
+    <string name="verify_scan_any_failed">The card could not be looked up (%1$s). Please try again.</string>
+
+    <!-- REASSIGN THE BUILDING, decision-55 §3. Nothing is moved: the old zone is retired and a
+         new zone is created on a NEWLY written card. -->
+    <string name="verify_reassign_action">Move this door to another building</string>
+    <string name="verify_reassign_hint">Which building does this door belong to now? A NEW card is written next — the old card is retired.</string>
+    <string name="verify_reassign_loading">Loading the buildings …</string>
+    <!-- %1$s = server error code -->
+    <string name="verify_reassign_load_failed">The buildings could not be loaded (%1$s).</string>
+    <string name="verify_reassign_submit">Next: write a new card</string>
+    <!-- %1$s = building name -->
+    <string name="verify_reassign_awaiting">Now hold a NEW, blank card to the phone. It will be written for %1$s.</string>
+    <!-- %1$s = technical reason -->
+    <string name="verify_reassign_write_failed">This card could not be written (%1$s). Please use another, blank card.</string>
+    <string name="verify_reassign_submitting">Card written. Reassigning the zone …</string>
+    <string name="verify_reassign_retry">Try again</string>
+    <string name="verify_reassign_cancel">Cancel</string>
+    <!-- %1$s = zone name, %2$s = building name -->
+    <string name="verify_reassign_done">“%1$s” now belongs to %2$s. The old card is retired. Test the new card now.</string>
+    <string name="verify_reassign_unknown_zone">This zone no longer exists. Please reload the list.</string>
+    <string name="verify_reassign_zone_unbound">This zone has no building, so there is nothing to reassign. Give it a building first.</string>
+    <string name="verify_reassign_tag_unreported">The new card never reached the office. Please try again.</string>
+    <string name="verify_reassign_already_resolved">The new card is already in use. Please use another, blank card.</string>
+    <string name="verify_reassign_duplicate_name">The chosen building already has a zone with this name. Please tell the office.</string>
+    <string name="verify_reassign_id_in_use">This card number is already taken. Please use another, blank card.</string>
+    <string name="verify_reassign_unknown_location">That building no longer exists. Please reload the buildings.</string>
+    <!-- %1$s = server error code -->
+    <string name="verify_reassign_failed">The reassignment failed (%1$s). Please try again.</string>
 </resources>

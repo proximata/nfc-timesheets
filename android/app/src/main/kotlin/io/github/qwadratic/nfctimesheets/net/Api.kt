@@ -9,6 +9,7 @@ import io.github.qwadratic.nfctimesheets.core.EnrolmentRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
 import io.github.qwadratic.nfctimesheets.core.PendingWork
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
+import io.github.qwadratic.nfctimesheets.core.ReassignBuildingRequest
 import io.github.qwadratic.nfctimesheets.core.ResolveZoneRequest
 import io.github.qwadratic.nfctimesheets.core.SmsRequestBody
 import io.github.qwadratic.nfctimesheets.core.SmsVerifyBody
@@ -17,7 +18,9 @@ import io.github.qwadratic.nfctimesheets.core.Wire
 import io.github.qwadratic.nfctimesheets.core.WireRoster
 import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
 import io.github.qwadratic.nfctimesheets.core.WireOperatorZone
+import io.github.qwadratic.nfctimesheets.core.WireReassignedZone
 import io.github.qwadratic.nfctimesheets.core.WireResolvedZone
+import io.github.qwadratic.nfctimesheets.core.WireTagClassification
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.core.WireWorker
 import io.github.qwadratic.nfctimesheets.core.WireZoneShiftPage
@@ -259,6 +262,59 @@ class Api(
         Wire.resolvedZone(
             post("/operator/tags/$tagId/resolve-zone", ResolveZoneRequest(name, locationId).toJson())
                 .getJSONObject("zone"),
+        )
+
+    /**
+     * GET /operator/tags/:id -> "what IS this card" (decision-55 §1). The scan-first entry point:
+     * an operator holds up a card found in a drawer or on a door with no worklist entry, and this
+     * is what tells them what they are holding.
+     *
+     * READ-ONLY. It stamps nothing, creates nothing and verifies nothing — scanning a card must
+     * be as free as looking at it. When the answer is a BOUND zone, the caller follows with the
+     * unchanged [verifyZone]; that stamp is a second, deliberate call and never a side effect of
+     * this one.
+     *
+     * ALWAYS 200 (400 only for an :id that is not a uuid, which never leaves this app: the id
+     * comes from [io.github.qwadratic.nfctimesheets.core.TagLink] or a worklist serial match).
+     * "I do not know this card" IS an answer — {kind: "unknown"} — not a 404, so the phone shows
+     * a sentence about the card rather than a transport error about the request.
+     */
+    suspend fun classifyTag(tagId: String): WireTagClassification =
+        Wire.tagClassification(get("/operator/tags/$tagId"))
+
+    /**
+     * POST /operator/zones/:id/reassign-building {new_tag_id, location_id} -> this door belongs
+     * to a different building now (decision-55 §3).
+     *
+     * `newTagId` MUST ALREADY BE ON A PHYSICAL CARD AND REPORTED before this is called: the
+     * caller mints it, writes it with the same `TagWriter` the write screen uses, and posts it
+     * through the unchanged [reportTag]. This route CLAIMS that report; a call with an id no
+     * card carries would strand a zone on a tag nobody can tap.
+     *
+     * NOTHING IS MOVED. The old zone is soft-deactivated with its `verified_at` and every shift
+     * that ever named it untouched, and a brand new zone is minted on the new card, unverified
+     * and with zero shifts — so the caller must send the operator back to a test scan. Either
+     * both halves happen or neither does (one statement, EXISTS-gated CTEs).
+     *
+     *   201 reassigned            {zone, retired_zone_id}
+     *   404 unknown_zone          :id is not an active zone
+     *   404 unknown_reported_tag  the new card's report never landed
+     *   409 zone_unbound          it has no building; there is nothing to reassign
+     *   409 already_resolved      the new card is already something
+     *   409 duplicate_zone_name   the TARGET building already has a live zone by that name
+     *   409 id_in_use             uuid collision on the new tag id
+     *   422 unknown_location      no such building, or it is deactivated
+     */
+    suspend fun reassignZoneBuilding(
+        zoneId: String,
+        newTagId: String,
+        locationId: String,
+    ): WireReassignedZone =
+        Wire.reassignedZone(
+            post(
+                "/operator/zones/$zoneId/reassign-building",
+                ReassignBuildingRequest(newTagId, locationId).toJson(),
+            ),
         )
 
     /**

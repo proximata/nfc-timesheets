@@ -474,7 +474,7 @@
          Betreiber-Sitzung (ts_operator), und keine Schicht-Route akzeptiert dieses Cookie. -->
     <string name="verify_open">Tag prüfen</string>
     <string name="verify_title">Tag prüfen</string>
-    <string name="verify_hint">Zone auswählen, dann die Karte an das Telefon halten. Dieser Testscan startet und beendet niemals eine Schicht — er prüft nur, ob die Karte die gewählte Zone öffnet.</string>
+    <string name="verify_hint">Karte direkt an das Telefon halten — oder erst eine Zone auswählen und dann prüfen. Dieser Testscan startet und beendet niemals eine Schicht.</string>
     <string name="verify_zones_loading">Zonenliste wird geladen …</string>
     <string name="verify_zones_error">Zonenliste konnte nicht neu geladen werden. Letzte gespeicherte Liste wird angezeigt, falls vorhanden.</string>
     <string name="verify_zones_empty">Keine aktive Zone gefunden. Erst in „Objekte“ eine Zone anlegen.</string>
@@ -549,4 +549,42 @@
     <string name="verify_unbind_has_shifts">Hier wurde bereits eingestempelt, deshalb bleibt diese Zone bei diesem Objekt.</string>
     <!-- %1$s = Fehlercode vom Server -->
     <string name="verify_unbind_failed">Zuordnung konnte nicht aufgehoben werden (%1$s). Bitte erneut versuchen.</string>
+
+    <!-- SCAN ZUERST, decision-55 §1. Ohne vorherige Auswahl: die Karte sagt selbst, was sie
+         ist. Vier der fuenf Antworten sind genau ein Satz und bieten keine Aktion an. -->
+    <string name="verify_scan_any_hint">Unbekannte Karte? Einfach an das Telefon halten — die Karte wird nur gelesen, nichts wird verändert.</string>
+    <string name="verify_scan_any_checking">Karte wird nachgeschlagen …</string>
+    <string name="verify_scan_any_building">Das ist eine Objekt-Karte, keine Zonen-Karte. Für Objekt-Karten gibt es hier nichts zu prüfen.</string>
+    <string name="verify_scan_any_retired">Diese Karte gehörte zu einer Zone, die inzwischen stillgelegt wurde. Sie öffnet nichts mehr.</string>
+    <string name="verify_scan_any_reported">Diese Karte ist gemeldet, aber noch keiner Zone zugeordnet. Zuordnen geht in „Tag beschreiben“.</string>
+    <string name="verify_scan_any_unknown">Diese Karte gehört nicht zu diesem System.</string>
+    <!-- %1$s = Fehlercode vom Server -->
+    <string name="verify_scan_any_failed">Karte konnte nicht nachgeschlagen werden (%1$s). Bitte erneut versuchen.</string>
+
+    <!-- OBJEKT NEU ZUWEISEN, decision-55 §3. Es wird nichts verschoben: die alte Zone wird
+         stillgelegt, eine neue Zone entsteht auf einer NEU beschriebenen Karte. -->
+    <string name="verify_reassign_action">Anderem Objekt zuweisen</string>
+    <string name="verify_reassign_hint">Zu welchem Objekt gehört diese Tür jetzt? Danach wird eine NEUE Karte beschrieben — die alte Karte wird stillgelegt.</string>
+    <string name="verify_reassign_loading">Objektliste wird geladen …</string>
+    <!-- %1$s = Fehlercode vom Server -->
+    <string name="verify_reassign_load_failed">Objektliste konnte nicht geladen werden (%1$s).</string>
+    <string name="verify_reassign_submit">Weiter: neue Karte beschreiben</string>
+    <!-- %1$s = Objektname -->
+    <string name="verify_reassign_awaiting">Jetzt eine NEUE, leere Karte an das Telefon halten. Sie wird für %1$s beschrieben.</string>
+    <!-- %1$s = technischer Grund -->
+    <string name="verify_reassign_write_failed">Diese Karte konnte nicht beschrieben werden (%1$s). Bitte eine andere, leere Karte verwenden.</string>
+    <string name="verify_reassign_submitting">Karte beschrieben. Zone wird neu zugewiesen …</string>
+    <string name="verify_reassign_retry">Erneut versuchen</string>
+    <string name="verify_reassign_cancel">Abbrechen</string>
+    <!-- %1$s = Zonenname, %2$s = Objektname -->
+    <string name="verify_reassign_done">„%1$s“ gehört jetzt zu %2$s. Die alte Karte ist stillgelegt. Jetzt die neue Karte prüfen.</string>
+    <string name="verify_reassign_unknown_zone">Diese Zone gibt es nicht mehr. Bitte Liste neu laden.</string>
+    <string name="verify_reassign_zone_unbound">Diese Zone gehört zu keinem Objekt, es gibt also nichts neu zuzuweisen. Zuerst ein Objekt zuordnen.</string>
+    <string name="verify_reassign_tag_unreported">Die neue Karte ist beim Büro nicht angekommen. Bitte erneut versuchen.</string>
+    <string name="verify_reassign_already_resolved">Die neue Karte ist bereits vergeben. Bitte eine andere, leere Karte verwenden.</string>
+    <string name="verify_reassign_duplicate_name">Im gewählten Objekt gibt es bereits eine Zone mit diesem Namen. Bitte bei der Verwaltung melden.</string>
+    <string name="verify_reassign_id_in_use">Diese Kartennummer ist schon vergeben. Bitte eine andere, leere Karte verwenden.</string>
+    <string name="verify_reassign_unknown_location">Dieses Objekt gibt es nicht mehr. Bitte Objektliste neu laden.</string>
+    <!-- %1$s = Fehlercode vom Server -->
+    <string name="verify_reassign_failed">Neuzuweisung fehlgeschlagen (%1$s). Bitte erneut versuchen.</string>
 </resources>

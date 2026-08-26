@@ -28,6 +28,7 @@ import io.github.qwadratic.nfctimesheets.core.MaterialStatus
 import io.github.qwadratic.nfctimesheets.core.QueuedMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
 import io.github.qwadratic.nfctimesheets.core.PendingWork
+import io.github.qwadratic.nfctimesheets.core.ReassignBuildingRequest
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
 import io.github.qwadratic.nfctimesheets.core.RunningShift
 import io.github.qwadratic.nfctimesheets.core.SessionCookie
@@ -40,6 +41,7 @@ import io.github.qwadratic.nfctimesheets.core.TagLink
 import io.github.qwadratic.nfctimesheets.core.TapInbox
 import io.github.qwadratic.nfctimesheets.core.NdefTag
 import io.github.qwadratic.nfctimesheets.core.Wire
+import io.github.qwadratic.nfctimesheets.core.WireTagClassification
 import io.github.qwadratic.nfctimesheets.core.WireZone
 import io.github.qwadratic.nfctimesheets.core.WriteGuard
 import io.github.qwadratic.nfctimesheets.core.Zones
@@ -386,6 +388,85 @@ private fun wireDecoding() {
     // 006 landed, zero zone rows).
     val emptyZones = JSONObject(noZonesKey.toString()).put("zones", org.json.JSONArray())
     check(Wire.roster(emptyZones).zones.isEmpty(), "an empty zones array decodes to an empty list too")
+
+    // decision-55 §1: GET /operator/tags/:id, the scan-first classification. FIVE kinds, and
+    // the two that decide what an operator is shown next are the zone ones — bound vs unbound
+    // is the fork between the zone page and the building picker, and it is read off
+    // `location_id` exactly as the worklist reads it.
+    val boundZone = Wire.tagClassification(
+        JSONObject(
+            """{"kind":"zone","zone":{"id":"$UUID_B","location_id":"$UUID_A",
+                "location_name":"Westbahnhof","name":"Stiege A","verified_at":null}}""",
+        ),
+    )
+    check(boundZone is WireTagClassification.Zone, "kind=zone decodes as a zone")
+    check(
+        (boundZone as WireTagClassification.Zone).zone.isBound,
+        "a zone WITH location_id is bound -> the zone page, not the building picker",
+    )
+    // The route answers OP_ZONE_COLS-ish bodies with no tag_serial/tag_deployed_at at all.
+    // Wire.operatorZone must not need them: this body is the shape the server really sends.
+    check(boundZone.zone.tagSerial == null && boundZone.zone.tagDeployedAt == null, "absent tag columns decode as null")
+
+    val unboundZone = Wire.tagClassification(
+        JSONObject(
+            """{"kind":"zone","zone":{"id":"$UUID_B","location_id":null,"location_name":null,
+                "name":"Stiege B","verified_at":null}}""",
+        ),
+    )
+    check(
+        unboundZone is WireTagClassification.Zone && !unboundZone.zone.isBound,
+        "a zone with a null location_id decodes and is UNBOUND -> the building picker",
+    )
+
+    check(
+        Wire.tagClassification(JSONObject("""{"kind":"building"}""")) == WireTagClassification.Building,
+        "kind=building decodes",
+    )
+    check(
+        Wire.tagClassification(JSONObject("""{"kind":"retired"}""")) == WireTagClassification.Retired,
+        "kind=retired decodes",
+    )
+    check(
+        Wire.tagClassification(JSONObject("""{"kind":"tag_reported"}""")) == WireTagClassification.TagReported,
+        "kind=tag_reported decodes",
+    )
+    check(
+        Wire.tagClassification(JSONObject("""{"kind":"unknown"}""")) == WireTagClassification.Unknown,
+        "kind=unknown decodes",
+    )
+    // A SERVER NEWER THAN THE APP. A sixth kind, or a "zone" with no zone object, must leave an
+    // operator in a stairwell holding a sentence -- never a thrown JSONException.
+    check(
+        Wire.tagClassification(JSONObject("""{"kind":"portal"}""")) == WireTagClassification.Unknown,
+        "an unrecognised kind degrades to unknown, never a throw",
+    )
+    check(
+        Wire.tagClassification(JSONObject("""{"kind":"zone"}""")) == WireTagClassification.Unknown,
+        "kind=zone with no zone object degrades to unknown",
+    )
+
+    // decision-55 §3: the reassignment's 201 body. The retired id is what lets the phone drop
+    // the old row from a worklist it is still holding, so it must survive decoding.
+    val reassigned = Wire.reassignedZone(
+        JSONObject(
+            """{"zone":{"id":"$UUID_A","location_id":"$UUID_B","name":"Stiege A",
+                "tag_serial":null,"tag_deployed_at":"2026-08-26T09:00:00Z","verified_at":null},
+                "retired_zone_id":"$UUID_B"}""",
+        ),
+    )
+    check(reassigned.zone.id == UUID_A, "the reassigned zone is keyed by the NEW card")
+    check(reassigned.zone.verifiedAt == null, "a reassigned zone starts UNVERIFIED and must be test-scanned")
+    check(reassigned.retiredZoneId == UUID_B, "retired_zone_id decodes")
+    // The route returns no location_name; the screen substitutes the building it just picked.
+    check(reassigned.zone.locationName == null, "no location_name comes back -- the caller supplies it")
+
+    // The body a REASSIGN posts: both fields, snake_case, and nothing else.
+    val reassignBody = ReassignBuildingRequest(UUID_A, UUID_B).toJson()
+    check(
+        reassignBody == """{"new_tag_id":"$UUID_A","location_id":"$UUID_B"}""",
+        "POST reassign-building body: $reassignBody",
+    )
 }
 
 // ---------------------------------------------------------------------------------

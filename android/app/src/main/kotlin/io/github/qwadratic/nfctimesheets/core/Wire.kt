@@ -153,6 +153,47 @@ object Wire {
         locationId = o.stringOrNull("location_id"),
     )
 
+    /**
+     * GET /operator/tags/:id's whole body (decision-55 §1) — "what IS this card", asked before
+     * anything has been picked off the worklist.
+     *
+     * THE `zone` BRANCH IS DECODED BY [operatorZone] AND NOT BY A SECOND DECODER, because the
+     * route deliberately answers the SAME shape GET /operator/zones/:id does — that is the whole
+     * reason the scan-first screen can hand the result straight to the zone page that already
+     * exists. That body carries no `tag_serial`/`tag_deployed_at`, which [operatorZone] already
+     * reads as nullable, so nothing has to be relaxed for it.
+     *
+     * AN UNRECOGNISED `kind` DEGRADES TO [WireTagClassification.Unknown], never a throw: a sixth
+     * kind added server-side must leave an operator in a stairwell with a sentence, not a crash.
+     * A "zone" with no `zone` object degrades the same way, for the same reason.
+     */
+    fun tagClassification(o: JSONObject): WireTagClassification = when (o.optString("kind", "")) {
+        "zone" -> o.optJSONObject("zone")
+            ?.let { WireTagClassification.Zone(operatorZone(it)) }
+            ?: WireTagClassification.Unknown
+        "building" -> WireTagClassification.Building
+        "retired" -> WireTagClassification.Retired
+        "tag_reported" -> WireTagClassification.TagReported
+        else -> WireTagClassification.Unknown
+    }
+
+    /**
+     * POST /operator/zones/:id/reassign-building's 201 body (decision-55 §3): the NEW zone plus
+     * the id of the one that was retired in the same statement.
+     *
+     * `retired_zone_id` IS NOT COSMETIC. It is what lets the caller drop the old row from the
+     * worklist it is holding, so a zone the server has just deactivated cannot keep being offered
+     * as a live scan target on a phone that has not refreshed yet.
+     *
+     * The zone comes back with the route's OP_ZONE_COLS, which carry no `location_name` — the
+     * caller substitutes the building it just picked rather than spending a round trip re-reading
+     * a word it already had (the same rule WriteTagActivity's resolve-zone ending follows).
+     */
+    fun reassignedZone(o: JSONObject) = WireReassignedZone(
+        zone = operatorZone(o.getJSONObject("zone")),
+        retiredZoneId = o.stringOrNull("retired_zone_id"),
+    )
+
     /** GET /operator/zones's whole envelope: `{zones: [...]}`. */
     fun operatorZones(o: JSONObject): List<WireOperatorZone> {
         val array = o.getJSONArray("zones")
@@ -289,6 +330,35 @@ data class WireOperatorZone(
      */
     val isBound: Boolean get() = locationId != null
 }
+
+/**
+ * WHAT A SCANNED CARD IS (decision-55 §1), for a human holding it — never for a tap. The tap
+ * path is `activePlace` server-side and knows nothing of these kinds; a maintainer widening one
+ * must not assume it widens the other.
+ *
+ * ONLY [Zone] CARRIES AN ACTION. The other four exist so the phone can say something true and
+ * specific instead of "not ours" — a building card, a card whose zone was retired, a card that
+ * was written and reported but never named, and a card that is genuinely nobody's.
+ */
+sealed interface WireTagClassification {
+    /** An ACTIVE zone, bound or not. The bound/unbound fork is [WireOperatorZone.isBound]. */
+    data class Zone(val zone: WireOperatorZone) : WireTagClassification
+
+    /** The grandfathered building card (decision-47). There is no operator screen for it. */
+    data object Building : WireTagClassification
+
+    /** An INACTIVE zone — what a reassignment leaves on the old card. */
+    data object Retired : WireTagClassification
+
+    /** Reported, never resolved into anything. No action is offered from the scan screen. */
+    data object TagReported : WireTagClassification
+
+    /** Not ours — and also a `tag_aliases` id, which decision-55 §1 leaves unresolved on purpose. */
+    data object Unknown : WireTagClassification
+}
+
+/** POST /operator/zones/:id/reassign-building's 201 body (decision-55 §3). */
+data class WireReassignedZone(val zone: WireOperatorZone, val retiredZoneId: String?)
 
 /** One row of this month's shifts at one zone (decision-54 §7). */
 data class WireZoneShift(
@@ -456,6 +526,18 @@ data class ResolveZoneRequest(val name: String, val locationId: String?) {
  */
 data class BindZoneRequest(val locationId: String) {
     fun toJson(): String = Wire.obj("location_id" to locationId)
+}
+
+/**
+ * POST /operator/zones/:id/reassign-building (decision-55 §3). The OLD zone is in the PATH; the
+ * body is the card the phone has just written and reported, plus the building it now belongs to.
+ *
+ * BOTH FIELDS ARE REQUIRED and neither has a "leave it" case. A reassignment with no new card
+ * would be an in-place UPDATE, which the composite shift FKs refuse outright, and one with no
+ * building would be an unbind wearing a different name.
+ */
+data class ReassignBuildingRequest(val newTagId: String, val locationId: String) {
+    fun toJson(): String = Wire.obj("new_tag_id" to newTagId, "location_id" to locationId)
 }
 
 /**

@@ -5,6 +5,8 @@ import io.github.qwadratic.nfctimesheets.core.TagLink
 import io.github.qwadratic.nfctimesheets.core.Wire
 import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
 import io.github.qwadratic.nfctimesheets.core.WireOperatorZone
+import io.github.qwadratic.nfctimesheets.core.WireReassignedZone
+import io.github.qwadratic.nfctimesheets.core.WireTagClassification
 import io.github.qwadratic.nfctimesheets.core.WireZoneShiftPage
 import io.github.qwadratic.nfctimesheets.core.WireZoneVerifyResult
 import org.json.JSONObject
@@ -139,7 +141,16 @@ fun simulatedZones(): List<WireOperatorZone> = Wire.operatorZones(JSONObject(SIM
  * in, and "still simulating" over a REAL zone is exactly the accident this whole source-set
  * split exists to make impossible.
  */
-fun isSimulatedZone(zone: WireOperatorZone): Boolean = simulatedZones().any { it.id == zone.id }
+fun isSimulatedZone(zone: WireOperatorZone): Boolean =
+    simulatedZones().any { it.id == zone.id } || zone.id in reassignedSimulatedZones
+
+/**
+ * The zones a SIMULATED reassignment minted (decision-55 §3). Kept because the new zone's id is
+ * the card that was just "written" — a fresh uuid, so it cannot be in [SIM_ZONES_JSON] — and
+ * without it the very next thing the screen does on that zone (a test scan, then its shifts)
+ * would go to the real server and answer 401. Process-lifetime only, debug source set only.
+ */
+private val reassignedSimulatedZones = mutableSetOf<String>()
 
 /** The buildings the bind picker offers: the write flow's fixture, not a second copy of it. */
 fun simulatedBindLocations(): List<WireOperatorLocation> = simulatedLocations()
@@ -242,3 +253,107 @@ fun runShiftsSimulation(page: Int): WireZoneShiftPage =
                 ",\"total_minutes\":615,\"shifts\":[]}",
         ),
     )
+
+// ---- decision-55 §1: scan first, ask what the card IS ------------------------------------
+
+/**
+ * FOUR CARDS THAT ARE NOT ZONES. `GET /operator/tags/:id` answers five kinds and four of them
+ * end in a sentence and nothing else — which is exactly the half no emulator can reach, because
+ * producing one needs a deactivated zone row, an unresolved report, or a stranger's card.
+ *
+ * REAL UUIDS, for the same reason [SIM_ZONES_JSON]'s are: [TagLink.uriFor] returns null for
+ * anything else, and a placeholder would turn every scenario below into "unreadable" instead of
+ * the kind it is meant to show.
+ */
+private const val SIM_TAG_BUILDING = "5111d0de-0000-4000-8000-0000000000d1"
+private const val SIM_TAG_RETIRED = "5111d0de-0000-4000-8000-0000000000d2"
+private const val SIM_TAG_REPORTED = "5111d0de-0000-4000-8000-0000000000d3"
+private const val SIM_TAG_UNKNOWN = "5111d0de-0000-4000-8000-0000000000d4"
+
+/**
+ * The scan-first buttons, offered BEFORE any zone is picked — one per branch decision-55 §1
+ * names, plus the unreadable card, which is not a kind at all: it never reaches the route,
+ * because there is no id to ask about.
+ *
+ * THE ZONE SCENARIOS REUSE THE SIMULATED WORKLIST ROWS rather than inventing a seventh id: the
+ * bound one must land on the very zone page [SIM_ZONES_JSON]'s bound row already drives, which
+ * is the property AC #2 is about — one zone page, reached two ways.
+ */
+fun classifyTapSimulations(tagLink: TagLink): List<VerifyTapSimulation> {
+    fun card(label: String, uid: String, id: String?) = VerifyTapSimulation(
+        label = label,
+        techs = listOf("SIMULATED"),
+        uid = uid,
+        uriString = id?.let { tagLink.uriFor(it)?.toString() },
+    )
+    val zones = simulatedZones()
+    return listOf(
+        card(
+            "SIMULATED: Karte einer Zone MIT Gebaeude — sollte freischalten und die Zone zeigen",
+            "SC:AN:00:00:01",
+            zones.getOrNull(1)?.id,
+        ),
+        card(
+            "SIMULATED: Karte einer Zone OHNE Gebaeude — sollte die Objektauswahl zeigen",
+            "SC:AN:00:00:02",
+            zones.getOrNull(0)?.id,
+        ),
+        card("SIMULATED: Gebaeude-Karte", "SC:AN:00:00:03", SIM_TAG_BUILDING),
+        card("SIMULATED: Karte einer stillgelegten Zone", "SC:AN:00:00:04", SIM_TAG_RETIRED),
+        card("SIMULATED: gemeldete, aber unbenannte Karte", "SC:AN:00:00:05", SIM_TAG_REPORTED),
+        card("SIMULATED: fremde Karte", "SC:AN:00:00:06", SIM_TAG_UNKNOWN),
+        card("SIMULATED: leere oder unlesbare Karte", "SC:AN:00:00:07", null),
+    )
+}
+
+/**
+ * `GET /operator/tags/:id`, answered here for the simulated ids ONLY — null for every other id,
+ * which is what sends a REAL card to the real route.
+ *
+ * BY ID, never by a flag on the screen, exactly as [isSimulatedZone] is: a "still simulating"
+ * mode left switched on over a real card is the accident this whole source-set split exists to
+ * make impossible.
+ *
+ * The zone branches return the SAME rows [simulatedZones] puts on the worklist, so a scan-first
+ * arrival and a worklist arrival land on one screen holding one object, not two copies that can
+ * drift.
+ */
+fun simulatedClassification(id: String): WireTagClassification? {
+    simulatedZones().firstOrNull { it.id == id }?.let { return WireTagClassification.Zone(it) }
+    return when (id) {
+        SIM_TAG_BUILDING -> WireTagClassification.Building
+        SIM_TAG_RETIRED -> WireTagClassification.Retired
+        SIM_TAG_REPORTED -> WireTagClassification.TagReported
+        SIM_TAG_UNKNOWN -> WireTagClassification.Unknown
+        else -> null
+    }
+}
+
+/**
+ * `POST /operator/zones/:id/reassign-building`'s 201 body (decision-55 §3), answered here.
+ *
+ * THE NEW ZONE IS KEYED BY THE CARD THAT WAS JUST WRITTEN and carries the OLD zone's name
+ * forward, unverified and with no shifts — the route's own contract. It comes back with NO
+ * `location_name`, deliberately: the real route returns OP_ZONE_COLS and does not have one
+ * either, so a fixture that supplied it would hide the substitution the screen has to make.
+ *
+ * `retired_zone_id` is the OLD zone, which is how the screen drops it from the worklist it is
+ * still holding — the one thing AC #5 is about.
+ */
+fun runReassignSimulation(
+    zone: WireOperatorZone,
+    newTagId: String,
+    location: WireOperatorLocation,
+): WireReassignedZone {
+    reassignedSimulatedZones += newTagId
+    return Wire.reassignedZone(
+        JSONObject(
+            "{\"zone\":{\"id\":${JSONObject.quote(newTagId)}" +
+                ",\"location_id\":${JSONObject.quote(location.id)}" +
+                ",\"name\":${JSONObject.quote(zone.name)}" +
+                ",\"tag_serial\":null,\"tag_deployed_at\":\"2026-08-26T09:00:00Z\"" +
+                ",\"verified_at\":null}" +
+                ",\"retired_zone_id\":${JSONObject.quote(zone.id)}}",
+        ),
+    )
+}

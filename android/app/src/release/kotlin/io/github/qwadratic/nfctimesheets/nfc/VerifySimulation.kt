@@ -3,6 +3,8 @@ package io.github.qwadratic.nfctimesheets.nfc
 import io.github.qwadratic.nfctimesheets.core.TagLink
 import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
 import io.github.qwadratic.nfctimesheets.core.WireOperatorZone
+import io.github.qwadratic.nfctimesheets.core.WireReassignedZone
+import io.github.qwadratic.nfctimesheets.core.WireTagClassification
 import io.github.qwadratic.nfctimesheets.core.WireZoneShiftPage
 import io.github.qwadratic.nfctimesheets.core.WireZoneVerifyResult
 import java.time.Instant
@@ -70,3 +72,25 @@ fun runVerifySimulation(zone: WireOperatorZone): WireZoneVerifyResult = WireZone
 
 fun runShiftsSimulation(page: Int): WireZoneShiftPage =
     WireZoneShiftPage(shifts = emptyList(), page = page, pageSize = 0, matching = 0, totalMinutes = 0.0)
+
+/**
+ * decision-55's scan-first screen has no fixtures here either. A release build offers no card
+ * to scan but a real one, and every scanned id goes to the real GET /operator/tags/:id.
+ */
+fun classifyTapSimulations(tagLink: TagLink): List<VerifyTapSimulation> = emptyList()
+
+/**
+ * ALWAYS NULL, which is what makes every scan in a release build a REAL request. An operator is
+ * never told what a card is by anything but the server.
+ */
+fun simulatedClassification(id: String): WireTagClassification? = null
+
+/**
+ * Unreachable by construction: its only caller is behind [isSimulatedZone], constantly false
+ * here. Present so both source sets expose the same surface to the screen.
+ */
+fun runReassignSimulation(
+    zone: WireOperatorZone,
+    newTagId: String,
+    location: WireOperatorLocation,
+): WireReassignedZone = WireReassignedZone(zone = zone, retiredZoneId = null)

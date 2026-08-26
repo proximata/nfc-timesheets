@@ -41,6 +41,7 @@ import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.Wire
 import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
 import io.github.qwadratic.nfctimesheets.core.WireOperatorZone
+import io.github.qwadratic.nfctimesheets.core.WireTagClassification
 import io.github.qwadratic.nfctimesheets.core.WireZoneShiftPage
 import io.github.qwadratic.nfctimesheets.core.WireZoneVerifyResult
 import io.github.qwadratic.nfctimesheets.core.Zones
@@ -48,6 +49,7 @@ import io.github.qwadratic.nfctimesheets.ui.BuildingPicker
 import io.github.qwadratic.nfctimesheets.ui.TimeSheetsTheme
 import kotlinx.coroutines.launch
 import java.time.Instant
+import java.util.UUID
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -90,6 +92,22 @@ import java.time.format.FormatStyle
  * anything if the operator committed to which zone they are testing before they knew what
  * the card would say. "Stamp whatever was scanned" would happily bless a card mounted on
  * the wrong door, which is the single most likely honest mistake on a field visit.
+ *
+ * AND SINCE decision-55 §2, A SECOND WAY IN THAT INVERTS THAT ORDER — deliberately, and
+ * without weakening it. With NO zone picked, a card scanned here is not verified against
+ * anything: it is CLASSIFIED, read-only, by `GET /operator/tags/:id`, which answers what the
+ * card IS. That is the shape of the honest mistake decision-47's own header names as the
+ * reason this screen exists — a card in a drawer, a card on a door with no worklist entry.
+ * `zone_mismatch` cannot fire on that path because there is nothing to mismatch AGAINST, and
+ * it stays exactly as protective as it always was on the worklist-first path, which is
+ * untouched: [selectZone] and its verify are the same lines they were. An ADDED entry point,
+ * not a replacement.
+ *
+ * IT WRITES A CARD, IN EXACTLY ONE PLACE (decision-55 §3, [ReassignStep]). Reassigning a bound
+ * zone's building needs a freshly written card before the server call, and it gets one through
+ * the SAME `app.tagWriter` and the SAME `POST /operator/tags` report the write screen uses —
+ * not a second copy of either. Nothing about that touches a shift: `TagWriter` puts bytes on a
+ * card, and the report and the reassignment both go out over `app.operatorApi`.
  */
 class VerifyZoneActivity : ComponentActivity() {
 
@@ -116,6 +134,20 @@ class VerifyZoneActivity : ComponentActivity() {
 
     private var unbindStep by mutableStateOf<UnbindStep>(UnbindStep.Idle)
     private var unbindConfirming by mutableStateOf(false)
+
+    private var scanStep by mutableStateOf<ScanStep>(ScanStep.Idle)
+
+    private var reassignStep by mutableStateOf<ReassignStep>(ReassignStep.Idle)
+    private var reassignBuilding by mutableStateOf<WireOperatorLocation?>(null)
+
+    /**
+     * The id the reassignment will write onto the NEW card. Minted on this phone before the
+     * server has heard of it, for the reason [WriteTagActivity]'s header gives at length: the
+     * operator is in a stairwell and a flow that needs a round trip before it can write a card
+     * is a flow that fails where it is used. Re-minted only after one is actually consumed, so
+     * a card re-presented after a failed read-back gets the SAME id.
+     */
+    private var reassignTagId by mutableStateOf(UUID.randomUUID().toString())
 
     /** What a completed test scan showed. Rendered as a named sentence, never a raw code. */
     private sealed interface VerifyOutcome {
@@ -170,6 +202,77 @@ class VerifyZoneActivity : ComponentActivity() {
      * a fact an operator standing at the door can act on — "this is the right building after
      * all" — where a code is not.
      */
+    /**
+     * SCAN FIRST, ASK WHAT THE CARD IS (decision-55 §1) — the state of the screen BEFORE any
+     * zone is picked. Only [WireTagClassification.Zone] has anywhere to go; the other four are
+     * one honest sentence each and offer no action, which is the decision and not an omission:
+     * there is no operator screen for a building card, and turning a reported card into a zone
+     * stays where it has always been, in the write flow.
+     */
+    private sealed interface ScanStep {
+        /** Waiting for a card, with no zone picked. Renders the ordinary worklist. */
+        data object Idle : ScanStep
+        data object Checking : ScanStep
+        data object Building : ScanStep
+        data object Retired : ScanStep
+        data object TagReported : ScanStep
+        data object Unknown : ScanStep
+
+        /** No URI and no worklist serial: never reached the server, because there was no id. */
+        data class Unreadable(val techs: List<String>, val uid: String) : ScanStep
+        data class Failed(val code: String) : ScanStep
+    }
+
+    /**
+     * REASSIGNING A BOUND ZONE'S BUILDING (decision-55 §3) — the door changed management
+     * company, which is the case decision-40 split the whole system's two hostnames for.
+     *
+     * OFFERED ONLY ON A BOUND ZONE, because an unbound one has nothing to reassign: the bind
+     * form is already the right question there, and the server says the same thing with 409
+     * `zone_unbound`.
+     *
+     * IT COSTS A NEW CARD, AND THAT IS THE POINT. Nothing is moved: the old zone is retired
+     * with its shifts and its proof intact, and a NEW zone is minted on a card this phone
+     * writes first. A zone with any shift history structurally cannot have its building changed
+     * in place — the composite shift FKs refuse it — so there is one path and not two.
+     *
+     *   pick building -> write a NEW card -> report it -> reassign -> the NEW zone's page
+     *
+     * The write and the report are [WriteTagActivity]'s own `app.tagWriter` and `reportTag`,
+     * called here rather than copied.
+     */
+    private sealed interface ReassignStep {
+        /** Not reassigning. Renders one button on a bound zone and nothing else. */
+        data object Idle : ReassignStep
+        data object Loading : ReassignStep
+        data class Picking(val locations: List<WireOperatorLocation>) : ReassignStep
+
+        /** The building list did not load. Retryable, and a dead end until it does. */
+        data class LoadFailed(val code: String) : ReassignStep
+
+        /** Building chosen; now hold a NEW, blank card against the phone. */
+        data class AwaitingCard(val building: WireOperatorLocation) : ReassignStep
+
+        /**
+         * The card was NOT written. The old zone is untouched and the operator can present
+         * another card — this is the one state that stays armed for a further tap.
+         */
+        data class WriteRefused(val building: WireOperatorLocation, val reason: String) : ReassignStep
+
+        /** Card written; telling the office it exists, then reassigning in one go. */
+        data object Submitting : ReassignStep
+
+        /**
+         * The card is written and correct but the server call did not land. RETRYABLE without
+         * touching the card again: the report is idempotent and the reassignment is one
+         * all-or-nothing statement, so repeating both is safe.
+         */
+        data class Failed(val building: WireOperatorLocation, val code: String) : ReassignStep
+
+        /** Done. The screen has already moved to the NEW zone; this is one sentence over it. */
+        data class Done(val zoneName: String, val building: String) : ReassignStep
+    }
+
     private sealed interface UnbindStep {
         data object Idle : UnbindStep
         data object Submitting : UnbindStep
@@ -233,6 +336,23 @@ class VerifyZoneActivity : ComponentActivity() {
 
         val zone = selectedZone
         if (zone == null) {
+            // SCAN FIRST (decision-55 §2). The card may be held up right now, before anything is
+            // picked — reader mode is already running (see startReaderMode), so this is a
+            // statement of fact and not an invitation to arm something.
+            Text(stringResource(R.string.verify_scan_any_hint), style = MaterialTheme.typography.titleMedium)
+            ScanFirstStatus()
+
+            // DEBUG BUILDS ONLY, same split and same checking script as every other simulator
+            // on this screen: classifyTapSimulations() is empty in src/release/.
+            for (simulation in classifyTapSimulations(app.tagLink)) {
+                OutlinedButton(
+                    onClick = { handleScanFirst(simulation.techs, simulation.uid, simulation.uriString) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) { Text("\u25b6 ${simulation.label}") }
+            }
+
             Text(stringResource(R.string.verify_pick_zone_hint), style = MaterialTheme.typography.titleMedium)
             if (zonesLoading && zones.isEmpty()) Text(stringResource(R.string.verify_zones_loading))
             if (zonesError) {
@@ -321,6 +441,7 @@ class VerifyZoneActivity : ComponentActivity() {
         }
 
         ZonePage(zone)
+        ReassignSection(zone)
         UnbindAction(zone)
 
         OutlinedButton(
@@ -329,6 +450,153 @@ class VerifyZoneActivity : ComponentActivity() {
                 .fillMaxWidth()
                 .heightIn(min = 48.dp),
         ) { Text(stringResource(R.string.verify_change_zone)) }
+    }
+
+    /**
+     * What the last scan-first card was, in one sentence. Four of the five kinds end here and
+     * offer nothing else; the fifth ([WireTagClassification.Zone]) never renders in this state at
+     * all, because it has already put a zone on the screen.
+     */
+    @Composable
+    private fun ScanFirstStatus() {
+        val text = when (val step = scanStep) {
+            ScanStep.Idle -> return
+            ScanStep.Checking -> stringResource(R.string.verify_scan_any_checking)
+            ScanStep.Building -> stringResource(R.string.verify_scan_any_building)
+            ScanStep.Retired -> stringResource(R.string.verify_scan_any_retired)
+            ScanStep.TagReported -> stringResource(R.string.verify_scan_any_reported)
+            ScanStep.Unknown -> stringResource(R.string.verify_scan_any_unknown)
+            is ScanStep.Unreadable ->
+                getString(R.string.verify_no_uri, step.techs.joinToString(", "), step.uid)
+            is ScanStep.Failed -> getString(R.string.verify_scan_any_failed, step.code)
+        }
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (scanStep is ScanStep.Failed) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
+    }
+
+    /**
+     * REASSIGN THIS DOOR TO A DIFFERENT BUILDING (decision-55 §3). Drawn only under a BOUND
+     * zone — its only caller sits in the bound branch — and it is a button until it is used,
+     * because an always-open building picker under every zone page is a picker somebody will
+     * eventually tap on the wrong screen.
+     */
+    @Composable
+    private fun ReassignSection(zone: WireOperatorZone) {
+        when (val step = reassignStep) {
+            ReassignStep.Idle -> {
+                OutlinedButton(
+                    onClick = ::loadReassignLocations,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.verify_reassign_action)) }
+                return
+            }
+
+            ReassignStep.Loading -> Text(stringResource(R.string.verify_reassign_loading))
+            ReassignStep.Submitting -> Text(stringResource(R.string.verify_reassign_submitting))
+
+            is ReassignStep.Done -> {
+                Text(
+                    getString(R.string.verify_reassign_done, step.zoneName, step.building),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+                return
+            }
+
+            is ReassignStep.LoadFailed -> {
+                Text(
+                    getString(R.string.verify_reassign_load_failed, step.code),
+                    color = MaterialTheme.colorScheme.error,
+                )
+                OutlinedButton(
+                    onClick = ::loadReassignLocations,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.verify_bind_retry)) }
+            }
+
+            is ReassignStep.Picking -> {
+                Text(
+                    stringResource(R.string.verify_reassign_hint),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                BuildingPicker(
+                    locations = step.locations,
+                    selectedId = reassignBuilding?.id,
+                    emptyText = stringResource(R.string.verify_bind_locations_empty),
+                    onPick = { reassignBuilding = it },
+                )
+                Button(
+                    onClick = {
+                        reassignBuilding?.let {
+                            reassignStep = ReassignStep.AwaitingCard(it)
+                            startReaderMode()
+                        }
+                    },
+                    enabled = reassignBuilding != null,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.verify_reassign_submit)) }
+            }
+
+            is ReassignStep.AwaitingCard -> Text(
+                getString(R.string.verify_reassign_awaiting, step.building.name),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+
+            is ReassignStep.WriteRefused -> Text(
+                getString(R.string.verify_reassign_write_failed, step.reason),
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+
+            is ReassignStep.Failed -> {
+                Text(reassignFailureText(step.code), color = MaterialTheme.colorScheme.error)
+                // The CARD IS ALREADY CORRECT here, so the retry repeats the two server calls
+                // and never asks for another card: the report is idempotent and the
+                // reassignment is one all-or-nothing statement.
+                OutlinedButton(
+                    onClick = { finishReassign(zone, step.building) },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.verify_reassign_retry)) }
+            }
+        }
+
+        // DEBUG BUILDS ONLY, and the same fixtures the write screen uses: a written card is
+        // the one thing an emulator cannot produce, and writeSimulations() is empty in
+        // src/release/ so this loop has nothing to draw there (nfc/WriteSimulation.kt).
+        val awaiting = reassignStep as? ReassignStep.AwaitingCard
+            ?: (reassignStep as? ReassignStep.WriteRefused)?.let { ReassignStep.AwaitingCard(it.building) }
+        if (awaiting != null) {
+            for (simulation in writeSimulations()) {
+                OutlinedButton(
+                    onClick = {
+                        applyReassignWrite(
+                            zone,
+                            awaiting.building,
+                            runSimulation(simulation, app.tagLink, reassignTagId),
+                        )
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text("\u25b6 ${simulation.label}") }
+            }
+        }
+
+        OutlinedButton(
+            onClick = ::cancelReassign,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
+        ) { Text(stringResource(R.string.verify_reassign_cancel)) }
     }
 
     /**
@@ -543,10 +811,7 @@ class VerifyZoneActivity : ComponentActivity() {
      * there is no code path on which an unpicked or unauthorised scan touches a card.
      */
     private fun startReaderMode() {
-        // AND NO UNBOUND ZONE EITHER (decision-54 §3): no card can resolve to a zone with no
-        // building, so a scan here could only ever end in a 422. The gate is again the absence
-        // of the callback, not a message after the fact.
-        if (!operatorReady || selectedZone?.isBound != true) return
+        if (!operatorReady || !readerWanted()) return
         val nfc = adapter ?: return
         if (!nfc.isEnabled) return
         val flags = NfcAdapter.FLAG_READER_NFC_A or
@@ -555,6 +820,28 @@ class VerifyZoneActivity : ComponentActivity() {
             NfcAdapter.FLAG_READER_NFC_V or
             NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS
         nfc.enableReaderMode(this, ::onTag, flags, null)
+    }
+
+    /**
+     * WHEN A CARD MAY BE READ AT ALL, in one place, because there are now three answers and a
+     * scattered set of `if`s is how the fourth one ends up wrong.
+     *
+     *   no zone picked   YES — scan-first classification (decision-55 §2), read-only.
+     *   reassigning      YES — and ONLY while a fresh card is expected: this is the one state
+     *                    in this screen where a tap WRITES. Mid-reassignment (picking a
+     *                    building, submitting) NO: a card presented then has nowhere to go.
+     *                    A FINISHED one is not "reassigning" at all — the screen is already on
+     *                    the NEW zone, whose very next step is a test scan.
+     *   a bound zone     YES — the test scan, unchanged.
+     *   an unbound zone  NO (decision-54 §3): no card can resolve to a zone with no building,
+     *                    so a scan could only ever end in a 422. The gate is the absence of the
+     *                    callback, not a message after the fact.
+     */
+    private fun readerWanted(): Boolean = when {
+        reassignStep is ReassignStep.AwaitingCard || reassignStep is ReassignStep.WriteRefused -> true
+        reassignStep !is ReassignStep.Idle && reassignStep !is ReassignStep.Done -> false
+        selectedZone == null -> true
+        else -> selectedZone?.isBound == true
     }
 
     /**
@@ -567,6 +854,9 @@ class VerifyZoneActivity : ComponentActivity() {
         selectedZone = zone
         outcome = null
         checking = false
+        scanStep = ScanStep.Idle
+        reassignStep = ReassignStep.Idle
+        reassignBuilding = null
         bindBuilding = null
         shifts = null
         shiftsError = false
@@ -581,7 +871,6 @@ class VerifyZoneActivity : ComponentActivity() {
     }
 
     private fun changeZone() {
-        adapter?.disableReaderMode(this)
         selectedZone = null
         outcome = null
         checking = false
@@ -591,6 +880,189 @@ class VerifyZoneActivity : ComponentActivity() {
         shiftsError = false
         unbindStep = UnbindStep.Idle
         unbindConfirming = false
+        scanStep = ScanStep.Idle
+        reassignStep = ReassignStep.Idle
+        reassignBuilding = null
+        // NOT disableReaderMode: with no zone picked this screen is the scan-first one
+        // (decision-55 §2), which reads cards precisely in that state. Restarting is a no-op
+        // when reader mode is already on and the honest thing when it was off.
+        startReaderMode()
+    }
+
+    /**
+     * SCAN FIRST: what IS this card (decision-55 §1)? The id is resolved exactly as the test
+     * scan resolves it — a real URI first, then this worklist's own serials — and then handed
+     * to `GET /operator/tags/:id`, which stamps nothing.
+     *
+     * A BOUND ZONE IS THEN VERIFIED, by the SAME [handleRead] the worklist-first path runs, with
+     * the same card reading. That is the reuse decision-55 §2 asks for: no second verify call
+     * site, no second zone page, and `zone_mismatch` structurally impossible because the zone
+     * being verified IS the one the card just named.
+     *
+     * AN UNBOUND ZONE STOPS AT [selectZone], which forks into the building picker that already
+     * exists — there is nothing to verify until it has a building.
+     */
+    private fun handleScanFirst(techs: List<String>, uid: String, uriString: String?) {
+        val placeUuid = app.tagLink.locationId(uriString) ?: matchSerial(uid)
+        if (placeUuid == null) {
+            scanStep = ScanStep.Unreadable(techs, uid)
+            return
+        }
+        scanStep = ScanStep.Checking
+        lifecycleScope.launch {
+            val classification = try {
+                // DEBUG BUILDS ONLY: simulatedClassification() is constantly null in src/release/,
+                // so a release build always asks the server (nfc/VerifySimulation.kt).
+                simulatedClassification(placeUuid) ?: app.operatorApi.classifyTag(placeUuid)
+            } catch (e: ApiFailure) {
+                scanStep = ScanStep.Failed(e.code)
+                return@launch
+            } catch (_: Exception) {
+                scanStep = ScanStep.Failed("unknown")
+                return@launch
+            }
+            when (classification) {
+                is WireTagClassification.Zone -> {
+                    selectZone(classification.zone)
+                    if (classification.zone.isBound) handleRead(techs, uid, uriString)
+                }
+                WireTagClassification.Building -> scanStep = ScanStep.Building
+                WireTagClassification.Retired -> scanStep = ScanStep.Retired
+                WireTagClassification.TagReported -> scanStep = ScanStep.TagReported
+                WireTagClassification.Unknown -> scanStep = ScanStep.Unknown
+            }
+        }
+    }
+
+    /** GET /operator/locations — the same list the bind form and the write flow already load. */
+    private fun loadReassignLocations() {
+        reassignStep = ReassignStep.Loading
+        reassignBuilding = null
+        val zone = selectedZone
+        if (zone != null && isSimulatedZone(zone)) {
+            reassignStep = ReassignStep.Picking(simulatedBindLocations())
+            return
+        }
+        lifecycleScope.launch {
+            reassignStep = try {
+                ReassignStep.Picking(app.operatorApi.operatorLocations())
+            } catch (e: ApiFailure) {
+                ReassignStep.LoadFailed(e.code)
+            } catch (_: Exception) {
+                ReassignStep.LoadFailed("unknown")
+            }
+        }
+    }
+
+    private fun cancelReassign() {
+        reassignStep = ReassignStep.Idle
+        reassignBuilding = null
+        startReaderMode()
+    }
+
+    /**
+     * The write half of a reassignment, one step after [TagWriter] has spoken.
+     *
+     * NO OVERWRITE OVERRIDE HERE, unlike [WriteTagActivity]. A reassignment needs a card the
+     * operator is mounting on a door that is about to change buildings; a card that already
+     * carries one of our ids is a card on some other wall, and `WriteGuard` refusing it is the
+     * right answer with no way to argue. The operator picks up a blank one.
+     */
+    private fun applyReassignWrite(
+        zone: WireOperatorZone,
+        building: WireOperatorLocation,
+        result: TagWriter.Outcome,
+    ) {
+        if (result !is TagWriter.Outcome.Written) {
+            reassignStep = ReassignStep.WriteRefused(building, writeRefusalToken(result))
+            return
+        }
+        finishReassign(zone, building)
+    }
+
+    /**
+     * The two server calls, in the only order that can be safe: REPORT the card first (that is
+     * what makes the minted id exist server-side), then reassign, which CLAIMS that report.
+     *
+     * BOTH ARE RETRYABLE TOGETHER and this is the retry: `POST /operator/tags` is idempotent and
+     * the reassignment is one all-or-nothing statement, so repeating the pair after a failure
+     * cannot half-apply anything. The card is already correct before either call runs, so a
+     * failure here is never a failed write — the same rule the write screen states at length.
+     */
+    private fun finishReassign(zone: WireOperatorZone, building: WireOperatorLocation) {
+        val newTagId = reassignTagId
+        reassignStep = ReassignStep.Submitting
+        lifecycleScope.launch {
+            val reassigned = try {
+                if (isSimulatedZone(zone)) {
+                    runReassignSimulation(zone, newTagId, building)
+                } else {
+                    app.operatorApi.reportTag(newTagId)
+                    app.operatorApi.reassignZoneBuilding(zone.id, newTagId, building.id)
+                }
+            } catch (e: ApiFailure) {
+                reassignStep = ReassignStep.Failed(building, e.code)
+                return@launch
+            } catch (_: Exception) {
+                reassignStep = ReassignStep.Failed(building, "unknown")
+                return@launch
+            }
+            // The id is spent: it is on a card and it now names a zone, so the NEXT card this
+            // screen writes must not reuse it.
+            reassignTagId = UUID.randomUUID().toString()
+            // The route returns OP_ZONE_COLS, which carry no location_name — and the operator
+            // just tapped the building's name, so it is substituted rather than re-fetched.
+            val fresh = reassigned.zone.copy(locationName = building.name)
+            // THE OLD ZONE IS GONE FROM THE WORKLIST, not merely unselected: the server has
+            // deactivated it, and a row this phone keeps offering as a scan target is a row an
+            // operator will scan.
+            zones = zones.filterNot { it.id == (reassigned.retiredZoneId ?: zone.id) } + fresh
+            selectZone(fresh)
+            reassignStep = ReassignStep.Done(fresh.name, building.name)
+        }
+    }
+
+    /**
+     * WHY THE CARD WAS NOT WRITTEN, as one short token inside a translated sentence.
+     *
+     * ponytail: deliberately coarser than [WriteTagActivity]'s per-outcome sentences, which name
+     * capacities, ids and confirmation tokens because that screen's WHOLE job is writing cards.
+     * Here the only useful next move is the same for every refusal — use a different card — so
+     * one sentence carries it. If field use shows an operator needs the detail, the upgrade path
+     * is to lift WriteTagActivity.outcomeText() into a shared function and call it from both,
+     * not to grow a second copy of it here.
+     *
+     * THE TOKEN IS NOT TRANSLATED AND MUST NOT BE: it is a diagnostic riding inside a translated
+     * sentence, exactly as this screen already renders raw server codes (verify_bind_failed and
+     * friends). A German literal here would be a user-visible string living in Kotlin, which the
+     * project's i18n rule forbids outright.
+     */
+    private fun writeRefusalToken(result: TagWriter.Outcome): String = when (result) {
+        is TagWriter.Outcome.Written -> ""
+        is TagWriter.Outcome.Refused.Occupied -> "occupied"
+        is TagWriter.Outcome.Refused.TooSmall -> "too_small"
+        is TagWriter.Outcome.Refused.ReadOnly -> "read_only"
+        is TagWriter.Outcome.Refused.NoCapacity -> "no_capacity"
+        is TagWriter.Outcome.Refused.NotFormatted -> "not_formatted"
+        is TagWriter.Outcome.Refused.BadId -> "bad_id"
+        is TagWriter.Outcome.Unverified -> result.reason
+        is TagWriter.Outcome.Lost -> "lost"
+    }
+
+    /**
+     * Every refusal `POST /operator/zones/:id/reassign-building` can produce, as its own
+     * sentence — never a bare code. Each one has a DIFFERENT next move for the operator, which
+     * is the whole reason the route bothers to tell them apart.
+     */
+    private fun reassignFailureText(code: String): String = when (code) {
+        "unknown_zone" -> getString(R.string.verify_reassign_unknown_zone)
+        "zone_unbound" -> getString(R.string.verify_reassign_zone_unbound)
+        "unknown_reported_tag" -> getString(R.string.verify_reassign_tag_unreported)
+        "already_resolved" -> getString(R.string.verify_reassign_already_resolved)
+        "duplicate_zone_name" -> getString(R.string.verify_reassign_duplicate_name)
+        "id_in_use" -> getString(R.string.verify_reassign_id_in_use)
+        "unknown_location" -> getString(R.string.verify_reassign_unknown_location)
+        else -> getString(R.string.verify_reassign_failed, code)
     }
 
     /**
@@ -713,12 +1185,28 @@ class VerifyZoneActivity : ComponentActivity() {
     /** Called off the main thread by the NFC service. */
     private fun onTag(tag: Tag) {
         // Belt and braces behind the reader-mode gate: disableReaderMode is asynchronous,
-        // so a tag dispatched microseconds after the zone was cleared could still land here.
-        if (!operatorReady || selectedZone == null) return
+        // so a tag dispatched microseconds after the state changed could still land here.
+        if (!operatorReady) return
+
+        // THE ONE TAP IN THIS SCREEN THAT WRITES (decision-55 §3), and it is reachable only
+        // while a reassignment is waiting for a fresh card. The write runs HERE, on the NFC
+        // thread, exactly as WriteTagActivity.onTag does — app.tagWriter is that screen's
+        // writer, called, not copied.
+        val awaiting = reassignStep as? ReassignStep.AwaitingCard
+            ?: (reassignStep as? ReassignStep.WriteRefused)?.let { ReassignStep.AwaitingCard(it.building) }
+        val zone = selectedZone
+        if (awaiting != null && zone != null) {
+            val result = app.tagWriter.write(tag, reassignTagId, confirmedOverwriteOf = null)
+            runOnUiThread { applyReassignWrite(zone, awaiting.building, result) }
+            return
+        }
+
         val techs = tag.techList.map { it.substringAfterLast('.') }
         val uid = tag.id.joinToString(":") { "%02X".format(it) }
         val uri = readUri(tag)?.toString()
-        runOnUiThread { handleRead(techs, uid, uri) }
+        // NO ZONE PICKED = the scan-first classification (decision-55 §2); a picked zone is the
+        // test scan it always was.
+        runOnUiThread { if (zone == null) handleScanFirst(techs, uid, uri) else handleRead(techs, uid, uri) }
     }
 
     /**
