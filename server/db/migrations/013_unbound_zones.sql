@@ -1,0 +1,53 @@
+-- 013_unbound_zones.sql — a zone may exist before anybody decided which building it is in.
+--
+-- decision-54 §1. Zone creation moves out of the admin panel and into the operator's hand:
+-- a card is written at a door, on a field visit, and the building it belongs to is
+-- frequently NOT known at that moment ("this is the new Stiege — which of the four
+-- Hausverwaltung objects is it?"). Until now `zones.location_id` was NOT NULL (006 §3), so
+-- that state was not expressible as a row at all and the operator had to either invent a
+-- building or hold the information in their head until they reached a desk.
+--
+-- ONE STATEMENT, and no new integrity code anywhere. That is the whole point of the file.
+--
+-- WHY THIS IS SCHEMA-SAFE, and it is worth spelling out because loosening NOT NULL on a
+-- table that TWO composite foreign keys point at looks reckless at a glance:
+--
+--   shifts_start_zone_fk  FOREIGN KEY (start_zone_id, location_id) REFERENCES zones (id, location_id)
+--   shifts_end_zone_fk    FOREIGN KEY (end_zone_id,   location_id) REFERENCES zones (id, location_id)
+--
+-- They reference `zones_id_location_key UNIQUE (id, location_id)`, with MATCH SIMPLE (the
+-- default). MATCH SIMPLE only skips the check when a column of the REFERENCING pair is
+-- NULL, and `shifts.location_id` is NOT NULL and always has been (001) — so any shift that
+-- names a zone must find a zones row whose (id, location_id) EQUALS its own pair. A row
+-- with `location_id IS NULL` can never equal anything: NULL is not equal to a building id,
+-- and the unique index cannot even be probed for it.
+--
+-- Two consequences fall out for free, and neither needed a line of application code:
+--   1. An UNBOUND zone is structurally unreferenceable by any shift. It cannot be clocked
+--      into (`activePlace`'s zone branch INNER JOINs locations — decision-54 §1 notes that
+--      behaviour was already correct and is now merely exercised), and it cannot be
+--      back-dated into one by a correction either.
+--   2. UNBINDING a zone that DOES have shift history is refused BY THE DATABASE: setting
+--      location_id back to NULL orphans every referencing shift and Postgres raises 23503
+--      naming shifts_start_zone_fk / shifts_end_zone_fk. That is decision-54 §3's
+--      unbind-refusal in full, enforced by the constraint decision-43 already shipped;
+--      POST /operator/zones/:id/unbind only has to translate the error code into
+--      `409 zone_has_shifts`. No SELECT-then-decide, so no race to lose.
+--
+-- ADDITIVE IN SPIRIT AND REVERSIBLE IN PRACTICE. Nothing is dropped, no column changes
+-- type, and the constraint being relaxed only ever ADMITS rows that were refused before —
+-- every existing row still satisfies it. Re-tightening is a new numbered file plus a
+-- decision, and it would first have to say what happens to the unbound rows.
+--
+-- ZERO ROWS CHANGED. A DROP NOT NULL rewrites nothing and backfills nothing; every zone
+-- that exists today keeps the building it has. Unbound rows only ever appear because an
+-- operator deliberately made one.
+--
+-- NO BEGIN/COMMIT — migrate.js already runs each file with `psql -1`.
+-- 001-012 are APPLIED ON THE LIVE BOX and are not editable (db/README.md).
+ALTER TABLE zones ALTER COLUMN location_id DROP NOT NULL;
+
+-- NO INDEX FOR "the unbound ones". `zones_location_id_idx` (006) already covers
+-- `location_id IS NULL` for a table that holds one row per physical door in the estate,
+-- and the operator's worklist reads every active zone anyway. A partial index here would
+-- be maintained for a query nobody writes.

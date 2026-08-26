@@ -777,9 +777,12 @@ try {
     const { authRoutes } = await import("./routes/auth.js");
     const { appRoutes } = await import("./routes/app.js");
     const smsish = [...adminRoutes, ...authRoutes, ...appRoutes].filter((r) => /sms|otp|\/phone$/i.test(r.path));
-    // 4 SMS/OTP routes + PUT and DELETE .../phone. A magic number is the point here: if a
-    // seventh appears, somebody must come back and say which auth kind it carries.
-    assert.equal(smsish.length, 6, `expected 6 routes, found ${smsish.length}: ${smsish.map((r) => r.path).join(", ")}`);
+    // 7 SMS/OTP routes + PUT and DELETE .../phone. A magic number is the point here: if a
+    // tenth appears, somebody must come back and say which auth kind it carries. It has
+    // gone up twice by design — decision-45's operator enrolment-code SMS, and decision-54
+    // §5's POST /auth/operator-sms/request + /verify, the operator's own OTP door — and
+    // BOTH additions are `auth: "app"`, which is what the loop below is really pinning.
+    assert.equal(smsish.length, 9, `expected 9 routes, found ${smsish.length}: ${smsish.map((r) => r.path).join(", ")}`);
     for (const r of smsish) {
       assert.ok(["admin", "app"].includes(r.auth), `${r.method} ${r.path} has auth ${r.auth}`);
       assert.ok(!r.path.startsWith("/shifts"), `${r.path} is on the clock-in path`);

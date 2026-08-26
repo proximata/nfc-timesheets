@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createHash, generateKeyPairSync, randomBytes, sign as rsaSign } from "node:crypto";
+import { createServer as createHttpServer } from "node:http";
 import pg from "pg";
 import { CODE_TTL_MS } from "./lib/enrolment.js";
 import { redactUrl, scrubBreadcrumb, scrubEvent, scrubLogAttributes } from "./lib/scrub.js";
@@ -275,7 +276,13 @@ CREATE UNIQUE INDEX location_revenue_one_live_idx
 CREATE INDEX location_revenue_month_idx ON location_revenue (month, location_id);
 CREATE TABLE zones (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  location_id UUID NOT NULL REFERENCES locations(id),
+  -- 013 (decision-54 §1) DROPPED THE NOT NULL, and it is transcribed here as an absence
+  -- rather than a second statement. A zone may exist before anybody decided which building
+  -- it is in: a card written at a door on a field visit, bound later from the phone.
+  -- The composite FK below is what makes that safe — MATCH SIMPLE cannot match a NULL, so
+  -- an unbound zone is structurally unreferenceable by any shift, and UNBINDING one that
+  -- has shifts raises 23503. Both halves are exercised in the decision-54 block.
+  location_id UUID REFERENCES locations(id),
   name TEXT NOT NULL CHECK (btrim(name) <> ''),
   note TEXT,
   area_sqm NUMERIC(8,2) CHECK (area_sqm > 0),
@@ -745,6 +752,36 @@ try {
   // shared pg module and this raw client inherits it. Wrapped once here so no case has to
   // remember, and so a `"0"` typo cannot pass by accident.
   const countOf = async (sql, params = []) => Number((await admin.query(sql, params)).rows[0].n);
+
+  /**
+   * A zone row, INSERTed straight into the schema, for the many fixtures below that merely
+   * need one to EXIST.
+   *
+   * It used to be `POST /admin/zones` with no `id`, and decision-54 §2 took exactly that
+   * half of the route away: a zone is born in the field now, in an operator's hand
+   * (POST /operator/tags/:id/resolve-zone), and that route has its own block at the bottom
+   * of this file. A fixture is not the place to re-test the thing being tested there — and
+   * a fixture that went on calling the retired half would only ever prove the 410.
+   *
+   * Returns the route's old `{zone}` shape so every call site below reads unchanged.
+   * `location_id` DEFAULTS TO NULL on purpose: an unbound zone is now a legal row and the
+   * decision-54 cases want one without a special helper.
+   */
+  const newZoneRow = async ({
+    location_id = null,
+    name,
+    note = null,
+    area_sqm = null,
+    tag_serial = null,
+    active = true,
+  }) => {
+    const { rows } = await admin.query(
+      `INSERT INTO zones (location_id, name, note, area_sqm, tag_serial, active)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [location_id, name, note, area_sqm, tag_serial, active],
+    );
+    return { zone: rows[0] };
+  };
 
   console.log(`check-api: running against schema ${SCHEMA}`);
 
@@ -4233,21 +4270,8 @@ try {
       assert.equal(unzoned.labour_minutes_per_m2, null);
       assert.equal(unzoned.cost_cents_per_m2, null);
 
-      const zoneA = (
-        await expect(
-          await asAdmin("/admin/zones", {
-            method: "POST",
-            body: { location_id: plA, name: "Stiege 1", area_sqm: "240.00" },
-          }),
-          201,
-        )
-      ).zone;
-      const zoneB = (
-        await expect(
-          await asAdmin("/admin/zones", { method: "POST", body: { location_id: plA, name: "Tiefgarage" } }),
-          201,
-        )
-      ).zone;
+      const zoneA = (await newZoneRow({ location_id: plA, name: "Stiege 1", area_sqm: "240.00" })).zone;
+      const zoneB = (await newZoneRow({ location_id: plA, name: "Tiefgarage" })).zone;
       assert.equal(zoneB.area_sqm, null, "a zone nobody has measured is a real, permanent state");
 
       // ONE UNMEASURED ZONE POISONS THE WHOLE FIGURE. Make it sum only the known areas and
@@ -4359,10 +4383,7 @@ try {
       );
 
       // One zone flips the presentation and changes nothing else.
-      await expect(
-        await asAdmin("/admin/zones", { method: "POST", body: { location_id: grey, name: "Eingang" } }),
-        201,
-      );
+      await newZoneRow({ location_id: grey, name: "Eingang" });
       assert.equal((await analyticsOf()).zone_state, "zoned");
       assert.equal((await analyticsOf()).active, true);
 
@@ -4896,12 +4917,7 @@ try {
 
     await test("a zone uuid resolves to (its building, itself); deactivating either kills it", async () => {
       const zoneHouse = await newLocation("pin-zoned", "Zonenhaus");
-      const zone = (
-        await expect(
-          await asAdmin("/admin/zones", { method: "POST", body: { location_id: zoneHouse, name: "Haupteingang" } }),
-          201,
-        )
-      ).zone;
+      const zone = (await newZoneRow({ location_id: zoneHouse, name: "Haupteingang" })).zone;
       // decision-47 §4: a zone lands UNVERIFIED and is not a clock-in target until an
       // operator test-scanned its card. Every fixture that expects a TAPPABLE zone now has
       // to say so explicitly — that is the point of 010 carrying no default, and this line
@@ -5030,12 +5046,7 @@ try {
     await test("moving a shift to another building CLEARS its zone columns", async () => {
       const fromHouse = await newLocation("move-from", "Umzug von");
       const toHouse = await newLocation("move-to", "Umzug nach");
-      const zone = (
-        await expect(
-          await asAdmin("/admin/zones", { method: "POST", body: { location_id: fromHouse, name: "Stiege X" } }),
-          201,
-        )
-      ).zone;
+      const zone = (await newZoneRow({ location_id: fromHouse, name: "Stiege X" })).zone;
       const shiftId = Number(
         (
           await admin.query(
@@ -5065,22 +5076,28 @@ try {
       // holding no URL at all. It cannot be rewritten to carry our URI, which is why the
       // serial is data on a zone rather than a hardcode in an APK (decision-44).
       const SERIAL = "04:A1:A8:52:AE:5C:80";
+      // The zone itself is a FIXTURE now (decision-54 §2 moved birth to the field), but
+      // ADOPTING a serial onto an existing zone is still the DIRECTOR'S job and still this
+      // route's — decision-54 names decision-44's adopted-hardware walk as untouched, so
+      // everything below goes through the EDIT half that survived.
+      const adoptee = (await newZoneRow({ location_id: house, name: "Übernommener Tag" })).zone;
       const adopted = (
         await expect(
           await asAdmin("/admin/zones", {
             method: "POST",
             // Typed the way another reader spells it. Normalising means the CHECK never
             // fires on somebody who typed the truth in a different style.
-            body: { location_id: house, name: "Übernommener Tag", tag_serial: "04-a1-a8-52-ae-5c-80" },
+            body: { id: adoptee.id, location_id: house, name: "Übernommener Tag", tag_serial: "04-a1-a8-52-ae-5c-80" },
           }),
-          201,
+          200,
         )
       ).zone;
       assert.equal(adopted.tag_serial, SERIAL, "one stored spelling, whatever the director pasted");
 
+      const second = (await newZoneRow({ location_id: house, name: "Zweite Zone" })).zone;
       const clash = await asAdmin("/admin/zones", {
         method: "POST",
-        body: { location_id: house, name: "Zweite Zone", tag_serial: "04 a1 a8 52 ae 5c 80" },
+        body: { id: second.id, location_id: house, name: "Zweite Zone", tag_serial: "04 a1 a8 52 ae 5c 80" },
       });
       assert.equal(clash.status, 409);
       const clashBody = await clash.json();
@@ -5089,7 +5106,12 @@ try {
 
       // Two live zones with one name in one building is a director about to tag the wrong door.
       assert.equal(
-        (await asAdmin("/admin/zones", { method: "POST", body: { location_id: house, name: "übernommener tag" } })).status,
+        (
+          await asAdmin("/admin/zones", {
+            method: "POST",
+            body: { id: second.id, location_id: house, name: "übernommener tag" },
+          })
+        ).status,
         409,
       );
 
@@ -5123,7 +5145,7 @@ try {
       for (const bad of ["nope", "04:A1", "04:A1:A8:5", "zz:zz:zz:zz"]) {
         const res = await asAdmin("/admin/zones", {
           method: "POST",
-          body: { location_id: house, name: `Bad ${bad}`, tag_serial: bad },
+          body: { id: second.id, location_id: house, name: "Zweite Zone", tag_serial: bad },
         });
         assert.equal(res.status, 400, `serial ${bad} must be refused`);
       }
@@ -5137,10 +5159,7 @@ try {
       // RED: add `z.name` (or an area) to the portal select list -> this fires.
       const house = await newLocation("portal-zoned", "Portalhaus");
       for (const [name, area] of [["Stiege Geheim", "120.00"], ["Tiefgarage Geheim", "80.00"]]) {
-        await expect(
-          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house, name, area_sqm: area } }),
-          201,
-        );
+        await newZoneRow({ location_id: house, name, area_sqm: area });
       }
       await admin.query(
         `INSERT INTO shifts (worker_id, location_id, start_time, end_time)
@@ -5231,13 +5250,7 @@ try {
     await test("/admin/data carries zones with a DERIVED last_tap_at, and never a stored one", async () => {
       const house = await newLocation("tapstate-haus", "Tapstate Haus");
       const zone = (
-        await expect(
-          await asAdmin("/admin/zones", {
-            method: "POST",
-            body: { location_id: house, name: "Stiege 9", note: "Tag links neben der Gegensprechanlage" },
-          }),
-          201,
-        )
+        await newZoneRow({ location_id: house, name: "Stiege 9", note: "Tag links neben der Gegensprechanlage" })
       ).zone;
 
       const before = (await (await asAdmin("/admin/data")).json()).zones.find((z) => z.id === zone.id);
@@ -5278,12 +5291,7 @@ try {
       // RED: delete `if (place.zone_verified_at === null) fail(...)` from
       // requireVerifiedPlace -> this answers 201 AND a shift row appears.
       const house = await newLocation("gate-haus", "Freischalt Haus");
-      const zone = (
-        await expect(
-          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house, name: "Stiege ungepr\u00fcft" } }),
-          201,
-        )
-      ).zone;
+      const zone = (await newZoneRow({ location_id: house, name: "Stiege ungepr\u00fcft" })).zone;
       assert.equal(zone.verified_at, null, "a zone an admin typed has proved nothing about a card on a wall");
 
       const before = await countShifts();
@@ -5325,18 +5333,8 @@ try {
       // a configuration state of the office; it must never trap somebody in a shift.
       // RED: call requireVerifiedPlace in closeShift too -> the close below 422s.
       const house = await newLocation("gate-close-haus", "Ausstempel Haus");
-      const verified = (
-        await expect(
-          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house, name: "Eingang gepr\u00fcft" } }),
-          201,
-        )
-      ).zone;
-      const unverified = (
-        await expect(
-          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house, name: "Hinterausgang" } }),
-          201,
-        )
-      ).zone;
+      const verified = (await newZoneRow({ location_id: house, name: "Eingang gepr\u00fcft" })).zone;
+      const unverified = (await newZoneRow({ location_id: house, name: "Hinterausgang" })).zone;
       await verifyZoneRow(verified.id);
 
       await expect(
@@ -5367,21 +5365,27 @@ try {
       // decision-47 §5: verification is the field's, structurally. RED: read `verified_at`
       // out of the body in upsertZone -> the column below stops being NULL.
       const house = await newLocation("gate-desk-haus", "Schreibtisch Haus");
-      const zone = (
-        await expect(
-          await asAdmin("/admin/zones", {
-            method: "POST",
-            body: {
-              location_id: house,
-              name: "Vom Schreibtisch",
-              verified_at: new Date().toISOString(),
-              verified_by_operator_id: 1,
-            },
-          }),
-          201,
-        )
-      ).zone;
-      assert.equal(zone.verified_at, null, "POST /admin/zones must IGNORE verified_at in the body");
+      const zone = (await newZoneRow({ location_id: house, name: "Vom Schreibtisch" })).zone;
+      // The CREATE half is gone entirely (decision-54 §2), so "an admin cannot verify by
+      // creating a pre-verified zone" is now true by the strongest means available: there is
+      // no create. Pinned as a 410 rather than assumed — RED: restore the INSERT branch in
+      // upsertZone and this line answers 201 with a zone nobody in the field ever saw.
+      const created = await asAdmin("/admin/zones", {
+        method: "POST",
+        body: {
+          location_id: house,
+          name: "Vom Schreibtisch Neu",
+          verified_at: new Date().toISOString(),
+          verified_by_operator_id: 1,
+        },
+      });
+      assert.equal(created.status, 410, "POST /admin/zones must not CREATE a zone at all any more");
+      assert.equal((await created.json()).error, "zone_creation_moved_to_operator_app");
+      assert.equal(
+        await countOf("SELECT count(*) AS n FROM zones WHERE name = $1", ["Vom Schreibtisch Neu"]),
+        0,
+        "a refused create must not land a row either",
+      );
       assert.equal(
         (await admin.query("SELECT verified_at, verified_by_operator_id FROM zones WHERE id = $1", [zone.id])).rows[0]
           .verified_at,
@@ -5843,6 +5847,10 @@ try {
 
     const reportTag = (tagId, cookie) => call("/operator/tags", { method: "POST", cookie, body: { id: tagId } });
 
+    /** The ONE way a zone is born since decision-54 §2: the operator's phone, not a desk. */
+    const resolveZone = (tagId, cookie, body) =>
+      call(`/operator/tags/${tagId}/resolve-zone`, { method: "POST", cookie, body });
+
     let op1;
 
     // ---- POST /operator/tags --------------------------------------------------------
@@ -6001,10 +6009,7 @@ try {
       );
       assert.notEqual(house.location.id, tagId, "a building's id is generated by the database and is never a card's id");
       const firstZone = await expect(
-        await asAdmin(`/admin/tags/${tagId}/resolve-zone`, {
-          method: "POST",
-          body: { location_id: house.location.id, name: "Erste Zone" },
-        }),
+        await resolveZone(tagId, op1.cookie, { location_id: house.location.id, name: "Erste Zone" }),
         201,
       );
       assert.equal(firstZone.zone.id, tagId, "the card's own bytes still never need rewriting");
@@ -6012,7 +6017,7 @@ try {
     });
 
     // ---- RESOLVE: new zone in an existing building ------------------------------------
-    await test("resolve-zone mints a NEW zone at the TAG'S OWN id, stamping tag_deployed_at from the REPORT", async () => {
+    await test("operator resolve-zone mints a NEW zone at the TAG'S OWN id, stamping tag_deployed_at from the REPORT", async () => {
       const house = await expect(
         await asAdmin("/admin/locations", { method: "POST", body: { slug: "resolve-zone-haus", name: "Zonenhaus f\u00fcr Resolve" } }),
         201,
@@ -6021,10 +6026,7 @@ try {
       const reported = await expect(await reportTag(tagId, op1.cookie), 201);
 
       const created = await expect(
-        await asAdmin(`/admin/tags/${tagId}/resolve-zone`, {
-          method: "POST",
-          body: { location_id: house.location.id, name: "Tiefgarage", area_sqm: "120" },
-        }),
+        await resolveZone(tagId, op1.cookie, { location_id: house.location.id, name: "Tiefgarage" }),
         201,
       );
       assert.equal(created.zone.id, tagId);
@@ -6061,10 +6063,7 @@ try {
         await asAdmin("/admin/locations", { method: "POST", body: { slug: "alias-haus", name: "Aliashaus" } }),
         201,
       );
-      const zone = await expect(
-        await asAdmin("/admin/zones", { method: "POST", body: { location_id: house.location.id, name: "Haupteingang" } }),
-        201,
-      );
+      const zone = await newZoneRow({ location_id: house.location.id, name: "Haupteingang" });
       // Verification is per ZONE, not per card (decision-47, accepted loss): once the zone
       // is proved, a SECOND card aliased onto it resolves without its own scan.
       await admin.query("UPDATE zones SET verified_at = now() WHERE id = $1", [zone.zone.id]);
@@ -6138,13 +6137,7 @@ try {
       const tagId = uuid(42);
       await expect(await reportTag(tagId, op1.cookie), 201);
       const zone = (
-        await expect(
-          await asAdmin(`/admin/tags/${tagId}/resolve-zone`, {
-            method: "POST",
-            body: { location_id: house.location.id, name: "Stiege Pr\u00fcf" },
-          }),
-          201,
-        )
+        await expect(await resolveZone(tagId, op1.cookie, { location_id: house.location.id, name: "Stiege Pr\u00fcf" }), 201)
       ).zone;
       assert.equal(zone.verified_at, null);
 
@@ -6224,18 +6217,8 @@ try {
         await asAdmin("/admin/locations", { method: "POST", body: { slug: "mismatch-haus", name: "Verwechselhaus" } }),
         201,
       );
-      const zoneA = (
-        await expect(
-          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house.location.id, name: "Stiege A" } }),
-          201,
-        )
-      ).zone;
-      const zoneB = (
-        await expect(
-          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house.location.id, name: "Stiege B" } }),
-          201,
-        )
-      ).zone;
+      const zoneA = (await newZoneRow({ location_id: house.location.id, name: "Stiege A" })).zone;
+      const zoneB = (await newZoneRow({ location_id: house.location.id, name: "Stiege B" })).zone;
 
       const stillNull = async (why) =>
         assert.equal(
@@ -6293,12 +6276,7 @@ try {
         await asAdmin("/admin/locations", { method: "POST", body: { slug: "desk-verify-haus", name: "Schreibtischpr\u00fcfung" } }),
         201,
       );
-      const zone = (
-        await expect(
-          await asAdmin("/admin/zones", { method: "POST", body: { location_id: house.location.id, name: "Stiege Fern" } }),
-          201,
-        )
-      ).zone;
+      const zone = (await newZoneRow({ location_id: house.location.id, name: "Stiege Fern" })).zone;
       const path = `/operator/zones/${zone.id}/verify`;
       const body = { place_uuid: zone.id };
 
@@ -6313,7 +6291,7 @@ try {
       );
     });
 
-    await test("THE RESOLVE RACE: two admins resolving the SAME reported tag at once — only one wins", async () => {
+    await test("THE RESOLVE RACE: two OPERATORS resolving the SAME reported tag at once — only one wins", async () => {
       const house = await expect(
         await asAdmin("/admin/locations", { method: "POST", body: { slug: "resolve-race-haus", name: "Rennhaus" } }),
         201,
@@ -6321,15 +6299,12 @@ try {
       const tagId = uuid(40);
       await expect(await reportTag(tagId, op1.cookie), 201);
 
+      // Two phones at the same door, one card. The CTE's `resolved_at IS NULL` is what
+      // decides it, exactly as it did when this race was two admins at two desks.
+      const op2 = await operatorCookieFor("Feldleiter Rennen");
       const [a, b] = await Promise.all([
-        asAdmin(`/admin/tags/${tagId}/resolve-zone`, {
-          method: "POST",
-          body: { location_id: house.location.id, name: "Zone A" },
-        }),
-        asAdmin(`/admin/tags/${tagId}/resolve-zone`, {
-          method: "POST",
-          body: { location_id: house.location.id, name: "Zone B" },
-        }),
+        resolveZone(tagId, op1.cookie, { location_id: house.location.id, name: "Zone A" }),
+        resolveZone(tagId, op2.cookie, { location_id: house.location.id, name: "Zone B" }),
       ]);
       assert.deepEqual([a.status, b.status].sort(), [201, 409], "exactly one resolve may win a race for the same reported tag");
       assert.equal(await countOf("SELECT count(*) AS n FROM zones WHERE id = $1", [tagId]), 1);
@@ -6351,15 +6326,622 @@ try {
         201,
       );
       await expect(
-        await asAdmin(`/admin/tags/${tagId}/resolve-zone`, {
-          method: "POST",
-          body: { location_id: worklistHouse.location.id, name: "Aus der Warteliste" },
-        }),
+        await resolveZone(tagId, op1.cookie, { location_id: worklistHouse.location.id, name: "Aus der Warteliste" }),
         201,
       );
       const after = await (await asAdmin("/admin/data")).json();
       assert.ok(!after.reported_tags.some((t) => t.id === tagId), "a resolved report is history, not a queue item");
     });
+
+    // =================================================================================
+    // decision-54 · A ZONE MAY EXIST WITH NO BUILDING, and creating, binding and unbinding
+    // one are the OPERATOR'S actions.
+    //
+    // Three claims are load-bearing here and each is tested against the thing that really
+    // enforces it, never against a read of the code:
+    //   1. the admin's create/resolve-zone doors are GONE (410 and 404, not "unused")
+    //   2. an unbound zone is a real, visible, permanent state — not a 404, not dropped
+    //   3. UNBINDING a zone that has shift history is refused BY POSTGRES (23503 on the
+    //      composite FK), so that case creates a REAL shift and asserts the real refusal.
+    //      Faking the error would test the catch block and nothing else, and the whole
+    //      argument of migration 013 is that no application integrity code was written.
+    // =================================================================================
+
+    const newHouse = async (slug, name) =>
+      (await expect(await asAdmin("/admin/locations", { method: "POST", body: { slug, name } }), 201)).location.id;
+
+    await test("admin resolve-zone is GONE — a desk can no longer turn a reported card into a zone", async () => {
+      // RED: put the route-table entry back in adminRoutes -> this answers 201 and a second
+      // birthplace for zones exists again, which is the exact thing decision-54 §2 closed.
+      const tagId = uuid(50);
+      await expect(await reportTag(tagId, op1.cookie), 201);
+      const house = await newHouse("admin-resolve-gone", "Kein Schreibtisch Haus");
+
+      const gone = await asAdmin(`/admin/tags/${tagId}/resolve-zone`, {
+        method: "POST",
+        body: { location_id: house, name: "Vom Schreibtisch geboren" },
+      });
+      assert.equal(gone.status, 404, "the route must not exist at all — not merely refuse");
+      assert.equal((await gone.json()).error, "not_found", "...and it is the ROUTER answering, not a handler");
+      assert.equal(await countOf("SELECT count(*) AS n FROM zones WHERE id = $1", [tagId]), 0);
+      assert.equal(
+        (await admin.query("SELECT resolved_at FROM reported_tags WHERE id = $1", [tagId])).rows[0].resolved_at,
+        null,
+        "...and the card is still unresolved, waiting for the operator who wrote it",
+      );
+
+      // Not "unrouted but importable" either — decision-47's own precedent, repeated: a
+      // retired handler that still compiles is one a later reader finds and re-wires, and a
+      // re-wired zone-minting route is invisible until a card is on a wall.
+      const adminSource = readFileSync(new URL("./routes/admin.js", import.meta.url), "utf8");
+      assert.ok(
+        !adminSource.includes("async function resolveTagToZone"),
+        "the handler must be DELETED from routes/admin.js, not kept importable",
+      );
+      const { adminRoutes } = await import("./routes/admin.js");
+      assert.equal(
+        adminRoutes.filter((r) => r.path.includes("resolve-zone")).length,
+        0,
+        "no /admin route-table entry may match resolve-zone",
+      );
+
+      // The replacement, on the same card, in the same test.
+      const born = await expect(await resolveZone(tagId, op1.cookie, { location_id: house, name: "Im Feld geboren" }), 201);
+      assert.equal(born.zone.id, tagId);
+    });
+
+    await test("POST /admin/zones REFUSES to create (410, named) and still EDITS exactly as before", async () => {
+      const house = await newHouse("upsert-split-haus", "Trennhaus");
+      const refused = await asAdmin("/admin/zones", { method: "POST", body: { location_id: house, name: "Neue Stiege" } });
+      assert.equal(refused.status, 410, "not a 404 — the URL still works, the CREATE half does not");
+      assert.equal((await refused.json()).error, "zone_creation_moved_to_operator_app");
+      assert.equal(
+        await countOf("SELECT count(*) AS n FROM zones WHERE location_id = $1", [house]),
+        0,
+        "a refused create must land nothing — never a 500 with a half-written row behind it",
+      );
+
+      // ...and the EDIT half, which is still the DIRECTOR'S job, is untouched: every field
+      // the route ever patched, in one call, read back off the row and not off the response.
+      const zone = (await newZoneRow({ location_id: house, name: "Stiege alt" })).zone;
+      const edited = await expect(
+        await asAdmin("/admin/zones", {
+          method: "POST",
+          body: {
+            id: zone.id,
+            location_id: house,
+            name: "Stiege neu",
+            note: "Tag rechts vom Lift",
+            area_sqm: "75.50",
+            tag_serial: "04:11:22:33:44:55:66",
+            active: false,
+          },
+        }),
+        200,
+      );
+      assert.equal(edited.zone.name, "Stiege neu");
+      const row = (await admin.query("SELECT * FROM zones WHERE id = $1", [zone.id])).rows[0];
+      assert.equal(row.name, "Stiege neu");
+      assert.equal(row.note, "Tag rechts vom Lift");
+      assert.equal(Number(row.area_sqm), 75.5);
+      assert.equal(row.tag_serial, "04:11:22:33:44:55:66");
+      assert.equal(row.active, false);
+      assert.equal(row.location_id, house, "location_id is still NOT patchable");
+    });
+
+    await test("operator resolve-zone lands a zone UNBOUND when no building is named, and refuses the same way as before", async () => {
+      const tagId = uuid(51);
+      await expect(await reportTag(tagId, op1.cookie), 201);
+
+      const created = await expect(await resolveZone(tagId, op1.cookie, { name: "Stiege ohne Objekt" }), 201);
+      assert.equal(created.zone.id, tagId);
+      assert.equal(
+        created.zone.location_id,
+        null,
+        "THE STATE decision-54 exists for: a card is written at a door before anybody knows which object the door belongs to",
+      );
+      assert.equal(created.zone.verified_at, null, "creating a zone proves nothing about the card (decision-47)");
+      assert.equal(
+        (await admin.query("SELECT resolved_at FROM reported_tags WHERE id = $1", [tagId])).rows[0].resolved_at !== null,
+        true,
+        "the CTE still stamps the report in the same statement",
+      );
+
+      // An UNBOUND zone is structurally untappable, and that is the DATABASE's doing (013):
+      // activePlace INNER JOINs locations, so there is nothing for a tap to resolve to.
+      const before = await countShifts();
+      const tap = await asWorker("/shifts/open", {
+        method: "POST",
+        body: { client_uuid: uuid(52), location_uuid: tagId, start_time: new Date().toISOString() },
+      });
+      assert.equal(tap.status, 422, "never a 500");
+      assert.equal(await countShifts(), before, "and never a shift against a zone with no building");
+
+      // The 404/409/422 vocabulary is the admin route's, carried over unchanged.
+      const again = await resolveZone(tagId, op1.cookie, { name: "Zweiter Versuch" });
+      assert.equal(again.status, 409);
+      assert.equal((await again.json()).error, "already_resolved");
+
+      const never = await resolveZone(uuid(53), op1.cookie, { name: "Nie gemeldet" });
+      assert.equal(never.status, 404);
+      assert.equal((await never.json()).error, "unknown_reported_tag");
+
+      const strayTag = uuid(54);
+      await expect(await reportTag(strayTag, op1.cookie), 201);
+      const nowhere = await resolveZone(strayTag, op1.cookie, { location_id: uuid(55), name: "Nirgendwo" });
+      assert.equal(nowhere.status, 422);
+      assert.equal((await nowhere.json()).error, "unknown_location");
+
+      // And it is an OPERATOR route, not a desk one.
+      assert.equal(
+        (await asAdmin(`/operator/tags/${strayTag}/resolve-zone`, { method: "POST", body: { name: "X" } })).status,
+        401,
+        "an ADMIN session is not a path into the field",
+      );
+    });
+
+    await test("BIND: a building is chosen later, verification does NOT carry over, and a second bind is refused", async () => {
+      const house = await newHouse("bind-haus", "Bindehaus");
+      const other = await newHouse("bind-haus-2", "Bindehaus Zwei");
+      const zone = (await newZoneRow({ name: "Stiege ungebunden" })).zone;
+      // Proved against a context with NO building. decision-54 §3 says that proof must not
+      // survive the bind — RED: drop `verified_at = NULL` from bindZone's UPDATE and the
+      // assertion below marks a door tappable on a scan that never resolved to this building.
+      await admin.query("UPDATE zones SET verified_at = now() WHERE id = $1", [zone.id]);
+
+      const bound = await expect(
+        await call(`/operator/zones/${zone.id}/bind`, { method: "POST", cookie: op1.cookie, body: { location_id: house } }),
+        200,
+      );
+      assert.equal(bound.zone.location_id, house);
+      assert.equal(bound.zone.verified_at, null, "a card proved in another context is not proved in this one");
+      assert.equal(
+        (await admin.query("SELECT verified_by_operator_id FROM zones WHERE id = $1", [zone.id])).rows[0]
+          .verified_by_operator_id,
+        null,
+        "...and the stamp of WHO went with it: a signature on nothing is worse than no signature",
+      );
+
+      const twice = await call(`/operator/zones/${zone.id}/bind`, {
+        method: "POST",
+        cookie: op1.cookie,
+        body: { location_id: other },
+      });
+      assert.equal(twice.status, 409, "rebinding is unbind-then-bind, never a silent move");
+      assert.equal((await twice.json()).error, "already_bound");
+      assert.equal(
+        (await admin.query("SELECT location_id FROM zones WHERE id = $1", [zone.id])).rows[0].location_id,
+        house,
+        "a refused bind must not have moved it half way",
+      );
+
+      // A REAL name clash in the TARGET building: unique-by-being-NULL stops being true the
+      // moment the row gets a building, and the partial index is what says so.
+      const clashHouse = await newHouse("bind-clash-haus", "Namensgleich Haus");
+      await newZoneRow({ location_id: clashHouse, name: "Haupteingang" });
+      const pending = (await newZoneRow({ name: "haupteingang" })).zone;
+      const clash = await call(`/operator/zones/${pending.id}/bind`, {
+        method: "POST",
+        cookie: op1.cookie,
+        body: { location_id: clashHouse },
+      });
+      assert.equal(clash.status, 409);
+      assert.equal(
+        (await clash.json()).error,
+        "duplicate_zone_name",
+        "two live 'Haupteingang's in one building is an operator about to tag the wrong door",
+      );
+      assert.equal(
+        (await admin.query("SELECT location_id FROM zones WHERE id = $1", [pending.id])).rows[0].location_id,
+        null,
+        "...and the zone stays unbound rather than landing somewhere ambiguous",
+      );
+
+      const nowhere = await call(`/operator/zones/${pending.id}/bind`, {
+        method: "POST",
+        cookie: op1.cookie,
+        body: { location_id: uuid(56) },
+      });
+      assert.equal(nowhere.status, 422);
+      assert.equal((await nowhere.json()).error, "unknown_location");
+
+      const missing = await call(`/operator/zones/${uuid(57)}/bind`, {
+        method: "POST",
+        cookie: op1.cookie,
+        body: { location_id: house },
+      });
+      assert.equal(missing.status, 404);
+      assert.equal((await missing.json()).error, "unknown_zone");
+    });
+
+    await test("UNBIND: allowed with no history, and REFUSED BY POSTGRES the moment one real shift names the zone", async () => {
+      // THE MOST IMPORTANT CASE IN THIS BLOCK. decision-54 §3 claims the refusal needs NO
+      // application integrity code because the composite FK decision-43 already shipped does
+      // the whole job. That claim is only worth anything if a REAL shift row is what raises
+      // it — a stubbed 23503 would test the catch block and prove nothing about the schema.
+      const house = await newHouse("unbind-haus", "L\u00f6sehaus");
+
+      const clean = (await newZoneRow({ location_id: house, name: "Nie betreten" })).zone;
+      const unbound = await expect(
+        await call(`/operator/zones/${clean.id}/unbind`, { method: "POST", cookie: op1.cookie, body: {} }),
+        200,
+      );
+      assert.equal(unbound.zone.location_id, null);
+
+      const twice = await call(`/operator/zones/${clean.id}/unbind`, { method: "POST", cookie: op1.cookie, body: {} });
+      assert.equal(twice.status, 409);
+      assert.equal((await twice.json()).error, "already_unbound");
+
+      // A REAL shift, a real tap record, inserted the same way every other fixture in this
+      // file inserts one — through the composite FK, which is the point.
+      const worked = (await newZoneRow({ location_id: house, name: "T\u00e4glich betreten" })).zone;
+      await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, start_zone_id, start_time, end_time)
+         VALUES ($1, $2, $3, now() - interval '2 hours', now() - interval '1 hour')`,
+        [workerId, house, worked.id],
+      );
+
+      const refused = await call(`/operator/zones/${worked.id}/unbind`, { method: "POST", cookie: op1.cookie, body: {} });
+      assert.equal(refused.status, 409, "never a 500 with a constraint name on the wire");
+      assert.equal(
+        (await refused.json()).error,
+        "zone_has_shifts",
+        "somebody clocked in here; this zone's history is nailed to its building",
+      );
+      assert.equal(
+        (await admin.query("SELECT location_id FROM zones WHERE id = $1", [worked.id])).rows[0].location_id,
+        house,
+        "THE UPDATE MUST NOT HAVE HAPPENED — the FK aborts the statement, it does not merely warn",
+      );
+
+      // The END of a shift counts too: shifts_end_zone_fk is a second constraint, and a zone
+      // people only ever leave by would otherwise be unbindable-in-theory and unbound-in-fact.
+      const exitOnly = (await newZoneRow({ location_id: house, name: "Nur Ausgang" })).zone;
+      await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, end_zone_id, start_time, end_time)
+         VALUES ($1, $2, $3, now() - interval '4 hours', now() - interval '3 hours')`,
+        [workerId, house, exitOnly.id],
+      );
+      const refusedExit = await call(`/operator/zones/${exitOnly.id}/unbind`, {
+        method: "POST",
+        cookie: op1.cookie,
+        body: {},
+      });
+      assert.equal(refusedExit.status, 409);
+      assert.equal((await refusedExit.json()).error, "zone_has_shifts");
+
+      await admin.query("DELETE FROM shifts WHERE start_zone_id = $1 OR end_zone_id = $1", [worked.id]);
+      await admin.query("DELETE FROM shifts WHERE end_zone_id = $1", [exitOnly.id]);
+      // ...and with the history gone the SAME call succeeds, which is what stops the two
+      // assertions above being a tautology about a route that refuses everything.
+      await expect(await call(`/operator/zones/${worked.id}/unbind`, { method: "POST", cookie: op1.cookie, body: {} }), 200);
+
+      assert.equal(
+        (await call(`/operator/zones/${uuid(58)}/unbind`, { method: "POST", cookie: op1.cookie, body: {} })).status,
+        404,
+      );
+    });
+
+    await test("GET /operator/zones/:id is the bound-vs-unbound branch, and GET /operator/zones keeps the unbound ones", async () => {
+      const house = await newHouse("zonepage-haus", "Zonenseitenhaus");
+      const bound = (await newZoneRow({ location_id: house, name: "Stiege gebunden" })).zone;
+      const loose = (await newZoneRow({ name: "Stiege lose" })).zone;
+
+      const boundBody = await expect(await call(`/operator/zones/${bound.id}`, { cookie: op1.cookie }), 200);
+      assert.equal(boundBody.zone.location_id, house);
+      assert.equal(boundBody.zone.location_name, "Zonenseitenhaus");
+      assert.equal(boundBody.zone.verified_at, null);
+      for (const key of ["area_sqm", "note", "hourly_rate_cents", "monthly_contract_cents", "client_id"]) {
+        assert.equal(boundBody.zone[key], undefined, `${key} has no business on an operator's phone`);
+      }
+
+      // RED: make getZone's join an INNER one and this 404s — turning "not bound yet" into
+      // "does not exist", which is the one answer the phone cannot act on.
+      const looseBody = await expect(await call(`/operator/zones/${loose.id}`, { cookie: op1.cookie }), 200);
+      assert.equal(looseBody.zone.location_id, null);
+      assert.equal(looseBody.zone.location_name, null);
+
+      await admin.query("UPDATE zones SET active = false WHERE id = $1", [bound.id]);
+      const dead = await call(`/operator/zones/${bound.id}`, { cookie: op1.cookie });
+      assert.equal(dead.status, 404);
+      assert.equal((await dead.json()).error, "unknown_zone");
+      await admin.query("UPDATE zones SET active = true WHERE id = $1", [bound.id]);
+
+      // THE WORKLIST. An unbound zone is exactly the one with work left on it, so dropping
+      // it would hide the only screen it can ever be bound from.
+      const worklist = await expect(await call("/operator/zones", { cookie: op1.cookie }), 200);
+      const item = worklist.zones.find((z) => z.id === loose.id);
+      assert.ok(item, "an UNBOUND zone must appear on the operator's worklist");
+      assert.equal(item.location_name, null, "...with no building name, because it has no building");
+      assert.ok(
+        worklist.zones.some((z) => z.id === bound.id),
+        "and a bound one is still there beside it",
+      );
+
+      // A zone bound to a DEACTIVATED building is a different thing from an unbound one and
+      // must still drop out — RED: leave `l.active` in the WHERE instead of the JOIN and the
+      // unbound rows vanish; move it and forget the `l.id IS NOT NULL` half and these appear.
+      await admin.query("UPDATE locations SET active = false WHERE id = $1", [house]);
+      const afterDeactivation = await expect(await call("/operator/zones", { cookie: op1.cookie }), 200);
+      assert.ok(!afterDeactivation.zones.some((z) => z.id === bound.id), "a zone of a dead building is not field work");
+      assert.ok(afterDeactivation.zones.some((z) => z.id === loose.id), "...but the unbound one is still on the list");
+      await admin.query("UPDATE locations SET active = true WHERE id = $1", [house]);
+    });
+
+    await test("GET /operator/locations is a PICKER: active buildings, id and name, and nothing else", async () => {
+      const live = await newHouse("picker-haus", "Auswahlhaus");
+      const dead = await newHouse("picker-haus-tot", "Stillgelegtes Haus");
+      await admin.query("UPDATE locations SET active = false WHERE id = $1", [dead]);
+      await admin.query("UPDATE locations SET monthly_contract_cents = 250000 WHERE id = $1", [live]);
+
+      const body = await expect(await call("/operator/locations", { cookie: op1.cookie }), 200);
+      const row = body.locations.find((l) => l.id === live);
+      assert.ok(row, "an active building must be offered");
+      assert.deepEqual(Object.keys(row).sort(), ["id", "name"], "TWO COLUMNS, and the list stops there");
+      assert.ok(
+        !body.locations.some((l) => l.id === dead),
+        "binding a zone into a building nobody cleans any more is a mistake the picker must not offer",
+      );
+      assert.equal((await call("/operator/locations")).status, 401, "the app key alone is not an operator");
+    });
+
+    await test("GET /operator/zones/:id/shifts: hours and names only, one month, paginated, totalled off the WHOLE month", async () => {
+      const house = await newHouse("shiftpage-haus", "Schichtenhaus");
+      const zone = (await newZoneRow({ location_id: house, name: "Stiege Schichten" })).zone;
+
+      // 51 shifts of exactly 30 minutes each, in the CURRENT month, one an hour from the
+      // month's first instant — 51 so page 2 exists and holds exactly one row, and 30
+      // minutes so the total is an integer nobody has to squint at: 51 * 30 = 1530.
+      await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, start_zone_id, start_time, end_time)
+         SELECT $1, $2, $3,
+                date_trunc('month', CURRENT_DATE) + (i || ' hours')::interval,
+                date_trunc('month', CURRENT_DATE) + (i || ' hours')::interval + interval '30 minutes'
+           FROM generate_series(0, 50) AS i`,
+        [workerId, house, zone.id],
+      );
+      // One shift in a month this query is NOT asking about. Without it, "the month filter
+      // works" would be a claim about a table that only ever held one month.
+      await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, start_zone_id, start_time, end_time)
+         VALUES ($1, $2, $3, TIMESTAMPTZ '2025-03-10T06:00:00Z', TIMESTAMPTZ '2025-03-10T07:30:00Z')`,
+        [workerId, house, zone.id],
+      );
+
+      const first = await expect(await call(`/operator/zones/${zone.id}/shifts`, { cookie: op1.cookie }), 200);
+      assert.equal(first.page, 1);
+      assert.equal(first.page_size, 50);
+      assert.equal(first.shifts.length, 50, "one page is 50 rows, fixed — there is no caller-supplied limit");
+      assert.equal(first.matching, 51, "THE COUNT IS THE MONTH'S, not the page's");
+      assert.equal(Number(first.total_minutes), 1530, "51 * 30, summed over the whole month and never over one page");
+      assert.equal(first.month, null, "an unnamed month is echoed as null, so the screen knows it is on the default");
+
+      // RED for the paging tiebreak: drop `s.id DESC` from the ORDER BY and rows tying on
+      // start_time silently duplicate and disappear across the two pages.
+      const second = await expect(await call(`/operator/zones/${zone.id}/shifts?page=2`, { cookie: op1.cookie }), 200);
+      assert.equal(second.page, 2);
+      assert.equal(second.shifts.length, 1, "51 rows over a page of 50 is one row on page two");
+      assert.equal(second.matching, 51, "...and the total does not shrink because the page did");
+      assert.equal(Number(second.total_minutes), 1530);
+      const ids = new Set([...first.shifts, ...second.shifts].map((s) => `${s.start_time}|${s.worker_id}`));
+      assert.equal(ids.size, 51, "the two pages must be disjoint and complete");
+
+      const march = await expect(await call(`/operator/zones/${zone.id}/shifts?month=2025-03`, { cookie: op1.cookie }), 200);
+      assert.equal(march.month, "2025-03-01");
+      assert.equal(march.matching, 1, "an explicitly named month is the one that answers");
+      assert.equal(Number(march.total_minutes), 90);
+      assert.equal(Number(march.shifts[0].duration_minutes), 90, "duration is computed in SQL, not on the phone");
+      assert.equal(march.shifts[0].worker_name, "Check Worker");
+
+      // THE HARD LINE (decision-54 §7, decision-6/42/43): a zone is not a costing unit.
+      for (const key of ["hourly_rate_cents", "pay_cents", "client_name", "monthly_contract_cents", "location_name"]) {
+        assert.equal(march.shifts[0][key], undefined, `${key} must never reach an operator's phone`);
+      }
+      assert.deepEqual(
+        Object.keys(march.shifts[0]).sort(),
+        ["duration_minutes", "end_time", "start_time", "worker_id", "worker_name"],
+        "the whole payload, and adding a column to it is a decision record rather than a patch",
+      );
+
+      // An OPEN shift counts the time SO FAR rather than reading as a blank row.
+      await admin.query(
+        `INSERT INTO shifts (worker_id, location_id, start_zone_id, start_time)
+         VALUES ($1, $2, $3, now() - interval '20 minutes')`,
+        [otherWorkerId, house, zone.id],
+      );
+      const withOpen = await expect(await call(`/operator/zones/${zone.id}/shifts`, { cookie: op1.cookie }), 200);
+      const running = withOpen.shifts.find((s) => s.end_time === null);
+      assert.ok(running, "a running shift must be visible, not filtered out");
+      assert.ok(Number(running.duration_minutes) >= 19, "...and it must carry the time so far");
+
+      assert.equal((await call(`/operator/zones/${uuid(59)}/shifts`, { cookie: op1.cookie })).status, 404);
+      assert.equal((await call(`/operator/zones/${zone.id}/shifts`)).status, 401, "the app key alone is not an operator");
+      assert.equal(
+        (await call(`/operator/zones/${zone.id}/shifts?page=0`, { cookie: op1.cookie })).status,
+        400,
+        "page numbers are 1-based; 0 is a bug in the caller, not page one",
+      );
+      await admin.query("DELETE FROM shifts WHERE start_zone_id = $1", [zone.id]);
+    });
+
+    // ---- operator SMS sign-in (decision-54 §5) --------------------------------------
+    //
+    // NO REAL SMS IS SENT BY ANY OF THIS, AND NONE CAN BE. The mechanism is the one
+    // check-sms-flag.mjs already uses and is the only test seam lib/sms.js has:
+    // TWILIO_API_BASE pointed at a local stub, with obvious fakes for the credentials —
+    // correctly SHAPED fakes, because a malformed value counts as MISSING and would turn the
+    // feature off instead of on. The flag is read per request, never cached at boot, which
+    // is what lets it be switched on here and off again afterwards.
+    //
+    // The stub is also the only way to learn the code: it is never written down anywhere
+    // else — a local in the handler, a SHA-256 in the database, scrubbed out of telemetry.
+    // Reading it off the wire is exactly what a handset does.
+    {
+      const sms = { calls: [] };
+      const stub = createHttpServer((req, res) => {
+        let raw = "";
+        req.on("data", (c) => (raw += c));
+        req.on("end", () => {
+          sms.calls.push(Object.fromEntries(new URLSearchParams(raw)));
+          res.writeHead(201, { "content-type": "application/json" });
+          res.end(JSON.stringify({ sid: `SM${randomBytes(16).toString("hex")}`, status: "queued" }));
+        });
+      });
+      await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+
+      const TWILIO_VARS = ["TWILIO_ACCOUNT_SID", "TWILIO_SID", "TWILIO_SECRET", "TWILIO_FROM", "TWILIO_API_BASE"];
+      const configureTwilio = () => {
+        process.env.TWILIO_ACCOUNT_SID = `AC${"0123456789abcdef0123456789abcdef"}`;
+        process.env.TWILIO_SID = `SK${"fedcba9876543210fedcba9876543210"}`;
+        process.env.TWILIO_SECRET = "not-a-real-twilio-secret-000000000";
+        process.env.TWILIO_FROM = "+43720123456";
+        process.env.TWILIO_API_BASE = `http://127.0.0.1:${stub.address().port}`;
+      };
+
+      // The last message this server tried to send, as the handset would read it.
+      const lastCode = () => {
+        const body = sms.calls.at(-1)?.Body ?? "";
+        const m = body.match(/\b(\d{6})\b/);
+        assert.ok(m, `no 6-digit code in the message body: ${JSON.stringify(body)}`);
+        return m[1];
+      };
+
+      const OP_PHONE = "+436649007801";
+      const WORKER_PHONE = "+436649007802";
+      const DEAD_OP_PHONE = "+436649007803";
+
+      try {
+        configureTwilio();
+        const smsOp = await operatorCookieFor("Feldleiterin SMS");
+        await admin.query("INSERT INTO phone_identities (phone_e164, operator_id) VALUES ($1, $2)", [OP_PHONE, smsOp.operatorId]);
+        await admin.query("INSERT INTO phone_identities (phone_e164, worker_id) VALUES ($1, $2)", [WORKER_PHONE, workerId]);
+        const { rows: deadOp } = await admin.query(
+          "INSERT INTO operators (name, active) VALUES ('Ehemalige Feldleiterin', false) RETURNING id",
+        );
+        await admin.query("INSERT INTO phone_identities (phone_e164, operator_id) VALUES ($1, $2)", [
+          DEAD_OP_PHONE,
+          Number(deadOp[0].id),
+        ]);
+
+        const opRequest = (phone, ip) => call("/auth/operator-sms/request", { method: "POST", body: { phone }, ip });
+        const opVerify = (phone, code, ip) => call("/auth/operator-sms/verify", { method: "POST", body: { phone, code }, ip });
+
+        await test("operator SMS: a real request+verify round trip mints ts_operator and NOTHING else", async () => {
+          resetLoginRate();
+          const sent = sms.calls.length;
+          const req = await opRequest(OP_PHONE, "10.9.1.1");
+          const reqBody = await req.json();
+          assert.equal(req.status, 202, JSON.stringify(reqBody));
+          assert.deepEqual(reqBody, { status: "accepted" });
+          assert.equal(sms.calls.length, sent + 1, "exactly one message was attempted");
+          assert.equal(sms.calls.at(-1).To, OP_PHONE);
+
+          // The delivery is logged against the OPERATOR column 011 has carried, nullable,
+          // since before there was an operator route to use it.
+          assert.equal(
+            await countOf(
+              "SELECT count(*) AS n FROM sms_deliveries WHERE kind = 'otp' AND operator_id = $1 AND worker_id IS NULL",
+              [smsOp.operatorId],
+            ),
+            1,
+            "an operator's OTP is recorded as an operator's, never as a worker's",
+          );
+
+          const res = await opVerify(OP_PHONE, lastCode(), "10.9.1.1");
+          const body = await res.json();
+          assert.equal(res.status, 200, JSON.stringify(body));
+          assert.equal(body.operator.name, "Feldleiterin SMS");
+          const raw = res.headers.getSetCookie?.()[0] ?? res.headers.get("set-cookie");
+          assert.match(raw, /^ts_operator=/, "SMS is a fourth DOOR, never a second operator identity system");
+          assert.ok(!/ts_worker=/.test(raw), "and it must never hand out a worker session");
+
+          // The session is REAL: it opens an operator route, which is the only claim that
+          // matters about a cookie.
+          const cookie = raw.split(";")[0];
+          assert.equal((await call("/operator/zones", { cookie })).status, 200);
+
+          // SINGLE USE, decided by the database.
+          resetLoginRate();
+          assert.equal((await opVerify(OP_PHONE, lastCode(), "10.9.1.2")).status, 401, "a code is spent when it is used");
+        });
+
+        await test("operator SMS: decision-51 disclosure — a worker's number and a deactivated operator's are both 404", async () => {
+          resetLoginRate();
+          const sent = sms.calls.length;
+
+          // ONE SOURCE ADDRESS EACH: `checkSmsRequestRate` is spent before the database is
+          // touched (decision-51 §6), so three requests from one address would answer 429 on
+          // the last one and this would be testing the limiter instead of the disclosure.
+          for (const [phone, ip, why] of [
+            ["+436649007899", "10.9.2.1", "a number nobody has ever registered"],
+            [WORKER_PHONE, "10.9.2.2", "A WORKER'S number: this route is not their door"],
+            [DEAD_OP_PHONE, "10.9.2.3", "a DEACTIVATED operator — deactivating must be a lockout, not a label"],
+          ]) {
+            resetLoginRate();
+            const res = await opRequest(phone, ip);
+            assert.equal(res.status, 404, why);
+            assert.equal((await res.json()).error, "unknown_phone", `${why} — the three collapse to ONE answer`);
+          }
+          assert.equal(sms.calls.length, sent, "NOT ONE MESSAGE may be sent on any of those paths");
+
+          // SHAPE ONLY, never existence: a malformed number is a different class of answer.
+          resetLoginRate();
+          const shape = await opRequest("Anna", "10.9.2.9");
+          assert.equal(shape.status, 422);
+          assert.equal((await shape.json()).error, "invalid_phone");
+
+          // ...and the VERIFY route never leaks it at all: a wrong number and a wrong code
+          // are byte-identical, or the shape check becomes a free existence probe.
+          resetLoginRate();
+          const bad = await opVerify("+436649007899", "123456", "10.9.2.10");
+          assert.equal(bad.status, 401);
+          assert.equal((await bad.json()).error, "invalid_code");
+        });
+
+        await test("operator SMS: the smsotpop: bucket is GENUINELY separate from smsotp:", async () => {
+          // decision-54 §5, the same argument decision-45 §6 made for enrolop: a stranger
+          // guessing one role's codes must not lock the other role out of the same office
+          // address. RED: change the bucket in operatorSmsVerify to `smsotp:${ip}` and the
+          // worker call below flips from 401 to 429.
+          resetLoginRate();
+          const IP = "10.9.3.1";
+          for (let i = 0; i < 5; i++) {
+            assert.equal((await opVerify(OP_PHONE, "000000", IP)).status, 401, `guess ${i + 1} is a plain refusal`);
+          }
+          const lockedOut = await opVerify(OP_PHONE, "000000", IP);
+          assert.equal(lockedOut.status, 429, "five wrong guesses lock the OPERATOR bucket");
+          assert.equal((await lockedOut.json()).error, "too_many_attempts");
+
+          const workerDoor = await call("/auth/sms/verify", {
+            method: "POST",
+            body: { phone: WORKER_PHONE, code: "000000" },
+            ip: IP,
+          });
+          assert.equal(workerDoor.status, 401, "THE WORKER'S DOOR AT THE SAME ADDRESS IS UNTOUCHED");
+          assert.equal((await workerDoor.json()).error, "invalid_code");
+
+          // ...and the same in the other direction, so this is a separation and not an
+          // accident of which bucket happened to fill first.
+          resetLoginRate();
+          const IP2 = "10.9.3.2";
+          for (let i = 0; i < 5; i++) {
+            await call("/auth/sms/verify", { method: "POST", body: { phone: WORKER_PHONE, code: "000000" }, ip: IP2 });
+          }
+          assert.equal(
+            (await call("/auth/sms/verify", { method: "POST", body: { phone: WORKER_PHONE, code: "000000" }, ip: IP2 })).status,
+            429,
+            "the worker bucket does lock — or the assertion below proves nothing",
+          );
+          assert.equal((await opVerify(OP_PHONE, "000000", IP2)).status, 401, "and the OPERATOR door stays open");
+          resetLoginRate();
+        });
+      } finally {
+        // OFF AGAIN. Nothing after this block may find itself with a configured carrier by
+        // accident, and the stub must not hold the process open.
+        for (const k of TWILIO_VARS) delete process.env[k];
+        await new Promise((r) => stub.close(r));
+      }
+    }
   }
 
 

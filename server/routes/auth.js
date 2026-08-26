@@ -590,6 +590,191 @@ async function smsVerify({ body, ip }) {
   };
 }
 
+/**
+ * POST /auth/operator-sms/request {phone} -> 202 {status:"accepted"}, or 404 for a number
+ * this server does not recognise as an ACTIVE OPERATOR.
+ *
+ * decision-54 §5. Mirrors `smsRequest` above clause for clause — same shape check, same
+ * three limiters, same `otp_challenges` row, same append-only `sms_deliveries` record, same
+ * decision-51 disclosure posture. ONE thing differs, and it is the whole route: eligibility
+ * JOINs `phone_identities.operator_id -> operators` instead of `.worker_id -> workers`.
+ *
+ * THE CHALLENGE TABLE IS PHONE-KEYED, NOT ROLE-KEYED, and that is deliberate (012). A number
+ * is ONE identity across workers and operators (007, decision-45), so a challenge minted here
+ * is the same kind of row `POST /auth/sms/request` mints and needs no `role` column: what
+ * decides which session a code can buy is the VERIFY route's own JOIN, not a flag on the
+ * challenge. Nothing here can mint a worker session and nothing in `smsVerify` can mint an
+ * operator one.
+ *
+ * NO MIGRATION WAS NEEDED FOR THE DELIVERY LOG EITHER: `sms_deliveries.operator_id` has
+ * existed since 011, nullable, ON DELETE SET NULL, sitting beside `worker_id` for exactly
+ * this day. `kind` stays 'otp' — it names WHAT was sent, not WHO to.
+ *
+ *   202 {status:"accepted"}          resolves to an ACTIVE operator; a message was attempted
+ *   404 {error:"unknown_phone"}      no such number, a worker-only row, or a DEACTIVATED
+ *                                    operator — the three collapse to one answer on purpose
+ *   422 {error:"invalid_phone"}      SHAPE ONLY — never existence
+ *   429 {error:"too_many_attempts"}
+ *   503 {error:"sms_not_configured"}
+ *
+ * THE OPERATOR ENROLMENT CODE IS UNAFFECTED, exactly as `smsRequest` leaves the worker's
+ * alone: this route never touches operators.enrolment_code_*, never spends
+ * `checkGlobalEnrolmentRate`'s budget, and cannot make POST /auth/operator-code answer
+ * differently. decision-45 §6's code door stays open beside this one, not behind it.
+ */
+async function operatorSmsRequest({ body, ip }) {
+  if (!smsConfigured()) fail(503, "sms_not_configured");
+
+  const phone = v.identityPhone(body.phone, "phone");
+
+  // The IP and GLOBAL buckets are ROLE-BLIND ON PURPOSE and are the SAME ones smsRequest
+  // spends: `checkSmsRequestRate` bounds how fast one source address can make this server
+  // send, and `checkGlobalSmsSpend` bounds the telephone bill — neither question has a role
+  // in it, and splitting them would double both ceilings for an attacker who simply posts to
+  // both routes. Spent BEFORE the database is touched (decision-51 §6): a refusal must be
+  // cheaper than the work it refuses.
+  await checkSmsRequestRate(ip);
+  checkGlobalSmsSpend();
+
+  // OPERATOR-ONLY: a phone_identities row carrying only `worker_id`, and a DEACTIVATED
+  // operator's row, both fall through to the same 404 as a genuinely unknown number.
+  const target = await one(
+    `SELECT o.id, o.name
+       FROM phone_identities pi
+       JOIN operators o ON o.id = pi.operator_id
+      WHERE pi.phone_e164 = $1 AND o.active`,
+    [phone],
+  );
+
+  if (!target) fail(404, "unknown_phone");
+
+  const code = newOtpCode();
+  const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+  // THE CODE IS NEVER WRITTEN DOWN: a local here, a SHA-256 in the database, dropped from
+  // every Sentry event by lib/scrub.js.
+  await query("INSERT INTO otp_challenges (phone_e164, code_hash, expires_at) VALUES ($1, $2, $3)", [
+    phone,
+    hashToken(code),
+    expiresAt,
+  ]);
+  await query("DELETE FROM otp_challenges WHERE expires_at < now() - interval '1 day'");
+
+  // Same SMS BODY as the worker's (`renderOtpSms`, unchanged): the message says "here is
+  // your code", and which app the person then opens is not the carrier's business. The
+  // result does not change the response — a rejection is recorded, not reported.
+  const result = await sendSms(phone, renderOtpSms({ name: senderName(), code, ttlMinutes: OTP_TTL_MINUTES }));
+  await query(
+    `INSERT INTO sms_deliveries (kind, operator_id, phone_e164, status, reason, provider_sid, provider_code)
+     VALUES ('otp', $1, $2, $3, $4, $5, $6)`,
+    [target.id, phone, result.status, result.reason ?? null, result.provider_sid ?? null, result.provider_code ?? null],
+  );
+
+  return { status: 202, body: { status: "accepted" } };
+}
+
+/**
+ * POST /auth/operator-sms/verify {phone, code} -> operator session cookie.
+ *
+ * decision-54 §5. Mirrors `smsVerify` above clause for clause, against `operators`: same
+ * newest-live-challenge lookup, same ONE constant-time comparison on every path, same
+ * burn-an-attempt on a wrong answer, same single-use-decided-by-the-database redemption. It
+ * ends in `createOperatorSession()` and the `ts_operator` cookie, so the 200 body and the
+ * cookie are byte-identical to POST /auth/operator-code's — SMS is a fourth DOOR, never a
+ * second operator identity system.
+ *
+ *   200 {operator:{id,name}, expires_at}  + Set-Cookie: ts_operator
+ *   401 {error:"invalid_code"}            EVERY other outcome, byte for byte
+ *   429 {error:"too_many_attempts"}
+ *   503 {error:"sms_not_configured"}
+ *
+ * A WORKER'S LIVE CHALLENGE CANNOT BE REDEEMED HERE and vice versa: the challenge row is
+ * phone-keyed, but the JOIN below demands an ACTIVE OPERATOR for that number, so a code
+ * texted to a worker-only number fails this route with the same opaque 401 a wrong guess
+ * gets. A number that is BOTH (one human, one claim — impossible today: phone_identities
+ * pins one row per number) would be a decision, not an accident.
+ */
+async function operatorSmsVerify({ body, ip }) {
+  if (!smsConfigured()) fail(503, "sms_not_configured");
+
+  // A VERIFY FLOOD MUST NOT SPEND THE SEND BUDGET — same shared, role-blind verify ceiling
+  // smsVerify spends: guessing costs nothing and sends nothing.
+  checkGlobalOtpVerifyRate();
+  // OWN per-IP bucket — `smsotpop:`, never `smsotp:` and never `enrolop:` — for the reason
+  // decision-45 §6 gave for `enrolop:` and decision-54 §5 repeats: a stranger guessing one
+  // role's codes must not lock the other role out from the same office address.
+  const bucket = `smsotpop:${ip}`;
+  checkLoginRate(bucket);
+
+  // Shape only, and it must NOT 422 here: a malformed number and a wrong code have to be
+  // indistinguishable, or the shape check becomes a free existence probe.
+  let phone = null;
+  try {
+    phone = v.identityPhone(body.phone, "phone");
+  } catch {
+    phone = null;
+  }
+  const code = normaliseOtp(body.code);
+  const presented = code === null ? null : hashToken(code);
+
+  const row =
+    phone === null || presented === null ? null : (
+      await one(
+        `SELECT c.id, c.code_hash AS stored, o.id AS operator_id, o.name
+           FROM otp_challenges c
+           JOIN phone_identities pi ON pi.phone_e164 = c.phone_e164
+           JOIN operators o ON o.id = pi.operator_id
+          WHERE c.phone_e164 = $1
+            AND c.consumed_at IS NULL
+            AND c.expires_at > now()
+            AND c.attempts < $2
+            AND o.active
+          ORDER BY c.created_at DESC
+          LIMIT 1`,
+        [phone, OTP_MAX_ATTEMPTS],
+      )
+    );
+
+  const matched = safeEqual(row?.stored ?? DECOY_STORED, presented ?? DECOY_PRESENTED);
+  if (!matched || row === null) {
+    // A WRONG ANSWER BURNS AN ATTEMPT ON THE LIVE CHALLENGE, or the 5-attempt cap is fiction.
+    // Best-effort: a failure to record must not change the answer below.
+    if (phone !== null) {
+      await query(
+        `UPDATE otp_challenges SET attempts = attempts + 1
+          WHERE id = (SELECT id FROM otp_challenges
+                       WHERE phone_e164 = $1 AND consumed_at IS NULL AND expires_at > now()
+                       ORDER BY created_at DESC LIMIT 1)`,
+        [phone],
+      ).catch(() => {});
+    }
+    recordLoginFailure(bucket);
+    fail(401, "invalid_code");
+  }
+
+  // SINGLE USE, DECIDED BY THE DATABASE. The predicate is repeated in full rather than
+  // trusting the SELECT above: between the two statements the challenge can expire or be
+  // consumed, and the loser of a race must update nothing.
+  const claimed = await one(
+    `UPDATE otp_challenges SET consumed_at = now()
+      WHERE id = $1 AND code_hash = $2 AND expires_at > now()
+        AND consumed_at IS NULL AND attempts < $3
+      RETURNING id`,
+    [row.id, presented, OTP_MAX_ATTEMPTS],
+  );
+  if (!claimed) {
+    recordLoginFailure(bucket);
+    fail(401, "invalid_code"); // lost the race. Same answer.
+  }
+
+  clearLoginFailures(bucket);
+  const { token, expiresAt } = await createOperatorSession(row.operator_id);
+  return {
+    status: 200,
+    body: { operator: { id: row.operator_id, name: row.name }, expires_at: expiresAt.toISOString() },
+    headers: { "set-cookie": sessionCookie(token, expiresAt, OPERATOR_SESSION_COOKIE) },
+  };
+}
+
 export const authRoutes = [
   // `auth: "app"` and not `null`: the X-App-Key gate stays in front of sign-in as
   // defence in depth, so this endpoint is not reachable from a browser or curl.
@@ -608,6 +793,12 @@ export const authRoutes = [
   // routes/admin.js (§8, TASK-212 AC#5).
   { method: "POST", path: "/auth/operator-code", auth: "app", handler: operatorCodeAuth },
   { method: "POST", path: "/auth/operator-logout", auth: "operator", handler: operatorLogout },
+  // decision-54 §5. SMS for OPERATORS, which decision-45 §6/§7 named as deferred and this
+  // decision un-defers, so the ONE shared code form on both apps means something for both
+  // roles. Same coarse app-key gate as every other sign-in door. ADDED BESIDE
+  // /auth/operator-code, never instead of it — the code door stays exactly as it is.
+  { method: "POST", path: "/auth/operator-sms/request", auth: "app", handler: operatorSmsRequest },
+  { method: "POST", path: "/auth/operator-sms/verify", auth: "app", handler: operatorSmsVerify },
   // decision-48 §6. Same coarse app-key gate as every other sign-in door, and for the same
   // reason. ADDED BESIDE /auth/code, NEVER INSTEAD OF IT: the line above stays exactly as
   // it is, and no Android build offers this until a server actually answers something other
