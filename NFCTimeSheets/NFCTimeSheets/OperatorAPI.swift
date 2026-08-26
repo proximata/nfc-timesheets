@@ -314,6 +314,50 @@ struct WireCreatedZone: Decodable {
 
 private struct WireCreatedZoneEnvelope: Decodable { let zone: WireCreatedZone }
 
+/// 200 from GET /operator/tags/:id (decision-55 §1) - "what IS this card", asked of an id
+/// nobody selected first. FIVE kinds and NO 404: "I don't know this card" is an ANSWER here,
+/// which is why `kind` is a plain String rather than an enum that would have to decide what
+/// to do with a sixth one the server grows later. The screen switches on it and falls back
+/// to the unknown sentence.
+///
+/// `zone` is present ONLY for kind "zone", and it is the SAME body shape
+/// GET /operator/zones/:id returns - bound or unbound - so it feeds straight into the
+/// EXISTING zone branch instead of a second screen. It carries no `tag_serial` /
+/// `tag_deployed_at`; both are Optional on WireOperatorZone, so a missing key decodes to nil.
+struct WireTagClassification: Decodable {
+    let kind: String
+    let zone: WireOperatorZone?
+}
+
+private struct ReassignBuildingRequest: Encodable {
+    let newTagId: String
+    let locationId: String
+
+    enum CodingKeys: String, CodingKey {
+        case newTagId = "new_tag_id"
+        case locationId = "location_id"
+    }
+}
+
+/// 201 from POST /operator/zones/:id/reassign-building. TWO ids, and BOTH matter: `zone` is
+/// the BRAND NEW zone on the rewritten card (fresh, `verified_at` null, zero shifts) and
+/// `retiredZoneId` is the old one, now `active = false`. The old zone is not moved, not
+/// renamed and not deleted - its shifts stay queryable under its own id for ever
+/// (decision-55 §3) - but it must never be shown as live again, which is what this field is
+/// for.
+///
+/// The zone body is the route's OP_ZONE_COLS, which has no `location_name` - the caller
+/// already holds the building it just picked, exactly as bindZone's caller does.
+struct WireReassignedZone: Decodable {
+    let zone: WireOperatorZone
+    let retiredZoneId: String
+
+    enum CodingKeys: String, CodingKey {
+        case zone
+        case retiredZoneId = "retired_zone_id"
+    }
+}
+
 /// `{}`. For the routes whose whole request is the path (currently only unbind): the server
 /// still parses a JSON body, so sending nothing at all is not the same thing as sending this.
 private struct EmptyBody: Encodable {}
@@ -432,5 +476,39 @@ enum OperatorTagAPI {
             try await operatorPost("/operator/tags/\(tagId)/resolve-zone",
                                    ResolveZoneRequest(name: name, locationId: locationId))
         return envelope.zone
+    }
+
+    /// GET /operator/tags/:id -> classify ANY scanned card, with nothing selected first
+    /// (decision-55 §1). READ-ONLY: it stamps nothing and creates nothing, which is what
+    /// makes scanning the odd card in a drawer free.
+    ///
+    /// NOT `activePlace`, and deliberately not: the tap path must keep collapsing an unbound
+    /// zone into `unknown_location`, while this route has to name it as a zone with work left
+    /// on it. Two questions, two queries, named as such in decision-55's Consequences.
+    ///   200 {kind: zone|building|retired|tag_reported|unknown, zone?} - always, no 404
+    ///   400 the id is not a uuid
+    static func classifyTag(id: String) async throws -> WireTagClassification {
+        try await operatorGet("/operator/tags/\(id)")
+    }
+
+    /// POST /operator/zones/:id/reassign-building {new_tag_id, location_id} -> the door moved
+    /// to another building (decision-55 §3). The OLD zone is retired (`active = false`, its
+    /// history untouched) and a NEW zone is minted on `new_tag_id` carrying the old name and
+    /// note forward, unverified, zero shifts.
+    ///
+    /// `new_tag_id` MUST ALREADY BE ON THE CARD AND REPORTED before this call - the phone
+    /// mints it, writes it and reports it through OperatorTagMint, the same sequence Write a
+    /// tag runs. An unreported id is a guaranteed 404 here.
+    ///
+    /// One statement, four EXISTS-gated CTEs server-side: either the tag is claimed AND the
+    /// new zone lands AND the old one retires, or nothing happens at all. This side needs no
+    /// rollback of its own.
+    ///   201 {zone, retired_zone_id}
+    ///   404 unknown_zone · 404 unknown_reported_tag · 409 zone_unbound ·
+    ///   409 already_resolved · 409 duplicate_zone_name · 409 id_in_use · 422 unknown_location
+    static func reassignBuilding(zoneId: String, newTagId: String,
+                                 locationId: String) async throws -> WireReassignedZone {
+        try await operatorPost("/operator/zones/\(zoneId)/reassign-building",
+                               ReassignBuildingRequest(newTagId: newTagId, locationId: locationId))
     }
 }

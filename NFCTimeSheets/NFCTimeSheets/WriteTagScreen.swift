@@ -20,7 +20,7 @@ import SwiftUI
 struct WriteTagScreen: View {
     @Environment(OperatorSession.self) private var operatorSession
     @Environment(\.dismiss) private var dismiss
-    @State private var pendingId = UUID().uuidString.lowercased()
+    @State private var pendingId = OperatorTagMint.mintId()
     // The actual bytes this build would write, computed the SAME way TagWriter.plan() does
     // (TagLink.uriFor), so what the operator sees here can never drift from what lands on
     // the card. Shown on screen because "Card id" alone is not something a person can
@@ -149,7 +149,7 @@ struct WriteTagScreen: View {
     private func simulateWrite(_ flow: OperatorMockFlow) async {
         OperatorMocks.arm(flow)
         busy = true
-        let id = UUID().uuidString.lowercased()
+        let id = OperatorTagMint.mintId()
         outcome = OperatorMocks.writtenOutcome(id: id)
         busy = false
         await sendReport(id)
@@ -196,20 +196,31 @@ struct WriteTagScreen: View {
         TagLink.uriFor(pendingId)?.absoluteString ?? pendingId
     }
 
+    /// MINT -> WRITE -> REPORT, and the sequence itself lives in OperatorTagMint.swift now
+    /// because VerifyZoneScreen's Reassign Building runs the SAME one (decision-55 §3). What
+    /// stays here is this screen's own state machine around it: the spent overwrite
+    /// confirmation, the re-mint, the report's retry.
     private func write() async {
         busy = true
         defer { busy = false }
-        let result = await writer.write(locationId: pendingId, confirmedOverwriteOf: confirmedFor)
-        outcome = result
-        if case .written = result {
-            // The confirmation is SPENT: it authorised one card, and the next card
-            // presented starts from refused again.
-            confirmedFor = nil
-            confirmText = ""
-            if case .written(let locationId, _, _, _, _) = result {
-                await sendReport(locationId)
-            }
+        let result = await OperatorTagMint.writeAndReport(
+            writer: writer, id: pendingId, confirmedOverwriteOf: confirmedFor,
+            onWritten: { written in
+                outcome = written
+                if case .written = written { report = .sending }
+            })
+        guard result.written else { return }
+        // The confirmation is SPENT: it authorised one card, and the next card
+        // presented starts from refused again.
+        confirmedFor = nil
+        confirmText = ""
+        // A failed report is not a failed write - the retry button under `reportText` calls
+        // `sendReport` again with the id that is physically on the card.
+        guard result.reported else {
+            report = .failed
+            return
         }
+        await reportLanded(result.id)
     }
 
     private func sendReport(_ locationId: String) async {
@@ -217,14 +228,21 @@ struct WriteTagScreen: View {
         report = .sending
         do {
             _ = try await OperatorFlowAPI.reportTag(id: locationId)
-            report = .sent
-            reportedId = locationId
-            // The id has now left this phone, so the NEXT card must not reuse it.
-            pendingId = UUID().uuidString.lowercased()
-            await loadLocations()
+            await reportLanded(locationId)
         } catch {
             report = .failed
         }
+    }
+
+    /// The office now knows this id, whichever call told it. One place, because the three
+    /// things that must follow a landed report - remember the id, re-mint the next one, open
+    /// the zone step - are the same either way.
+    private func reportLanded(_ locationId: String) async {
+        report = .sent
+        reportedId = locationId
+        // The id has now left this phone, so the NEXT card must not reuse it.
+        pendingId = OperatorTagMint.mintId()
+        await loadLocations()
     }
 
     /// The building list is a CONVENIENCE, never a gate: if it fails to load, the picker

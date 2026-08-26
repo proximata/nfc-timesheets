@@ -95,6 +95,35 @@ enum OperatorFlowAPI {
         return try await OperatorTagAPI.zoneShifts(zoneId: zoneId, page: page)
     }
 
+    static func classifyTag(id: String) async throws -> WireTagClassification {
+        #if DEBUG
+        if OperatorMocks.active != nil { return OperatorMocks.classification(id: id) }
+        #endif
+        return try await OperatorTagAPI.classifyTag(id: id)
+    }
+
+    static func reassignBuilding(zoneId: String, newTagId: String,
+                                 locationId: String) async throws -> WireReassignedZone {
+        #if DEBUG
+        if OperatorMocks.active != nil {
+            return try OperatorMocks.reassigned(zoneId: zoneId, newTagId: newTagId, locationId: locationId)
+        }
+        #endif
+        return try await OperatorTagAPI.reassignBuilding(zoneId: zoneId, newTagId: newTagId,
+                                                         locationId: locationId)
+    }
+
+    /// The WRITE, behind the same door as everything else - a simulator has no radio, so a
+    /// mocked reassign would otherwise die at the card and never reach the endpoint it exists
+    /// to exercise. Live, this is a plain passthrough to the ported CoreNFC writer.
+    @MainActor
+    static func write(writer: TagWriter, id: String, confirmedOverwriteOf: String?) async -> TagWriter.Outcome {
+        #if DEBUG
+        if OperatorMocks.active != nil { return OperatorMocks.writtenOutcome(id: id) }
+        #endif
+        return await writer.write(locationId: id, confirmedOverwriteOf: confirmedOverwriteOf)
+    }
+
     /// The radio, behind the same door as the network. A mocked scan resolves to the picked
     /// zone's own place id, which is the ONLY outcome that gets past `verifyZone`'s equality
     /// check - a mock that resolved to something else would be testing the mismatch branch,
@@ -120,8 +149,9 @@ enum OperatorFlowAPI {
 
 #if DEBUG
 
-/// The four branches decision-54 added, one case each. Named after what the OPERATOR does,
-/// not after which endpoint gets mocked, because the button carries this label.
+/// The branches decision-54 added, plus the seven decision-55 added (six classifications of
+/// a scanned card, and the reassign), one case each. Named after what the OPERATOR does, not
+/// after which endpoint gets mocked, because the button carries this label.
 enum OperatorMockFlow: String, CaseIterable, Identifiable {
     case writeThenPickBuilding
     case writeThenSkipBuilding
@@ -129,8 +159,30 @@ enum OperatorMockFlow: String, CaseIterable, Identifiable {
     case verifyBoundZone
     case unbindBoundZone
     case unbindZoneWithShifts
+    case scanBoundZone
+    case scanUnboundZone
+    case scanBuildingCard
+    case scanRetiredCard
+    case scanReportedCard
+    case scanUnknownCard
+    case reassignBuilding
 
     var id: String { rawValue }
+
+    /// The SIX kinds GET /operator/tags/:id can answer with, one scenario each (decision-55
+    /// §1 names five kinds; "zone" splits in the UI into bound and unbound, which is the
+    /// whole reason it feeds the existing screen instead of a new one). nil for the scenarios
+    /// that never scan a stranger's card.
+    var classifiedKind: String? {
+        switch self {
+        case .scanBoundZone, .scanUnboundZone: return "zone"
+        case .scanBuildingCard: return "building"
+        case .scanRetiredCard: return "retired"
+        case .scanReportedCard: return "tag_reported"
+        case .scanUnknownCard: return "unknown"
+        default: return nil
+        }
+    }
 
     var label: String {
         switch self {
@@ -140,6 +192,13 @@ enum OperatorMockFlow: String, CaseIterable, Identifiable {
         case .verifyBoundZone: return "Mock: verify a bound zone, then its zone page"
         case .unbindBoundZone: return "Mock: unbind a bound zone (works)"
         case .unbindZoneWithShifts: return "Mock: unbind a zone somebody clocked in at (refused)"
+        case .scanBoundZone: return "Mock: scan a card - a bound zone"
+        case .scanUnboundZone: return "Mock: scan a card - an unbound zone"
+        case .scanBuildingCard: return "Mock: scan a card - a building card"
+        case .scanRetiredCard: return "Mock: scan a card - a retired zone"
+        case .scanReportedCard: return "Mock: scan a card - reported, not a zone yet"
+        case .scanUnknownCard: return "Mock: scan a card - not one of ours"
+        case .reassignBuilding: return "Mock: move a bound zone to another building"
         }
     }
 }
@@ -154,8 +213,42 @@ enum OperatorMocks {
 
     /// Non-nil only while a scan is being mocked, so the write flow (which never scans)
     /// cannot accidentally arm the radio mock.
+    /// The SCAN-FIRST scenarios each need one too, and WHICH id they hand back is what makes
+    /// the six branches different runs of the same code: the classification below is keyed
+    /// off the armed scenario, not off the id, because a simulator has no card to read it
+    /// from.
     static var scannedPlaceId: String? {
-        active == .verifyBoundZone ? boundZoneId : nil
+        switch active {
+        case .verifyBoundZone, .scanBoundZone: return boundZoneId
+        case .scanUnboundZone: return unboundZoneId
+        case .scanBuildingCard: return locations[0].id
+        case .scanRetiredCard: return retiredZoneId
+        case .scanReportedCard: return reportedOnlyTagId
+        case .scanUnknownCard: return strangerTagId
+        default: return nil
+        }
+    }
+
+    /// GET /operator/tags/:id. `zone` is attached ONLY for the zone kinds, exactly as the
+    /// route does - a canned body that always carried one would let a screen bug that ignores
+    /// `kind` pass.
+    static func classification(id: String) -> WireTagClassification {
+        let kind = active?.classifiedKind ?? "unknown"
+        guard kind == "zone" else { return WireTagClassification(kind: kind, zone: nil) }
+        return WireTagClassification(kind: kind, zone: zones.first { $0.id == id } ?? zones[1])
+    }
+
+    /// POST /operator/zones/:id/reassign-building. The refusal is canned for a zone with no
+    /// building because the screen must not offer the action there at all - if this ever
+    /// throws in a walk-through, the button appeared somewhere it should not have.
+    static func reassigned(zoneId: String, newTagId: String, locationId: String) throws -> WireReassignedZone {
+        guard zones.first(where: { $0.id == zoneId })?.locationId != nil else {
+            throw APIFailure(status: 409, code: "zone_unbound")
+        }
+        let fresh = WireOperatorZone(
+            id: newTagId, locationId: locationId, locationName: nil,
+            name: "Haupteingang (mock)", tagSerial: nil, tagDeployedAt: Date(), verifiedAt: nil)
+        return WireReassignedZone(zone: fresh, retiredZoneId: zoneId)
     }
 
     /// `POST /operator/zones/:id/unbind`, both answers - and WHICH answer is decided by the
@@ -184,6 +277,12 @@ enum OperatorMocks {
 
     static let unboundZoneId = "33333333-3333-4333-8333-333333333333"
     static let boundZoneId = "44444444-4444-4444-8444-444444444444"
+    /// Three cards that are NOT in the worklist and never can be: a zone that a reassignment
+    /// retired, a card reported and left undecided, and a stranger's. They exist only as ids
+    /// a scan can produce, which is precisely the case decision-55 §1 was written for.
+    static let retiredZoneId = "55555555-5555-4555-8555-555555555555"
+    static let reportedOnlyTagId = "66666666-6666-4666-8666-666666666666"
+    static let strangerTagId = "77777777-7777-4777-8777-777777777777"
 
     /// One of each state the worklist can now hold (decision-54 §1): a zone with no building
     /// at all, and a bound one that is scannable.

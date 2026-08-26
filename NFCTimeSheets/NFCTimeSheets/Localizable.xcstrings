@@ -475,6 +475,16 @@
         }
       }
     },
+    "Couldn't write this card. Try another card." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Karte konnte nicht beschrieben werden. Eine andere Karte nehmen."
+          }
+        }
+      }
+    },
     "Create zone" : {
       "localizations" : {
         "de" : {
@@ -747,6 +757,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Material"
+          }
+        }
+      }
+    },
+    "Move this zone to another object" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Zone in ein anderes Objekt verschieben"
+          }
+        }
+      }
+    },
+    "Moved. This is the new zone - scan its card to prove it before anybody clocks in." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verschoben. Das ist die neue Zone – ihre Karte scannen, bevor jemand hier einstempelt."
+          }
+        }
+      }
+    },
+    "Moving the zone…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zone wird verschoben…"
           }
         }
       }
@@ -1073,6 +1113,16 @@
         }
       }
     },
+    "Pick the new object. The card is rewritten, this zone closes with its hours intact, and a fresh zone takes over." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neues Objekt wählen. Die Karte wird neu beschrieben, diese Zone wird geschlossen – ihre Stunden bleiben erhalten – und eine frische Zone übernimmt."
+          }
+        }
+      }
+    },
     "Pick the zone you're testing" : {
       "localizations" : {
         "de" : {
@@ -1119,6 +1169,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Diese Zone diesem Objekt zuordnen"
+          }
+        }
+      }
+    },
+    "Reading the card…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Karte wird gelesen…"
           }
         }
       }
@@ -1259,6 +1319,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Endzeit speichern"
+          }
+        }
+      }
+    },
+    "Scan a card" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine Karte scannen"
+          }
+        }
+      }
+    },
+    "Scan a card and this says what it is. Nothing is written and no shift is opened." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Karte scannen und die App sagt, was sie ist. Es wird nichts geschrieben und keine Schicht geöffnet."
           }
         }
       }
@@ -1680,6 +1760,16 @@
         }
       }
     },
+    "Test any card" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beliebige Karte testen"
+          }
+        }
+      }
+    },
     "That building already has a zone with this name." : {
       "localizations" : {
         "de" : {
@@ -1720,12 +1810,32 @@
         }
       }
     },
+    "That new card is already in use. Take another card." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese neue Karte ist bereits in Verwendung. Eine andere Karte nehmen."
+          }
+        }
+      }
+    },
     "That phone number doesn't look right." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Diese Telefonnummer sieht nicht richtig aus."
+          }
+        }
+      }
+    },
+    "The card is written, but the office hasn't heard about it. Try again with a signal." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Karte ist beschrieben, aber das Büro weiß noch nichts davon. Mit Signal erneut versuchen."
           }
         }
       }
@@ -1746,6 +1856,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Die Verwaltung hat das noch nicht freigeschaltet. Was Sie schreiben, wird gespeichert und gesendet, sobald es so weit ist."
+          }
+        }
+      }
+    },
+    "The office knows this card, but nobody has made it a zone yet." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Büro kennt diese Karte, aber noch niemand hat eine Zone daraus gemacht."
           }
         }
       }
@@ -1870,6 +1990,26 @@
         }
       }
     },
+    "This card already belongs to %@. Use Write a tag to overwrite it." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Karte gehört bereits zu %@. Zum Überschreiben „Tag schreiben“ verwenden."
+          }
+        }
+      }
+    },
+    "This card belonged to a zone that has since been closed. Write it again to put it back in use." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Karte gehörte zu einer Zone, die inzwischen geschlossen wurde. Neu beschreiben, um sie wieder zu verwenden."
+          }
+        }
+      }
+    },
     "This card belongs to a different zone." : {
       "localizations" : {
         "de" : {
@@ -1926,6 +2066,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Dieses iPhone kann keine NFC-Tags lesen."
+          }
+        }
+      }
+    },
+    "This is an object card, not a zone card. It stays as it is." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das ist eine Objektkarte, keine Zonenkarte. Sie bleibt, wie sie ist."
           }
         }
       }
@@ -2116,6 +2266,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Diese Zone hat noch kein Objekt, deshalb führt ein Tippen auf ihre Karte ins Leere. Zuerst das Objekt wählen."
+          }
+        }
+      }
+    },
+    "This zone has no object yet, so there is nothing to move." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Zone hat noch kein Objekt, also gibt es nichts zu verschieben."
           }
         }
       }
@@ -2326,6 +2486,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Schreiben"
+          }
+        }
+      }
+    },
+    "Write a new card and move the zone" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neue Karte schreiben und Zone verschieben"
           }
         }
       }
