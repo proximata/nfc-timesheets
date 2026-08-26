@@ -35,6 +35,9 @@ private struct OperatorCodeRequest: Encodable {
     let code: String
 }
 
+private struct OperatorPhoneRequest: Encodable { let phone: String }
+private struct OperatorSmsVerifyRequest: Encodable { let phone: String; let code: String }
+
 private struct WireEmptyBody: Encodable {}
 
 /// 200 from POST /auth/operator-code. The session cookie rides in the headers, exactly
@@ -97,6 +100,27 @@ enum OperatorAuthAPI {
         try await operatorPost("/auth/operator-code", OperatorCodeRequest(code: code))
     }
 
+    /// POST /auth/operator-sms/request {phone} -> 202 {status:"accepted"} (decision-54 §5).
+    /// Mirrors POST /auth/sms/request byte for byte, on the same phone-keyed
+    /// `otp_challenges` table - what differs is the rate-limit bucket (`smsotpop:`, not
+    /// `smsotp:`), for the same reason `enrolop:` is not `enrol:`: a stranger guessing one
+    /// role's codes must not lock the other role out of enrolling from the same address.
+    ///   404 unknown_phone (decision-51) · 422 invalid_phone · 429 too_many_attempts ·
+    ///   503 sms_not_configured.
+    /// Mints no session. The copy for each failure lives beside the field it is shown next
+    /// to (CodeSignInSection.swift), not here.
+    static func requestSmsCode(phone: String) async throws -> WireSmsRequestAck {
+        try await operatorPost("/auth/operator-sms/request", OperatorPhoneRequest(phone: phone))
+    }
+
+    /// POST /auth/operator-sms/verify {phone, code} -> operator session cookie (ts_operator).
+    /// BYTE-IDENTICAL 200 body to POST /auth/operator-code's, exactly as the worker pair is.
+    ///   401 invalid_code (every failure mode) · 429 too_many_attempts · 503 sms_not_configured.
+    static func verifySmsCode(phone: String, code: String) async throws -> WireOperatorSession {
+        try await operatorPost("/auth/operator-sms/verify",
+                               OperatorSmsVerifyRequest(phone: phone, code: code))
+    }
+
     /// POST /auth/operator-logout — revokes the session server-side. Best-effort from the
     /// caller's side: OperatorSession.signOut() drops the local cookie regardless of
     /// whether this call ever lands.
@@ -136,10 +160,16 @@ private struct WireReportedTagEnvelope: Decodable { let tag: WireReportedTag }
 /// already had one. `tagSerial` travels OUTWARDS only (decision-44): the phone matches a
 /// scanned hardware UID against it client-side (see TagReaderProbe.swift /
 /// Zones.normaliseSerial) and posts back the resolved PLACE id, never the serial itself.
+///
+/// `locationId`/`locationName` are OPTIONAL since decision-54 §1: the worklist LEFT JOINs
+/// `locations` now, so a card written at a door before anybody decided which object it
+/// belongs to comes back with both null. That zone is exactly the one with work left on it
+/// — it is the only screen from which it can ever be bound — and it is NOT scannable until
+/// it is, because `activePlace` cannot resolve an unbound zone at all.
 struct WireOperatorZone: Codable, Identifiable, Hashable {
     let id: String
-    let locationId: String
-    let locationName: String
+    let locationId: String?
+    let locationName: String?
     let name: String
     let tagSerial: String?
     let tagDeployedAt: Date?
@@ -156,6 +186,57 @@ struct WireOperatorZone: Codable, Identifiable, Hashable {
     }
 
     var isVerified: Bool { verifiedAt != nil }
+    var isBound: Bool { locationId != nil }
+}
+
+private struct BindZoneRequest: Encodable {
+    let locationId: String
+    enum CodingKeys: String, CodingKey { case locationId = "location_id" }
+}
+
+/// One row of GET /operator/zones/:id/shifts. WHAT IS ABSENT IS THE POINT (decision-54 §7):
+/// no rate, no euro figure, no client name — a zone is not a costing unit and an operator is
+/// not on the payroll screen. `endTime` is nil for a shift still running, and
+/// `durationMinutes` is then the time SO FAR, computed in SQL off the same
+/// COALESCE(end_time, now()) — this phone never does date arithmetic on two timestamps and a
+/// timezone.
+struct WireZoneShift: Decodable, Identifiable, Hashable {
+    let workerId: Int
+    let workerName: String
+    let startTime: Date
+    let endTime: Date?
+    let durationMinutes: Double
+
+    /// Composite, because the route returns no shift id: a worker can tap the same door
+    /// twice in a month, but never twice in the same second.
+    var id: String { "\(workerId)-\(startTime.timeIntervalSince1970)" }
+
+    enum CodingKeys: String, CodingKey {
+        case workerId = "worker_id"
+        case workerName = "worker_name"
+        case startTime = "start_time"
+        case endTime = "end_time"
+        case durationMinutes = "duration_minutes"
+    }
+}
+
+/// One page of GET /operator/zones/:id/shifts. `totalMinutes` is the WHOLE month's, from a
+/// second unpaginated query on the server — summing this page's 50 rows on the phone and
+/// labelling it "the month" is precisely the lie the server took a second query to avoid.
+struct WireZoneShiftsPage: Decodable {
+    let shifts: [WireZoneShift]
+    let page: Int
+    let pageSize: Int
+    let matching: Int
+    let totalMinutes: Double
+
+    enum CodingKeys: String, CodingKey {
+        case shifts, page, matching
+        case pageSize = "page_size"
+        case totalMinutes = "total_minutes"
+    }
+
+    var hasNextPage: Bool { page * pageSize < matching }
 }
 
 private struct WireOperatorZonesEnvelope: Decodable { let zones: [WireOperatorZone] }
@@ -187,6 +268,54 @@ struct WireZoneVerifyResult: Decodable {
 
 private struct WireZoneVerifyEnvelope: Decodable { let zone: WireZoneVerifyResult }
 
+/// One row of GET /operator/locations. TWO COLUMNS AND THAT IS THE WHOLE ROW, matching the
+/// route: picking a building needs a name to tap and an id to post, and nothing about it
+/// needs a rate, a client, an address or a coordinate (decision-54 §2).
+struct WireOperatorLocation: Decodable, Identifiable, Hashable {
+    let id: String
+    let name: String
+}
+
+private struct WireOperatorLocationsEnvelope: Decodable { let locations: [WireOperatorLocation] }
+
+/// The zone POST /operator/tags/:id/resolve-zone hands back. NOT WireOperatorZone: that one
+/// is the worklist shape and carries `location_name`, which this route does not return (it
+/// selects OP_ZONE_COLS off `zones` alone). Decoding it as a zone row would fail on a field
+/// the server never sends.
+struct WireCreatedZone: Decodable {
+    let id: String
+    let locationId: String?
+    let name: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case locationId = "location_id"
+    }
+}
+
+private struct WireCreatedZoneEnvelope: Decodable { let zone: WireCreatedZone }
+
+private struct ResolveZoneRequest: Encodable {
+    let name: String
+    let locationId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case locationId = "location_id"
+    }
+
+    // Hand-written for ONE reason: Skip must OMIT the key, not send `location_id: null`.
+    // Synthesised Encodable already does exactly this (`encodeIfPresent` for Optionals), but
+    // that is a language detail a future reader would have to know by heart to trust the
+    // wire shape - and the server's `v.optionalUuid` treating null and absent alike is not
+    // something this side should be leaning on. Spelled out instead.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        if let locationId { try container.encode(locationId, forKey: .locationId) }
+    }
+}
+
 enum OperatorTagAPI {
     /// POST /operator/tags {id} -> "this tag now exists and carries this id", called once
     /// right after the phone WRITES a fresh NDEF tag. Idempotent: the SAME id reported
@@ -216,6 +345,52 @@ enum OperatorTagAPI {
     static func verifyZone(zoneId: String, placeUuid: String) async throws -> WireZoneVerifyResult {
         let envelope: WireZoneVerifyEnvelope =
             try await operatorPost("/operator/zones/\(zoneId)/verify", VerifyZoneRequest(placeUuid: placeUuid))
+        return envelope.zone
+    }
+
+    /// POST /operator/zones/:id/bind {location_id} -> this zone is in this building
+    /// (decision-54 §3). The ONLY way an unbound zone becomes tappable: `activePlace` cannot
+    /// resolve a zone with no building, so there is nothing to test-scan until this lands.
+    ///
+    /// IT CLEARS `verified_at` SERVER-SIDE, which is why the screen sends the operator back
+    /// to the scan afterwards rather than calling the door done: the earlier proof, if there
+    /// was one, was taken against a zone that resolved to nothing.
+    ///   200 {zone} · 404 unknown_zone · 409 already_bound · 409 duplicate_zone_name ·
+    ///   409 serial_taken · 422 unknown_location
+    static func bindZone(zoneId: String, locationId: String) async throws -> WireCreatedZone {
+        let envelope: WireCreatedZoneEnvelope =
+            try await operatorPost("/operator/zones/\(zoneId)/bind", BindZoneRequest(locationId: locationId))
+        return envelope.zone
+    }
+
+    /// GET /operator/zones/:id/shifts?page=N -> who worked at this door this month, and for
+    /// how long (decision-54 §7). `month` is deliberately NOT sent: the server defaults it in
+    /// SQL to its own `date_trunc('month', CURRENT_DATE)`, and a phone naming the month itself
+    /// would put a second clock on a boundary that only the database gets to decide.
+    ///   200 {shifts, page, page_size, matching, total_minutes, month} · 404 unknown_zone
+    static func zoneShifts(zoneId: String, page: Int) async throws -> WireZoneShiftsPage {
+        try await operatorGet("/operator/zones/\(zoneId)/shifts?page=\(page)")
+    }
+
+    /// GET /operator/locations -> the building picker's list, active buildings only.
+    /// NOT cached: unlike the zone worklist, this list is only ever needed right after a
+    /// successful report or when binding a zone, both of which already need signal anyway.
+    static func locations() async throws -> [WireOperatorLocation] {
+        let envelope: WireOperatorLocationsEnvelope = try await operatorGet("/operator/locations")
+        return envelope.locations
+    }
+
+    /// POST /operator/tags/:id/resolve-zone {name, location_id?} -> the card just written at
+    /// this door becomes a zone (decision-54 §2). `locationId` nil means the operator SKIPPED
+    /// the building question: the key is left out of the body entirely and the zone lands
+    /// unbound, which is a legitimate resting state, not a half-failure.
+    ///   201 {zone}
+    ///   404 unknown_reported_tag · 409 already_resolved · 409 duplicate_zone_name ·
+    ///   409 id_in_use · 422 unknown_location
+    static func resolveZone(tagId: String, name: String, locationId: String?) async throws -> WireCreatedZone {
+        let envelope: WireCreatedZoneEnvelope =
+            try await operatorPost("/operator/tags/\(tagId)/resolve-zone",
+                                   ResolveZoneRequest(name: name, locationId: locationId))
         return envelope.zone
     }
 }

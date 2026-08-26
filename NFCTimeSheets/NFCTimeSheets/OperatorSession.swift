@@ -55,29 +55,35 @@ final class OperatorSession {
             : .signedOut(reason: nil)
     }
 
-    /// Redeem an operator enrolment code. `raw` is whatever the operator typed —
-    /// normalisation happens here, the same client-side courtesy Android gives
-    /// (EnrolmentCode.swift), never a security control.
-    func signIn(code raw: String) async {
-        guard let code = EnrolmentCode.normalise(raw) else {
-            state = .signedOut(reason: String(localized: "That doesn't look like an operator code."))
-            return
-        }
+    /// Redeem an operator enrolment code. `code` is already EnrolmentCode.normalise()'d by
+    /// the caller — exactly the shape Session.signInWithCode has always had, and now the
+    /// same one, because ONE form calls both (decision-54 §5).
+    ///
+    /// THROWS rather than parking a sentence in `state`. The failure copy has to sit next
+    /// to the field that was typed into, and that field is now shared with the worker's
+    /// door, so the mapping lives in CodeSignInSection.codeMessage(for:role:) — including
+    /// decision-45's one-message rule, which is unchanged: unknown, expired, already
+    /// redeemed and revoked stay indistinguishable there.
+    func signIn(code: String) async throws {
         busy = true
         defer { busy = false }
-        do {
-            let session = try await OperatorAuthAPI.signIn(code: code)
-            store(session.operator)
-        } catch let failure as APIFailure where failure.code == "too_many_attempts" {
-            state = .signedOut(reason: String(localized: "Too many attempts - try again shortly."))
-        } catch is APIFailure {
-            // ONE message for every other failure mode (decision-45): unknown, expired,
-            // already redeemed and revoked must stay indistinguishable, or the message
-            // itself becomes an oracle over a live code.
-            state = .signedOut(reason: String(localized: "Code not accepted. Check it and try again."))
-        } catch {
-            state = .signedOut(reason: String(localized: "No connection - try again."))
-        }
+        store(try await OperatorAuthAPI.signIn(code: code).operator)
+    }
+
+    /// POST /auth/operator-sms/request (decision-54 §5). Mints no session — only "was a
+    /// code sent". Same contract as Session.requestSmsCode, same reason for throwing.
+    func requestSmsCode(phone: String) async throws {
+        busy = true
+        defer { busy = false }
+        _ = try await OperatorAuthAPI.requestSmsCode(phone: phone)
+    }
+
+    /// POST /auth/operator-sms/verify. On success, the SAME store(_:) tail the code door
+    /// runs — one cache write, one place the operator becomes signed in.
+    func verifySmsCode(phone: String, code: String) async throws {
+        busy = true
+        defer { busy = false }
+        store(try await OperatorAuthAPI.verifySmsCode(phone: phone, code: code).operator)
     }
 
     /// Revokes the session server-side first, then drops the local cookie regardless of

@@ -1,6 +1,36 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ at %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ in %2$@"
+          }
+        }
+      }
+    },
+    "%@ · %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · %@"
+          }
+        }
+      }
+    },
+    "%@ · still running · %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · läuft noch · %2$@"
+          }
+        }
+      }
+    },
     "%@ – %@  ·  %@" : {
       "localizations" : {
         "de" : {
@@ -17,22 +47,22 @@
         }
       }
     },
-    "%@ · %@" : {
+    "%@ – %@ · %@" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ · %@"
+            "value" : "%1$@ – %2$@ · %3$@"
           }
         }
       }
     },
-    "%@ at %@" : {
+    "%@, no building yet" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ in %2$@"
+            "value" : "%@, noch kein Objekt"
           }
         }
       }
@@ -171,6 +201,16 @@
         }
       }
     },
+    "Another zone already claims this card." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine andere Zone beansprucht diese Karte bereits."
+          }
+        }
+      }
+    },
     "App update" : {
       "localizations" : {
         "de" : {
@@ -211,6 +251,36 @@
         }
       }
     },
+    "Binding the zone…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zone wird zugeordnet…"
+          }
+        }
+      }
+    },
+    "Bound. Scan the card to prove it." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zugeordnet. Karte scannen, um es zu belegen."
+          }
+        }
+      }
+    },
+    "Building" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Objekt"
+          }
+        }
+      }
+    },
     "Card id" : {
       "localizations" : {
         "de" : {
@@ -237,6 +307,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Wird geprüft…"
+          }
+        }
+      }
+    },
+    "Choose a building" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Objekt auswählen"
           }
         }
       }
@@ -311,6 +391,16 @@
         }
       }
     },
+    "Couldn't load this month's shifts." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schichten dieses Monats konnten nicht geladen werden."
+          }
+        }
+      }
+    },
     "Couldn't load zones. Showing the last saved list." : {
       "localizations" : {
         "de" : {
@@ -347,6 +437,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Dieses Tag konnte nicht gelesen werden. Versuchen Sie es erneut."
+          }
+        }
+      }
+    },
+    "Create zone" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zone erstellen"
+          }
+        }
+      }
+    },
+    "Creating the zone…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zone wird erstellt…"
           }
         }
       }
@@ -537,6 +647,26 @@
         }
       }
     },
+    "Loading buildings…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Objekte werden geladen…"
+          }
+        }
+      }
+    },
+    "Loading shifts…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schichten werden geladen…"
+          }
+        }
+      }
+    },
     "Loading zones…" : {
       "localizations" : {
         "de" : {
@@ -567,12 +697,32 @@
         }
       }
     },
+    "Make this card a zone" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Karte zu einer Zone machen"
+          }
+        }
+      }
+    },
     "Materials" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Material"
+          }
+        }
+      }
+    },
+    "NFC TimeSheets" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NFC TimeSheets"
           }
         }
       }
@@ -587,12 +737,62 @@
         }
       }
     },
-    "NFC TimeSheets" : {
+    "Name this door and pick its building, or skip the building for now." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "NFC TimeSheets"
+            "value" : "Diese Tür benennen und das Objekt wählen – oder das Objekt vorerst überspringen."
+          }
+        }
+      }
+    },
+    "Name this door. No buildings loaded - the zone will be created without one." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Tür benennen. Keine Objekte geladen – die Zone wird ohne Objekt erstellt."
+          }
+        }
+      }
+    },
+    "Needs a building before it can be tested" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Braucht ein Objekt, bevor getestet werden kann"
+          }
+        }
+      }
+    },
+    "Next page" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nächste Seite"
+          }
+        }
+      }
+    },
+    "No building yet" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch kein Objekt"
+          }
+        }
+      }
+    },
+    "No buildings loaded - try again with a signal." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine Objekte geladen – mit Empfang erneut versuchen."
           }
         }
       }
@@ -643,6 +843,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Derzeit muss keine Zone getestet werden."
+          }
+        }
+      }
+    },
+    "Nobody has clocked in here this month." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diesen Monat hat sich hier niemand eingestempelt."
           }
         }
       }
@@ -789,6 +999,16 @@
         }
       }
     },
+    "Page" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seite"
+          }
+        }
+      }
+    },
     "Phone number" : {
       "localizations" : {
         "de" : {
@@ -819,12 +1039,32 @@
         }
       }
     },
+    "Previous page" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vorherige Seite"
+          }
+        }
+      }
+    },
     "Proves a card resolves to this zone before a cleaner can clock in on it. This never opens a shift." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Bestätigt, dass eine Karte dieser Zone entspricht, bevor sich eine Reinigungskraft dort einstempeln kann. Dies öffnet nie eine Schicht."
+          }
+        }
+      }
+    },
+    "Put this zone in that building" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Zone diesem Objekt zuordnen"
           }
         }
       }
@@ -895,6 +1135,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Läuft"
+          }
+        }
+      }
+    },
+    "SMS code" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SMS-Code"
+          }
+        }
+      }
+    },
+    "SMS sign-in isn't set up on this server. Please use the access code below." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SMS-Anmeldung ist auf diesem Server nicht eingerichtet. Bitte den Zugangscode verwenden."
           }
         }
       }
@@ -1156,22 +1416,12 @@
         }
       }
     },
-    "SMS code" : {
+    "Skip for now" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SMS-Code"
-          }
-        }
-      }
-    },
-    "SMS sign-in isn't set up on this server. Please use the access code below." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "SMS-Anmeldung ist auf diesem Server nicht eingerichtet. Bitte den Zugangscode verwenden."
+            "value" : "Vorerst überspringen"
           }
         }
       }
@@ -1182,6 +1432,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Einige ältere Anfragen auf diesem Telefon konnten nicht gelesen werden. Alles bereits Gesendete liegt sicher am Server."
+          }
+        }
+      }
+    },
+    "Somebody already gave this zone a building." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jemand hat dieser Zone bereits ein Objekt gegeben."
+          }
+        }
+      }
+    },
+    "Somebody already made this card into a zone." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jemand hat aus dieser Karte bereits eine Zone gemacht."
           }
         }
       }
@@ -1286,6 +1556,26 @@
         }
       }
     },
+    "That building already has a zone with this name." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Objekt hat bereits eine Zone mit diesem Namen."
+          }
+        }
+      }
+    },
+    "That building isn't one of ours any more." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Objekt gehört nicht mehr zu unseren."
+          }
+        }
+      }
+    },
     "That code is wrong or has expired." : {
       "localizations" : {
         "de" : {
@@ -1312,6 +1602,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Diese Telefonnummer sieht nicht richtig aus."
+          }
+        }
+      }
+    },
+    "The office doesn't know this card yet. Tell the office first." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dem Büro ist diese Karte noch nicht bekannt. Bitte zuerst dem Büro melden."
           }
         }
       }
@@ -1506,6 +1806,16 @@
         }
       }
     },
+    "This month at this door" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diesen Monat an dieser Tür"
+          }
+        }
+      }
+    },
     "This never opens a shift. A fresh id is minted on this phone before anything is written." : {
       "localizations" : {
         "de" : {
@@ -1656,6 +1966,16 @@
         }
       }
     },
+    "This zone has no building yet, so a tap on its card resolves to nothing. Pick its building first." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Zone hat noch kein Objekt, deshalb führt ein Tippen auf ihre Karte ins Leere. Zuerst das Objekt wählen."
+          }
+        }
+      }
+    },
     "This zone isn't active any more." : {
       "localizations" : {
         "de" : {
@@ -1712,6 +2032,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Gesamt"
+          }
+        }
+      }
+    },
+    "Total this month" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Summe diesen Monat"
+          }
+        }
+      }
+    },
+    "Try again" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erneut versuchen"
           }
         }
       }
@@ -1898,6 +2238,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ihre Schicht bei %@ hat 8 Stunden erreicht und wurde automatisch beendet. Öffnen Sie die App und bestätigen Sie, wann Sie tatsächlich fertig waren – sonst wird sie nicht bezahlt."
+          }
+        }
+      }
+    },
+    "Zone created: %@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zone erstellt: %@."
+          }
+        }
+      }
+    },
+    "Zone created: %@. No building yet - bind it in Test a tag." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zone erstellt: %@. Noch kein Objekt – unter „Tag prüfen“ zuordnen."
+          }
+        }
+      }
+    },
+    "Zone name" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zonenname"
           }
         }
       }

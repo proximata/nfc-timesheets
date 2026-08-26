@@ -2,27 +2,24 @@
 //  WriteTagScreen.swift
 //  NFCTimeSheets
 //
-//  Reachable directly from the sign-in screen (TASK-252's iOS half - full parity with
-//  android/.../nfc/WriteTagActivity.kt, which was never gated behind a separate sign-in
-//  screen either). Mints an id, presents the system NFC sheet, shows exactly one Outcome,
-//  then reports it - and the report is SOFT, never downgrading a verified write
-//  (decision-49). NOTHING here opens or closes a shift: OperatorTagAPI carries the
-//  ts_operator cookie, which no shift route accepts (decision-45).
+//  Reachable ONLY through OperatorHomeScreen (decision-54 §4). Mints an id, presents the
+//  system NFC sheet, shows exactly one Outcome, then reports it - and the report is SOFT,
+//  never downgrading a verified write (decision-49). NOTHING here opens or closes a shift:
+//  OperatorTagAPI carries the ts_operator cookie, which no shift route accepts (decision-45).
 //
-//  THE GATE IS HERE, NOT JUST AT THE NAVIGATION LINK - mirrors WriteTagActivity.kt's own
-//  `onResume` refusal (`if (!operatorReady) return`, never starting reader mode): a link
-//  on the sign-in screen is reachable by ANYONE with the app installed, so without this
-//  check this screen would run a real NFC write from a phone that had never proven it is
-//  an operator's. `session.write(...)` only ever ran through CoreNFC once - it never
-//  checked WHO was holding the phone - so this was the actual gap direct sign-in-screen
-//  buttons would have opened if this screen stayed as unguarded as it was before.
+//  THE CODE FIELD THAT USED TO LIVE HERE IS GONE, and that is not a loosening: the gate
+//  moved UPSTREAM of the navigation link, so this screen is unreachable without an operator
+//  session instead of merely refusing to act without one. What is left is the DEFENSIVE
+//  half - a session that dies while this screen is open pops back to the gate rather than
+//  growing a second code-entry UI here, which is exactly the duplication decision-54 §5
+//  set out to delete.
 //
 
 import SwiftUI
 
 struct WriteTagScreen: View {
     @Environment(OperatorSession.self) private var operatorSession
-    @State private var operatorCode = ""
+    @Environment(\.dismiss) private var dismiss
     @State private var pendingId = UUID().uuidString.lowercased()
     // The actual bytes this build would write, computed the SAME way TagWriter.plan() does
     // (TagLink.uriFor), so what the operator sees here can never drift from what lands on
@@ -34,54 +31,38 @@ struct WriteTagScreen: View {
     @State private var confirmText = ""
     @State private var busy = false
     @State private var report: ReportState = .idle
+    // The id that actually LEFT this phone. `pendingId` is re-minted the moment a report
+    // lands, so it is already the NEXT card by the time the zone step runs - resolving
+    // against it would 404 on a tag nobody ever reported.
+    @State private var reportedId: String?
+    @State private var zone: ZoneState = .idle
+    @State private var locations: [WireOperatorLocation] = []
+    @State private var pickedLocationId: String?
+    @State private var zoneName = ""
 
     private enum ReportState: Equatable {
         case idle, sending, sent
         case failed
     }
 
-    var body: some View {
-        Form {
-            // ONE FORM, one of two contents - never both. Matches WriteTagActivity.kt's
-            // `if (!operatorReady) { ... } else { ... }` split, not a disabled button next
-            // to a live one: a phone that has not proven it is an operator's must not be
-            // able to even attempt a write while a code field sits unfilled beside it.
-            switch operatorSession.state {
-            case .unknown:
-                Section { ProgressView() }
-            case .signedOut(let reason):
-                operatorSignInSection(reason: reason)
-            case .signedIn:
-                writeSections
-            }
-        }
-        .navigationTitle("Write a tag")
+    /// The zone step, modelled the same way the report above it is: one enum, one line of
+    /// text per case (see `zoneText`), no scattered booleans. `.failed` carries the server's
+    /// error CODE rather than a sentence, because the sentence belongs next to the field.
+    private enum ZoneState: Equatable {
+        case idle, loading, picking, submitting
+        case created(String)
+        case failed(String)
     }
 
-    @ViewBuilder
-    private func operatorSignInSection(reason: String?) -> some View {
-        Section {
-            Text("This phone is not signed in as an operator. Only operators can write tags. Please enter the operator code. Until a code is entered, this screen reads no card at all.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+    var body: some View {
+        Form {
+            writeSections
         }
-        Section("Operator code") {
-            TextField("Operator code", text: $operatorCode)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-                .accessibilityLabel("Operator code")
-            if let reason {
-                Text(reason)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            }
-            Button("Sign in") {
-                Task {
-                    await operatorSession.signIn(code: operatorCode)
-                    if operatorSession.operatorInfo != nil { operatorCode = "" }
-                }
-            }
-            .disabled(operatorSession.busy || EnrolmentCode.normalise(operatorCode) == nil)
+        .navigationTitle("Write a tag")
+        // The session went away underneath us - expired, revoked, or signed out on another
+        // screen. Back to the gate, which is the ONE place a code is typed now.
+        .onChange(of: operatorSession.operatorInfo == nil) { _, gone in
+            if gone { dismiss() }
         }
     }
 
@@ -126,6 +107,80 @@ struct WriteTagScreen: View {
                         .disabled(busy)
                 }
             }
+
+            // ONLY after the office knows about the card. Resolving a tag the server has
+            // never heard of is a guaranteed 404, so this step cannot come earlier - and a
+            // failed report is not a dead end, because the retry button above is still up.
+            if report == .sent, reportedId != nil {
+                zoneSection
+            }
+
+            #if DEBUG
+            mockSection
+            #endif
+        }
+    }
+
+    #if DEBUG
+    /// Absent from a Release build, byte for byte - see OperatorMockFlows.swift. The button
+    /// does NOT draw a canned screen: it hands the state machine the outcome a successful
+    /// write would have produced and then lets the SHIPPING report + zone steps run against
+    /// mocked responses, so what gets walked here is this file's real code.
+    @ViewBuilder
+    private var mockSection: some View {
+        Section("Simulate (debug builds only)") {
+            Text("No NFC, no network. A simulator has neither.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Button(OperatorMockFlow.writeThenPickBuilding.label) {
+                Task { await simulateWrite(OperatorMockFlow.writeThenPickBuilding) }
+            }
+            .disabled(busy)
+            Button(OperatorMockFlow.writeThenSkipBuilding.label) {
+                Task { await simulateWrite(OperatorMockFlow.writeThenSkipBuilding) }
+            }
+            .disabled(busy)
+        }
+    }
+
+    /// The only thing bypassed is the radio. Everything after this line - the report, the
+    /// re-mint of `pendingId`, the building fetch, the picker, `createZone()` - is untouched
+    /// shipping code talking to OperatorFlowAPI's mocked half.
+    private func simulateWrite(_ flow: OperatorMockFlow) async {
+        OperatorMocks.arm(flow)
+        busy = true
+        let id = UUID().uuidString.lowercased()
+        outcome = OperatorMocks.writtenOutcome(id: id)
+        busy = false
+        await sendReport(id)
+        // The difference between the two scenarios, seeded rather than narrated: one arrives
+        // at the picker with a building already chosen, the other with Skip standing.
+        pickedLocationId = flow == .writeThenPickBuilding ? OperatorMocks.locations.first?.id : nil
+        zoneName = "Stiege 2"
+    }
+    #endif
+
+    @ViewBuilder
+    private var zoneSection: some View {
+        Section("Make this card a zone") {
+            Text(zoneText)
+                .font(.footnote)
+                .accessibilityLabel(zoneText)
+            switch zone {
+            case .idle, .loading, .submitting, .created:
+                EmptyView()
+            case .picking, .failed:
+                TextField("Zone name", text: $zoneName)
+                    .autocorrectionDisabled()
+                // "Skip" is an OPTION INSIDE the picker rather than a second button:
+                // skipping is an answer to the building question, not a way out of the zone
+                // step, and a separate button would read as the latter. An unbound zone is a
+                // legitimate resting state (decision-54 §1). Same control VerifyZoneScreen
+                // binds an existing zone with - see BuildingPicker.swift.
+                BuildingPicker(locations: locations, allowsSkip: true, selection: $pickedLocationId)
+                Button("Create zone") { Task { await createZone() } }
+                    .disabled(busy || zoneName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
         }
     }
 
@@ -161,12 +216,68 @@ struct WriteTagScreen: View {
         guard !busy || report != .sending else { return }
         report = .sending
         do {
-            _ = try await OperatorTagAPI.reportTag(id: locationId)
+            _ = try await OperatorFlowAPI.reportTag(id: locationId)
             report = .sent
+            reportedId = locationId
             // The id has now left this phone, so the NEXT card must not reuse it.
             pendingId = UUID().uuidString.lowercased()
+            await loadLocations()
         } catch {
             report = .failed
+        }
+    }
+
+    /// The building list is a CONVENIENCE, never a gate: if it fails to load, the picker
+    /// still opens with Skip as its only choice and the zone can still be created unbound,
+    /// which is exactly what an operator who cannot answer the building question wanted
+    /// anyway. So there is no retry button and no error state of its own here.
+    private func loadLocations() async {
+        zone = .loading
+        locations = (try? await OperatorFlowAPI.locations()) ?? []
+        pickedLocationId = nil
+        zoneName = ""
+        zone = .picking
+    }
+
+    private func createZone() async {
+        guard let reportedId else { return }
+        busy = true
+        defer { busy = false }
+        zone = .submitting
+        do {
+            let created = try await OperatorFlowAPI.resolveZone(
+                tagId: reportedId,
+                name: zoneName.trimmingCharacters(in: .whitespacesAndNewlines),
+                locationId: pickedLocationId)
+            zone = .created(created.locationId == nil
+                            ? String(localized: "Zone created: \(created.name). No building yet - bind it in Test a tag.")
+                            : String(localized: "Zone created: \(created.name)."))
+        } catch let failure as APIFailure {
+            zone = .failed(failure.code)
+        } catch {
+            zone = .failed("network")
+        }
+    }
+
+    private var zoneText: String {
+        switch zone {
+        case .idle: return ""
+        case .loading: return String(localized: "Loading buildings…")
+        case .picking:
+            return locations.isEmpty
+                ? String(localized: "Name this door. No buildings loaded - the zone will be created without one.")
+                : String(localized: "Name this door and pick its building, or skip the building for now.")
+        case .submitting: return String(localized: "Creating the zone…")
+        case .created(let message): return message
+        case .failed(let code):
+            switch code {
+            case "duplicate_zone_name": return String(localized: "That building already has a zone with this name.")
+            case "already_resolved": return String(localized: "Somebody already made this card into a zone.")
+            case "unknown_reported_tag": return String(localized: "The office doesn't know this card yet. Tell the office first.")
+            case "unknown_location": return String(localized: "That building isn't one of ours any more.")
+            case "network": return String(localized: "No connection - try again.")
+            default: return String(localized: "Server trouble - try again.")
+            }
         }
     }
 

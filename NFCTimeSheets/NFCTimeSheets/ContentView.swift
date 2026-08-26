@@ -97,8 +97,8 @@ struct ContentView: View {
 // MARK: - State (a): signed out
 
 /// Two doors, both always visible, neither gated (decision-50): an SMS one-time code, and
-/// the admin-issued enrolment code, normalised by EnrolmentCode.swift the same way
-/// WriteTagScreen/VerifyZoneScreen's own operator-code fields do. No `GET
+/// the admin-issued enrolment code. ONE FORM NOW SERVES BOTH (decision-54 §5) - see
+/// CodeSignInSection.swift, which the operator gate uses too. No `GET
 /// /auth/capabilities` check here, unlike Android - with
 /// Apple gone, hiding SMS behind a flag could leave a phone with exactly one door, and a
 /// control that answers 503 the moment it is pressed says so in the copy right where the
@@ -109,25 +109,10 @@ struct SignInView: View {
     /// session) - the field-level SMS/code errors below are local @State.
     let reason: String?
 
-    // SMS door. `sentTo` mirrors Android's rememberSaveable shape: non-nil only once a
-    // request has been ACCEPTED for this exact string, and the ONLY way back to phone
-    // entry is the "Use a different number" button - so the code field can never sit next
-    // to a number nothing was sent to.
-    @State private var phone = ""
-    @State private var sentTo: String?
-    @State private var otp = ""
-    @State private var phoneErrorMessage: String?
-    @State private var otpErrorMessage: String?
-
-    // Enrolment-code door.
-    @State private var enrolmentInput = ""
-    @State private var enrolmentErrorMessage: String?
-
     var body: some View {
-        // WriteTagScreen and VerifyZoneScreen are both pushed from operatorSection below,
-        // so whatever presents this view needs a NavigationStack ancestor - Settings
-        // already has one; this is the second, and now the ONLY one that does not
-        // require a worker session first.
+        // OperatorHomeScreen is pushed from operatorSection below, so whatever presents
+        // this view needs a NavigationStack ancestor - Settings already has one; this is
+        // the second, and now the ONLY one that does not require a worker session first.
         NavigationStack {
             Form {
                 Section {
@@ -155,8 +140,15 @@ struct SignInView: View {
                 }
                 .listRowBackground(Color.clear)
 
-                smsSection
-                enrolmentSection
+                // The phone field, the Request-SMS button, ONE code field and ONE submit
+                // button - the same view the operator gate mounts (decision-54 §5). All
+                // three calls stay Session's; this view kept no auth state of its own
+                // when it consolidated.
+                CodeSignInSection(role: .worker,
+                                  busy: session.busy,
+                                  requestSms: { try await session.requestSmsCode(phone: $0) },
+                                  verifySms: { try await session.verifySmsCode(phone: $0, code: $1) },
+                                  submitCode: { try await session.signInWithCode($0) })
                 operatorSection
             }
             .scrollDismissesKeyboard(.interactively)
@@ -170,204 +162,25 @@ struct SignInView: View {
     // Settings, which only exists inside .eligible(worker): a phone that is operator-only
     // had no way in at all (found 2026-08-24, TASK-252).
     //
-    // TWO DIRECT LINKS, not a link to a sign-in screen that then reveals two more links -
-    // full parity with android/.../ui/TimeSheetApp.kt's SignInScreen, which puts "Tag
-    // schreiben" and "Tag pruefen" directly on the welcome screen. WriteTagScreen and
-    // VerifyZoneScreen each carry their OWN operator-code gate now (mirrors
-    // WriteTagActivity.kt/VerifyZoneActivity.kt refusing to start a reader session while
-    // `!operatorReady`), so there is nothing left for an intermediate sign-in screen to
-    // do - OperatorSignInScreen.swift is retired, not left as a second, now-redundant door.
-    // Settings keeps its own identical section for a phone that is already signed in as a
-    // worker and also mounts tags.
+    // ONE LINK INTO A GATE, not two direct links (decision-54 §4). This reverses what the
+    // comment here used to say: the two-direct-link design let anyone with the app
+    // installed SEE the operator interface, and gated only the action, inside each screen.
+    // decision-54 gates reaching it at all, so OperatorHomeScreen.swift is the retired
+    // OperatorSignInScreen back in substance, and WriteTagScreen/VerifyZoneScreen no
+    // longer carry a code field of their own. Settings keeps its own identical link for a
+    // phone that is already signed in as a worker and also mounts tags.
     private var operatorSection: some View {
         Section {
-            NavigationLink("Write a tag") { WriteTagScreen() }
-            NavigationLink("Test a tag") { VerifyZoneScreen() }
+            NavigationLink("Write or test tags") { OperatorHomeScreen() }
         } footer: {
             Text("Operator? Write or test tags without signing in as a worker.")
                 .font(.footnote)
         }
     }
 
-    // MARK: SMS door
-
-    @ViewBuilder
-    private var smsSection: some View {
-        if let target = sentTo {
-            Section {
-                Text("A 6-digit code was sent to \(target).")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                TextField("SMS code", text: $otp)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
-                    .onChange(of: otp) { _, new in
-                        // Digits only, capped at 6 - an OTP has no alphabet to alias, so
-                        // there is nothing here for an EnrolmentCode-style normaliser to do.
-                        otp = String(new.filter(\.isNumber).prefix(6))
-                        otpErrorMessage = nil
-                    }
-                    .accessibilityLabel("SMS code")
-                if let otpErrorMessage {
-                    Text(otpErrorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
-                Button("Confirm") { verifyOtp() }
-                    .disabled(session.busy || otp.count != 6)
-                Button("Use a different number") {
-                    sentTo = nil
-                    otp = ""
-                    otpErrorMessage = nil
-                }
-                .disabled(session.busy)
-            } header: {
-                Text("Sign in by SMS")
-            }
-        } else {
-            Section {
-                TextField("Phone number", text: $phone)
-                    .keyboardType(.phonePad)
-                    .textContentType(.telephoneNumber)
-                    .onChange(of: phone) { _, _ in phoneErrorMessage = nil }
-                    .accessibilityLabel("Phone number")
-                if let phoneErrorMessage {
-                    Text(phoneErrorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                } else {
-                    Text("Start with 0 or +43, for example 0664 1234567.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                Button("Send code") { requestCode() }
-                    .disabled(session.busy || phone.isEmpty)
-            } header: {
-                Text("Sign in by SMS")
-            }
-        }
-    }
-
-    // MARK: Enrolment-code door
-
-    private var enrolmentSection: some View {
-        Section {
-            TextField("Access code", text: $enrolmentInput)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-                .onChange(of: enrolmentInput) { _, _ in enrolmentErrorMessage = nil }
-                .accessibilityLabel("Access code")
-            if let enrolmentErrorMessage {
-                Text(enrolmentErrorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            } else {
-                Text("The one-time code your administration gave you.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Button("Sign in with code") { submitEnrolmentCode() }
-                .disabled(session.busy || EnrolmentCode.normalise(enrolmentInput) == nil)
-        } header: {
-            Text("Sign in with an access code")
-        }
-    }
-
-    // MARK: Actions
-
-    private func requestCode() {
-        guard !session.busy, !phone.isEmpty else { return }
-        let requested = phone
-        Task {
-            do {
-                try await session.requestSmsCode(phone: requested)
-                sentTo = requested
-                phoneErrorMessage = nil
-                otp = ""
-                otpErrorMessage = nil
-            } catch let failure as APIFailure {
-                phoneErrorMessage = Self.phoneRequestMessage(for: failure)
-            } catch {
-                phoneErrorMessage = APIFailure(status: 0, code: "network").workerMessage
-            }
-        }
-    }
-
-    private func verifyOtp() {
-        guard !session.busy, let target = sentTo, otp.count == 6 else { return }
-        Task {
-            do {
-                try await session.verifySmsCode(phone: target, code: otp)
-                // Success moves the whole screen to .eligible; nothing left to reset here.
-            } catch let failure as APIFailure {
-                otpErrorMessage = Self.otpVerifyMessage(for: failure)
-            } catch {
-                otpErrorMessage = APIFailure(status: 0, code: "network").workerMessage
-            }
-        }
-    }
-
-    private func submitEnrolmentCode() {
-        guard !session.busy, let code = EnrolmentCode.normalise(enrolmentInput) else { return }
-        Task {
-            do {
-                try await session.signInWithCode(code)
-            } catch let failure as APIFailure {
-                enrolmentErrorMessage = Self.enrolmentCodeMessage(for: failure)
-            } catch {
-                enrolmentErrorMessage = APIFailure(status: 0, code: "network").workerMessage
-            }
-        }
-    }
-
-    // MARK: Error copy
-    //
-    // Distinct per outcome and per field (decision-50 §1): the SAME server code means a
-    // different next action depending on which field is on screen, so none of these go
-    // through APIFailure.workerMessage's generic switch - that one is shift-sync copy.
-
-    private static func phoneRequestMessage(for failure: APIFailure) -> String {
-        switch failure.code {
-        case "unknown_phone":
-            // decision-51: the number is well-formed but not on file. Never the same
-            // sentence as an invalid code - nobody re-issues this, the admin adds the number.
-            return String(localized: "This number isn't on file. Please contact your administration so it can be added.")
-        case "invalid_phone":
-            return String(localized: "That phone number doesn't look right.")
-        case "too_many_attempts":
-            return String(localized: "Too many attempts - try again in a few minutes.")
-        case "sms_not_configured":
-            return String(localized: "SMS sign-in isn't set up on this server. Please use the access code below.")
-        default:
-            return failure.workerMessage
-        }
-    }
-
-    private static func otpVerifyMessage(for failure: APIFailure) -> String {
-        switch failure.code {
-        case "invalid_code":
-            // NEVER the enrolment field's "ask your admin for a new one" - an OTP is
-            // re-requested by the WORKER, not reissued by an admin.
-            return String(localized: "That code is wrong or has expired.")
-        case "too_many_attempts":
-            return String(localized: "Too many attempts - try again in a few minutes.")
-        case "sms_not_configured":
-            return String(localized: "SMS sign-in isn't set up on this server. Please use the access code below.")
-        default:
-            return failure.workerMessage
-        }
-    }
-
-    private static func enrolmentCodeMessage(for failure: APIFailure) -> String {
-        switch failure.code {
-        case "invalid_code":
-            return String(localized: "Code not accepted. Ask your admin for a new one.")
-        case "too_many_attempts":
-            return String(localized: "Too many attempts - try again in a few minutes.")
-        default:
-            return failure.workerMessage
-        }
-    }
+    // The SMS door, the enrolment-code door and every per-outcome error sentence they
+    // showed all moved, verbatim, into CodeSignInSection.swift - nothing was dropped in
+    // the move, only the LAYOUT consolidated (decision-54 §5).
 }
 
 // MARK: - Log tab
@@ -852,9 +665,13 @@ struct SettingsView: View {
                 // decision-45: a SEPARATE identity for a SEPARATE credential. Reachable
                 // from here because a worker's own phone may also be the one an operator
                 // uses to mount or test a tag — it is additive, and touches nothing above.
+                //
+                // Through the SAME gate as the sign-in screen's link, never straight into
+                // WriteTagScreen: those screens no longer carry a code field of their own
+                // (decision-54 §4), so a direct link from here would be the one unguarded
+                // way in left.
                 Section {
-                    NavigationLink("Write a tag") { WriteTagScreen() }
-                    NavigationLink("Test a tag") { VerifyZoneScreen() }
+                    NavigationLink("Write or test tags") { OperatorHomeScreen() }
                 } footer: {
                     Text("For staff who mount and test NFC tags. This never opens a shift.")
                         .font(.footnote)
