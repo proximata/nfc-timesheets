@@ -137,18 +137,11 @@ type Draft = {
   monthly: string
   /** Whole hours as typed. Converted to integer minutes at submit. */
   targetHours: string
-  /**
-   * STEP 3, and it is OPTIONAL (decision-43 §7). Building creation no longer walks through
-   * tag writing; the tag walk moved onto the ZONE. A building with a contract, a contact
-   * and no zone is a legitimate, finished thing to save — its tag resolves and its workers
-   * clock in exactly as before — so this step offers a first zone and never demands one.
-   *
-   * An empty name here means "no zone", not "a zone called nothing".
-   */
-  firstZoneName: string
-  firstZoneArea: string
-  firstZoneNote: string
 }
+
+// NO "first zone" STEP ANY MORE (decision-54 §2). A zone is born in the OPERATOR's hand,
+// at the door, on a field visit — never at this desk. Creating a building here is now the
+// whole errand: the building, its client and its contract, and no zone.
 
 const EMPTY_DRAFT: Draft = {
   name: '',
@@ -165,9 +158,6 @@ const EMPTY_DRAFT: Draft = {
   newContactPhone: '',
   monthly: '',
   targetHours: '',
-  firstZoneName: '',
-  firstZoneArea: '',
-  firstZoneNote: '',
 }
 
 function draftOf(location: Location): Draft {
@@ -226,7 +216,6 @@ type FieldErrors = {
   newContactPhone?: ErrorMessage
   monthly?: ErrorMessage
   targetHours?: ErrorMessage
-  firstZoneArea?: ErrorMessage
 }
 
 /**
@@ -354,9 +343,6 @@ export default function LocationsPage() {
   const monthId = useId()
   const monthHintId = useId()
   const activeId = useId()
-  const firstZoneNameId = useId()
-  const firstZoneAreaId = useId()
-  const firstZoneNoteId = useId()
   const zoneFormId = useId()
   const zoneNameId = useId()
   const zoneAreaId = useId()
@@ -371,14 +357,13 @@ export default function LocationsPage() {
   /** null = the drawer is closed. There is no half-open form on this screen any more. */
   const [draft, setDraft] = useState<Draft | null>(null)
   /**
-   * 1 = the building and its client. 2 = the contract and the agreed time. 3 = an OPTIONAL
-   * first zone. Step 3 replaced the tag walkthrough that used to live on this drawer: a tag
-   * belongs to a zone now (decision-43 §7), and a building that never gets one is fine.
+   * 1 = the building and its client. 2 = the contract and the agreed time. There is no
+   * third step: the optional first zone that used to live here is gone with admin zone
+   * creation itself (decision-54 §2).
    */
-  const [step, setStep] = useState<1 | 2 | 3>(1)
-  /** Steps 2 and 3, so focus can be moved into them when the step changes. */
+  const [step, setStep] = useState<1 | 2>(1)
+  /** Step 2, so focus can be moved into it when the step changes. */
   const stepTwoRef = useRef<HTMLDivElement | null>(null)
-  const stepThreeRef = useRef<HTMLDivElement | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [formError, setFormError] = useState<ErrorMessage | null>(null)
   /** A 5xx or an offline browser during a SAVE. Shown in the drawer, which stays open. */
@@ -443,7 +428,6 @@ export default function LocationsPage() {
    */
   useEffect(() => {
     if (step === 2) stepTwoRef.current?.focus()
-    if (step === 3) stepThreeRef.current?.focus()
   }, [step])
 
   /* --- zones (decision-43) --------------------------------------------------------------
@@ -663,15 +647,6 @@ export default function LocationsPage() {
     ) {
       errors.targetHours = 'errorTargetInvalid'
     }
-    // The optional first zone. An empty NAME means "no zone" and is not an error; an area
-    // typed next to no name is, because it is somebody halfway through a thought.
-    if (current.firstZoneArea.trim() !== '') {
-      if (parseAreaToHundredths(current.firstZoneArea) === null) {
-        errors.firstZoneArea = 'errorAreaInvalid'
-      } else if (current.firstZoneName.trim() === '') {
-        errors.firstZoneArea = 'errorZoneNameRequired'
-      }
-    }
     return errors
   }
 
@@ -750,7 +725,7 @@ export default function LocationsPage() {
         )
       }
 
-      const saved = await saveLocation({
+      await saveLocation({
         ...(draft.id === undefined ? {} : { id: draft.id }),
         name,
         slug,
@@ -764,44 +739,11 @@ export default function LocationsPage() {
         target_minutes_per_month: targetHours === '' ? null : Number.parseInt(targetHours, 10) * 60,
       })
 
-      /*
-       * STEP 3, if it was filled in. The zone is written AFTER the building, because it
-       * references it — and only for a NEW building: offering "add the first zone" inside
-       * an edit would quietly create a second one every time somebody corrected an address.
-       * The zone list is where zones are added afterwards.
-       *
-       * A failure here does NOT lose the building. It is already saved; the drawer stays
-       * open on step 3 with the reason, and the zone can be retried or dropped.
-       */
-      const firstZoneName = draft.firstZoneName.trim()
-      let createdZone: Zone | null = null
-      if (draft.id === undefined && firstZoneName !== '') {
-        const areaTyped = draft.firstZoneArea.trim()
-        const hundredths = areaTyped === '' ? null : parseAreaToHundredths(areaTyped)
-        createdZone = await saveZone({
-          location_id: saved.id,
-          name: firstZoneName,
-          note: draft.firstZoneNote.trim(),
-          area_sqm: hundredths === null ? null : hundredthsToPlainArea(hundredths),
-          active: true,
-        })
-      }
-
       // The result is announced by the PAGE: the drawer closes on success and would take
       // its own success message with it, unread.
       setNotice({ ok: true, text: t('saved') })
       closeDrawer()
       await load()
-      /*
-       * A zone was just filed, so the tag walk is offered IMMEDIATELY — the one moment the
-       * director is definitely thinking about this door. It is still only an offer: the
-       * zone is already saved, and closing this drawer loses nothing but the errand, which
-       * the zone list keeps offering.
-       */
-      if (createdZone !== null) {
-        setFilters({ zones: saved.id }, 'push')
-        openZoneTag(createdZone)
-      }
     } catch (cause) {
       // A FAILED save keeps the drawer open, so its message stays inside the drawer, next
       // to the fields it is about.
@@ -816,24 +758,15 @@ export default function LocationsPage() {
 
   /* --- the zone drawer -------------------------------------------------------------- */
 
-  function openZoneCreate(locationId: string) {
-    setZoneDraft({
-      locationId,
-      name: '',
-      area: '',
-      note: '',
-      active: true,
-      serial: '',
-      deployed: false,
-    })
-    setZoneStep(1)
-    setTagZone(null)
-    setZoneErrors({})
-    setZoneFormError(null)
-    setNotice(null)
-  }
+  // NO `openZoneCreate` (decision-54 §2). A zone is created by an OPERATOR, on the phone,
+  // standing at the door — the admin panel edits zones and never mints one. What is left
+  // here is editing an existing zone and decision-44's adopted-serial tag walk.
 
   function openZoneEdit(zone: Zone) {
+    // Only a BOUND zone is editable here: every caller is a row of one building's zone
+    // table. An unbound zone is read-only in this panel (decision-54 §1) and the guard is
+    // what lets `location_id` be nullable without a cast.
+    if (zone.location_id === null) return
     const hundredths = wireAreaToHundredths(zone.area_sqm)
     setZoneDraft({
       id: zone.id,
@@ -955,7 +888,7 @@ export default function LocationsPage() {
    * means when a tag comes off a wall.
    */
   async function toggleZone(zone: Zone) {
-    if (busy) return
+    if (busy || zone.location_id === null) return
     setBusy(true)
     try {
       if (zone.active) {
@@ -1182,6 +1115,8 @@ export default function LocationsPage() {
   const zonesOfBuilding =
     zonedBuilding === null ? [] : allZones.filter((zone) => zone.location_id === zonedBuilding.id)
   const zoneArea = zonedBuilding === null ? null : areaOf(zonedBuilding.id)
+  /** Zones no building owns yet (decision-54 §1). Shown, never acted on. */
+  const unboundZones = allZones.filter((zone) => zone.location_id === null)
   const zoneDrawerError = zoneFormError === null ? '' : t(zoneFormError)
   /**
    * The zone whose tag URI step 2 prints. `tagZone` after a save; before the first save
@@ -1365,19 +1300,10 @@ export default function LocationsPage() {
         focus around it.
       */}
       {zonesUnknown ? <p className="notice bad">{tFilter('unknownNotice')}</p> : null}
+      {/* NO "+ Zone anlegen" ACTION on this panel (decision-54 §2): zones are minted by an
+          operator at the door, not from this desk. It still edits what exists. */}
       {zonedBuilding === null ? null : (
-        <ListPanel
-          title={t('zonesHeading', { name: zonedBuilding.name })}
-          action={
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => openZoneCreate(zonedBuilding.id)}
-            >
-              {t('zoneCreate')}
-            </button>
-          }
-        >
+        <ListPanel title={t('zonesHeading', { name: zonedBuilding.name })}>
           <div className="list-body">
             {/* The AREA, in words, with its three genuinely different answers. A floor is
                 never printed as a total: an unmeasured Tiefgarage makes every EUR/m2 figure
@@ -1582,6 +1508,26 @@ export default function LocationsPage() {
               </tbody>
             </table>
           )}
+        </ListPanel>
+      )}
+
+      {/*
+        UNBOUND ZONES (decision-54 §1). A card written at a door before anybody decided
+        which building it is in. Top-level and not nested under a building, because it has
+        no building to nest under.
+
+        READ-ONLY ON PURPOSE, and this is a VISIBILITY BACKSTOP, not a workflow: binding is
+        the operator app's job. No edit, no bind, no tag URI — nothing here is an offer.
+        Hidden entirely when there are none, so it never reads as a queue that is behind.
+      */}
+      {unboundZones.length === 0 ? null : (
+        <ListPanel title={t('unboundHeading')} padded>
+          <p className="note">{t('unboundNote')}</p>
+          <ul>
+            {unboundZones.map((zone) => (
+              <li key={zone.id}>{zone.name}</li>
+            ))}
+          </ul>
         </ListPanel>
       )}
 
@@ -1888,7 +1834,7 @@ export default function LocationsPage() {
         open={draft !== null}
         onClose={closeDrawer}
         title={draft?.id === undefined ? t('createHeading') : t('editHeading')}
-        step={step === 1 ? t('stepOne') : step === 2 ? t('stepTwo') : t('stepThree')}
+        step={step === 1 ? t('stepOne') : t('stepTwo')}
         busy={busy}
         footer={
           step === 1 ? (
@@ -1912,30 +1858,9 @@ export default function LocationsPage() {
                 {t('stepNext')}
               </button>
             </>
-          ) : step === 2 && draft?.id === undefined ? (
-            <>
-              <button key="back" type="button" className="btn btn-ghost" onClick={() => setStep(1)}>
-                {t('stepBack')}
-              </button>
-              {/* Distinct keys, same bug as above: React would otherwise reuse this node as
-                  the submit button on step 3 and one press would advance AND save. */}
-              <button
-                key="next3"
-                type="button"
-                className="btn btn-primary"
-                onClick={() => setStep(3)}
-              >
-                {t('stepNextZone')}
-              </button>
-            </>
           ) : (
             <>
-              <button
-                key="back"
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => setStep(step === 3 ? 2 : 1)}
-              >
+              <button key="back" type="button" className="btn btn-ghost" onClick={() => setStep(1)}>
                 {t('stepBack')}
               </button>
               <button
@@ -2203,74 +2128,9 @@ export default function LocationsPage() {
               </div>
             </div>
 
-            {/*
-              STEP 3, AND IT IS OPTIONAL (decision-43 §7).
-
-              Building creation used to walk through writing the building's NFC tag. It does
-              not any more: a tag belongs to a ZONE, and a building with a contract, a
-              contact and no zone is a legitimate thing to save. Skipping this step is a
-              first-class outcome, not an unfinished one — the note says what a zone buys
-              and what still works without one, and nothing here scolds.
-
-              Only on CREATE. Offering „add the first zone" inside an edit would quietly
-              create a second one every time somebody corrected an address; the zone list is
-              where zones are added afterwards.
-            */}
-            <div hidden={step !== 3} ref={stepThreeRef} tabIndex={-1}>
-              <p className="note">{t('stepThreeNote')}</p>
-
-              <Field
-                id={firstZoneNameId}
-                label={t('fieldZoneName')}
-                optional
-                help={t('zoneNameHint')}
-              >
-                <input
-                  type="text"
-                  value={draft.firstZoneName}
-                  onChange={(event) => setDraft({ ...draft, firstZoneName: event.target.value })}
-                  maxLength={120}
-                  autoComplete="off"
-                  disabled={busy}
-                />
-              </Field>
-
-              <Field
-                id={firstZoneAreaId}
-                label={t('fieldArea')}
-                optional
-                help={t('areaHint')}
-                error={
-                  fieldErrors.firstZoneArea === undefined ? undefined : t(fieldErrors.firstZoneArea)
-                }
-              >
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={draft.firstZoneArea}
-                  onChange={(event) => setDraft({ ...draft, firstZoneArea: event.target.value })}
-                  disabled={busy}
-                />
-              </Field>
-
-              <Field
-                id={firstZoneNoteId}
-                label={t('fieldZoneNote')}
-                optional
-                help={t('zoneNoteHint')}
-              >
-                <input
-                  type="text"
-                  value={draft.firstZoneNote}
-                  onChange={(event) => setDraft({ ...draft, firstZoneNote: event.target.value })}
-                  maxLength={500}
-                  autoComplete="off"
-                  disabled={busy}
-                />
-              </Field>
-
-              <p className="note">{t('stepThreeTagNote')}</p>
-            </div>
+            {/* NO STEP 3. The optional first zone left with admin zone creation itself
+                (decision-54 §2) — a building is finished at step 2, and its first zone is
+                written by an operator at the door. */}
           </form>
         )}
       </Drawer>
@@ -2287,7 +2147,7 @@ export default function LocationsPage() {
       <Drawer
         open={zoneDraft !== null}
         onClose={closeZoneDrawer}
-        title={zoneDraft?.id === undefined ? t('zoneCreate') : t('zoneEditHeading')}
+        title={t('zoneEditHeading')}
         step={zoneStep === 1 ? t('zoneStepOne') : t('zoneStepTwo')}
         busy={busy}
         footer={

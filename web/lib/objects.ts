@@ -111,7 +111,8 @@ export function summariseBuildings(
   // counting it would paint a building as set up on the strength of a tag that is in a skip.
   const zonesPerLocation = new Map<string, number>()
   for (const zone of zones) {
-    if (!zone.active) continue
+    // An UNBOUND zone (decision-54 §1) counts towards no building, because it is in none.
+    if (!zone.active || zone.location_id === null) continue
     zonesPerLocation.set(zone.location_id, (zonesPerLocation.get(zone.location_id) ?? 0) + 1)
   }
 

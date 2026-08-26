@@ -1,6 +1,5 @@
 'use client'
 
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useFormatter, useTranslations } from 'next-intl'
 import { type FormEvent, useCallback, useEffect, useId, useState } from 'react'
@@ -14,7 +13,6 @@ import {
   fetchTagsSnapshot,
   type ReportedTag,
   resolveTagToExistingZone,
-  resolveTagToZone,
   type TagsSnapshot,
 } from '@/lib/api'
 import type { ErrorKey } from '@/lib/locale'
@@ -31,45 +29,37 @@ import { BUSINESS_TIME_ZONE } from '@/lib/shifts'
  * and `/operators/` are the reference this mirrors.
  *
  * decision-47 — „Neues Gebäude" IS GONE, and with it POST /admin/tags/:id/resolve-building.
- * A card can no longer become a BUILDING's own tap surface: a new building is created
- * tag-free under „Objekte", and the reported card then becomes its FIRST ZONE. The
- * capability is not deleted, it moved — `buildingNote` below says where.
+ * A card can no longer become a BUILDING's own tap surface.
+ *
+ * decision-54 §2 — „Neue Zone" IS GONE TOO, and with it POST /admin/tags/:id/resolve-zone.
+ * A zone is born in an OPERATOR's hand, at the door, and this desk cannot mint one any
+ * more. What is left here is the ONE thing that was never zone creation: pointing a second
+ * physical card at an ALREADY-EXISTING zone (`tag_aliases`). The capability is not deleted,
+ * it moved — `operatorNote` below says where.
  *
  * Not in the sidebar (decision-39 style off-nav utility). Reached by URL (`/tags/`), via
  * the link on `/locations/`'s panel header — see `OFF_NAV_ROUTES` in lib/nav.ts.
  */
 
-const LOCATIONS_PATH = '/locations/'
-
-type Action = 'zone' | 'existing'
-
 type ActionDraft = {
-  action: Action
-  locationId: string
-  zoneName: string
   zoneId: string
 }
 
-const EMPTY_DRAFT: ActionDraft = { action: 'zone', locationId: '', zoneName: '', zoneId: '' }
+const EMPTY_DRAFT: ActionDraft = { zoneId: '' }
 
 /** Message keys inside the `tags` namespace for the drawer's own client-side checks. */
-type FieldErrorKey = 'errorLocationRequired' | 'errorZoneNameRequired' | 'errorZoneRequired'
+type FieldErrorKey = 'errorZoneRequired'
 
 type FieldErrors = {
-  location?: FieldErrorKey
-  zoneName?: FieldErrorKey
   zoneId?: FieldErrorKey
 }
 
-/** Every code the two resolve routes can answer (server/routes/admin.js
- *  resolveTagToZone / resolveTagToExistingZone), mapped onto a sentence in the `tags`
- *  namespace — never the bare code (LOOK.md C4: a raw internal token in a German panel). */
+/** Every code the one remaining resolve route can answer (server/routes/admin.js
+ *  resolveTagToExistingZone), mapped onto a sentence in the `tags` namespace — never the
+ *  bare code (LOOK.md C4: a raw internal token in a German panel). */
 type ResolveErrorKey =
   | 'errorInvalidField'
   | 'errorInvalidUuid'
-  | 'errorIdInUse'
-  | 'errorDuplicateZoneName'
-  | 'errorUnknownLocation'
   | 'errorUnknownZone'
   | 'errorAlreadyResolved'
   | 'errorUnknownReportedTag'
@@ -78,9 +68,6 @@ type ResolveErrorKey =
 const RESOLVE_ERROR_KEYS: Record<string, ResolveErrorKey> = {
   invalid_field: 'errorInvalidField',
   invalid_uuid: 'errorInvalidUuid',
-  id_in_use: 'errorIdInUse',
-  duplicate_zone_name: 'errorDuplicateZoneName',
-  unknown_location: 'errorUnknownLocation',
   unknown_zone: 'errorUnknownZone',
   already_resolved: 'errorAlreadyResolved',
   unknown_reported_tag: 'errorUnknownReportedTag',
@@ -93,9 +80,6 @@ export default function TagsPage() {
   const router = useRouter()
 
   const formId = useId()
-  const actionId = useId()
-  const locationFieldId = useId()
-  const zoneNameFieldId = useId()
   const existingZoneFieldId = useId()
 
   const [snapshot, setSnapshot] = useState<TagsSnapshot | null>(null)
@@ -159,16 +143,10 @@ export default function TagsPage() {
     if (busy || resolvingTag === null) return
 
     const tag = resolvingTag
-    const zoneName = draft.zoneName.trim()
 
     // Client-side validation is UX only — the server decides for real.
     const errors: FieldErrors = {}
-    if (draft.action === 'zone') {
-      if (draft.locationId === '') errors.location = 'errorLocationRequired'
-      if (zoneName === '') errors.zoneName = 'errorZoneNameRequired'
-    } else if (draft.zoneId === '') {
-      errors.zoneId = 'errorZoneRequired'
-    }
+    if (draft.zoneId === '') errors.zoneId = 'errorZoneRequired'
     setFieldErrors(errors)
     setFormError(null)
     if (Object.keys(errors).length > 0) return
@@ -176,13 +154,8 @@ export default function TagsPage() {
     const token = tag.id.slice(-6)
     setBusy(true)
     try {
-      if (draft.action === 'zone') {
-        await resolveTagToZone(tag.id, { location_id: draft.locationId, name: zoneName })
-        setNotice({ ok: true, text: t('resolvedNewZone', { token, name: zoneName }) })
-      } else {
-        await resolveTagToExistingZone(tag.id, draft.zoneId)
-        setNotice({ ok: true, text: t('resolvedExisting', { token }) })
-      }
+      await resolveTagToExistingZone(tag.id, draft.zoneId)
+      setNotice({ ok: true, text: t('resolvedExisting', { token }) })
       closeDrawer()
       await load()
     } catch (cause) {
@@ -287,85 +260,33 @@ export default function TagsPage() {
               {formError === null ? '' : t(formError)}
             </p>
 
-            <Field id={actionId} label={t('fieldAction')}>
+            {/* NOTHING TRUE IS DELETED TO LIGHTEN A SCREEN, and nothing here scolds: the
+                capability „Neue Zone" used to offer still exists, it just does not live at a
+                desk any more (decision-54 §2). Say so plainly, because the honest answer to
+                "why can I not create a zone here" is "an operator does that at the door",
+                not an empty form. */}
+            <p className="note">{t('operatorNote')}</p>
+
+            <Field
+              id={existingZoneFieldId}
+              label={t('fieldExistingZone')}
+              error={fieldErrors.zoneId === undefined ? undefined : t(fieldErrors.zoneId)}
+            >
               <select
-                value={draft.action}
-                onChange={(event) => setDraft({ ...draft, action: event.target.value as Action })}
+                value={draft.zoneId}
+                onChange={(event) => setDraft({ ...draft, zoneId: event.target.value })}
                 disabled={busy}
               >
-                <option value="zone">{t('actionNewZone')}</option>
-                <option value="existing">{t('actionExisting')}</option>
+                <option value="">{t('choosePlaceholder')}</option>
+                {snapshot.zones
+                  .filter((zone) => zone.active)
+                  .map((zone) => (
+                    <option key={zone.id} value={zone.id}>
+                      {zone.name}
+                    </option>
+                  ))}
               </select>
             </Field>
-
-            {/* NOTHING TRUE IS DELETED TO LIGHTEN A SCREEN: the capability „Neues Gebäude"
-                used to offer still exists, it just does not start with a card any more
-                (decision-47). Say where it went, AND take the admin there. */}
-            <p className="note">
-              {t.rich('buildingNote', {
-                locationsLink: (chunks) => <Link href={LOCATIONS_PATH}>{chunks}</Link>,
-              })}
-            </p>
-
-            {draft.action === 'zone' ? (
-              <>
-                <Field
-                  id={locationFieldId}
-                  label={t('fieldLocation')}
-                  error={fieldErrors.location === undefined ? undefined : t(fieldErrors.location)}
-                >
-                  <select
-                    value={draft.locationId}
-                    onChange={(event) => setDraft({ ...draft, locationId: event.target.value })}
-                    disabled={busy}
-                  >
-                    <option value="">{t('choosePlaceholder')}</option>
-                    {snapshot.locations
-                      .filter((location) => location.active)
-                      .map((location) => (
-                        <option key={location.id} value={location.id}>
-                          {location.name}
-                        </option>
-                      ))}
-                  </select>
-                </Field>
-                <Field
-                  id={zoneNameFieldId}
-                  label={t('fieldZoneName')}
-                  error={fieldErrors.zoneName === undefined ? undefined : t(fieldErrors.zoneName)}
-                >
-                  <input
-                    type="text"
-                    value={draft.zoneName}
-                    onChange={(event) => setDraft({ ...draft, zoneName: event.target.value })}
-                    maxLength={120}
-                    autoComplete="off"
-                    disabled={busy}
-                  />
-                </Field>
-              </>
-            ) : (
-              <Field
-                id={existingZoneFieldId}
-                label={t('fieldExistingZone')}
-                error={fieldErrors.zoneId === undefined ? undefined : t(fieldErrors.zoneId)}
-              >
-                <select
-                  value={draft.zoneId}
-                  onChange={(event) => setDraft({ ...draft, zoneId: event.target.value })}
-                  disabled={busy}
-                >
-                  <option value="">{t('choosePlaceholder')}</option>
-                  {snapshot.zones
-                    .filter((zone) => zone.active)
-                    .map((zone) => (
-                      <option key={zone.id} value={zone.id}>
-                        {zone.name}
-                      </option>
-                    ))}
-                </select>
-              </Field>
-            )}
           </form>
         )}
       </Drawer>
