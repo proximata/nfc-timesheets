@@ -63,10 +63,7 @@ private fun fact(key: String, value: String) {
 private val branding = java.util.Properties().apply {
     File("branding.properties").inputStream().use { load(it) }
 }
-private val tagLink = TagLink(
-    branding.getProperty("ts.tagHost").trim(),
-    (branding.getProperty("ts.legacyTagHosts") ?: "").split(",").map { it.trim() }.filter { it.isNotEmpty() },
-)
+private val tagLink = TagLink(branding.getProperty("ts.tagHost").trim())
 private val writer = TagWriter(tagLink)
 
 /**

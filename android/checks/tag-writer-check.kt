@@ -51,9 +51,7 @@ private val branding = java.util.Properties().apply {
     File("branding.properties").inputStream().use { load(it) }
 }
 private val host = branding.getProperty("ts.tagHost").trim()
-private val legacyHosts = (branding.getProperty("ts.legacyTagHosts") ?: "")
-    .split(",").map { it.trim() }.filter { it.isNotEmpty() }
-private val tagLink = TagLink(host, legacyHosts)
+private val tagLink = TagLink(host)
 private val writer = TagWriter(tagLink)
 
 /** The building that is actually in production. Same constant as core-check § 1b. */
@@ -345,8 +343,6 @@ private class Case(
 
 private fun aMountedCardIsNotOverwritten() {
     val ours = NdefTag.message("https://$host/t?l=$OTHER_LOCATION")!!
-    val legacyHost = legacyHosts.firstOrNull { it != host }
-    val oursOnLegacyHost = legacyHost?.let { NdefTag.message("https://$it/t?l=$OTHER_LOCATION")!! }
     val foreignUrl = NdefTag.message("https://example.com/loyalty-card")!!
     // A Text record: same length class, no URL at all. NFC Tools writes these by default.
     val foreignText = NdefTag.message("https://example.com/x")!!.copyOf().also { it[3] = 0x54 }
@@ -371,12 +367,6 @@ private fun aMountedCardIsNotOverwritten() {
             what = "OUR id, a DIFFERENT one — A MOUNTED CARD",
             card = { FakeCard(capacity = 137, initial = ours) },
             expect = "Refused.Occupied, card untouched",
-            expectWrite = false,
-        ) { it is TagWriter.Outcome.Refused.Occupied && it.onTag == OTHER_LOCATION },
-        Case(
-            what = "OUR id on a LEGACY host — still a mounted card",
-            card = { FakeCard(capacity = 137, initial = oursOnLegacyHost ?: ours) },
-            expect = "Refused.Occupied",
             expectWrite = false,
         ) { it is TagWriter.Outcome.Refused.Occupied && it.onTag == OTHER_LOCATION },
         Case(
@@ -452,8 +442,6 @@ private fun aMountedCardIsNotOverwritten() {
         )
         check(TagBus.calls.lastOrNull() == "close", "${case.what}: the tag is released: ${TagBus.trace()}")
     }
-
-    check(legacyHost != null, "no legacy host in branding.properties — the legacy-host row degenerates")
 
     println(
         "\n  WHAT THE OPERATOR MAY BE HOLDING  (real TagWriter, observed call log)\n\n" +
@@ -587,32 +575,27 @@ private fun theReadBackActuallyCompares() {
     // TagWriter has a second, belt-and-braces guard after the byte comparison: it re-parses
     // the card's bytes through TagLink and compares the uuid. That guard catches almost
     // every corruption above, which is what makes this case worth writing down: a card that
-    // comes back holding the SAME uuid on a LEGACY host parses perfectly — TagLink accepts
-    // legacy hosts on purpose, so tags written before the rename still scan — and the uuid
-    // matches, so the parse guard is happy. Only the byte comparison refuses it.
+    // comes back holding the SAME uuid with a TRAILING SLASH before the query parses
+    // perfectly — TagLink strips it on purpose (the server serves both /t and /t/) — and the
+    // uuid matches, so the parse guard is happy. Only the byte comparison refuses it, because
+    // the bytes on the card are not byte-for-byte what this writer would have produced.
     //
-    // And it must refuse it. That card carries the RENAMEABLE api host (decision-40). It
-    // works today, it is scrap the next time that host is renamed, and the last rename cost
-    // five days of a phone in the field that could not clock in. Written to a card and
-    // screwed to a wall, it is a site visit waiting to happen.
+    // And it must refuse it: "parses to the same id" is not "is the bytes we wrote", and a
+    // card holding some OTHER tool's slightly different encoding of the same URI is not a
+    // card this write verified, whatever the parser makes of it afterwards.
     //
     // Deleting NdefTag.verified()'s byte comparison leaves every other assertion in this
     // function still passing. This is the line that goes red.
-    val legacyHost = legacyHosts.firstOrNull { it != host }
-    if (legacyHost != null) {
-        val onLegacyHost = NdefTag.message("https://$legacyHost/t?l=$HOIV_LOCATION")!!
-        val wrongHost = run(FakeCard(capacity = 137) { onLegacyHost })
-        check(
-            tagLink.locationId(NdefTag.uriFrom(onLegacyHost)) == HOIV_LOCATION,
-            "precondition: the legacy-host card PARSES to the right uuid, so only bytes can catch it",
-        )
-        check(
-            wrongHost is TagWriter.Outcome.Unverified,
-            "a card that read back on the RENAMEABLE host is UNVERIFIED, though it parses clean: $wrongHost",
-        )
-    } else {
-        check(false, "no legacy host in branding.properties — the strongest read-back case cannot run")
-    }
+    val onTrailingSlash = NdefTag.message("https://$host/t/?l=$HOIV_LOCATION")!!
+    val wrongBytes = run(FakeCard(capacity = 137) { onTrailingSlash })
+    check(
+        tagLink.locationId(NdefTag.uriFrom(onTrailingSlash)) == HOIV_LOCATION,
+        "precondition: the trailing-slash card PARSES to the right uuid, so only bytes can catch it",
+    )
+    check(
+        wrongBytes is TagWriter.Outcome.Unverified,
+        "a card that read back with a trailing slash is UNVERIFIED, though it parses clean: $wrongBytes",
+    )
 
     // And the control: an honest card verifies. Without this line every assertion above is
     // satisfied by a writer that returns Unverified unconditionally.

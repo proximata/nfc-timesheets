@@ -31,19 +31,6 @@ fun brand(key: String): String = branding.getProperty(key)?.trim().orEmpty().ifE
     throw GradleException("branding.properties is missing '$key' — see android/README.md")
 }
 
-/**
- * A comma-separated branding list. The KEY must exist — an absent key is still a hard
- * failure — but an EMPTY value is legal and means an empty list.
- *
- * That distinction is the whole point for ts.legacyTagHosts: "we have no old tags" is a
- * statement someone has to make, and it must not be indistinguishable from "nobody thought
- * about the tags already on the walls", which is what a defaulted-to-empty key would be.
- */
-fun brandList(key: String): List<String> {
-    val raw = branding.getProperty(key)
-        ?: throw GradleException("branding.properties is missing '$key' — see android/README.md")
-    return raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-}
 
 // Resolution order: keystore.properties (gitignored) -> environment -> debug signing.
 val keystore = props(rootProject.file("keystore.properties"))
@@ -99,12 +86,6 @@ android {
         // Hosts we ONCE wrote onto tags. Accepted by the PARSER only; deliberately not a
         // manifest placeholder, because App Link verification is all-or-nothing across the
         // hosts in an autoVerify filter and a dead legacy host would un-verify the live one.
-        // See branding.properties and android/README.md § legacy hosts.
-        buildConfigField(
-            "String[]",
-            "LEGACY_TAG_HOSTS",
-            brandList("ts.legacyTagHosts").joinToString(", ", "{", "}") { "\"$it\"" },
-        )
         // NOT a secret — see branding.properties. It proves "our app", never "this person".
         buildConfigField("String", "APP_KEY", "\"${brand("ts.appKey")}\"")
     }

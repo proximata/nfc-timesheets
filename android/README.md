@@ -685,7 +685,6 @@ produce a dead `applinks:` entitlement.
 | `ts.appName` | launcher label | |
 | `ts.tagHost` | manifest `${tagHost}` + `BuildConfig.TAG_HOST` | **PERMANENT** — it is written on physical cards. Must equal `ops/branding.json` `tagHost` |
 | `ts.apiHost` | `BuildConfig.API_HOST` → `Api.kt` base URL | renameable. Must equal `ops/branding.json` `apiHost`, and must **never** reach the manifest |
-| `ts.legacyTagHosts` | `BuildConfig.LEGACY_TAG_HOSTS` — **parser only** | hosts we once wrote onto tags. Key must be present; empty value is legal |
 | `ts.appKey` | `X-App-Key` | not a secret; must equal `APP_KEY` in `/etc/nfc/env` |
 | `ts.versionName` / `ts.versionCode` | Play | |
 
@@ -722,18 +721,11 @@ re-point tags already glued to walls: a new operator picks the host **at zero ta
 (decision-15). `checks/run.sh` pins the exact URI on the HOIV card, so getting this wrong is
 a red check rather than a silent dead tap.
 
-### legacy hosts
-
-`ts.legacyTagHosts` widens the **parser** (`TagLink`) to accept hosts we have written onto
-tags before. It buys **manual scan** on such a tag — the app never fetches the tag URL, it
-parses the uuid out and talks to `ts.apiHost`.
-
-It does **not** buy **passive tap**, and the fix for that is not "add it to the manifest".
-App Link verification is **all-or-nothing** across every host in an `autoVerify`
-intent-filter: one host that stops serving `assetlinks.json` and Android marks the app
-unverified for the *live* host too. Adding a host to rescue old tags would break the tags
-that currently work. `checks/core-check.kt` asserts no legacy host and no API host is in the
-manifest.
+**There is no legacy-host allowance any more** (decision-40's amendment). `TagLink` accepts
+exactly `ts.tagHost` and nothing else — no widened parser set, no manual-scan fallback for a
+card written under an older host. If a physical card is ever found carrying a host other
+than the current `ts.tagHost`, it is unreadable on every path until it is rewritten at the
+location; there is no software fix. Weigh that before ever changing `ts.tagHost` again.
 
 ---
 

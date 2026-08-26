@@ -68,12 +68,7 @@ private val branding = java.util.Properties().apply {
 // renameable. They were one value; the box was renamed and a tag went dead.
 private val host = branding.getProperty("ts.tagHost").trim()
 private val apiHost = branding.getProperty("ts.apiHost").trim()
-// Hosts we once wrote onto tags that are still on walls. Read, never typed here, for the
-// same reason as ts.tagHost — except section 1b ALSO pins the real field tags, so deleting
-// an entry from branding.properties turns this check red instead of quietly narrowing it.
-private val legacyHosts = (branding.getProperty("ts.legacyTagHosts") ?: "")
-    .split(",").map { it.trim() }.filter { it.isNotEmpty() }
-private val tags = TagLink(host, legacyHosts)
+private val tags = TagLink(host)
 
 private const val UUID_A = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
 private const val UUID_B = "6b3a2c1d-0e4f-4a8b-9c7d-1e2f3a4b5c6d"
@@ -175,14 +170,14 @@ private fun tagLink() {
 //     and the app started answering "not one of ours" to a tag that was never wrong.
 //
 //     decision-40 answers that by making timesheets.exe.xyz the PERMANENT tag host again,
-//     so this literal is now the LIVE host rather than a legacy one. The assertion does not
-//     change and must not: whichever side of the split it lands on, this exact URI has to
-//     parse, because it is glued to a wall.
+//     so this literal is now the LIVE host. The assertion does not change and must not:
+//     this exact URI has to parse, because it is glued to a wall.
 //
 //     These literals are deliberately NOT read from branding: they are field facts, and a
 //     check that derives them from the same file it is checking cannot fail. Point
-//     ts.tagHost at anything else without adding the old value to ts.legacyTagHosts and
-//     this section goes red — which is the entire reason it is written this way.
+//     ts.tagHost at anything else and this section goes red — which is the entire reason it
+//     is written this way. There is no legacy-host escape hatch any more (decision-40's
+//     amendment): the fix for a drifted ts.tagHost is putting it back, not widening around it.
 // ---------------------------------------------------------------------------------
 private const val HOIV_LOCATION = "c3c37d4a-ca0a-42c5-b248-9704b9907ec7"
 
@@ -191,46 +186,16 @@ private fun fieldTags() {
     // card. This is the assertion the whole two-host model exists to keep green.
     check(
         tags.locationId("https://timesheets.exe.xyz/t?l=$HOIV_LOCATION") == HOIV_LOCATION,
-        "the tag physically on the wall at HOIV parses (keep timesheets.exe.xyz as ts.tagHost, " +
-            "or add it to ts.legacyTagHosts)",
+        "the tag physically on the wall at HOIV parses (ts.tagHost must stay timesheets.exe.xyz)",
     )
-    // ...and every legacy host declared in branding parses, not just the one pinned above.
-    for (legacy in legacyHosts) {
-        check(
-            tags.locationId("https://$legacy/t?l=$UUID_A") == UUID_A,
-            "declared legacy host is accepted: $legacy",
-        )
-        check(
-            tags.locationId("https://${legacy.uppercase()}/t/?l=${UUID_A.uppercase()}") == UUID_A,
-            "legacy host gets the same case/trailing-slash handling as the live one: $legacy",
-        )
-    }
 
-    // THE CURRENT HOST IS STILL THE CURRENT HOST. A legacy entry must never displace it.
+    // THE CURRENT HOST IS STILL THE CURRENT HOST.
     check(
         tags.locationId("https://$host/t?l=$HOIV_LOCATION") == HOIV_LOCATION,
         "a tag rewritten with the live host parses too",
     )
 
-    // A SECOND HOST IS NOT A SECOND SHAPE. Every negative below is re-run against the
-    // legacy host: widening the host set must widen NOTHING else.
-    val legacy = legacyHosts.firstOrNull()
-    if (legacy != null) {
-        val stillRejected = listOf(
-            "https://$legacy@evil.example.com/t?l=$UUID_A" to "userinfo does not make it our host",
-            "http://$legacy/t?l=$UUID_A" to "legacy host over http is still not https",
-            "https://$legacy/admin?l=$UUID_A" to "legacy host, wrong path",
-            "https://$legacy/t?l=westbahnhof" to "legacy host, slug not uuid (decision-21)",
-            "https://$legacy/t?l=1-1-1-1-1" to "legacy host, lenient-parser uuid",
-            "https://evil-$legacy/t?l=$UUID_A" to "a host ENDING in ours is not ours",
-            "https://$legacy.evil.example.com/t?l=$UUID_A" to "a host STARTING with ours is not ours",
-        )
-        for ((raw, why) in stillRejected) {
-            check(tags.locationId(raw) == null, "must reject ($why): $raw")
-        }
-    }
-
-    // An unrelated host is still nobody's tag, however many hosts are accepted.
+    // An unrelated host is still nobody's tag.
     check(tags.locationId("https://evil.example.com/t?l=$UUID_A") == null, "unrelated host still rejected")
 
     // uriFor MINTS links, and nothing new is minted under a host we have stopped using.
@@ -723,35 +688,15 @@ private fun manifestAndWiring() {
             "verification is all-or-nothing across the hosts in a filter",
     )
 
-    // THE TRAP THAT WOULD BREAK THE TAGS THAT CURRENTLY WORK.
-    //
-    // App Link verification is ALL-OR-NOTHING across every host named in an autoVerify
-    // intent-filter: Android fetches assetlinks.json from each, and one host that stops
-    // serving it leaves the app UNVERIFIED for the live host too. So "just add it to the
-    // filter as well" trades passive tap on the old tags for passive tap on ALL tags.
-    // Legacy hosts are a PARSER widening (BuildConfig.LEGACY_TAG_HOSTS), never a manifest
-    // host.
-    for (legacy in legacyHosts) {
-        check(
-            !raw.contains(legacy),
-            "legacy host '$legacy' must NOT be in AndroidManifest.xml — autoVerify is " +
-                "all-or-nothing and one host that stops serving un-verifies the live one",
-        )
-    }
-
-    // The join between the gradle-side list and the parser. Both ends are proven (the
+    // The join between the gradle-side value and the parser. Both ends are proven (the
     // build fails on a missing key; section 1b runs the real parser) but the one line that
     // connects them imports Android and can only be read as text.
     val application = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/TimeSheetsApplication.kt").readText()
     check(
-        application.contains("TagLink(BuildConfig.TAG_HOST, BuildConfig.LEGACY_TAG_HOSTS.toList())"),
-        "the app's TagLink is built with the legacy hosts, not the live host alone",
+        application.contains("TagLink(BuildConfig.TAG_HOST)"),
+        "the app's TagLink is built from the live host alone — no legacy widening",
     )
     val gradle = File("app/build.gradle.kts").readText()
-    check(
-        gradle.contains("brandList(\"ts.legacyTagHosts\")"),
-        "BuildConfig.LEGACY_TAG_HOSTS comes from branding.properties",
-    )
     check(
         gradle.contains("buildConfigField(\"String\", \"API_HOST\", \"\\\"\${brand(\"ts.apiHost\")}\\\"\")"),
         "BuildConfig.API_HOST comes from branding.properties",
@@ -806,11 +751,6 @@ private fun manifestAndWiring() {
         val text = file.readText()
         check(!text.contains(host), "$host is hardcoded in ${file.path} — it belongs in branding.properties")
         check(!text.contains(apiHost), "$apiHost is hardcoded in ${file.path} — it belongs in branding.properties")
-        // Same rule for the old hosts. A legacy host pasted into source is how the accepted
-        // set stops matching the tags on the walls the day someone edits only one of them.
-        for (legacy in legacyHosts) {
-            check(!text.contains(legacy), "$legacy is hardcoded in ${file.path} — it belongs in branding.properties")
-        }
     }
 }
 
@@ -880,7 +820,7 @@ private fun zones() {
     // THE ROUND TRIP, same discipline known-tags-check.kt already runs for the compiled
     // table: what a scan resolves must also be what TagLink accepts back, or a worker
     // holding a tag the roster knows about gets "unknown tag" anyway.
-    val link = TagLink(host, legacyHosts)
+    val link = TagLink(host)
     val resolved = Zones.zonePlaceIdForSerial("04:A1:A8:52:AE:5C:80", cache)
     check(resolved != null, "the fixture serial resolves")
     val synthesised = link.uriFor(resolved)
@@ -1922,12 +1862,11 @@ private fun ndefTag() {
         (NdefTag.plan(tags, HOIV_LOCATION, 137, true) as? NdefTag.Plan.Write)?.uri == uri,
         "plan() mints the URI from TagLink's CURRENT host, so no caller can choose the host",
     )
-    // The same id under a build whose ONLY accepted host is a legacy one: the minted URI
-    // must still be that build's own current host and must still round-trip. This is the
-    // rename that killed a tag, run as an assertion.
-    val legacyOnly = TagLink("tags.example.test")
+    // A differently-branded build (a white-label fork, not a legacy widening) mints its
+    // OWN host, and nothing here hardcodes ours.
+    val differentBrand = TagLink("tags.example.test")
     check(
-        (NdefTag.plan(legacyOnly, HOIV_LOCATION, 137, true) as? NdefTag.Plan.Write)?.uri ==
+        (NdefTag.plan(differentBrand, HOIV_LOCATION, 137, true) as? NdefTag.Plan.Write)?.uri ==
             "https://tags.example.test/t?l=$HOIV_LOCATION",
         "a differently-branded build mints its OWN host, and nothing here hardcodes ours",
     )
@@ -2069,17 +2008,6 @@ private fun theOverwriteGuard() {
         WriteGuard.classify(tags, mounted) == WriteGuard.Existing.Ours(UUID_A),
         "a card carrying one of our ids is Ours: ${WriteGuard.classify(tags, mounted)}",
     )
-    // A LEGACY host is still one of ours. The rename already killed a tag once; a card
-    // written before it is on a wall and must not be classified as somebody else's rubbish.
-    val legacy = legacyHosts.firstOrNull { it != host }
-    check(legacy != null, "branding still lists a legacy tag host, or the row below proves nothing")
-    if (legacy != null) {
-        check(
-            WriteGuard.classify(tags, NdefTag.message("https://$legacy/t?l=$UUID_A")) ==
-                WriteGuard.Existing.Ours(UUID_A),
-            "a card on a LEGACY host is still one of ours",
-        )
-    }
     check(
         WriteGuard.classify(tags, NdefTag.message("https://example.com/x")) is WriteGuard.Existing.Foreign,
         "somebody else's URL is Foreign",

@@ -27,11 +27,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 class TimeSheetsApplication : Application() {
 
     /**
-     * Parses tag URIs against THIS build's host, plus the hosts we once wrote onto tags
-     * that are still on walls (branding.properties -> BuildConfig). The API base stays
-     * TAG_HOST alone: a legacy host is a string on a tag, never somewhere we talk to.
+     * Parses tag URIs against THIS build's host, and ONLY this build's host — no legacy
+     * widening (decision-40's amendment). The API base stays TAG_HOST alone regardless.
      */
-    val tagLink: TagLink by lazy { TagLink(BuildConfig.TAG_HOST, BuildConfig.LEGACY_TAG_HOSTS.toList()) }
+    val tagLink: TagLink by lazy { TagLink(BuildConfig.TAG_HOST) }
 
     val cookies: CookieJar by lazy { PrefsCookieJar(this) }
 

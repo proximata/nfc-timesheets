@@ -47,7 +47,7 @@ behind is a silent dead tap, never an error:
 | File | What it holds |
 |---|---|
 | `ops/branding.json` | `tagHost` — the source of truth |
-| `android/branding.properties` | `ts.tagHost`, and the OLD value appended to `ts.legacyTagHosts` |
+| `android/branding.properties` | `ts.tagHost` |
 | `web/lib/tag.ts` | the default the admin panel prints onto tags |
 | `NFCTimeSheets/NFCTimeSheets/NFCTimeSheets.entitlements` | `applinks:` literal (hand-edited; see step 4) |
 | `NFCTimeSheets/Branding.xcconfig` | `TS_TAG_HOST` |
@@ -221,11 +221,13 @@ Set `ts.applicationId`, `ts.appName`, `ts.tagHost`, `ts.apiHost` to match
 `ops/branding.json`, and `ts.appKey` to the value from step 7.
 
 `ts.tagHost` is the manifest `${tagHost}` placeholder **and** `BuildConfig.TAG_HOST`, which
-is what `TagLink` parses. `ts.apiHost` is `BuildConfig.API_HOST`, which is the only thing
-`Api.kt` ever calls, and it must **never** appear in an `autoVerify` intent-filter: App Link
-verification is all-or-nothing across the hosts in a filter, so one host that stops serving
-`assetlinks.json` un-verifies the app for the *other* host too. Hosts you have written onto
-tags in the past go in `ts.legacyTagHosts` — a **parser** widening, not a manifest host.
+is what `TagLink` parses — and the ONLY host it accepts (decision-40's amendment removed the
+earlier legacy-host parser widening). `ts.apiHost` is `BuildConfig.API_HOST`, which is the
+only thing `Api.kt` ever calls, and it must **never** appear in an `autoVerify` intent-filter:
+App Link verification is all-or-nothing across the hosts in a filter, so one host that stops
+serving `assetlinks.json` un-verifies the app for the *other* host too. There is no fallback
+for a card written under an OLD `ts.tagHost` any more — changing it strands every card
+already on a wall until each is physically rewritten. Do not change it lightly.
 
 **Leave `ts.namespace` alone.** It is the Kotlin package that `R` and `BuildConfig` are
 generated into, and it is hard-wired in three places tooling cannot follow: the `package`
