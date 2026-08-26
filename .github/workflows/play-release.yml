@@ -29,11 +29,15 @@ name: Play Internal Testing
 # a normal commit, so a bot commit from CI is the same category of change.
 
 on:
+  # Android code only - NOT this file's own path. Editing the pipeline is not "Android
+  # changed"; a self-referencing path here means a comment-only YAML edit silently ships a
+  # real Play Console upload with an unrelated versionCode bump, which is exactly what
+  # happened once (2026-08-26, a server-deploy.yml comment edit dragged this workflow along
+  # for the ride via a shared push). Test a pipeline change with workflow_dispatch instead.
   push:
     branches: [main]
     paths:
       - "android/**"
-      - ".github/workflows/play-release.yml"
   workflow_dispatch: {}
 
 permissions:

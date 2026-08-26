@@ -1,17 +1,19 @@
 name: Deploy (API + admin)
 
-# Manual only, on purpose. ops/deploy.sh's own header names "a GitHub Action running these
-# same lines against a deploy key" as its upgrade path, so this job does exactly that and
-# nothing else - no logic is duplicated in YAML, ops/deploy.sh stays the one place deploy
-# order is encoded.
+# ops/deploy.sh's own header names "a GitHub Action running these same lines against a
+# deploy key" as its upgrade path, so this job does exactly that and nothing else - no
+# logic is duplicated in YAML, ops/deploy.sh stays the one place deploy order is encoded.
 #
-# NOT push-triggered. Unlike the Android/iOS pipelines (which only ever reach internal test
-# tracks), this ships straight to the production box real workers clock in against. GitHub's
-# environment-approval gate would be the native way to require a human click before that -
-# this repo's role (org member, not admin) got a 403 trying to create one - so
-# workflow_dispatch is the substitute gate: nothing runs until a human presses Run workflow.
-# An org owner can add a protected "production" environment later and this workflow can move
-# to it with one `environment: production` line.
+# Push-triggered on server/**, web/** and ops/** (deploy.sh's own dependencies), minus
+# ops/tag-host/** (a deliberately separate, uncomplicated, hand-run script for the OTHER
+# box per decision-40 - see that directory's own header for why it explicitly does not want
+# CI) and ops/workflows/** (unrelated dead code, kept only as a historical artifact). Owner
+# instruction, 2026-08-26: ships straight to the production box real workers clock in
+# against, same risk profile as the Android/iOS pipelines already auto-shipping to their
+# internal test tracks on push. There is still no GitHub environment-approval gate - this
+# repo's role (org member, not admin) got a 403 trying to create one - workflow_dispatch
+# remains available for a manual run (e.g. to redeploy with no code change, or to test the
+# pipeline itself without touching server/web/ops).
 #
 # Needs 2 repo secrets (Settings -> Secrets and variables -> Actions), both created this
 # session:
@@ -35,6 +37,14 @@ name: Deploy (API + admin)
 # StrictHostKeyChecking=no.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - "web/**"
+      - "ops/**"
+      - "!ops/tag-host/**"
+      - "!ops/workflows/**"
   workflow_dispatch: {}
 
 permissions:
