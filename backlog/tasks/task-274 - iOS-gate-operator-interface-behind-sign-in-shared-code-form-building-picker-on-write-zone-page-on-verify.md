@@ -3,10 +3,10 @@ id: TASK-274
 title: >-
   iOS: gate operator interface behind sign-in, shared code form, building picker
   on write, zone page on verify
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-08-26 17:14'
-updated_date: '2026-08-26 18:07'
+updated_date: '2026-08-26 18:30'
 labels: []
 dependencies:
   - TASK-271
@@ -32,7 +32,7 @@ decision-54. Depends on TASK-271's backend routes. Mirrors TASK-273 on iOS. NEVE
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 one shared SwiftUI view serves worker AND operator code entry; SignInView's old two-section layout is gone
-- [ ] #2 Write a tag / Test a tag are unreachable without a valid operator session; a dedicated operator sign-in step exists again (OperatorSignInScreen-equivalent), using the shared form
+- [x] #2 Write a tag / Test a tag are unreachable without a valid operator session; a dedicated operator sign-in step exists again (OperatorSignInScreen-equivalent), using the shared form
 - [x] #3 .textContentType(.oneTimeCode) still applies to the code field while in SMS mode
 - [x] #4 after a successful write+report, a building picker (or Skip) appears and creates a zone via the new resolve-zone endpoint
 - [x] #5 selecting an unbound zone in Test a tag shows the building picker/bind UI instead of starting a scan
@@ -41,37 +41,8 @@ decision-54. Depends on TASK-271's backend routes. Mirrors TASK-273 on iOS. NEVE
 - [x] #8 NFCTimeSheets/checks/run.sh passes, the Release build (CODE_SIGNING_ALLOWED=NO) succeeds, and NFCTimeSheets.entitlements/project.pbxproj/IPHONEOS_DEPLOYMENT_TARGET are byte-identical to HEAD
 <!-- AC:END -->
 
-
-
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-REVIEW GATE (TASK-275), 2026-08-26 — REOPENED. AC#2 does NOT hold as written. (This task carried NO implementation notes of its own; this is the first evidence recorded against it.)
-
-WHAT IS GENUINELY CORRECT AND VERIFIED:
-- One shared form. CodeSignInSection.swift declared once, called exactly twice: ContentView.swift:147 (worker) and OperatorHomeScreen.swift:44 (operator). Every TextField in the app: CodeSignInSection:67 phone, :85 THE code field, MaterialsView:96, WriteTagScreen:89 WriteGuard confirm (decision-49), WriteTagScreen:173 zone name. No second code-entry UI. AC#1 holds.
-- CodeSignInSection.swift:87 '.textContentType(otpMode ? UITextContentType.oneTimeCode : nil)'. AC#3 holds.
-- WriteTagScreen/VerifyZoneScreen are constructed in exactly one place each: OperatorHomeScreen.swift:51-52, inside the .signedIn branch.
-- Entitlements + project.pbxproj BYTE-IDENTICAL. Blob SHAs at 56440ea (pre-session), b77523c and HEAD are all 95a3cb4f2b2bf7ea4205eb117ef8f9fcf44dc250 and 480a727855ea4c405dfdd9a15a1a1584dc7f025e. git diff over the range is empty. AC#8's diff half holds.
-- NFCTimeSheets/checks/run.sh EXIT 0, 11 checks, incl. entitlement-format-check and localisation-check.
-
-AC#2 FAILS: THE GATE IS NOT THE SESSION, IT IS A UserDefaults FLAG THAT NEVER CLEARS.
-- OperatorHomeScreen.swift:30 branches on operatorSession.state.
-- OperatorSession.swift:51-56 init(): state = UserDefaults integer 'operator.id' > 0 ? .signedIn : .signedOut. It NEVER reads the ts_operator cookie. decision-54 §4 says the gate is 'reading the stored cookie'. Android does exactly that (TimeSheetViewModel.kt:230); iOS does not.
-- 'state = .signedOut' is assigned in exactly ONE place, OperatorSession.swift:96, inside signOut(). Grep: signOut() is called from NOWHERE in the UI. OperatorHomeScreen has no sign-out control. OperatorAPI deliberately never posts .sessionRejected (correct per decision-49), so a 401 never reaches state either.
-- Therefore the operator sign-in form at OperatorHomeScreen.swift:44 is reachable EXACTLY ONCE PER INSTALL. After the first successful sign-in the gate is permanently .signedIn regardless of whether ts_operator still exists.
-- The trigger is one tap away and pre-existing: ContentView.swift:680 'Sign out' -> Auth.swift:176-181 clearLocalSession() deletes EVERY cookie for API.base, including ts_operator, and does not touch 'operator.id'. Server-side expiry/revocation does the same thing.
-- Resulting state: OperatorHomeScreen still offers Write a tag / Test a tag, every operator call 401s, the inline code fields that used to rescue this were removed by this commit, and '.onChange(of: operatorSession.operatorInfo == nil)' (WriteTagScreen:64, VerifyZoneScreen:66) can never fire because nothing sets .signedOut. No in-app recovery short of reinstalling.
-Filed as TASK-276.
-
-SECOND GAP — 4 RELEASE-VISIBLE STRINGS SHIP UNTRANSLATED, against AGENTS.md's no-follow-up-commit i18n rule:
-Not in Localizable.xcstrings at all, so a German-default app renders the English key.
-  ContentView.swift:174           'Write or test tags'
-  ContentView.swift:674           'Write or test tags'
-  OperatorHomeScreen.swift:35     'Sign in as an operator to write and test tags. This never opens a shift.'
-  OperatorHomeScreen.swift:59     .navigationTitle('Operator')
-Verified by extracting every Text/NavigationLink/Button/navigationTitle literal at HEAD and at c7337fd~1 and diffing the missing sets — all four are NEW in c7337fd; the only pre-existing miss is DemoHooks.swift:106 (demo build). Two more, DEBUG-only and therefore low: VerifyZoneScreen:98-99 and WriteTagScreen:131-132.
-localisation-check.swift passes anyway (222 keys, all German) and cannot catch this — its own header says so: 'a new Text(...) with no catalogue entry renders its English literal'. The other ~37 new keys DID get German, so this is four misses, not a missing pass. Filed as TASK-278.
-
-THIRD, PRE-EXISTING, NOT FROM THIS COMMIT: decision-49 §4 ('OperatorAPI gets its own URLSession with httpShouldSetCookies=false, its own store, token in the Keychain — two jars, no request that carries both') is not implemented. OperatorAPI.swift:20-22 and :65 use URLSession.shared and HTTPCookieStorage.shared, and say so. Present at 56440ea, so not this run's doing — but it is what makes the AC#2 failure above reachable. Filed as TASK-279.
+AC#2 RE-VERIFIED 2026-08-26 after TASK-276 landed (commit 670a862). The gap the review gate found is closed: OperatorHomeScreen still branches on OperatorSession.state, but that state is now derived in refresh() from the ts_operator cookie in HTTPCookieStorage (by NAME, so ts_worker is untouched) and re-derived in .onAppear on every appearance, not once at init from UserDefaults. Losing the cookie - a worker sign-out, a revocation, the TTL - returns the operator to the shared code form with no reinstall, and a 401 from any operator call now posts .operatorSessionRejected and drops the state to .signedOut, so the existing dismiss-on-session-loss fires. WriteTagScreen and VerifyZoneScreen are still constructed in exactly one place each, inside the .signedIn branch. checks/operator-gate-check.swift pins it with a RED case I ran myself. run.sh OK (12 checks), Release build (CODE_SIGNING_ALLOWED=NO) SUCCEEDED, entitlements/pbxproj/IPHONEOS_DEPLOYMENT_TARGET still byte-identical to HEAD. All 8 ACs now hold -> Done.
 <!-- SECTION:NOTES:END -->

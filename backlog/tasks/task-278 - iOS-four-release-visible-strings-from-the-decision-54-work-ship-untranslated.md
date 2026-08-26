@@ -1,9 +1,10 @@
 ---
 id: TASK-278
 title: 'iOS: four release-visible strings from the decision-54 work ship untranslated'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-26 18:08'
+updated_date: '2026-08-26 18:30'
 labels:
   - ios
   - i18n
@@ -33,7 +34,13 @@ WORTH DOING IN THE SAME TASK: make that extraction a check, or the next screen r
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 all four release-visible strings carry German in Localizable.xcstrings
-- [ ] #2 the two DEBUG-only strings are keyed too
-- [ ] #3 NFCTimeSheets/checks/ gains a check that fails when a source literal has no catalogue entry, RED case seeded
+- [x] #1 all four release-visible strings carry German in Localizable.xcstrings
+- [x] #2 the two DEBUG-only strings are keyed too
+- [x] #3 NFCTimeSheets/checks/ gains a check that fails when a source literal has no catalogue entry, RED case seeded
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED 2026-08-26, commit 670a862. AC#1+#2: Localizable.xcstrings now carries German for 'Write or test tags', 'Sign in as an operator to write and test tags. This never opens a shift.', 'Operator', plus the two DEBUG-only 'Simulate (debug builds only)' / 'No NFC, no network. A simulator has neither.'; catalogue is 236 keys, all German. AC#3: localisation-check.swift gained a narrow source-literal extractor over the one-argument Text/Button/NavigationLink/Section/navigationTitle forms and fails when a literal has no catalogue entry. RED case run by me - deleting the 'Write or test tags' entry produced 'FAIL: ContentView.swift shows the literal Write or test tags and the catalogue has no entry for it' (twice, both call sites); restored, OK. CAVEAT recorded in the check's own header: it cannot see interpolated or variable-built literals, so it is a floor, not a proof - xcodebuild -exportLocalizations remains the real answer.
+<!-- SECTION:NOTES:END -->

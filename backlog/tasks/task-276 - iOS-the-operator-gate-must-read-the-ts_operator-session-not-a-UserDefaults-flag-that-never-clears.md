@@ -3,9 +3,10 @@ id: TASK-276
 title: >-
   iOS: the operator gate must read the ts_operator session, not a UserDefaults
   flag that never clears
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-26 18:07'
+updated_date: '2026-08-26 18:30'
 labels:
   - ios
   - decision-54
@@ -41,8 +42,14 @@ MUST NOT REGRESS: no network call may be required to decide what the gate shows 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 OperatorHomeScreen's signed-in branch is reachable only while a ts_operator cookie exists
-- [ ] #2 deleting the cookie or signing the worker out returns the operator to the shared code form with no reinstall
-- [ ] #3 a 401 from any operator call drives OperatorSession to .signedOut so the existing dismiss-on-session-loss fires
-- [ ] #4 a check under NFCTimeSheets/checks/ pins the gate, with its RED case seeded
+- [x] #1 OperatorHomeScreen's signed-in branch is reachable only while a ts_operator cookie exists
+- [x] #2 deleting the cookie or signing the worker out returns the operator to the shared code form with no reinstall
+- [x] #3 a 401 from any operator call drives OperatorSession to .signedOut so the existing dismiss-on-session-loss fires
+- [x] #4 a check under NFCTimeSheets/checks/ pins the gate, with its RED case seeded
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED 2026-08-26, commit 670a862. AC#1: OperatorSession.refresh() guards on hasSessionCookie, which filters HTTPCookieStorage.shared.cookies(for: API.base) by name == ts_operator; the UserDefaults id/name are read only AFTER that guard, as the display echo. AC#2: no cookie -> clearCache() + .signedOut, and OperatorHomeScreen calls refresh() in .onAppear, so a worker sign-out (Auth.swift clears every cookie for API.base) returns the operator to the shared code form on the next appearance, no reinstall. AC#3: sendOperator posts .operatorSessionRejected on any 401 (never the worker's .sessionRejected - decision-49 §4), OperatorSession observes it and sets .signedOut(reason:), so WriteTagScreen:64 / VerifyZoneScreen:66's onChange dismiss can now fire. AC#4: NFCTimeSheets/checks/operator-gate-check.swift, wired into checks/run.sh; RED case run by me - removing the .onAppear refresh line makes it FAIL on 'OperatorHomeScreen re-derives the gate on every appearance', restoring it returns 'operator-gate-check: OK'. MUST-NOT-REGRESS: refresh() is synchronous and awaits nothing - no network call decides what the gate shows. run.sh OK (12 checks). xcodebuild -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO ** BUILD SUCCEEDED **. entitlements/pbxproj byte-identical to HEAD (empty git diff).
+<!-- SECTION:NOTES:END -->
