@@ -50,11 +50,35 @@
 #   Until all three are set, this script logs a warning and does nothing (build still
 #   succeeds normally, you just keep doing the manual group-add for now).
 #
-# ci_post_xcodebuild.sh runs after every `xcodebuild` invocation in the workflow, even a
-# plain build/test - CI_XCODEBUILD_ACTION lets us only act on the archive.
+# STOP - READ THIS BEFORE RE-ENABLING ANY API CALL HERE.
+# ci_post_xcodebuild.sh runs BEFORE Xcode Cloud's own "Prepare Build for App Store
+# Connect" step - i.e. before the archive has been uploaded to Apple at all. A real build
+# (37) proved this the hard way: this script tried to poll GET /v1/builds for the build
+# THIS SAME ARCHIVE was producing, which cannot exist in the API until the later upload
+# step runs - a deadlock by construction, not a network hiccup. It polled for exactly
+# 15m0.2s until Xcode Cloud's own step timeout killed it, which failed the ENTIRE ARCHIVE
+# and meant that commit's real code never reached TestFlight at all. The JWT-signing and
+# betaGroups POST themselves are correct - proven against the live API from a developer
+# machine using an already-processed historical build - the bug is purely which pipeline
+# hook this ran from.
+#
+# There is no Xcode Cloud custom-script hook that runs AFTER the upload step; ci_post_clone,
+# ci_pre_xcodebuild and ci_post_xcodebuild are all tied to the xcodebuild invocation, not the
+# workflow's later distribution phase. A correct fix needs to live somewhere that runs
+# independently of - and after - this pipeline: App Store Connect's own Webhooks feature
+# (Users and Access > Integrations > Webhooks, a real "build finished processing" event
+# exists) or a scheduled job elsewhere (this repo already runs two GitHub Actions
+# pipelines - a `schedule:` cron reusing this exact curl+openssl JWT code, just triggered
+# externally instead of from inside the build, would sidestep the deadlock entirely). Both
+# are real follow-up work, not something to keep iterating on inside a script that fails
+# a production archive every time it's wrong.
+#
+# Until one of those lands: this script does nothing. Add a build to the "me" TestFlight
+# group by hand in App Store Connect > TestFlight > iOS > Builds - same manual step this
+# whole file was trying to remove, restored on purpose after the cost of getting it wrong.
+exit 0
 
-set -eu
-
+# shellcheck disable=SC2317  # unreachable on purpose until the hook problem above is fixed
 if [ "${CI_XCODEBUILD_ACTION:-}" != "archive" ]; then
   exit 0
 fi
