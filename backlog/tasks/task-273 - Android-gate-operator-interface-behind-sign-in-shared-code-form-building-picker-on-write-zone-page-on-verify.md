@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-26 17:13'
-updated_date: '2026-08-26 17:52'
+updated_date: '2026-08-26 18:06'
 labels: []
 dependencies:
   - TASK-271
@@ -41,3 +41,26 @@ decision-54. Depends on TASK-271's backend routes.
 - [x] #8 android/checks/run.sh passes, gradlew compileDebugKotlin and assembleDebug succeed, de/en strings.xml stay in parity for every new string
 - [x] #9 no change to AndroidManifest permissions beyond what SMS autofill choice actually requires
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+REVIEW GATE (TASK-275), 2026-08-26 — INDEPENDENTLY VERIFIED, stays Done. (This task carried NO implementation notes of its own; this is the first evidence recorded against it.)
+
+THE GATE IS REAL, and it is the stronger of the two platforms:
+- ui/TimeSheetApp.kt:277-323 OperatorSection. 'if (!ready) { ...CodeSignInSection...; return }' — the Write/Test buttons compose only after that early return.
+- ready comes from TimeSheetViewModel.kt:229-231 'app.operatorCookies.header() != null' — the ACTUAL stored ts_operator cookie, re-read via LifecycleResumeEffect on EVERY resume. That is decision-54 §4 literally ('reading the stored cookie, no network call'). iOS does NOT do this — see TASK-274.
+- AndroidManifest.xml:255-256 / 273-274: both activities android:exported="false", so no external intent reaches them. Both also re-check operatorReady before enabling reader mode (WriteTagActivity.kt:488, VerifyZoneActivity.kt:456).
+- Exactly one launch site each, pinned by checks/core-check.kt.
+
+ONE SHARED FORM, no leftover second code field:
+- CodeSignInSection is declared once (TimeSheetApp.kt:388) and called exactly twice (:210 worker, :302 operator).
+- Every OutlinedTextField in main/: :454 phone, :495 THE code field, :1599 material request, WriteTagActivity:292 WriteGuard overwrite-confirm (decision-49), WriteTagActivity:412 zone name. No second code-entry UI anywhere.
+- checks/core-check.kt was rewritten, not weakened: it now pins 'CodeSignInSection( appears exactly 3 times', 'SignInScreen must not build a code field of its own', 'if (!ready) precedes WriteTagActivity::class.java', 'each activity launched from exactly one place', and 'neither activity contains operatorEnrol('. Good pins.
+- Autofill: ContentType.SmsOtpCode, otpMode only (TimeSheetApp.kt:561), pinned by core-check. AndroidManifest permissions unchanged (not in the diff at all).
+
+i18n: values/strings.xml and values-en/strings.xml are both 284 keys, key sets identical, 36 new <string> in each. Parity holds.
+android/checks/run.sh: EXIT 0 — core-check OK, known-tags-check OK, tag-writer-check OK, manifest-check OK, verify-no-shift-check OK.
+
+GAP, named not glossed (filed as its own task): there is NO client for POST /operator/zones/:id/unbind on Android. Zero matches for 'unbind' under android/. Not in this task's ACs, so it does not reopen the task — but decision-54 §3's 'rebinding is unbind-then-bind, never a silent move' has no reachable surface anywhere as a result. Same on iOS.
+<!-- SECTION:NOTES:END -->

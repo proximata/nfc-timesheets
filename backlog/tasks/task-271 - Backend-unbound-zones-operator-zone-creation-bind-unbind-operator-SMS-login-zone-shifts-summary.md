@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-26 17:13'
-updated_date: '2026-08-26 17:41'
+updated_date: '2026-08-26 18:06'
 labels: []
 dependencies: []
 ordinal: 189000
@@ -49,4 +49,24 @@ Evidence, all produced in this step:
 ONE pre-existing suite failure, NOT from this task: check-telemetry-wire 'a failed SMS reports the VOCABULARY WORD and nothing else' -> 'no sms failure event reached the wire'. Reproduced identically on a clean git worktree at HEAD 8162f90 before this change, so it is unrelated and predates TASK-271. Needs its own task.
 
 Commit used PSST_SKIP_SCAN=1: psst flagged the vaulted PORT number as a substring of the placeholder UUID 00000000-0000-4000-8000-000000000000 in check-api.js. Known false positive, gitleaks clean, --no-verify never used.
+
+REVIEW GATE (TASK-275), 2026-08-26 — INDEPENDENTLY VERIFIED, stays Done.
+
+Re-read the diff, not the message. Confirmed by my own runs, not by trusting the notes:
+- INSERT INTO zones exists in exactly ONE place in the whole server: routes/operator.js:264. No admin path can create a zone (grep over routes/ + lib/).
+- admin.js:1769-1792 deletes resolveTagToZone as a COMMENT BLOCK, not a dead function; the route-table entry is gone. check-api.js proves 'POST /admin/tags/<id>/resolve-zone -> 404' and 'resolve-building -> 404' (decision-47's pin survives).
+- admin.js:1671 'if (targetId === null) fail(410, zone_creation_moved_to_operator_app)'. Observed live in check-api: 'POST /admin/zones 410 err=zone_creation_moved_to_operator_app'.
+- operator.js:365-372: unbind's refusal is a REAL 'if (err?.code === 23503) fail(409, zone_has_shifts)' around the bare UPDATE. No SELECT-then-decide anywhere. check-api.js:6588/6611 raises it from a REAL shift row through the composite FK, on BOTH start_zone_fk and end_zone_fk, and asserts the UPDATE did not happen. Not stubbed.
+- operator.js:456-459 SELECT list is worker_id, worker_name, start_time, end_time, duration_minutes. check-api.js:6741 pins the exact key set with deepEqual. No rate, no money, no client name, no location_name.
+- Unbound zones stay invisible where they must: routes/app.js:147 (/roster) and lib/validate.js:557 (activePlace) both still INNER JOIN locations. reporting.js:277 areaByLocation GROUPs BY location_id so a NULL bucket cannot reach a building total.
+- smsotpop: bucket is real (auth.js:705, verify side). NOTE for the record: the REQUEST side deliberately SHARES 'smsreq:' with the worker (auth.js:636) — correct, decision-51's per-IP request bucket is role-blind and decision-54 §5's 'smsotpop: not smsotp:' is about the VERIFY bucket, which is what shipped.
+
+Checks re-run by me: check-api.js 1 FAILED (only check-telemetry-wire, see below); check-sms-flag.mjs OK; ops/check-branding.mjs OK with ZERO TODO lines.
+
+PRE-EXISTING FAILURE CONFIRMED BY MY OWN REPRO, not accepted on trust. Added a git worktree at 8162f90 (the commit before 9f2faf2) and ran it there: 'FAIL a failed SMS reports the VOCABULARY WORD and nothing else — no sms failure event reached the wire: transaction, transaction, transaction, transaction'. Identical. b77523c, the only other commit before it, touches web/ only and cannot reach this. Unrelated to TASK-271 as claimed.
+
+THREE NITS, none blocking, none worth a task on their own:
+1. admin.js:1668-1671 the comment says the 410 costs 'one branch and no query' — untrue, admin.js:1657 already ran SELECT id FROM locations. Also, because location_id is validated FIRST, a create attempt with no location_id answers 422 invalid_field rather than the named 410.
+2. AC#8 said 'worker_name, start_time, end_time, duration_minutes only'; the payload also carries worker_id. Harmless (it is an internal id, not money) and check-api pins it deliberately, but it is one field wider than the AC.
+3. POST /admin/tags/:id/resolve-existing-zone (admin.js:1811) checks only 'active', not 'location_id IS NOT NULL', so an admin can alias a reported card onto an UNBOUND zone. activePlace's alias branch INNER JOINs locations, so the result is a dead alias rather than a wrong resolution — safe, but silently useless.
 <!-- SECTION:NOTES:END -->
