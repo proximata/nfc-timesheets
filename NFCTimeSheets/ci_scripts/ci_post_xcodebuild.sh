@@ -47,8 +47,19 @@ fi
 
 if ! command -v fastlane >/dev/null 2>&1; then
   echo "ci_post_xcodebuild: fastlane not found, installing..."
-  if ! gem install fastlane --no-document -N; then
+  # --user-install: the Xcode Cloud runner's system gem dir (/Library/Ruby/Gems/...) is
+  # root-owned and this script doesn't run as root (build 34 proved it: Gem::FilePermissionError,
+  # the whole reason this branch runs at all). --user-install writes to the CI user's own
+  # ~/.gem instead - but `gem install` doesn't put that dir on PATH, so it has to be added
+  # by hand or the `command -v fastlane` above just misses it again on the next build too.
+  GEM_USER_BIN="$(ruby -e 'print Gem.user_dir' 2>/dev/null)/bin"
+  if ! gem install fastlane --user-install --no-document -N; then
     echo "ci_post_xcodebuild: fastlane install failed, skipping auto TestFlight group add"
+    exit 0
+  fi
+  export PATH="$GEM_USER_BIN:$PATH"
+  if ! command -v fastlane >/dev/null 2>&1; then
+    echo "ci_post_xcodebuild: fastlane installed but not on PATH ($GEM_USER_BIN), skipping auto TestFlight group add"
     exit 0
   fi
 fi
