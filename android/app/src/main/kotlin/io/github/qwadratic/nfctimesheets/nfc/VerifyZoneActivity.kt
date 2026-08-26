@@ -16,11 +16,13 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -112,6 +114,9 @@ class VerifyZoneActivity : ComponentActivity() {
     private var shiftsLoading by mutableStateOf(false)
     private var shiftsError by mutableStateOf(false)
 
+    private var unbindStep by mutableStateOf<UnbindStep>(UnbindStep.Idle)
+    private var unbindConfirming by mutableStateOf(false)
+
     /** What a completed test scan showed. Rendered as a named sentence, never a raw code. */
     private sealed interface VerifyOutcome {
         data class Verified(val result: WireZoneVerifyResult) : VerifyOutcome
@@ -150,6 +155,31 @@ class VerifyZoneActivity : ComponentActivity() {
          */
         data class Bound(val building: String) : BindStep
         data class Failed(val code: String) : BindStep
+    }
+
+    /**
+     * UNBINDING A BOUND ZONE (TASK-277) — the way back out of a wrong building, and the only
+     * one there is: [Api.bindZone] refuses a zone that already has a building, and decision-54
+     * §2/§3 removed the admin panel's ability to touch a zone's building at all.
+     *
+     * IT IS NOT A DELETE and the confirmation says so. The zone, its card, its name and its
+     * proof all survive; only the building goes, and binding it again puts one back.
+     *
+     * `zone_has_shifts` IS ITS OWN STATE, not a code in [Failed]. The server refuses a zone any
+     * shift has ever referenced (a composite FK, not a check in this app), and that refusal is
+     * a fact an operator standing at the door can act on — "this is the right building after
+     * all" — where a code is not.
+     */
+    private sealed interface UnbindStep {
+        data object Idle : UnbindStep
+        data object Submitting : UnbindStep
+
+        /** Done. The zone below has already flipped to unbound, so this is one sentence over it. */
+        data class Unbound(val building: String) : UnbindStep
+
+        /** 409 zone_has_shifts: somebody has clocked in here. Rendered as a sentence. */
+        data object HasShifts : UnbindStep
+        data class Failed(val code: String) : UnbindStep
     }
 
     override fun attachBaseContext(newBase: Context) {
@@ -247,6 +277,8 @@ class VerifyZoneActivity : ComponentActivity() {
             style = MaterialTheme.typography.titleMedium,
         )
 
+        UnbindStatus()
+
         // NO BUILDING, NO SCAN. The bind form replaces the scan body entirely — it does not
         // sit above a screen that is simultaneously waiting for a card it could never accept.
         if (!zone.isBound) {
@@ -289,6 +321,7 @@ class VerifyZoneActivity : ComponentActivity() {
         }
 
         ZonePage(zone)
+        UnbindAction(zone)
 
         OutlinedButton(
             onClick = ::changeZone,
@@ -296,6 +329,66 @@ class VerifyZoneActivity : ComponentActivity() {
                 .fillMaxWidth()
                 .heightIn(min = 48.dp),
         ) { Text(stringResource(R.string.verify_change_zone)) }
+    }
+
+    /**
+     * The unbind outcome, one sentence, above whichever body the zone now renders — a
+     * successful unbind flips the zone to UNBOUND and therefore to the bind form, so this has
+     * to sit ABOVE that fork rather than inside the bound branch that produced it.
+     */
+    @Composable
+    private fun UnbindStatus() {
+        val text = when (val step = unbindStep) {
+            UnbindStep.Idle -> return
+            UnbindStep.Submitting -> stringResource(R.string.verify_unbind_submitting)
+            is UnbindStep.Unbound -> getString(R.string.verify_unbind_done, step.building)
+            UnbindStep.HasShifts -> stringResource(R.string.verify_unbind_has_shifts)
+            is UnbindStep.Failed -> getString(R.string.verify_unbind_failed, step.code)
+        }
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (unbindStep is UnbindStep.Unbound || unbindStep is UnbindStep.Submitting) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
+    }
+
+    /**
+     * The unbind button and its confirmation. The dialog NAMES THE BUILDING being removed —
+     * an operator with a worklist of near-identical stairwells is exactly who this is for, and
+     * "are you sure?" over an unnamed building is a question nobody can answer.
+     */
+    @Composable
+    private fun UnbindAction(zone: WireOperatorZone) {
+        val building = zone.locationName ?: getString(R.string.verify_zone_no_building)
+        OutlinedButton(
+            onClick = { unbindConfirming = true },
+            enabled = unbindStep != UnbindStep.Submitting,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
+        ) { Text(stringResource(R.string.verify_unbind_action)) }
+
+        if (!unbindConfirming) return
+        AlertDialog(
+            onDismissRequest = { unbindConfirming = false },
+            title = { Text(stringResource(R.string.verify_unbind_confirm_title)) },
+            text = { Text(getString(R.string.verify_unbind_confirm_body, building)) },
+            confirmButton = {
+                TextButton(onClick = { submitUnbind(zone) }) {
+                    Text(stringResource(R.string.verify_unbind_confirm_yes))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { unbindConfirming = false }) {
+                    Text(stringResource(R.string.verify_unbind_confirm_cancel))
+                }
+            },
+        )
     }
 
     /**
@@ -477,6 +570,8 @@ class VerifyZoneActivity : ComponentActivity() {
         bindBuilding = null
         shifts = null
         shiftsError = false
+        unbindStep = UnbindStep.Idle
+        unbindConfirming = false
         if (zone.isBound) {
             bindStep = BindStep.Idle
             startReaderMode()
@@ -494,6 +589,47 @@ class VerifyZoneActivity : ComponentActivity() {
         bindBuilding = null
         shifts = null
         shiftsError = false
+        unbindStep = UnbindStep.Idle
+        unbindConfirming = false
+    }
+
+    /**
+     * POST /operator/zones/:id/unbind. The zone the server hands back replaces the worklist row
+     * exactly as [submitBind] does, and it comes back UNBOUND — so the screen falls through to
+     * the bind form on the next composition, which is the honest next question. Reader mode is
+     * stopped first: no card can resolve to a zone with no building, so a scan from here could
+     * only ever answer 422.
+     *
+     * `verified_at` IS NOT TOUCHED, here or on the server. What was proved stays proved.
+     */
+    private fun submitUnbind(zone: WireOperatorZone) {
+        unbindConfirming = false
+        val building = zone.locationName ?: getString(R.string.verify_zone_no_building)
+        unbindStep = UnbindStep.Submitting
+        lifecycleScope.launch {
+            try {
+                val unbound = if (isSimulatedZone(zone)) {
+                    runUnbindSimulation(zone)
+                } else {
+                    app.operatorApi.unbindZone(zone.id)
+                }
+                adapter?.disableReaderMode(this@VerifyZoneActivity)
+                zones = zones.map { if (it.id == unbound.id) unbound else it }
+                selectedZone = unbound
+                outcome = null
+                shifts = null
+                shiftsError = false
+                bindBuilding = null
+                unbindStep = UnbindStep.Unbound(building)
+                loadBindLocations()
+            } catch (e: ApiFailure) {
+                // The refusal an operator can act on gets a sentence; everything else a code.
+                unbindStep =
+                    if (e.code == "zone_has_shifts") UnbindStep.HasShifts else UnbindStep.Failed(e.code)
+            } catch (_: Exception) {
+                unbindStep = UnbindStep.Failed("unknown")
+            }
+        }
     }
 
     /** GET /operator/locations — the same list the write flow's picker loads. */

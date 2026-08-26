@@ -403,4 +403,18 @@
     <string name="verify_shifts_page">Page %1$d</string>
     <string name="verify_shifts_previous">Previous page</string>
     <string name="verify_shifts_next">Next page</string>
+
+    <!-- UNBIND, TASK-277. Nothing is deleted and the confirmation names the building. -->
+    <string name="verify_unbind_action">Remove this zone from its building</string>
+    <string name="verify_unbind_confirm_title">Remove from the building?</string>
+    <!-- %1$s = building name -->
+    <string name="verify_unbind_confirm_body">Remove this zone from %1$s? This does not delete anything, and it can be undone by assigning a building again.</string>
+    <string name="verify_unbind_confirm_yes">Remove</string>
+    <string name="verify_unbind_confirm_cancel">Cancel</string>
+    <string name="verify_unbind_submitting">Removing the building …</string>
+    <!-- %1$s = building name -->
+    <string name="verify_unbind_done">The zone no longer belongs to %1$s. Pick a building now.</string>
+    <string name="verify_unbind_has_shifts">Somebody has already clocked in at this door, so it stays with this building.</string>
+    <!-- %1$s = server error code -->
+    <string name="verify_unbind_failed">The building could not be removed (%1$s). Please try again.</string>
 </resources>

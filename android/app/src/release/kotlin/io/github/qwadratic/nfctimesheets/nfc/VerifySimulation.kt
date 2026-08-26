@@ -51,11 +51,13 @@ fun isSimulatedZone(zone: WireOperatorZone): Boolean = false
 fun simulatedBindLocations(): List<WireOperatorLocation> = emptyList()
 
 /**
- * The three below are unreachable by construction: every caller is behind [isSimulatedZone],
+ * The four below are unreachable by construction: every caller is behind [isSimulatedZone],
  * which is constantly false here. Present only so both source sets expose the same surface
  * to the screen.
  */
 fun runBindSimulation(zone: WireOperatorZone, location: WireOperatorLocation): WireOperatorZone = zone
+
+fun runUnbindSimulation(zone: WireOperatorZone): WireOperatorZone = zone
 
 fun runVerifySimulation(zone: WireOperatorZone): WireZoneVerifyResult = WireZoneVerifyResult(
     id = zone.id,

@@ -1,5 +1,6 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
+import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.TagLink
 import io.github.qwadratic.nfctimesheets.core.Wire
 import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
@@ -100,6 +101,12 @@ fun verifyTapSimulations(
  * takes: unbound goes to the building picker and starts no reader mode, bound goes to the test
  * scan as it always did.
  *
+ * AND A THIRD, BOUND, WITH HISTORY (TASK-277), which exists for exactly one reason: unbind has
+ * two outcomes and both have to be reachable without a database. The plain bound zone unbinds
+ * and drops to the building picker; this one answers 409 zone_has_shifts and stays where it is.
+ * The difference is a property of the ZONE, not a toggle on the screen — same reasoning as
+ * [isSimulatedZone]'s.
+ *
  * THE IDS ARE REAL UUIDS and not the word "simulated": [TagLink.uriFor] returns null for
  * anything that is not one, so a pretty placeholder here would silently produce a card with no
  * URI and turn every tap scenario above into "unreadable".
@@ -111,9 +118,15 @@ private const val SIM_ZONES_JSON = """
    "tag_deployed_at":"2026-08-20T09:00:00Z","verified_at":null},
   {"id":"5111d0de-0000-4000-8000-0000000000c2","location_id":"5111d0de-0000-4000-8000-0000000000a1",
    "location_name":"SIMULATED: Stiegengasse 3","name":"SIMULATED: Zone mit Gebaeude",
+   "tag_serial":null,"tag_deployed_at":"2026-08-20T09:00:00Z","verified_at":null},
+  {"id":"5111d0de-0000-4000-8000-0000000000c3","location_id":"5111d0de-0000-4000-8000-0000000000a1",
+   "location_name":"SIMULATED: Stiegengasse 3","name":"SIMULATED: Zone mit Schichten",
    "tag_serial":null,"tag_deployed_at":"2026-08-20T09:00:00Z","verified_at":null}
 ]}
 """
+
+/** The one simulated zone whose unbind is REFUSED — see [runUnbindSimulation]. */
+private const val SIM_ZONE_WITH_SHIFTS = "5111d0de-0000-4000-8000-0000000000c3"
 
 fun simulatedZones(): List<WireOperatorZone> = Wire.operatorZones(JSONObject(SIM_ZONES_JSON))
 
@@ -147,6 +160,33 @@ fun runBindSimulation(zone: WireOperatorZone, location: WireOperatorLocation): W
                 ",\"tag_serial\":null,\"tag_deployed_at\":\"2026-08-20T09:00:00Z\",\"verified_at\":null}",
         ),
     )
+
+/**
+ * `POST /operator/zones/:id/unbind`, answered here — BOTH answers, decided by which simulated
+ * zone is selected (TASK-277).
+ *
+ * "SIMULATED: Zone mit Schichten" throws the server's own 409, because that refusal is the
+ * half a reviewer cannot otherwise see: it comes from a composite FK in migration 013, needs a
+ * real shift row to trigger, and is the one outcome the screen must render as a sentence
+ * instead of a code. Every other simulated zone unbinds cleanly and lands back in the building
+ * picker.
+ *
+ * `verified_at` IS CARRIED THROUGH UNCHANGED, unlike [runBindSimulation] which clears it: the
+ * real route deliberately does not clear it on an unbind, and a fixture that did would teach
+ * the screen the opposite of the rule.
+ */
+fun runUnbindSimulation(zone: WireOperatorZone): WireOperatorZone {
+    if (zone.id == SIM_ZONE_WITH_SHIFTS) throw ApiFailure(status = 409, code = "zone_has_shifts")
+    return Wire.operatorZone(
+        JSONObject(
+            "{\"id\":${JSONObject.quote(zone.id)}" +
+                ",\"location_id\":null,\"location_name\":null" +
+                ",\"name\":${JSONObject.quote(zone.name)}" +
+                ",\"tag_serial\":null,\"tag_deployed_at\":\"2026-08-20T09:00:00Z\"" +
+                ",\"verified_at\":${zone.verifiedAt?.let { JSONObject.quote(it.toString()) } ?: "null"}}",
+        ),
+    )
+}
 
 /** `POST /operator/zones/:id/verify`'s 200 body: freshly stamped, never `already_verified`. */
 fun runVerifySimulation(zone: WireOperatorZone): WireZoneVerifyResult =

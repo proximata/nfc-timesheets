@@ -533,4 +533,20 @@
     <string name="verify_shifts_page">Seite %1$d</string>
     <string name="verify_shifts_previous">Vorherige Seite</string>
     <string name="verify_shifts_next">Nächste Seite</string>
+
+    <!-- ZUORDNUNG AUFHEBEN, TASK-277. Der einzige Weg zurueck, wenn eine Zone dem falschen
+         Objekt zugeordnet wurde: Neu-Zuordnen lehnt der Server ab, solange ein Objekt haengt.
+         Es wird NICHTS geloescht, und die Bestaetigung nennt das Objekt beim Namen. -->
+    <string name="verify_unbind_action">Zuordnung zum Objekt aufheben</string>
+    <string name="verify_unbind_confirm_title">Zuordnung aufheben?</string>
+    <!-- %1$s = Objektname -->
+    <string name="verify_unbind_confirm_body">Diese Zone von %1$s trennen? Es wird nichts gelöscht — die Zone kann jederzeit wieder einem Objekt zugeordnet werden.</string>
+    <string name="verify_unbind_confirm_yes">Zuordnung aufheben</string>
+    <string name="verify_unbind_confirm_cancel">Abbrechen</string>
+    <string name="verify_unbind_submitting">Zuordnung wird aufgehoben …</string>
+    <!-- %1$s = Objektname -->
+    <string name="verify_unbind_done">Die Zone gehört nicht mehr zu %1$s. Jetzt ein Objekt auswählen.</string>
+    <string name="verify_unbind_has_shifts">Hier wurde bereits eingestempelt, deshalb bleibt diese Zone bei diesem Objekt.</string>
+    <!-- %1$s = Fehlercode vom Server -->
+    <string name="verify_unbind_failed">Zuordnung konnte nicht aufgehoben werden (%1$s). Bitte erneut versuchen.</string>
 </resources>

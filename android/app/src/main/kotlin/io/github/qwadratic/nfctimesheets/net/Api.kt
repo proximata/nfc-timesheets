@@ -283,6 +283,27 @@ class Api(
         )
 
     /**
+     * POST /operator/zones/:id/unbind {} -> take the building away again (decision-54 §3).
+     *
+     * THE ONLY WAY BACK from a zone bound to the wrong building: [bindZone] REFUSES a zone that
+     * already has one (409 already_bound, "rebinding is unbind-then-bind, never a silent move")
+     * and decision-54 §2/§3 took the same power out of the admin panel. So this is the
+     * operator's, in the field, or nobody's.
+     *
+     * NO BODY. The route takes none — the zone in the path is the whole request.
+     *
+     * `verified_at` is NOT cleared by this, deliberately and server-side (routes/operator.js):
+     * the earlier proof stays true of what was proved. Do not clear it here either.
+     *
+     *   200 unbound             {zone}
+     *   404 unknown_zone        :id is not an active zone
+     *   409 already_unbound     it has no building already
+     *   409 zone_has_shifts     somebody clocked in here; the building cannot be taken away
+     */
+    suspend fun unbindZone(zoneId: String): WireOperatorZone =
+        Wire.operatorZone(post("/operator/zones/$zoneId/unbind", "{}").getJSONObject("zone"))
+
+    /**
      * GET /operator/zones/:id/shifts?page=N -> who worked at this door this month, and for how
      * long (decision-54 §7).
      *
