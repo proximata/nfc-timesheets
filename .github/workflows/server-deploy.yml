@@ -15,9 +15,18 @@ name: Deploy (API + admin)
 #
 # Needs 2 repo secrets (Settings -> Secrets and variables -> Actions), both created this
 # session:
-#   SERVER_DEPLOY_SSH_KEY   CI-only ed25519 keypair; the public half was appended to
-#                           exedev's ~/.ssh/authorized_keys on schimmer-glanz.exe.xyz - same
-#                           account (passwordless sudo) ops/deploy.sh already assumes.
+#   SERVER_DEPLOY_SSH_KEY   CI-only ed25519 keypair. exe.dev's SSH endpoint is its own
+#                           account-level gateway, not the box's sshd - a key in the VM's
+#                           authorized_keys is not enough on its own (found the hard way:
+#                           rsync failed with "protocol version mismatch", which was the
+#                           gateway's "Please complete registration" banner corrupting the
+#                           wire protocol). The public half is registered the right way, via
+#                           `ssh exe.dev ssh-key add` (docs: exe.dev/docs/https-api-local-key),
+#                           which is how exe.dev expects a distinct per-workload key: revoke
+#                           it any time with `ssh exe.dev ssh-key remove
+#                           github-actions-deploy@proximatanfc-timesheets` with zero effect on
+#                           any other key. It reaches schimmer-glanz.exe.xyz as exedev, the
+#                           same passwordless-sudo account ops/deploy.sh already assumes.
 #   WEB_MAPS_KEY            NEXT_PUBLIC_GOOGLE_MAPS_KEY. deploy.sh reads this env var before
 #                           falling back to `psst get`, which doesn't exist on a runner.
 #
