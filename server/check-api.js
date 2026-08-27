@@ -716,9 +716,9 @@ try {
     FLAGS_ADMIN_EMAIL,
     await hashPassword(FLAGS_ADMIN_PASSWORD),
   ]);
-  // The migration seeds this row; the check seeds it the same way so GET /flags has the
+  // The migrations seed these rows; the check seeds them the same way so GET /flags has the
   // same shape here as on the box.
-  await admin.query("INSERT INTO feature_flags (name, enabled) VALUES ('fun_shift_screen', false)");
+  await admin.query("INSERT INTO feature_flags (name, enabled) VALUES ('fun_shift_screen', false), ('sms_login', false)");
 
   // Inject the fake JWKS before the server can serve a single request.
   const { setKeyFetcherForTest } = await import("./lib/apple.js");
@@ -7258,6 +7258,10 @@ try {
 
       try {
         configureTwilio();
+        // sms_login (migration 016) is a SECOND gate, seeded OFF, orthogonal to Twilio being
+        // configured — that hide-by-default behaviour is check-sms-flag.mjs's job. This
+        // suite is testing operator-SMS FUNCTIONALITY, so it opts the flag on directly.
+        await admin.query("UPDATE feature_flags SET enabled = true WHERE name = 'sms_login'");
         const smsOp = await operatorCookieFor("Feldleiterin SMS");
         await admin.query("INSERT INTO phone_identities (phone_e164, operator_id) VALUES ($1, $2)", [OP_PHONE, smsOp.operatorId]);
         await admin.query("INSERT INTO phone_identities (phone_e164, worker_id) VALUES ($1, $2)", [WORKER_PHONE, workerId]);
@@ -7386,6 +7390,10 @@ try {
         // accident, and the stub must not hold the process open.
         for (const k of TWILIO_VARS) delete process.env[k];
         await new Promise((r) => stub.close(r));
+        // Nothing after this block may find sms_login on by accident either — back to the
+        // seeded default so downstream tests (the flags-feature block) see one predictable
+        // state, not whatever this block last left behind.
+        await admin.query("UPDATE feature_flags SET enabled = false WHERE name = 'sms_login'");
       }
     }
   }
@@ -7526,14 +7534,16 @@ try {
     const fullCookie = cookieFrom(fullLogin);
     resetLoginRate();
 
-    await test("a worker reads the flags as a flat name->bool map, seeded OFF", async () => {
+    await test("a worker reads the flags as a flat name->bool map, both seeded OFF", async () => {
       const res = await asWorker("/flags");
       assert.equal(res.status, 200);
       const body = await res.json();
       assert.equal(body.fun_shift_screen, false, "the seeded flag is OFF — OFF is today's screen");
+      assert.equal(body.sms_login, false, "seeded OFF (migration 016) — SMS stays hidden until turned on");
       // No metadata on the wire: an admin's email must not reach every handset.
-      assert.deepEqual(Object.keys(body), ["fun_shift_screen"]);
+      assert.deepEqual(Object.keys(body).sort(), ["fun_shift_screen", "sms_login"]);
       assert.equal(typeof body.fun_shift_screen, "boolean");
+      assert.equal(typeof body.sms_login, "boolean");
     });
 
     await test("GET /flags is a worker route: no app key and no session are both refused", async () => {
@@ -7546,7 +7556,10 @@ try {
       assert.equal(list.status, 200);
       assert.deepEqual(
         (await list.json()).flags.map((f) => [f.name, f.enabled]),
-        [["fun_shift_screen", false]],
+        [
+          ["fun_shift_screen", false],
+          ["sms_login", false],
+        ],
       );
 
       const on = await call("/admin/flags/fun_shift_screen", {
@@ -7582,7 +7595,7 @@ try {
       });
       assert.equal(res.status, 404);
       assert.equal((await res.json()).error, "unknown_flag");
-      assert.equal(await countOf("SELECT count(*) AS n FROM feature_flags"), 1);
+      assert.equal(await countOf("SELECT count(*) AS n FROM feature_flags"), 2, "a 404 must not create a row either");
     });
 
     await test("a missing or non-boolean `enabled` is a 400, not a coerced truth", async () => {
@@ -7596,7 +7609,7 @@ try {
         assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(body)}`);
         assert.equal((await res.json()).error, "invalid_field");
       }
-      assert.equal(await countOf("SELECT count(*) AS n FROM feature_flags WHERE enabled"), 0);
+      assert.equal(await countOf("SELECT count(*) AS n FROM feature_flags WHERE enabled"), 0, "both flags still OFF");
     });
 
     await test("the flags session is refused on EVERY other admin route, exactly as anonymous is", async () => {
@@ -7627,7 +7640,7 @@ try {
       assert.equal((await call("/admin/data", { key: null, cookie: fullCookie })).status, 200);
       const list = await call("/admin/flags", { key: null, cookie: fullCookie });
       assert.equal(list.status, 200);
-      assert.equal((await list.json()).flags.length, 1);
+      assert.equal((await list.json()).flags.length, 2);
       const patched = await call("/admin/flags/fun_shift_screen", {
         method: "PATCH",
         key: null,

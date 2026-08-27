@@ -353,6 +353,24 @@ try {
   console.log("\n2 · the SAME calls, with the flag ON (stub carrier, no real SMS)");
   configureTwilio();
 
+  // ===================================================================================
+  // 1.5 · A SECOND, INDEPENDENT GATE: `feature_flags.sms_login`, seeded false by migration
+  //       016 (2026-08-27, asked for during UAT prep — SMS stays fully wired but hidden
+  //       from the sign-in form). Twilio is configured (the stub above) yet everything
+  //       here must still behave exactly like section 1, proving this is a REAL second
+  //       gate and not merely riding along on smsConfigured().
+  // ===================================================================================
+  await test("feature_flags.sms_login is OFF by default, EVEN WITH SMS fully configured", async () => {
+    const res = await call("/auth/capabilities");
+    assert.deepEqual(res.body, { sms: false }, "Twilio being wired must not be enough on its own");
+    const asked = await call("/auth/sms/request", { method: "POST", body: { phone: WORKER_PHONE_TYPED } });
+    assert.equal(asked.status, 503, JSON.stringify(asked.body));
+    assert.deepEqual(asked.body, { error: "sms_not_configured" }, "the SAME error a missing Twilio credential gives");
+    ok("configured() true + flag false = still hidden, still 503, byte-identical to section 1");
+  });
+
+  await db.query("UPDATE feature_flags SET enabled = true WHERE name = 'sms_login'");
+
   await test("the flag is re-read PER REQUEST — no restart, no deploy, no cached boot value", async () => {
     const res = await asAdmin("/admin/sms-status");
     assert.equal(res.body.configured, true, JSON.stringify(res.body));

@@ -1284,7 +1284,8 @@
     "noticeEnabled": "{name} ist jetzt eingeschaltet.",
     "noticeDisabled": "{name} ist jetzt ausgeschaltet.",
     "noticeFailed": "{name} konnte nicht geändert werden.",
-    "noteFunShiftScreen": "Verspielter Schicht-Bildschirm auf den Handys: blauer Akzent, schwarzer Hintergrund, animierte Figuren."
+    "noteFunShiftScreen": "Verspielter Schicht-Bildschirm auf den Handys: blauer Akzent, schwarzer Hintergrund, animierte Figuren.",
+    "noteSmsLogin": "SMS-Anmeldung im gemeinsamen Code-Formular, für Mitarbeiter und Betreiber. Anmeldecodes funktionieren unabhängig davon."
   },
   "tags": {
     "heading": "Unzugeordnete Tags",

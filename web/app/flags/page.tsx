@@ -27,8 +27,9 @@ import { BUSINESS_TIME_ZONE } from '@/lib/shifts'
  */
 
 /** Known flags → a sentence in the `flags` namespace. An unknown name simply shows none. */
-const FLAG_NOTE_KEYS: Record<string, 'noteFunShiftScreen'> = {
+const FLAG_NOTE_KEYS: Record<string, 'noteFunShiftScreen' | 'noteSmsLogin'> = {
   fun_shift_screen: 'noteFunShiftScreen',
+  sms_login: 'noteSmsLogin',
 }
 
 export default function FlagsPage() {

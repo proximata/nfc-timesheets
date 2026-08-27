@@ -274,6 +274,19 @@ async function whoami({ session }) {
 }
 
 /**
+ * A second gate on top of `smsConfigured()`, read from the `feature_flags` row a UAT pass
+ * asked for (2026-08-27): Twilio can be fully wired and still not be OFFERED, because the
+ * owner wants the door shut for now without touching /etc/nfc/env. Same idiom as `GET
+ * /flags` (app.js) — a name and a boolean, no cache, evaluated per request so a toggle from
+ * the admin Flags page is believed by the very next call. Seeded false by migration 016 (a
+ * missing row reads as OFF, never as "ask Twilio instead" — `?? false`, not `?? true`).
+ */
+async function smsLoginEnabled() {
+  const row = await one("SELECT enabled FROM feature_flags WHERE name = $1", ["sms_login"]);
+  return row?.enabled === true;
+}
+
+/**
  * GET /auth/capabilities -> what THIS BUILD may offer, before any session exists.
  *
  * decision-48 §6.6. THE APP'S ONE PUBLIC CAPABILITY READ: a phone that has never enrolled,
@@ -302,7 +315,7 @@ async function whoami({ session }) {
  * button that would answer 503 the moment it is pressed.
  */
 async function capabilities() {
-  return { status: 200, body: { sms: smsConfigured() } };
+  return { status: 200, body: { sms: smsConfigured() && (await smsLoginEnabled()) } };
 }
 
 /**
@@ -423,7 +436,7 @@ async function operatorLogout({ session }) {
  * and cannot make POST /auth/code answer differently.
  */
 async function smsRequest({ body, ip }) {
-  if (!smsConfigured()) fail(503, "sms_not_configured");
+  if (!smsConfigured() || !(await smsLoginEnabled())) fail(503, "sms_not_configured");
 
   // Shape, in the same normaliser `POST /admin/operators` uses — phone parsing is not
   // reimplemented here (decision-45 §4, lib/validate.js identityPhone). 422 for a shape
@@ -501,7 +514,7 @@ async function smsRequest({ body, ip }) {
  * confirm the challenge was real.
  */
 async function smsVerify({ body, ip }) {
-  if (!smsConfigured()) fail(503, "sms_not_configured");
+  if (!smsConfigured() || !(await smsLoginEnabled())) fail(503, "sms_not_configured");
 
   // A VERIFY FLOOD MUST NOT SPEND THE SEND BUDGET (lib/auth.js OTP_VERIFY_RULES): guessing
   // costs nothing and sends nothing, and if it drank from the same bucket a stranger could
@@ -623,7 +636,7 @@ async function smsVerify({ body, ip }) {
  * differently. decision-45 §6's code door stays open beside this one, not behind it.
  */
 async function operatorSmsRequest({ body, ip }) {
-  if (!smsConfigured()) fail(503, "sms_not_configured");
+  if (!smsConfigured() || !(await smsLoginEnabled())) fail(503, "sms_not_configured");
 
   const phone = v.identityPhone(body.phone, "phone");
 
@@ -694,7 +707,7 @@ async function operatorSmsRequest({ body, ip }) {
  * pins one row per number) would be a decision, not an accident.
  */
 async function operatorSmsVerify({ body, ip }) {
-  if (!smsConfigured()) fail(503, "sms_not_configured");
+  if (!smsConfigured() || !(await smsLoginEnabled())) fail(503, "sms_not_configured");
 
   // A VERIFY FLOOD MUST NOT SPEND THE SEND BUDGET — same shared, role-blind verify ceiling
   // smsVerify spends: guessing costs nothing and sends nothing.

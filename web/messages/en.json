@@ -1284,7 +1284,8 @@
     "noticeEnabled": "{name} is now on.",
     "noticeDisabled": "{name} is now off.",
     "noticeFailed": "{name} could not be changed.",
-    "noteFunShiftScreen": "Playful running-shift screen on the phones: blue tint, black background, animated figures."
+    "noteFunShiftScreen": "Playful running-shift screen on the phones: blue tint, black background, animated figures.",
+    "noteSmsLogin": "SMS sign-in on the shared code form, for both workers and operators. Enrolment codes work regardless."
   },
   "tags": {
     "heading": "Unassigned tags",
