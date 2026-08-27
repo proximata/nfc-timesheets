@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
+import java.util.UUID
 
 /**
  * The whole app is one of three screens, chosen by the SERVER's answer to "who is this?"
@@ -719,6 +720,111 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
     fun dismissSwitchNotice() {
         _log.value = _log.value.copy(switchNotice = null)
+    }
+
+    // ---- the manual pair (decision-56) ---------------------------------------------
+    //
+    // NOT A SECOND QUEUE, and deliberately not the tap path. A tap writes locally FIRST and
+    // pushes later, because a worker standing at a door in a basement must be paid for the
+    // hours whatever the network does. A manual action has no card and no door: the ONLY
+    // thing that makes it legitimate is the server's own validation (v.activePlace +
+    // v.requireVerifiedPlace, decision-56 §2), so it is ONLINE, synchronous, and the
+    // server's refusal is shown to the worker instead of being queued into a row nobody is
+    // standing next to. Offline it fails with err_network and no row is written anywhere.
+    //
+    // Both are FLAGGED server-side and for ever, which is the whole reason a second path is
+    // allowed to exist at all — see the comments in ui/TimeSheetApp.kt.
+
+    /** Buildings the worker can pick from, from the ALREADY-CACHED roster (decision-56 §2):
+     *  no new endpoint, and no fetch on the path of a person who wants to start working. */
+    fun buildings(): List<Pair<String, String>> =
+        _log.value.locationNames.entries.sortedBy { it.value }.map { it.key to it.value }
+
+    /**
+     * „Ohne Tag starten“. POST /shifts/open with manual=true.
+     *
+     * @param simulation debug builds only — always null in a release build, where
+     *        [manualOpenSimulations] is empty and nothing can construct one.
+     * @param onResult null on success; otherwise the failure, rendered through the SAME
+     *        [stringIdFor] keys the tap path uses (AC #3), never a new generic message.
+     */
+    fun manualOpen(
+        locationId: String,
+        simulation: ManualSimulation? = null,
+        onResult: (ApiFailure?) -> Unit,
+    ) {
+        val worker = (_session.value as? SessionState.SignedIn)?.worker ?: return
+        // The server answers this too; asking here first means the worker is told before a
+        // round trip, in the same words, and no client_uuid is spent.
+        if (_log.value.open != null) {
+            onResult(ApiFailure(status = 409, code = "shift_already_open"))
+            return
+        }
+        viewModelScope.launch {
+            val clientUuid = UUID.randomUUID().toString().lowercase()
+            val at = Instant.now()
+            try {
+                val shift = withContext(Dispatchers.IO) {
+                    simulation?.answer(clientUuid, worker.id, locationId, at)
+                        ?: app.api.openShift(clientUuid, locationId, at, manual = true)
+                }
+                // adopt(), not startShift(): the row the server just confirmed, marked
+                // already-synced, so this shift is never queued for a push that would be a
+                // duplicate of the call we just made.
+                io { app.store.adopt(shift) }
+                _log.value = _log.value.copy(
+                    shifts = io { app.store.all() },
+                    pending = io { app.store.pendingSummary() },
+                    pushArmed = io { SyncScheduler.isScheduled(app) },
+                )
+                armSignals()
+                onResult(null)
+            } catch (failure: ApiFailure) {
+                // NOTHING was written. There is no half-open shift to explain afterwards.
+                onResult(failure)
+            }
+        }
+    }
+
+    /**
+     * The Stop button. POST /shifts/close with manual=true and NO location: the server
+     * stamps end_time, manual_close and corrected_at in one update (decision-56 §3), so the
+     * row is closed AND resolved and never reaches the decision-10 resolver.
+     */
+    fun manualClose(simulation: ManualSimulation? = null, onResult: (ApiFailure?) -> Unit) {
+        val worker = (_session.value as? SessionState.SignedIn)?.worker ?: return
+        val open = _log.value.open ?: run {
+            onResult(ApiFailure(status = 404, code = "unknown_shift"))
+            return
+        }
+        viewModelScope.launch {
+            val at = Instant.now()
+            try {
+                val shift = withContext(Dispatchers.IO) {
+                    simulation?.answer(open.clientUuid, worker.id, open.locationId, at)
+                        ?: app.api.closeShift(open.clientUuid, at, autoClosed = false, manual = true)
+                }
+                io {
+                    app.store.closeShift(open.clientUuid, shift.endTime ?: at, autoClosed = false)
+                    // The SERVER's row wins, including its corrected_at: closeShift above
+                    // only knows the end time, and a local row without corrected_at would
+                    // show up as unresolved on a shift the office already sees as resolved.
+                    app.store.applyServer(shift)
+                    app.store.markCloseSynced(open.clientUuid)
+                }
+                _log.value = _log.value.copy(
+                    shifts = io { app.store.all() },
+                    pending = io { app.store.pendingSummary() },
+                    pushArmed = io { SyncScheduler.isScheduled(app) },
+                )
+                // The running-shift notification and the 8h ladder go with the shift. A
+                // notification left standing after a Stop is the orphaned-lock bug again.
+                armSignals()
+                onResult(null)
+            } catch (failure: ApiFailure) {
+                onResult(failure)
+            }
+        }
     }
 
     /** POST /shifts/:id/resolve, then mirror the result locally (decision-10). */

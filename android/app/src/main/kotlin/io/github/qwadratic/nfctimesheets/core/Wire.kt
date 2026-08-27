@@ -439,11 +439,24 @@ data class OpenShiftRequest(
     val clientUuid: String,
     val locationUuid: String,
     val startTime: Instant,
+    /**
+     * decision-56: the worker picked this building off the roster instead of tapping a
+     * card. The server stamps `manual_start` and the office sees the row flagged for ever;
+     * validation is UNCHANGED (v.activePlace + v.requireVerifiedPlace), so a manual open
+     * only ever succeeds where a real tap would.
+     */
+    val manual: Boolean = false,
 ) {
+    // OMITTED when false, never sent as `"manual":false`: the tap path's bytes stay exactly
+    // what they were before decision-56, which is what makes the pinned body in
+    // checks/core-check.kt a real assertion about the tap rather than a copy of the new shape.
     fun toJson(): String = Wire.obj(
-        "client_uuid" to clientUuid,
-        "location_uuid" to locationUuid,
-        "start_time" to Wire.string(startTime),
+        *listOfNotNull(
+            "client_uuid" to clientUuid,
+            "location_uuid" to locationUuid,
+            "start_time" to Wire.string(startTime),
+            if (manual) "manual" to true else null,
+        ).toTypedArray(),
     )
 }
 
@@ -461,11 +474,24 @@ data class CloseShiftRequest(
     val clientUuid: String,
     val endTime: Instant,
     val autoClosed: Boolean,
+    /**
+     * decision-56: the worker pressed Stop instead of tapping out. The server stamps
+     * `manual_close` AND `corrected_at` in the same update — a manual close is a worker
+     * confirming their own finish time in the moment, so it is already resolved and needs
+     * no decision-10 follow-up. `autoClosed` stays false: that flag is the 8h timer's and
+     * the different-building case's, and conflating the two would send this row back
+     * through a resolution screen the worker has just answered.
+     */
+    val manual: Boolean = false,
 ) {
+    // `manual` OMITTED when false — see OpenShiftRequest.toJson for why.
     fun toJson(): String = Wire.obj(
-        "client_uuid" to clientUuid,
-        "end_time" to Wire.string(endTime),
-        "auto_closed" to autoClosed,
+        *listOfNotNull(
+            "client_uuid" to clientUuid,
+            "end_time" to Wire.string(endTime),
+            "auto_closed" to autoClosed,
+            if (manual) "manual" to true else null,
+        ).toTypedArray(),
     )
 }
 

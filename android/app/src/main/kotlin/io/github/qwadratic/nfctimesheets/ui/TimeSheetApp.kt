@@ -717,6 +717,10 @@ private fun LogScreen(
     val log by model.log.collectAsStateWithLifecycle()
     val pendingTap by model.pendingTap.collectAsStateWithLifecycle()
     var showResolver by remember { mutableStateOf(false) }
+    // decision-56's two dialogs. Both start closed and both are one confirmation away from
+    // the call: neither action may be a single accidental tap (decision-56 §4).
+    var showManualStart by remember { mutableStateOf(false) }
+    var showManualStop by remember { mutableStateOf(false) }
 
     // THE TAP CONSUMER, and the reason TapInbox exists. This effect is inside the log
     // screen, which is only composed once the session has resolved — so a tap that
@@ -765,9 +769,16 @@ private fun LogScreen(
             pushArmed = log.pushArmed,
             readiness = readiness,
             openIntent = openIntent,
+            onStop = { showManualStop = true },
         )
         if (showResolver) {
             ResolveDialog(model, log.unresolved) { showResolver = false }
+        }
+        if (showManualStop) {
+            ManualStopDialog(
+                model = model,
+                locationName = model.siteName(open.locationId),
+            ) { showManualStop = false }
         }
         return
     }
@@ -845,6 +856,20 @@ private fun LogScreen(
             }
         }
 
+        // START WITHOUT A TAG (decision-56). A TextButton, under the scan button and above
+        // everything else: deliberately the quietest control on the screen, because the
+        // product is still the tap and this is the fallback for a broken or missing card.
+        // Shown on EVERY phone, including one with no NFC chip at all — that phone is
+        // exactly the one that cannot scan and previously could not clock in.
+        item {
+            TextButton(
+                onClick = { showManualStart = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.manual_start_open)) }
+        }
+
         item { SectionHeading(R.string.log_recent_section) }
         if (log.recent.isEmpty()) {
             item { Text(stringResource(R.string.log_recent_empty), color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -852,9 +877,18 @@ private fun LogScreen(
         items(log.recent, key = { it.clientUuid }) { ShiftRow(it, model.siteName(it.locationId)) }
 
         item {
-            // There is no in-app scan button and there must not be one. Clocking in
-            // happens by holding the phone to the tag: Android reads it and opens the App
-            // Link. A button would be a second, divergent path to the same row.
+            // Clocking in happens by holding the phone to the tag: Android reads it and
+            // opens the App Link. This used to say there was no in-app path to a shift and
+            // that there must not be one — SUPERSEDED BY decision-56 for exactly two
+            // actions, „Ohne Tag starten" above and Stop on the running screen.
+            //
+            // THE ORIGINAL REASONING IS WHY THE FLAGS EXIST, not something the decision
+            // threw away: a second, SILENT path to the same row is how two mechanisms start
+            // disagreeing about somebody's hours. So neither manual action is silent —
+            // each is confirmed by the worker, validated by the server exactly as a tap is
+            // (a manual start only succeeds where a tap would), and stamped manual_start /
+            // manual_close on the row for ever, where the office can see it. Flagged, not
+            // hidden. Everything else still has to be a tap.
             Text(
                 stringResource(R.string.log_hint_start),
                 style = MaterialTheme.typography.bodyLarge,
@@ -891,6 +925,9 @@ private fun LogScreen(
     if (showResolver) {
         ResolveDialog(model, log.unresolved) { showResolver = false }
     }
+    if (showManualStart) {
+        ManualStartDialog(model) { showManualStart = false }
+    }
 }
 
 // -------------------------------------------------------------------------------------
@@ -919,6 +956,8 @@ private fun ShiftRunningScreen(
     pushArmed: Boolean,
     readiness: NfcReadiness,
     openIntent: (Intent) -> Unit,
+    /** decision-56's Stop button. Opens the confirmation dialog; never closes anything. */
+    onStop: () -> Unit,
 ) {
     val context = LocalContext.current
 
@@ -1048,9 +1087,28 @@ private fun ShiftRunningScreen(
             }
         }
 
-        // The single obvious way to end the shift. There is still no button that CLOSES a
-        // shift, and there must not be one: clocking out is a tag tap, and a second path to
-        // the same row is how two mechanisms start disagreeing about somebody's hours.
+        // STOP (decision-56). Next to the clock, because this is the screen a worker is on
+        // when their card will not read and the shift has to end anyway.
+        //
+        // There WAS no button that closed a shift here, and this comment said there must not
+        // be one: clocking out is a tag tap, and a second path to the same row is how two
+        // mechanisms start disagreeing about somebody's hours. decision-56 supersedes that
+        // for this one action and keeps the reasoning — the disagreement is prevented by
+        // making the manual close impossible to confuse with a tap-out rather than by
+        // forbidding it: it is confirmed in a dialog that names the building and says the
+        // office will see it, and the server stamps manual_close (plus corrected_at, so the
+        // worker is never asked again about a time they just confirmed). Flagged, not silent.
+        //
+        // OutlinedButton, not a filled one: the tap is still the way to finish, and the line
+        // under it still says so.
+        OutlinedButton(
+            onClick = onStop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
+        ) { Text(stringResource(R.string.manual_stop_open)) }
+
+        // The single obvious way to end the shift, and still the first thing offered.
         Text(
             stringResource(R.string.log_hint_stop),
             style = MaterialTheme.typography.titleMedium,
@@ -1167,6 +1225,192 @@ private const val OVERDUE_CLOCK = "8:00:00+"
 private fun clock(start: Instant, now: Instant): String {
     val seconds = maxOf(0L, java.time.Duration.between(start, now).seconds)
     return String.format(Locale.ROOT, "%d:%02d:%02d", seconds / 3600, (seconds % 3600) / 60, seconds % 60)
+}
+
+// -------------------------------------------------------------------------------------
+// decision-56: THE TWO MANUAL DIALOGS.
+//
+// Neither of them decides anything. Every refusal on screen is the SERVER's, resolved
+// through the same [stringIdFor] key the tap path resolves — an unbound zone, an unverified
+// place and a shift already open read here exactly as they read after a tap, because they
+// ARE the same answer to the same route (decision-56 §2: validation is unchanged).
+// -------------------------------------------------------------------------------------
+
+/**
+ * „Ohne Tag starten". Pick a building, confirm, POST /shifts/open with manual=true.
+ *
+ * The list is the ALREADY-CACHED roster (no fetch, no new endpoint). An empty list means
+ * this phone has never completed a refresh; it says so rather than offering nothing.
+ */
+@Composable
+private fun ManualStartDialog(model: TimeSheetViewModel, onClose: () -> Unit) {
+    val buildings = model.buildings()
+    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
+    var errorKey by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    fun start(simulation: ManualSimulation? = null) {
+        val id = selectedId ?: return
+        busy = true
+        errorKey = null
+        model.manualOpen(id, simulation) { failure ->
+            busy = false
+            if (failure == null) onClose() else errorKey = failure.messageKey
+        }
+    }
+
+    Dialog(onDismissRequest = { if (!busy) onClose() }) {
+        Surface(shape = MaterialTheme.shapes.large) {
+            Column(
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    stringResource(R.string.manual_start_title),
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Text(stringResource(R.string.manual_start_intro))
+                if (buildings.isEmpty()) {
+                    Text(
+                        stringResource(R.string.manual_start_no_buildings),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                for ((id, name) in buildings) {
+                    OutlinedButton(
+                        onClick = { selectedId = id },
+                        enabled = !busy,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                    ) {
+                        // Marked in the LABEL, same as ui/BuildingPicker: a column of
+                        // buttons with one control that looks different reads as doing
+                        // something different.
+                        Text(if (selectedId == id) "\u2713 $name" else name)
+                    }
+                }
+
+                errorKey?.let {
+                    Text(
+                        stringResource(stringIdFor(it)),
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                    )
+                }
+
+                // THE CONFIRMATION. Disabled until a building is chosen, so the dialog
+                // cannot be dismissed into a shift nobody named.
+                Button(
+                    onClick = { start() },
+                    enabled = !busy && selectedId != null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.manual_start_confirm)) }
+                TextButton(
+                    onClick = onClose,
+                    enabled = !busy,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.manual_cancel)) }
+
+                // DEBUG BUILDS ONLY. manualOpenSimulations() is defined twice — once in
+                // src/debug/ with these scenarios, once in src/release/ returning an empty
+                // list and containing none of the code. On a release build this loop has
+                // nothing to iterate and the buttons do not exist.
+                for (simulation in manualOpenSimulations()) {
+                    OutlinedButton(
+                        onClick = { start(simulation) },
+                        enabled = !busy && selectedId != null,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) { Text("\u25b6 ${simulation.label}") }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Stop. Names the building, says the office will see it, then POST /shifts/close with
+ * manual=true and no location.
+ */
+@Composable
+private fun ManualStopDialog(
+    model: TimeSheetViewModel,
+    locationName: String?,
+    onClose: () -> Unit,
+) {
+    var errorKey by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    fun stop(simulation: ManualSimulation? = null) {
+        busy = true
+        errorKey = null
+        model.manualClose(simulation) { failure ->
+            busy = false
+            if (failure == null) onClose() else errorKey = failure.messageKey
+        }
+    }
+
+    Dialog(onDismissRequest = { if (!busy) onClose() }) {
+        Surface(shape = MaterialTheme.shapes.large) {
+            Column(
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    stringResource(R.string.manual_stop_title),
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Text(
+                    stringResource(
+                        R.string.manual_stop_body,
+                        locationName ?: stringResource(R.string.unknown_location),
+                    ),
+                )
+
+                errorKey?.let {
+                    Text(
+                        stringResource(stringIdFor(it)),
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                    )
+                }
+
+                Button(
+                    onClick = { stop() },
+                    enabled = !busy,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.manual_stop_confirm)) }
+                TextButton(
+                    onClick = onClose,
+                    enabled = !busy,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.manual_cancel)) }
+
+                // DEBUG BUILDS ONLY — see [ManualStartDialog] for the source-set split.
+                for (simulation in manualCloseSimulations()) {
+                    OutlinedButton(
+                        onClick = { stop(simulation) },
+                        enabled = !busy,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) { Text("\u25b6 ${simulation.label}") }
+                }
+            }
+        }
+    }
 }
 
 private fun appNotificationSettings(packageName: String): Intent =

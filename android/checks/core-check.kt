@@ -298,6 +298,24 @@ private fun wireBytes() {
     )
     check(!close.contains("worker"), "no worker identity in the close body either")
 
+    // decision-56. `manual` is OMITTED when false, so the two bodies pinned above are still
+    // the bytes a TAP sends — that is the whole reason those two assertions keep meaning
+    // what they meant before the manual pair existed. When true it is the LAST field.
+    val manualOpen = OpenShiftRequest(UUID_B, UUID_A, start, manual = true).toJson()
+    check(
+        manualOpen == """{"client_uuid":"$UUID_B","location_uuid":"$UUID_A","start_time":"2026-07-14T03:43:11.412Z","manual":true}""",
+        "POST /shifts/open manual body: $manualOpen",
+    )
+    check(!manualOpen.contains("worker"), "no worker identity in a manual open body either")
+    val manualClose = CloseShiftRequest(UUID_B, start, autoClosed = false, manual = true).toJson()
+    check(
+        manualClose == """{"client_uuid":"$UUID_B","end_time":"2026-07-14T03:43:11.412Z","auto_closed":false,"manual":true}""",
+        "POST /shifts/close manual body: $manualClose",
+    )
+    // A manual close is NOT an auto-close (decision-56 §3): the 8h timer's flag stays down,
+    // or the row goes back through a resolution the worker has just answered.
+    check(manualClose.contains("\"auto_closed\":false"), "manual close never raises auto_closed")
+
     val resolve = ResolveShiftRequest(start).toJson()
     check(resolve == """{"end_time":"2026-07-14T03:43:11.412Z"}""", "POST /shifts/:id/resolve body: $resolve")
 

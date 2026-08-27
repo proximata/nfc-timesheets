@@ -60,6 +60,18 @@
     <string name="log_hint_start">Hold your phone to the tag by the entrance to start.</string>
     <string name="log_hint_stop">Hold your phone to the tag again to finish.</string>
     <string name="log_refresh">Refresh</string>
+
+    <!-- decision-56: the manual path, for when no tag can be read. -->
+    <string name="manual_start_open">Start without a tag</string>
+    <string name="manual_start_title">Start without a tag</string>
+    <string name="manual_start_intro">Only use this when the tag is missing or cannot be read. Pick the building you are working in now. The shift is flagged for the office as a manual start.</string>
+    <string name="manual_start_no_buildings">No buildings are stored on this phone yet. Please refresh first.</string>
+    <string name="manual_start_confirm">Start the shift</string>
+    <string name="manual_stop_open">Finish without a tag</string>
+    <string name="manual_stop_title">Finish the shift?</string>
+    <string name="manual_stop_body">Your shift at %1$s ends now. The office sees this shift as manually finished and reviews it.</string>
+    <string name="manual_stop_confirm">Finish now</string>
+    <string name="manual_cancel">Cancel</string>
     <string name="unknown_location">Unknown location</string>
     <string name="dismiss">Dismiss</string>
     <string name="log_no_push_note">This app has no push. Everything you see here updates when you open it.</string>

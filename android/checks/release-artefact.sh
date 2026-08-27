@@ -132,7 +132,20 @@ VERIFY_NEEDLES=(
   "SIMULATED: Anna B."
 )
 
-for needle in "${NEEDLES[@]}" "${VERIFY_NEEDLES[@]}"; do
+# decision-56's manual pair (ui/ManualSimulation.kt). Shipped, this one would be the worst
+# of the three: it answers POST /shifts/open and /shifts/close WITHOUT asking the server, so
+# a worker would be shown a running clock — or a finished shift — for hours that exist
+# nowhere but on their screen, and would find out at month end. "manualOpenSimulations" is
+# the debug-side control only (R8 renames it); the labels are what is load-bearing.
+MANUAL_NEEDLES=(
+  "SIMULATED manual start: the server accepts it"
+  "SIMULATED manual start: 422 the zone is not verified"
+  "SIMULATED manual start: 409 a shift is already open"
+  "SIMULATED manual stop: closed and flagged"
+  "manualOpenSimulations"
+)
+
+for needle in "${NEEDLES[@]}" "${VERIFY_NEEDLES[@]}" "${MANUAL_NEEDLES[@]}"; do
   # RED FIRST: the debug apk must contain it, or the needle is wrong and the release
   # result below is meaningless.
   if ! has debug "$needle"; then
@@ -176,6 +189,9 @@ if has release "WriteSimulation.kt"; then
 fi
 if has release "VerifySimulation.kt"; then
   echo "  ok  VerifySimulation.kt is present in release (the src/release/ stub), without any scenario"
+fi
+if has release "ManualSimulation.kt"; then
+  echo "  ok  ManualSimulation.kt is present in release (the src/release/ stub), without any scenario"
 fi
 
 if [ "$fail" -ne 0 ]; then

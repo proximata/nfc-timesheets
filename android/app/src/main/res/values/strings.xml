@@ -98,6 +98,20 @@
     <string name="log_hint_start">Halten Sie Ihr Telefon an den Tag beim Eingang, um zu beginnen.</string>
     <string name="log_hint_stop">Halten Sie Ihr Telefon erneut an den Tag, um zu beenden.</string>
     <string name="log_refresh">Aktualisieren</string>
+
+    <!-- decision-56: der manuelle Weg, wenn kein Tag gelesen werden kann. Bewusst
+         zweitrangig formuliert — der Tag bleibt der normale Weg. Jede so gestartete oder
+         beendete Schicht wird für das Büro sichtbar markiert. -->
+    <string name="manual_start_open">Ohne Tag starten</string>
+    <string name="manual_start_title">Ohne Tag starten</string>
+    <string name="manual_start_intro">Nur verwenden, wenn der Tag fehlt oder nicht gelesen werden kann. Wählen Sie das Objekt, in dem Sie jetzt arbeiten. Die Schicht wird für das Büro als manueller Start markiert.</string>
+    <string name="manual_start_no_buildings">Es sind noch keine Objekte auf diesem Telefon gespeichert. Bitte zuerst aktualisieren.</string>
+    <string name="manual_start_confirm">Schicht starten</string>
+    <string name="manual_stop_open">Ohne Tag beenden</string>
+    <string name="manual_stop_title">Schicht beenden?</string>
+    <string name="manual_stop_body">Die Schicht in %1$s wird jetzt beendet. Das Büro sieht diese Schicht als manuell beendet und prüft sie.</string>
+    <string name="manual_stop_confirm">Jetzt beenden</string>
+    <string name="manual_cancel">Abbrechen</string>
     <string name="unknown_location">Unbekanntes Objekt</string>
     <string name="dismiss">Ausblenden</string>
     <!-- decision-23: es gibt kein Push. Wer eine Benachrichtigung verspricht, die nie

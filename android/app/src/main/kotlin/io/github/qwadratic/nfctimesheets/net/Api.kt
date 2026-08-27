@@ -402,17 +402,35 @@ class Api(
     /**
      * POST /shifts/open — decision-19: the shift is posted at clock-IN, end_time NULL.
      * 201 new · 200 duplicate (same client_uuid) · 409 shift_already_open.
+     *
+     * @param manual decision-56 — the worker picked the building instead of tapping. The
+     *        ROUTE, the validation and every refusal are identical; only the flag differs,
+     *        which is why the manual path shows the same 422/409 copy the tap path shows.
      */
-    suspend fun openShift(clientUuid: String, locationId: String, startTime: Instant): WireShift =
+    suspend fun openShift(
+        clientUuid: String,
+        locationId: String,
+        startTime: Instant,
+        manual: Boolean = false,
+    ): WireShift =
         Wire.shift(
-            post("/shifts/open", OpenShiftRequest(clientUuid, locationId, startTime).toJson())
+            post("/shifts/open", OpenShiftRequest(clientUuid, locationId, startTime, manual).toJson())
                 .getJSONObject("shift"),
         )
 
-    /** POST /shifts/close — the second half. Idempotent on the same client_uuid. */
-    suspend fun closeShift(clientUuid: String, endTime: Instant, autoClosed: Boolean): WireShift =
+    /**
+     * POST /shifts/close — the second half. Idempotent on the same client_uuid.
+     *
+     * @param manual decision-56 — the Stop button. The server also stamps corrected_at.
+     */
+    suspend fun closeShift(
+        clientUuid: String,
+        endTime: Instant,
+        autoClosed: Boolean,
+        manual: Boolean = false,
+    ): WireShift =
         Wire.shift(
-            post("/shifts/close", CloseShiftRequest(clientUuid, endTime, autoClosed).toJson())
+            post("/shifts/close", CloseShiftRequest(clientUuid, endTime, autoClosed, manual).toJson())
                 .getJSONObject("shift"),
         )
 
