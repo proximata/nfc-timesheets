@@ -4,7 +4,7 @@ title: 'Remove manual scan button, add approach-tag UI'
 status: Done
 assignee: []
 created_date: '2026-07-28 13:48'
-updated_date: '2026-08-04 16:47'
+updated_date: '2026-08-27 07:32'
 labels:
   - ios
   - ux
@@ -31,20 +31,5 @@ Replace Tap to Start button with passive UI: illustration showing phone near tag
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-TRIAGE 2026-08-04 — DONE, with ONE acceptance criterion deliberately reversed.
-
-AC1 + AC2: commit e4ac6e2 "iOS: drop the in-app NFC scanner, fixing App Store error 90778". No
-CoreNFC reader session survives in NFCTimeSheets/ — ContentView.swift keeps only the comment
-recording where the button used to be. The Log screen is the passive "hold your phone to the tag
-by the entrance to start" instruction (string present in Localizable.xcstrings, both locales).
-Frames: `docs/media/before-ios-shift.png` and `docs/media/ios-journey.mp4`.
-
-AC3 — "hidden manual scan accessible for troubleshooting" — WAS NOT BUILT, and will not be.
-Apple rejected the build (error 90778) over the NFC entitlement the fallback required. The
-scanner was removed rather than re-entitled. Leaving this AC unchecked is the honest record.
-Consequence to know: if a tag is unreadable there is no in-app workaround; the office fixes it
-by editing the shift in the admin panel (PATCH /admin/shifts/:id, live).
-
-There is also no in-app clock-OUT button, by design (see the in-shift takeover): the tag is the
-only way to end a shift, so two mechanisms can never disagree about somebody hours.
+Audit 2026-08-27: AC3 (hidden triple-tap manual scan) is dead, not a gap - grep for tripleTap/manualScan across NFCTimeSheets/*.swift finds nothing. Per decision-49's own history (the App Store rejection 90778 fix), the in-app manual NFC scanner was deliberately REMOVED later as part of switching the entitlement from NDEF to TAG-only. Left unchecked deliberately.
 <!-- SECTION:NOTES:END -->
