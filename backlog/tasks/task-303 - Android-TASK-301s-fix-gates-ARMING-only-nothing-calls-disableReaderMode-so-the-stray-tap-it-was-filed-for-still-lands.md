@@ -3,9 +3,10 @@ id: TASK-303
 title: >-
   Android: TASK-301's fix gates ARMING only - nothing calls disableReaderMode,
   so the stray tap it was filed for still lands
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-08-27 16:07'
+updated_date: '2026-08-27 17:42'
 labels:
   - android
   - decision-58
@@ -51,9 +52,81 @@ MUST NOT REGRESS. AwaitingCard and WriteRefused must still WRITE (decision-58 se
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 syncReaderMode (or an equivalent) DISABLES the reader on the freshStep suppressed states, not merely declines to enable it
-- [ ] #2 the same treatment applied to the reassign flow, since it has the identical hole
-- [ ] #3 reader-armed-check.sh fails a build where readerWanted() is right but nothing disables - proven with a mutant
+- [x] #1 syncReaderMode (or an equivalent) DISABLES the reader on the freshStep suppressed states, not merely declines to enable it
+- [x] #2 the same treatment applied to the reassign flow, since it has the identical hole
+- [x] #3 reader-armed-check.sh fails a build where readerWanted() is right but nothing disables - proven with a mutant
 - [ ] #4 debug-build walk-through recorded: recovery entered from BOTH Unreadable states, Naming reached, card presented, FreshCardSection survives
-- [ ] #5 android/checks/run.sh green
+- [x] #5 android/checks/run.sh green
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+REVIEW GATE (independent, 2026-08-27). VERDICT: the fix in 6dd27f7 is REAL. AC#1/#2/#3/#5 verified by reading the code and by running the checks, not by trusting the report. AC#4 confirmed genuinely blocked on hardware. Status stays In Progress for AC#4 only.
+
+AC#1 - every freshStep suppressed state reaches an actual disableReaderMode(), traced in source:
+  freshStep = Reporting (l.669) / Naming (l.683) / Submitting (l.698) / Failed (l.677,680,720,723)
+  -> none of them calls syncReaderMode() itself, so the ONLY path is the reactive one:
+  LaunchedEffect(freshStep, reassignStep) { syncReaderMode() } at l.363, inside the
+  TimeSheetsTheme content lambda. That lambda is a non-inline @Composable (ui/Theme.kt:72), so
+  reading the two states as LaunchedEffect keys registers snapshot reads in its own recompose
+  scope -> any step change invalidates it -> keys differ -> effect relaunches -> syncReaderMode()
+  -> readerWanted() false -> nfc.disableReaderMode(this) at l.1107. The path is code, not comment.
+  Residual window is one frame + binder latency (was: the whole Naming screen, unbounded);
+  onTag's existing belt-and-braces covers a tag dispatched inside that window.
+
+AC#2 - the same single path covers reassign, because the same LaunchedEffect is keyed on
+  reassignStep too: Loading (l.1246) / Picking (l.1250) / LoadFailed / Submitting (l.1301) /
+  Failed (l.1311,1314) all hit the 'reassignStep !is Idle && !is Done -> false' clause and
+  disable. Done still ARMS (falls through to the selectedZone clauses; finishReassign has
+  already selectZone(fresh)-ed the new bound zone). Verified by reading, not by the comment.
+  A mutant keyed on freshStep ONLY goes red (see M4 below), so AC#2 is checked, not assumed.
+
+AC#3 - mutants run for real against a scratch tree (/tmp copy, real source edits, not only the
+  script's own MUTANT= env simulation). Command: sh checks/reader-armed-check.sh in the copy.
+  M1 pre-fix VerifyZoneActivity.kt (git show cffe9ca:...) + the NEW check
+     = EXACTLY the mutant 'readerWanted() stays correct, nothing ever disables'
+     -> exit 1, 'FAIL: syncReaderMode() not found - a start-only shape cannot disarm anything'
+     and the five readerWanted() assertions above it all still print ok. That is the proof the
+     old check was vacuous and the new one is not.
+  M2 syncReaderMode kept, the disableReaderMode line replaced by a comment
+     -> exit 1, 'FAIL: syncReaderMode() never calls disableReaderMode'
+  M3 LaunchedEffect line deleted    -> exit 1, 'FAIL: nothing re-runs syncReaderMode()...'
+  M4 LaunchedEffect(freshStep) only -> exit 1, same assertion (so AC#2 is gated too)
+  KNOWN LIMITS of a source-grep check, both filed as TASK-308, neither a blocker:
+  M5 'if (false) nfc.disableReaderMode(this)' stays GREEN, M6 'LaunchedEffect(freshStep,
+  reassignStep) { }' with an empty body stays GREEN. They catch a liar, not a regression.
+
+AC#5 - android/checks/run.sh re-run by the reviewer: exit 0 in 18s, tail:
+    reader-armed-check: reading syncReaderMode() - the radio must MOVE, not merely decline
+      ok  the extraction works: syncReaderMode() reads readerWanted()
+      ok  the not-wanted branch DISABLES the reader (not just return)
+      ok  ...and it still ARMS (the recovery must be able to write)
+      ok  no start-only caller left: syncReaderMode() is the single actuator
+      ok  a LaunchedEffect re-syncs on every freshStep AND reassignStep change
+    reader-armed-check: OK
+  Plus ./gradlew compileDebugKotlin -> exit 0 (the report claimed assembleDebug; recompiled
+  independently, the LaunchedEffect import and the new function body do compile).
+
+MUST-NOT-REGRESS, checked by reading:
+  - AwaitingCard/WriteRefused still arm and still write: onTag l.1505 writes on the NFC thread
+    and only THEN runOnUiThread { applyFreshWrite } changes the step, so no disable can land
+    mid-write. WriteRefused stays armed for the next card.
+  - scan-first idle-armed unchanged: selectedZone == null -> readerWanted() true; onResume
+    (l.1083) and changeZone (l.1196) both sync. FreshCardSection still rendered from BOTH
+    Unreadable states (l.412 scan-first, l.498 test scan) - untouched by the diff.
+  - reassign Done still re-arms. No server change. git diff --name-only 2e224eb..HEAD =
+    2 files, both android/ (VerifyZoneActivity.kt, checks/reader-armed-check.sh).
+
+AC#4 STILL OPEN, and the emulator wall is real, not an excuse: adapter == null on an emulator
+-> nfcState = UNSUPPORTED (l.1071) -> the when at l.376 renders scan_unsupported and never
+calls ReadyBody(), so FreshCardSection (l.412/498) is not in the composition at all. A physical
+NFC device is the only way to satisfy #4. Do not close TASK-303 on the strength of #1-#3+#5.
+
+ADJACENT GAP FOUND, NOT INTRODUCED HERE, filed as TASK-308: selectZone() on an UNBOUND zone
+(l.1169 else-branch -> loadBindLocations()) calls nothing and changes no LaunchedEffect key, so
+a reader armed by the scan-first state stays armed while readerWanted() says false - the same
+defect class, on the decision-54 §3 arm instead of the write arms. Pre-existing (cffe9ca and
+earlier behave identically), read-only in effect (a tap there ends in a 422, no card is
+written), so it does not block this push.
+<!-- SECTION:NOTES:END -->
