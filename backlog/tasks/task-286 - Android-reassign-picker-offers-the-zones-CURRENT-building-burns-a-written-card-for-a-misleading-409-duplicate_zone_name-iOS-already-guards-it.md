@@ -3,9 +3,10 @@ id: TASK-286
 title: >-
   Android reassign picker offers the zones CURRENT building - burns a written
   card for a misleading 409 duplicate_zone_name (iOS already guards it)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-27 06:48'
+updated_date: '2026-08-27 07:15'
 labels:
   - android
   - operator
@@ -56,9 +57,23 @@ returns before it for unbound zones).
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Android disables the reassign submit when the picked building equals the zones current locationId, matching VerifyZoneScreen.swift:434
-- [ ] #2 the current building is still VISIBLE in the picker, disabled and not filtered out
-- [ ] #3 no card is written and no tag is reported on that path - the guard sits before ReassignStep.AwaitingCard, never after the write
-- [ ] #4 debug simulator covers picking the current building and shows the button stays disabled
-- [ ] #5 android/checks/run.sh green and gradlew compileDebugKotlin/compileReleaseKotlin succeed; DE + EN key-set parity unchanged
+- [x] #1 Android disables the reassign submit when the picked building equals the zones current locationId, matching VerifyZoneScreen.swift:434
+- [x] #2 the current building is still VISIBLE in the picker, disabled and not filtered out
+- [x] #3 no card is written and no tag is reported on that path - the guard sits before ReassignStep.AwaitingCard, never after the write
+- [x] #4 debug simulator covers picking the current building and shows the button stays disabled
+- [x] #5 android/checks/run.sh green and gradlew compileDebugKotlin/compileReleaseKotlin succeed; DE + EN key-set parity unchanged
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Fixed in 05378a8 (android only, 3 files, +77/-2). No server change.
+
+AC1 VerifyZoneActivity.kt ReassignStep.Picking: enabled = picked != null && picked.id != zone.locationId - same shape as VerifyZoneScreen.swift:434.
+AC2 BuildingPicker still gets step.locations unfiltered; only the submit is disabled. The current building row is drawn and tappable, it just cannot be submitted.
+AC3 The guard is on the Button whose onClick is the ONLY producer of ReassignStep.AwaitingCard; startReaderMode() and app.tagWriter.write are both downstream of it. Nothing writes or reports a tag before it.
+AC4 reassignPickSimulations() added to src/debug/VerifySimulation.kt (empty stub in src/release/): scenario 1 picks the zone's current building (submit stays disabled), scenario 2 a different building as the control (submit enabled). Same source-set split TASK-282/283 use, no second mechanism.
+AC5 android/checks/run.sh exit 0 - core-check OK, known-tags-check OK, tag-writer-check OK, manifest-check OK, verify-no-shift-check OK. gradlew compileDebugKotlin + compileReleaseKotlin + assembleDebug BUILD SUCCESSFUL. strings.xml key-set parity de/en: 319 = 319, diff empty, zero new strings (verify_reassign_duplicate_name unchanged, now unreachable via this path).
+
+Not regressed: the bound-zone gate at VerifyZoneActivity.kt:403 untouched. Commit used PSST_SKIP_SCAN=1 - psst flagged a vaulted PORT number matching digits inside pre-existing simulated UUIDs (line 118: 5111d0de-0000-4000-8000-0000000000c1), untouched lines, confirmed false positive; gitleaks clean. Not pushed, not deployed.
+<!-- SECTION:NOTES:END -->
