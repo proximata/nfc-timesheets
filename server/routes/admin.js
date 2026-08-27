@@ -213,7 +213,10 @@ const PORTAL_TOKEN_HASH_RE = /^[0-9a-f]{64}$/;
 // silently missing from the other.
 const ADMIN_SHIFT_COLS =
   "id, worker_id, location_id, start_zone_id, end_zone_id, " +
-  "start_time, end_time, auto_closed, corrected_at, client_uuid, created_at";
+  "start_time, end_time, auto_closed, corrected_at, " +
+  // decision-56 §5: the two manual flags ride the existing shift JSON so every list that
+  // shows shifts can mark a correction. Additive — a caller not looking for them ignores them.
+  "manual_start, manual_close, client_uuid, created_at";
 
 // Bounds on the login payload. The upper limits are not a password policy, they cap
 // how much work an unauthenticated caller can make scrypt do per request.
@@ -487,7 +490,7 @@ async function adminData({ query }) {
               s.location_id, l.slug AS location_slug, l.name AS location_name,
               s.start_zone_id, s.end_zone_id, sz.name AS start_zone_name, ez.name AS end_zone_name,
               s.start_time, s.end_time, s.auto_closed, s.corrected_at,
-              s.client_uuid, s.created_at
+              s.manual_start, s.manual_close, s.client_uuid, s.created_at
        FROM shifts s
        JOIN workers w ON w.id = s.worker_id
        JOIN locations l ON l.id = s.location_id

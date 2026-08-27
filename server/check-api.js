@@ -255,6 +255,10 @@ CREATE TABLE shifts (
   end_time TIMESTAMPTZ,
   auto_closed BOOLEAN NOT NULL DEFAULT false,
   corrected_at TIMESTAMPTZ,
+  -- 014 (decision-56): one flag per half of the shift. NOT NULL DEFAULT false because every
+  -- row that already exists was a tap, and "we don't know" is not a state either may hold.
+  manual_start BOOLEAN NOT NULL DEFAULT false,
+  manual_close BOOLEAN NOT NULL DEFAULT false,
   client_uuid TEXT UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -1756,6 +1760,93 @@ try {
     assert.equal((await res.json()).error, "unknown_shift");
   });
 
+  // ---- manual open / manual close (decision-56) ------------------------------------
+  //
+  // The whole risk of a second path to a shift row is that it becomes a way to do
+  // something the tap path refuses, or a row nobody can tell apart from a tap. These four
+  // cases pin both halves: the gate is IDENTICAL, and the flag is always there.
+  await test("a manual open 422s on an unverified zone exactly as a tap does (decision-56 \u00a72)", async () => {
+    // RED: move `v.bool(body.manual)` above `v.requireVerifiedPlace(place)` and let it skip
+    // the gate -> this answers 201 and manual becomes a way to clock in at a card nobody
+    // has proved (decision-47 undone by the back door).
+    const unverified = (await newZoneRow({ location_id: locationUuid, name: "Ungepr\u00fcfte Stiege" })).zone;
+    const before = await countShifts();
+    const res = await asWorker("/shifts/open", {
+      method: "POST",
+      body: { client_uuid: uuid(84), location_uuid: unverified.id, start_time: new Date().toISOString(), manual: true },
+    });
+    assert.equal(res.status, 422);
+    assert.equal((await res.json()).error, "zone_unverified", "the SAME code a tap gets, not a manual-only one");
+    assert.equal(await countShifts(), before, "a refused manual open must not leave a row");
+    await admin.query("DELETE FROM zones WHERE id = $1", [unverified.id]);
+  });
+
+  await test("manual open stamps manual_start; manual close stamps manual_close + corrected_at in ONE call", async () => {
+    const opened = await asWorker("/shifts/open", {
+      method: "POST",
+      body: {
+        client_uuid: uuid(85),
+        location_uuid: locationUuid,
+        start_time: new Date(Date.now() - 3600_000).toISOString(),
+        manual: true,
+      },
+    });
+    assert.equal(opened.status, 201, await opened.clone().text());
+    const openedShift = (await opened.json()).shift;
+    assert.equal(openedShift.manual_start, true, "a shift started without a tag says so, forever");
+    assert.equal(openedShift.manual_close, false, "the other half is untouched by this one");
+
+    const closed = await asWorker("/shifts/close", {
+      method: "POST",
+      body: { client_uuid: uuid(85), end_time: new Date().toISOString(), manual: true },
+    });
+    assert.equal(closed.status, 200);
+    const shift = (await closed.json()).shift;
+    assert.equal(shift.manual_close, true);
+    assert.equal(shift.manual_start, true, "the open flag survives the close");
+    // THE POINT OF decision-56 \u00a73: no follow-up /shifts/resolve. corrected_at is set by the
+    // SAME UPDATE, so the row lands `resolved` and the worker is never sent to a screen to
+    // confirm a time they just typed in themselves.
+    assert.notEqual(shift.corrected_at, null, "a manual close resolves itself in one call");
+    assert.equal(shift.auto_closed, false, "a manual close is NOT the 8h timer's machine fact");
+    const row = (
+      await admin.query("SELECT manual_start, manual_close, corrected_at, auto_closed FROM shifts WHERE client_uuid = $1", [
+        uuid(85),
+      ])
+    ).rows[0];
+    assert.deepEqual(
+      { ms: row.manual_start, mc: row.manual_close, ac: row.auto_closed, resolved: row.corrected_at !== null },
+      { ms: true, mc: true, ac: false, resolved: true },
+      "through the DATABASE, not just the response body",
+    );
+  });
+
+  await test("a plain tap close is byte-for-byte unaffected: both flags false, corrected_at null", async () => {
+    await asWorker("/shifts/open", {
+      method: "POST",
+      body: { ...openBody, client_uuid: uuid(86), start_time: new Date(Date.now() - 600_000).toISOString() },
+    });
+    const closed = await asWorker("/shifts/close", {
+      method: "POST",
+      body: { client_uuid: uuid(86), end_time: new Date().toISOString() },
+    });
+    assert.equal(closed.status, 200);
+    const shift = (await closed.json()).shift;
+    assert.equal(shift.manual_start, false);
+    assert.equal(shift.manual_close, false);
+    assert.equal(shift.corrected_at, null, "*** a tap-out must NOT be silently stamped as a correction ***");
+    assert.equal(shift.auto_closed, false);
+  });
+
+  await test("`manual` is a boolean or nothing - a truthy string never raises the flag", async () => {
+    const res = await asWorker("/shifts/open", {
+      method: "POST",
+      body: { ...openBody, client_uuid: uuid(87), manual: "true" },
+    });
+    assert.equal(res.status, 400);
+    assert.equal((await res.json()).error, "invalid_field");
+  });
+
   // ---- validation ------------------------------------------------------------------
   await test("unknown location uuid is rejected", async () => {
     const res = await asWorker("/shifts/open", {
@@ -1946,6 +2037,9 @@ try {
     "location_id", //   "is the next tap the same building, or a switch?"
     "location_name", // the lock screen names the building with no second round trip
     "location_slug", // display and log lines only, never back into a tag URI (decision-21)
+    // decision-56, ADDED not renamed: which half of this shift had no tag tapped for it.
+    "manual_close",
+    "manual_start",
     "start_time", //    the ticking clock, AND the locally computed start+8h flip
     "start_zone_id",
     "worker_id",

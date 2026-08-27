@@ -63,6 +63,11 @@ const SHIFT_FIELDS = [
   "end_time",
   "auto_closed",
   "corrected_at",
+  // decision-56: one flag per half, additive on the wire. `true` means "no tag was tapped
+  // for this end of the shift" — an audit fact the office reads forever, never a state the
+  // client derives anything from. A build that predates them ignores both.
+  "manual_start",
+  "manual_close",
   "client_uuid",
 ];
 const SHIFT_COLS = SHIFT_FIELDS.join(", ");
@@ -157,7 +162,7 @@ async function roster({ session }) {
 }
 
 /**
- * POST /shifts/open {client_uuid, location_uuid, start_time}
+ * POST /shifts/open {client_uuid, location_uuid, start_time, manual?}
  * -> creates an OPEN shift (end_time NULL) FOR THE SIGNED-IN WORKER.
  *
  * `worker_id` is not in that list and is not read even if a client sends one. It used
@@ -194,6 +199,11 @@ async function openShift({ body, session }) {
   // ever. Everything below runs exactly as it did.
   v.requireVerifiedPlace(place);
   const start = v.timestamp(body.start_time, "start_time");
+  // decision-56 §2 — OPTIONAL, and it buys NOTHING except the flag. It is read AFTER both
+  // gates above on purpose: a manual open only ever succeeds where a real tap would also
+  // succeed, same 422/409 codes, same resolver. If this flag ever starts skipping a check,
+  // it has become the second mechanism the flag exists to make visible.
+  const manual = v.bool(body.manual, "manual");
 
   // No conflict TARGET on purpose. Two unique indexes can fire here — client_uuid and
   // shifts_one_open_per_worker_idx — and a plain retry trips BOTH. Naming one arbiter
@@ -203,11 +213,11 @@ async function openShift({ body, session }) {
   let inserted;
   try {
     inserted = await one(
-      `INSERT INTO shifts (worker_id, location_id, start_zone_id, start_time, client_uuid)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO shifts (worker_id, location_id, start_zone_id, start_time, client_uuid, manual_start)
+       VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT DO NOTHING
        RETURNING ${SHIFT_COLS}`,
-      [workerId, place.location_id, place.zone_id, start, clientUuid],
+      [workerId, place.location_id, place.zone_id, start, clientUuid, manual],
     );
   } catch (err) {
     if (!CONFLICT_CODES.has(err?.code)) throw err;
@@ -254,7 +264,7 @@ async function openShift({ body, session }) {
 }
 
 /**
- * POST /shifts/close {client_uuid, end_time, auto_closed?} -> fills in end_time.
+ * POST /shifts/close {client_uuid, end_time, auto_closed?, manual?} -> fills in end_time.
  *
  * NO duration ceiling here. The old 422 shift_too_long rejected exactly the case the
  * safety net was built for — the worker who forgets to tap out — and left them unable
@@ -282,6 +292,11 @@ async function openShift({ body, session }) {
 async function closeShift({ body, session }) {
   const clientUuid = v.clientUuid(body.client_uuid);
   const autoClosed = v.bool(body.auto_closed, "auto_closed");
+  // decision-56 §3 — the worker pressed Stop instead of tapping out. Two facts follow, in
+  // ONE update: `manual_close` (audit, forever) and `corrected_at` (this end time IS
+  // confirmed, by the person who worked it). `auto_closed` stays untouched — that is the
+  // machine's "nobody confirmed this", which is precisely what did just happen here.
+  const manual = v.bool(body.manual, "manual");
   const endPlace =
     body.location_uuid === undefined || body.location_uuid === null || body.location_uuid === ""
       ? null
@@ -323,9 +338,11 @@ async function closeShift({ body, session }) {
   // not erase the door the worker actually tapped.
   const updated = await one(
     `UPDATE shifts SET end_time = $2, auto_closed = auto_closed OR $3,
-            end_zone_id = COALESCE($5::uuid, end_zone_id)
+            end_zone_id = COALESCE($5::uuid, end_zone_id),
+            manual_close = manual_close OR $6,
+            corrected_at = CASE WHEN $6 THEN now() ELSE corrected_at END
       WHERE client_uuid = $1 AND worker_id = $4 AND end_time IS NULL RETURNING ${SHIFT_COLS}`,
-    [clientUuid, end, autoClosed, session.workerId, endPlace?.zone_id ?? null],
+    [clientUuid, end, autoClosed, session.workerId, endPlace?.zone_id ?? null, manual],
   );
   if (updated) {
     recordShift("shift close", {

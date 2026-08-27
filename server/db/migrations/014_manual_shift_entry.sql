@@ -1,0 +1,32 @@
+-- 014_manual_shift_entry.sql — a shift may be started or ended without a tap, and says so.
+--
+-- decision-56 §1. Until now the ONLY path to either half of a shift was a physical NFC tap,
+-- and both clients said so in a comment. The owner has asked for a manual path for the case
+-- the tap cannot happen — broken or unreachable card, dead phone NFC. The price of that
+-- second path is that it must never be indistinguishable from a tap-confirmed row, so each
+-- half carries its own flag, forever.
+--
+-- TWO COLUMNS AND NOT ONE, for the same reason 001 split `manual_finish` into
+-- `auto_closed` + `corrected_at`: a shift that was started manually and ended by a real tap
+-- is a different fact from one started by a tap and ended manually, and a single column
+-- would force the office to guess which. One column per independent fact.
+--
+-- NOT `auto_closed`. That column is the 8h-timer/different-building machine fact — nobody
+-- confirmed the end time. A manual close is the opposite: the worker is confirming their own
+-- finish time in the moment, which is what `corrected_at` already means, so POST /shifts/close
+-- stamps corrected_at in the SAME update and the row lands `resolved` with no follow-up
+-- screen (decision-56 §3). No new shiftState, and decision-10's resolution flow is untouched.
+--
+-- DEFAULT false AND NOT NULL: every row that exists today was a tap, and "we don't know"
+-- is not a state either flag is allowed to have. A NULLable flag would make every admin
+-- list write `manual_start IS TRUE` and quietly render the unknown as a tap anyway.
+--
+-- NO BACKFILL and no index. Purely additive; a bool DEFAULT false is metadata-only on PG 16
+-- (no table rewrite). Admin filtering by manual is a scan over a shift list that is already
+-- date-bounded, so an index here would be maintained for a query nobody writes yet.
+--
+-- NO BEGIN/COMMIT — migrate.js already runs each file with `psql -1`.
+-- 001-013 are APPLIED ON THE LIVE BOX and are not editable (db/README.md).
+ALTER TABLE shifts
+  ADD COLUMN manual_start BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN manual_close BOOLEAN NOT NULL DEFAULT false;
