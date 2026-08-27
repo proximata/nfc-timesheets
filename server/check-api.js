@@ -113,7 +113,16 @@ CREATE TABLE admins (
   id BIGSERIAL PRIMARY KEY,
   email TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- 015 (decision-57): DEFAULT 'admin' so every pre-existing row keeps today's access.
+  role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('admin', 'flags'))
+);
+-- 015 (decision-57): a name and a boolean, seeded below with the one real flag.
+CREATE TABLE feature_flags (
+  name TEXT PRIMARY KEY,
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by TEXT
 );
 CREATE TABLE sessions (
   token TEXT PRIMARY KEY,
@@ -334,6 +343,8 @@ CREATE INDEX tag_aliases_zone_idx ON tag_aliases (zone_id);
 const APP_KEY = "check-app-key-aaaaaaaaaaaa";
 const ADMIN_EMAIL = "check-admin@example.test";
 const ADMIN_PASSWORD = "correct horse battery staple";
+const FLAGS_ADMIN_EMAIL = "check-flags-admin@example.test";
+const FLAGS_ADMIN_PASSWORD = "a different correct horse";
 let server;
 let failures = 0;
 
@@ -698,6 +709,16 @@ try {
     ADMIN_EMAIL,
     await hashPassword(ADMIN_PASSWORD),
   ]);
+  // decision-57 §2: the scoped second account. Same table, same login route, one column
+  // apart — which is the entire RBAC, and the reason the refusal has to be tested rather
+  // than assumed.
+  await admin.query("INSERT INTO admins (email, password_hash, role) VALUES ($1, $2, 'flags')", [
+    FLAGS_ADMIN_EMAIL,
+    await hashPassword(FLAGS_ADMIN_PASSWORD),
+  ]);
+  // The migration seeds this row; the check seeds it the same way so GET /flags has the
+  // same shape here as on the box.
+  await admin.query("INSERT INTO feature_flags (name, enabled) VALUES ('fun_shift_screen', false)");
 
   // Inject the fake JWKS before the server can serve a single request.
   const { setKeyFetcherForTest } = await import("./lib/apple.js");
@@ -7485,6 +7506,142 @@ try {
       for (const k of ASC_VARS) delete process.env[k];
       await new Promise((r) => ascStub.close(r));
     }
+  }
+
+  // ---- feature flags + the scoped 'flags' admin role (decision-57) ----------------
+  {
+    resetLoginRate();
+    const flagsLogin = await call("/admin/login", {
+      method: "POST",
+      key: null,
+      ip: "10.57.0.1",
+      body: { email: FLAGS_ADMIN_EMAIL, password: FLAGS_ADMIN_PASSWORD },
+    });
+    assert.equal(flagsLogin.status, 200, "the scoped account logs in through the SAME route");
+    const flagsCookie = cookieFrom(flagsLogin);
+
+    resetLoginRate();
+    const fullLogin = await login(ADMIN_PASSWORD, { ip: "10.57.0.2" });
+    assert.equal(fullLogin.status, 200);
+    const fullCookie = cookieFrom(fullLogin);
+    resetLoginRate();
+
+    await test("a worker reads the flags as a flat name->bool map, seeded OFF", async () => {
+      const res = await asWorker("/flags");
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.fun_shift_screen, false, "the seeded flag is OFF — OFF is today's screen");
+      // No metadata on the wire: an admin's email must not reach every handset.
+      assert.deepEqual(Object.keys(body), ["fun_shift_screen"]);
+      assert.equal(typeof body.fun_shift_screen, "boolean");
+    });
+
+    await test("GET /flags is a worker route: no app key and no session are both refused", async () => {
+      assert.equal((await call("/flags", { key: null })).status, 401);
+      assert.equal((await call("/flags")).status, 401);
+    });
+
+    await test("the flags account may list and flip flags", async () => {
+      const list = await call("/admin/flags", { key: null, cookie: flagsCookie });
+      assert.equal(list.status, 200);
+      assert.deepEqual(
+        (await list.json()).flags.map((f) => [f.name, f.enabled]),
+        [["fun_shift_screen", false]],
+      );
+
+      const on = await call("/admin/flags/fun_shift_screen", {
+        method: "PATCH",
+        key: null,
+        cookie: flagsCookie,
+        body: { enabled: true },
+      });
+      assert.equal(on.status, 200);
+      const flag = (await on.json()).flag;
+      assert.equal(flag.enabled, true);
+      assert.equal(flag.updated_by, FLAGS_ADMIN_EMAIL, "the audit line names WHO, from the session");
+
+      // The phone sees the flip on its next fetch — the point of the whole table.
+      assert.equal((await (await asWorker("/flags")).json()).fun_shift_screen, true);
+
+      const off = await call("/admin/flags/fun_shift_screen", {
+        method: "PATCH",
+        key: null,
+        cookie: flagsCookie,
+        body: { enabled: false },
+      });
+      assert.equal(off.status, 200);
+      assert.equal((await (await asWorker("/flags")).json()).fun_shift_screen, false);
+    });
+
+    await test("an unknown flag name is a 404, never a new row nothing reads", async () => {
+      const res = await call("/admin/flags/not_a_flag", {
+        method: "PATCH",
+        key: null,
+        cookie: flagsCookie,
+        body: { enabled: true },
+      });
+      assert.equal(res.status, 404);
+      assert.equal((await res.json()).error, "unknown_flag");
+      assert.equal(await countOf("SELECT count(*) AS n FROM feature_flags"), 1);
+    });
+
+    await test("a missing or non-boolean `enabled` is a 400, not a coerced truth", async () => {
+      for (const body of [{}, { enabled: "true" }, { enabled: 1 }, { enabled: null }]) {
+        const res = await call("/admin/flags/fun_shift_screen", {
+          method: "PATCH",
+          key: null,
+          cookie: flagsCookie,
+          body,
+        });
+        assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(body)}`);
+        assert.equal((await res.json()).error, "invalid_field");
+      }
+      assert.equal(await countOf("SELECT count(*) AS n FROM feature_flags WHERE enabled"), 0);
+    });
+
+    await test("the flags session is refused on EVERY other admin route, exactly as anonymous is", async () => {
+      // THE BLAST RADIUS IS THE FEATURE. This account exists to flip one boolean; if it can
+      // read /admin/data it can read every worker's rate, phone number and shift history.
+      // Compared against the ANONYMOUS answer, not against a hardcoded 401, so the two can
+      // never drift into a 403 that enumerates which admin routes exist.
+      const probes = [
+        ["GET", "/admin/data"],
+        ["GET", "/admin/session"],
+        ["GET", "/admin/sms-status"],
+        ["POST", "/admin/workers"],
+        ["POST", "/admin/locations"],
+        ["POST", "/admin/operators"],
+        ["POST", "/admin/logout"],
+        ["POST", "/admin/password"],
+      ];
+      for (const [method, path] of probes) {
+        const scoped = await call(path, { method, key: null, cookie: flagsCookie, body: method === "GET" ? undefined : {} });
+        const anon = await call(path, { method, key: null, body: method === "GET" ? undefined : {} });
+        assert.equal(scoped.status, 401, `${method} ${path} must refuse the flags role`);
+        assert.equal(scoped.status, anon.status, `${method} ${path} must answer the flags role exactly as anonymous`);
+        assert.deepEqual(await scoped.json(), await anon.json(), `${method} ${path} must not distinguish the two`);
+      }
+    });
+
+    await test("the full admin role is unaffected: it reads /admin/data AND /admin/flags", async () => {
+      assert.equal((await call("/admin/data", { key: null, cookie: fullCookie })).status, 200);
+      const list = await call("/admin/flags", { key: null, cookie: fullCookie });
+      assert.equal(list.status, 200);
+      assert.equal((await list.json()).flags.length, 1);
+      const patched = await call("/admin/flags/fun_shift_screen", {
+        method: "PATCH",
+        key: null,
+        cookie: fullCookie,
+        body: { enabled: false },
+      });
+      assert.equal(patched.status, 200);
+      assert.equal((await patched.json()).flag.updated_by, ADMIN_EMAIL);
+    });
+
+    await test("/admin/flags still refuses an anonymous caller and a worker cookie", async () => {
+      assert.equal((await call("/admin/flags", { key: null })).status, 401);
+      assert.equal((await call("/admin/flags", { key: null, cookie: workerCookie })).status, 401);
+    });
   }
 
   await test("unknown route returns a 404 code, not a stack trace", async () => {

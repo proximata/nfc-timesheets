@@ -2589,8 +2589,41 @@ async function deleteSetting({ params }) {
   return { status: 200, body: { setting: { key, value: null } } };
 }
 
+// ---- feature flags (decision-57 §1) ----------------------------------------------
+// A name and a boolean is the whole feature. These two routes are the ONLY ones a
+// 'flags'-role session can reach (auth: "flags" below); everything else in this file
+// stays admin-only through requireAdminSession's default.
+
+async function listFlags() {
+  const flags = await all("SELECT name, enabled, updated_at, updated_by FROM feature_flags ORDER BY name");
+  return { status: 200, body: { flags } };
+}
+
+/**
+ * PATCH /admin/flags/:name -> flip one flag.
+ *
+ * NO UPSERT. A flag is created by a migration, alongside the client code that reads it;
+ * a typo'd name here must be a 404 and not a new row nothing will ever consult, because a
+ * flag with no reader looks enabled and does nothing — the worst possible answer to
+ * "why is the screen still green".
+ */
+async function patchFlag({ params, body, session }) {
+  const enabled = v.bool(body.enabled, "enabled", null);
+  if (enabled === null) fail(400, "invalid_field", "enabled");
+  const row = await one(
+    `UPDATE feature_flags SET enabled = $2, updated_at = now(), updated_by = $3
+      WHERE name = $1
+      RETURNING name, enabled, updated_at, updated_by`,
+    [params.name, enabled, session.email],
+  );
+  if (!row) fail(404, "unknown_flag");
+  return { status: 200, body: { flag: row } };
+}
+
 export const adminRoutes = [
   { method: "POST", path: "/admin/login", auth: null, handler: login },
+  { method: "GET", path: "/admin/flags", auth: "flags", handler: listFlags },
+  { method: "PATCH", path: "/admin/flags/:name", auth: "flags", handler: patchFlag },
   { method: "POST", path: "/admin/logout", auth: "admin", handler: logout },
   { method: "GET", path: "/admin/session", auth: "admin", handler: whoami },
   { method: "POST", path: "/admin/password", auth: "admin", handler: changePassword },

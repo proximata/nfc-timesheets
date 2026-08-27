@@ -226,21 +226,30 @@ export function readCookie(headers, name = SESSION_COOKIE) {
   return null;
 }
 
-/** Resolve the session cookie to an admin, or 401. Expiry is enforced in SQL. */
-export async function requireAdminSession(headers) {
+/**
+ * Resolve the session cookie to an admin, or 401. Expiry is enforced in SQL.
+ *
+ * decision-57 §2. `allowedRoles` DEFAULTS to ['admin'], which is what makes every
+ * existing route admin-only without a single one of them changing: a `flags`-role
+ * session is refused here, before any handler runs, and gets the SAME 401 an
+ * unauthenticated caller gets — not a 403, so the scoped account cannot enumerate which
+ * admin routes exist. Only the two /admin/flags routes opt into the wider set.
+ */
+export async function requireAdminSession(headers, allowedRoles = ["admin"]) {
   const token = readCookie(headers);
   // Shape-check before SQL: a garbage cookie is not worth a round trip.
   if (!token || !TOKEN_RE.test(token)) fail(401, "unauthorized");
 
   const row = await one(
-    `SELECT s.admin_id, s.expires_at, a.email
+    `SELECT s.admin_id, s.expires_at, a.email, a.role
        FROM sessions s
        JOIN admins a ON a.id = s.admin_id
       WHERE s.token = $1 AND s.expires_at > now()`,
     [hashToken(token)],
   );
   if (!row) fail(401, "unauthorized");
-  return { adminId: row.admin_id, email: row.email, token };
+  if (!allowedRoles.includes(row.role)) fail(401, "unauthorized");
+  return { adminId: row.admin_id, email: row.email, role: row.role, token };
 }
 
 /**

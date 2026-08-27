@@ -599,7 +599,24 @@ async function markMaterialRequestSeen({ params, session }) {
 // Every one of these is `auth: "worker"` — X-App-Key AND a signed-in worker. There is
 // no app-key-only shift route left; that combination is what made body.worker_id
 // authoritative in the first place.
+/**
+ * GET /flags -> {"fun_shift_screen": false}
+ *
+ * decision-57 §1. A flat name->bool map and nothing else: no updated_at, no updated_by,
+ * no who-changed-it — the phone has no use for any of it, and what is not sent cannot
+ * leak an admin's email address to every handset in the field.
+ *
+ * NOT folded into /roster, even though the phone fetches both at the same moment: the
+ * roster is buildings-and-zones and is already the biggest payload the app takes, and a
+ * flag lookup that fails must not be able to cost a worker their tap resolution.
+ */
+async function flags() {
+  const rows = await all("SELECT name, enabled FROM feature_flags");
+  return { status: 200, body: Object.fromEntries(rows.map((r) => [r.name, r.enabled])) };
+}
+
 export const appRoutes = [
+  { method: "GET", path: "/flags", auth: "worker", handler: flags },
   { method: "GET", path: "/roster", auth: "worker", handler: roster },
   { method: "POST", path: "/shifts/open", auth: "worker", handler: openShift },
   { method: "GET", path: "/shifts/open", auth: "worker", handler: currentOpenShift },

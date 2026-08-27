@@ -50,7 +50,12 @@ export function assertEnv(env = process.env) {
 //   "app"      - X-App-Key only. Sign-in itself, which cannot require a session yet.
 //   "worker"   - X-App-Key AND a ts_worker session (decision-22). Identity comes from
 //                the session; handlers must never read a worker id from the request.
-//   "admin"    - ts_session cookie (decision-20).
+//   "admin"    - ts_session cookie (decision-20), role='admin' ONLY.
+//   "flags"    - ts_session cookie, role 'admin' OR 'flags' (decision-57 §2). The ONLY
+//                auth kind that the scoped flags account can pass. Every other admin
+//                route refuses it with the same 401 an anonymous caller gets, because
+//                requireAdminSession defaults to ['admin'] — structural, not a per-handler
+//                check somebody can forget to add.
 //   "operator" - X-App-Key AND a ts_operator session (decision-45). No route with this
 //                auth kind is ever reachable near /shifts/open or /shifts/close — that
 //                absence, not a check inside a handler, is what makes "an operator does
@@ -252,6 +257,7 @@ async function handle(req, res, ctx) {
   if (route.auth === "app" || route.auth === "worker" || route.auth === "operator") requireAppKey(req.headers);
   const session =
     route.auth === "admin" ? await requireAdminSession(req.headers)
+    : route.auth === "flags" ? await requireAdminSession(req.headers, ["admin", "flags"])
     : route.auth === "worker" ? await requireWorkerSession(req.headers)
     : route.auth === "operator" ? await requireOperatorSession(req.headers)
     : null;
