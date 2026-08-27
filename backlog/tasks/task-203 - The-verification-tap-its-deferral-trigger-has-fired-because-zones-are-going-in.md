@@ -3,10 +3,10 @@ id: TASK-203
 title: >-
   The verification tap: its deferral trigger has fired, because zones are going
   in
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-08-19 14:12'
-updated_date: '2026-08-22 13:37'
+updated_date: '2026-08-27 07:26'
 labels:
   - android
   - web
@@ -60,38 +60,15 @@ AC#5     -> the deferral is a decision, not an implementation; D6 (correcting th
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A decision record exists, status proposed, choosing (a), (b) or (c) and naming what the other two cost
-- [ ] #2 If (b): the flag is a SECOND fact, never a reuse of auto_closed or corrected_at, and the exclusion is NAMED and COUNTED on /payroll/ and /pl/ like decision-10's
-- [ ] #3 If (c): the Android surface is specified down to what it must NOT do -- no POST, no ACTION_VIEW re-entry, no client_uuid minted
-- [ ] #4 Either way: the interim admin copy in TASK-198 is verified present, in de and en
-- [ ] #5 No application code in this task
+- [x] #1 A decision record exists, status proposed, choosing (a), (b) or (c) and naming what the other two cost
+- [x] #2 If (b): the flag is a SECOND fact, never a reuse of auto_closed or corrected_at, and the exclusion is NAMED and COUNTED on /payroll/ and /pl/ like decision-10's
+- [x] #3 If (c): the Android surface is specified down to what it must NOT do -- no POST, no ACTION_VIEW re-entry, no client_uuid minted
+- [x] #4 Either way: the interim admin copy in TASK-198 is verified present, in de and en
+- [x] #5 No application code in this task
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-DESIGN LANDED as decision-47 + backlog/docs/ZONE-VERIFICATION.md, and option (c) was chosen: a read-only test scan that posts no shift.
-
-THE SERVER HALF IS BUILT, DEPLOYED AND PROVED ON THE LIVE BOX (2026-08-22):
-  migration 010    zones.verified_at + verified_by_operator_id, NULLable, NO DEFAULT, zero rows
-  the gate         POST /shifts/open -> 422 zone_unverified, no shift row; OPEN only, never CLOSE
-  the test scan    GET /operator/zones + POST /operator/zones/:id/verify, auth: operator,
-                   resolves through the REAL v.activePlace, requires the card to name the zone,
-                   idempotent, and STRUCTURALLY unable to open a shift (no shift route accepts
-                   a ts_operator cookie)
-  /roster          an unverified zone's ROW is published and its tag_serial is NULLed
-  resolve-building DELETED, with every caller
-
-Live proof, against the real HOIV row: ops/prove-zone-verification.sh (the wall card still
-answers 201 with an unverified zone under it; the zone's own id 422s with no shift row; the
-test scan moves the shift count by 0; a re-scan is idempotent). Its negative case was RUN:
-seeding the zone verified at creation turns eleven assertions red.
-
-STILL OPEN, and this task stays In Progress until they land:
-  TASK-241  the admin: an unverified zone must be VISIBLY waiting for a test scan
-  TASK-242  Android: MODE_VERIFY, err_zone_unverified, and zone_unverified made RETRYABLE
-
-UNTIL TASK-242 ships, do not create a zone at a building where anyone is working: the field
-APK renders err_rejected and, worse, treats the refusal as terminal, so an offline tap on a
-zone that goes live an hour later is stranded. Production has zero workers today.
+Its own implementation notes already said 'stays In Progress until TASK-241, TASK-242 land' - both are Done with independently-verified evidence (TASK-241: live PROVE-47 run against schimmer-glanz.exe.xyz, unverified zone tap 422/no shift row, test scan creates no shift, idempotent re-scan; TASK-242: MODE_VERIFY shipped and wired, ApiFailure.isRetryable pinned by core-check). Design landed as decision-47 + ZONE-VERIFICATION.md, option (c) chosen. AC4 (interim admin copy) confirmed still live in web/messages/de.json (zonesAwaitingScan, zoneWaitingVerification, zoneVerifyNextStep). AC5 trivially true, no app code in this task itself. Closed 2026-08-27 during a backlog audit, no new code.
 <!-- SECTION:NOTES:END -->

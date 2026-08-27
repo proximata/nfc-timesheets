@@ -3,9 +3,10 @@ id: TASK-170
 title: >-
   Geocode-Backfill in den Deploy einhängen und einmal gegen Produktion laufen
   lassen
-status: Done
+status: In Progress
 assignee: []
 created_date: '2026-08-18 07:50'
+updated_date: '2026-08-27 07:30'
 labels:
   - ops
   - map
@@ -45,3 +46,9 @@ NOTE ON THE KEY: GOOGLE_GEOCODING_KEY is the SERVER key, IP-restricted, read ins
 - [ ] #3 Running it a second time against production writes nothing and says 'nichts zu tun'
 - [ ] #4 ops/deploy.sh runs it, and a deliberately broken run (key removed) still lets the deploy finish green
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AUDIT 2026-08-27, FALSE CLOSURE FOUND: this was marked Done with all 4 ACs unchecked and zero notes - nobody ever verified it. grep -n backfill ops/deploy.sh returns NOTHING: AC4 (wire the backfill into deploy.sh) was never done. AC1's dry-run output was never recorded. AC2's premise is now stale: production was fully reset since this task was written (the original HOIV Arsenalstrasse 11 row is gone; per TASK-16's current notes the sole production location is now a row named test with an empty address, so there is nothing to geocode yet regardless of wiring). A second script, server/bin/geocode-backfill.js, now also exists alongside the one this task names (ops/backfill-geocode.mjs) - unclear which is current, needs checking before any fix. Real remaining, distinct work: decide which backfill script is canonical, then actually wire it into ops/deploy.sh so every future deploy keeps geocoding fresh instead of needing a one-off manual run (which is what TASK-16 already did once, manually, per its own notes). Reopened to In Progress; do not close again without grep evidence the wiring exists.
+<!-- SECTION:NOTES:END -->

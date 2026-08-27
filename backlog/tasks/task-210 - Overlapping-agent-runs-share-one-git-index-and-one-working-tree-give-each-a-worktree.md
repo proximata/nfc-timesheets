@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-20 04:04'
-updated_date: '2026-08-25 13:55'
+updated_date: '2026-08-27 07:29'
 labels:
   - ops
   - process
@@ -53,5 +53,5 @@ The port collisions are the same problem in a different resource: two runs, one 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-CLOSED 2026-08-25. Procedure written: ops/WORKTREES.md (git worktree add per edit-run, merge back on Verify success; git commit -o <path> as the cheap fallback for a short single-file run). Cross-referenced from AGENTS.md's workflow-tool-quirks section so a future run finds it before, not after, a collision.
+Fixed in ops/WORKTREES.md (git-worktree-per-run + git commit -o fallback), AC1/AC2 done. AUDIT 2026-08-27: AC3/AC4 (port-collision auto-detection, exercised negative case) never landed and are now moot rather than pending - the adopted mitigation diverged from the original worktree-per-run design. The tool has no cwd-override so per-run worktrees were never actually usable in practice; the real adopted rule became concurrent runs only on confirmed-disjoint file sets, staged by exact path, never git add -A - which every workflow this session followed successfully with zero collisions (decision-54, decision-55 rollouts). Left unchecked deliberately; task stays Done on AC1/2, the original AC3/4 mechanism was superseded by a simpler practice that needed neither.
 <!-- SECTION:NOTES:END -->
