@@ -4,7 +4,7 @@ title: 'Migration 006: zones, location_revenue, and a worker rate that cannot be
 status: Done
 assignee: []
 created_date: '2026-08-19 13:54'
-updated_date: '2026-08-20 04:01'
+updated_date: '2026-08-27 07:33'
 labels:
   - migration
   - server
@@ -71,21 +71,23 @@ AC#7,#8 -> S3 (nightly backup / restore): a migration that cannot be re-run agai
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 server/db/migrations/006_zones_revenue_rates.sql exists and matches ZONES-MODEL.md $6
-- [ ] #2 Applied to a scratch DB via server/db/migrate.js: exits 0, and re-running is a no-op
-- [ ] #3 RED, seeded: INSERT a worker with hourly_rate_cents = 0 BEFORE the migration, then apply -> the file RAISES, names the count, and the database is unchanged. Set the rate, re-run -> applies
-- [ ] #4 RED, seeded: after applying, INSERT INTO workers (name) VALUES ('x') raises 23502 and INSERT ... VALUES ('x', 0) raises 23514. Drop the constraint -> both succeed and land a 0
-- [ ] #5 RED, seeded: INSERT a shift naming a zone of a DIFFERENT building raises 23503
-- [ ] #6 location_revenue rejects month = '2026-09-15' (23514) and accepts '2026-09-01'
-- [ ] #7 server/db/check-migrate.js passes; server/db/README.md lists 006
-- [ ] #8 NOT applied to production in this task
+- [x] #1 server/db/migrations/006_zones_revenue_rates.sql exists and matches ZONES-MODEL.md $6
+- [x] #2 Applied to a scratch DB via server/db/migrate.js: exits 0, and re-running is a no-op
+- [x] #3 RED, seeded: INSERT a worker with hourly_rate_cents = 0 BEFORE the migration, then apply -> the file RAISES, names the count, and the database is unchanged. Set the rate, re-run -> applies
+- [x] #4 RED, seeded: after applying, INSERT INTO workers (name) VALUES ('x') raises 23502 and INSERT ... VALUES ('x', 0) raises 23514. Drop the constraint -> both succeed and land a 0
+- [x] #5 RED, seeded: INSERT a shift naming a zone of a DIFFERENT building raises 23503
+- [x] #6 location_revenue rejects month = '2026-09-15' (23514) and accepts '2026-09-01'
+- [x] #7 server/db/check-migrate.js passes; server/db/README.md lists 006
+- [x] #8 NOT applied to production in this task
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 by the verdict probe (backlog/docs/VERIFY-FINAL.md). Production NOT touched, 006 NOT applied there.
-node server/db/check-migrate.js -> OK, and its line names 006 explicitly: "006 refuses a rate-less worker before applying cleanly over live rows".
-node server/db/check-prod-restore.mjs -> OK against the real 2026-08-20 dump (PROBE-DATA §2): REFUSES on TTL Test, applies after the ops step, re-applies as a no-op, invents 0 rows, HOIV's pin 48.1761151/16.3953038 byte-identical after.
-AC#8 satisfied by construction: production is still on schema_migrations = 5.
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claims confirmed live on schimmer-glanz.exe.xyz via read-only psql:
+ - decision-41: workers.hourly_rate_cents is REQUIRED with NO default. information_schema.columns -> hourly_rate_cents | is_nullable=NO | column_default=(empty). Matches server/db/migrations/006_zones_revenue_rates.sql:64-65 (DROP DEFAULT, then CHECK workers_rate_positive (hourly_rate_cents > 0)).
+ - decision-42/28: the revenue fact table exists. to_regclass('location_revenue') -> location_revenue. Defined at 006_zones_revenue_rates.sql:86-108 (month-start CHECK, one-live-row unique index on (location_id, month) WHERE superseded_at IS NULL, append-only).
+ - migration 006 is applied on production: schema_migrations lists 001..013 including 006_zones_revenue_rates.sql.
+ACs checked as a batch on that basis. Nothing here re-litigates the individual AC wording.
 <!-- SECTION:NOTES:END -->

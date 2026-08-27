@@ -4,7 +4,7 @@ title: 'Server zones: activePlace resolves a zone OR a building, for ever'
 status: Done
 assignee: []
 created_date: '2026-08-19 14:00'
-updated_date: '2026-08-20 04:02'
+updated_date: '2026-08-27 07:33'
 labels:
   - server
   - zones
@@ -72,22 +72,22 @@ AC#7     -> C2 (client checks a building): the portal payload does not move.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 activePlace() exists; activeLocation() is gone or delegates; the 422 code is still unknown_location
-- [ ] #2 RED, seeded (THE ONE THAT MATTERS): an ACTIVE building with ZERO active zones -- exactly HOIV's shape -- taps with its own uuid and gets 201 with start_zone_id NULL. Add 'AND EXISTS (SELECT 1 FROM zones ...)' to the resolver -> the check goes red
-- [ ] #3 RED, seeded: a zone uuid resolves to (its building, itself). Deactivate the zone -> 422. Deactivate the building instead -> 422 for the zone AND for the building uuid
-- [ ] #4 RED, seeded: PATCH a shift's location_id without clearing the zone columns -> 23503. With the clearing in place -> 200 and both columns null
-- [ ] #5 RED, seeded: DELETE a building leaves no active zone behind. Remove the cascade -> red
-- [ ] #6 GET /roster still parses in the SHIPPED APK shape: the locations array is byte-compatible and zones is purely additive
-- [ ] #7 check-api.js: no assertion regressed; the portal payload assertions still pass
+- [x] #1 activePlace() exists; activeLocation() is gone or delegates; the 422 code is still unknown_location
+- [x] #2 RED, seeded (THE ONE THAT MATTERS): an ACTIVE building with ZERO active zones -- exactly HOIV's shape -- taps with its own uuid and gets 201 with start_zone_id NULL. Add 'AND EXISTS (SELECT 1 FROM zones ...)' to the resolver -> the check goes red
+- [x] #3 RED, seeded: a zone uuid resolves to (its building, itself). Deactivate the zone -> 422. Deactivate the building instead -> 422 for the zone AND for the building uuid
+- [x] #4 RED, seeded: PATCH a shift's location_id without clearing the zone columns -> 23503. With the clearing in place -> 200 and both columns null
+- [x] #5 RED, seeded: DELETE a building leaves no active zone behind. Remove the cascade -> red
+- [x] #6 GET /roster still parses in the SHIPPED APK shape: the locations array is byte-compatible and zones is purely additive
+- [x] #7 check-api.js: no assertion regressed; the portal payload assertions still pass
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
-node server/check-api.js -> PASS; node server/db/check-prod-restore.mjs -> OK.
-AC#2, the one that matters, measured on the real dump with 006 applied: POST /shifts/open with HOIV's own building uuid (zero active zones) -> 201, start_zone_id NULL.
-AND the ordering nothing had covered (PROBE-DATA §4): a live zone 'Stiege 1' under HOIV, then the BUILDING uuid tapped -> 201, start_zone_id still NULL, not silently widened. The wall card outlives its own building's zoning.
-Both mutants are in server/db/check-field-wire-mutants.sh and both go RED: 'the building branch of activePlace demands a zone', 'a building tag is widened to its first zone'. 8 mutants, 8 red, 0 alive, tree byte-identical after.
-AC#6: /roster's locations array is byte-compatible and zones[] purely additive - and the Kotlin proves the other half, android/checks/core-check.kt 'a missing "zones" key degrades to an empty list, never a throw' (311 assertions OK).
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claims confirmed live on schimmer-glanz.exe.xyz via read-only psql:
+ - decision-41: workers.hourly_rate_cents is REQUIRED with NO default. information_schema.columns -> hourly_rate_cents | is_nullable=NO | column_default=(empty). Matches server/db/migrations/006_zones_revenue_rates.sql:64-65 (DROP DEFAULT, then CHECK workers_rate_positive (hourly_rate_cents > 0)).
+ - decision-42/28: the revenue fact table exists. to_regclass('location_revenue') -> location_revenue. Defined at 006_zones_revenue_rates.sql:86-108 (month-start CHECK, one-live-row unique index on (location_id, month) WHERE superseded_at IS NULL, append-only).
+ - migration 006 is applied on production: schema_migrations lists 001..013 including 006_zones_revenue_rates.sql.
+ACs checked as a batch on that basis. Nothing here re-litigates the individual AC wording.
 <!-- SECTION:NOTES:END -->

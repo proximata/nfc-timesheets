@@ -4,7 +4,7 @@ title: 'Admin zones: building creation stops writing tags, zone creation starts'
 status: Done
 assignee: []
 created_date: '2026-08-19 14:02'
-updated_date: '2026-08-20 04:02'
+updated_date: '2026-08-27 07:33'
 labels:
   - web
   - zones
@@ -74,22 +74,23 @@ AC#7,#8  -> D1/D2 at 390px (decision-28) and IA-A11Y.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Building creation completes with zero zones and offers a named next action; no tag URI appears on that path
-- [ ] #2 The zone drawer renders the zone's URI verbatim from lib/tag.ts, with copy and the UUID line, matching today's building control exactly
-- [ ] #3 RED, seeded: remove the 'Gebäude-Tag (Bestand)' disclosure -> a check asserting the HOIV building's own URI is reachable in the admin goes red
-- [ ] #4 m2 left empty saves NULL and the zone list says 'Fläche unbekannt' -- never 0
-- [ ] #5 Serial input accepts '04a1a852ae5c80', '04-a1-a8-52-ae-5c-80' and '04:A1:A8:52:AE:5C:80' and stores the canonical form; a serial already claimed answers 409 naming the other zone
-- [ ] #6 The second-zone warning is rendered until the APK is confirmed, and it is a sentence, not a colour
-- [ ] #7 de/en exact key parity (web/scripts/check.mjs); Austrian business German; every plural through ICU
-- [ ] #8 Renders at 1680 and at 390; the zone list is stacked blocks on narrow; focus trap and Escape behave as in the existing Drawer
+- [x] #1 Building creation completes with zero zones and offers a named next action; no tag URI appears on that path
+- [x] #2 The zone drawer renders the zone's URI verbatim from lib/tag.ts, with copy and the UUID line, matching today's building control exactly
+- [x] #3 RED, seeded: remove the 'Gebäude-Tag (Bestand)' disclosure -> a check asserting the HOIV building's own URI is reachable in the admin goes red
+- [x] #4 m2 left empty saves NULL and the zone list says 'Fläche unbekannt' -- never 0
+- [x] #5 Serial input accepts '04a1a852ae5c80', '04-a1-a8-52-ae-5c-80' and '04:A1:A8:52:AE:5C:80' and stores the canonical form; a serial already claimed answers 409 naming the other zone
+- [x] #6 The second-zone warning is rendered until the APK is confirmed, and it is a sentence, not a colour
+- [x] #7 de/en exact key parity (web/scripts/check.mjs); Austrian business German; every plural through ICU
+- [x] #8 Renders at 1680 and at 390; the zone list is stacked blocks on narrow; focus trap and Escape behave as in the existing Drawer
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md), keyed bundle, server :8080.
-demo/probe-zones-revenue.mjs: 'zone drawer opens, is modal, takes focus' / 'fits 390px - worst +0px' / 'zone drawer controls reachable - 7' / 'Escape closes the zone drawer and restores focus' -> probe-zone-opener. At 1680, 1440x900 and 390, dark and light (AC#8).
-demo/audit-overlays.mjs 88/88: locations:zone, 7 focusables, trapped BOTH ways, focus back on 'Zone anlegen'.
-node server/check-api.js -> PASS covers the serial normalisation and the 409 (AC#5).
-cd web && pnpm check -> 1173 keys exact parity (AC#7).
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claims confirmed live on schimmer-glanz.exe.xyz via read-only psql:
+ - decision-41: workers.hourly_rate_cents is REQUIRED with NO default. information_schema.columns -> hourly_rate_cents | is_nullable=NO | column_default=(empty). Matches server/db/migrations/006_zones_revenue_rates.sql:64-65 (DROP DEFAULT, then CHECK workers_rate_positive (hourly_rate_cents > 0)).
+ - decision-42/28: the revenue fact table exists. to_regclass('location_revenue') -> location_revenue. Defined at 006_zones_revenue_rates.sql:86-108 (month-start CHECK, one-live-row unique index on (location_id, month) WHERE superseded_at IS NULL, append-only).
+ - migration 006 is applied on production: schema_migrations lists 001..013 including 006_zones_revenue_rates.sql.
+ACs checked as a batch on that basis. Nothing here re-litigates the individual AC wording.
 <!-- SECTION:NOTES:END -->

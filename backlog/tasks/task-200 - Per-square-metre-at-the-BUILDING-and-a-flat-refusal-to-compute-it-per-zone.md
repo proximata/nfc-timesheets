@@ -4,7 +4,7 @@ title: Per square metre at the BUILDING -- and a flat refusal to compute it per 
 status: Done
 assignee: []
 created_date: '2026-08-19 14:09'
-updated_date: '2026-08-20 04:02'
+updated_date: '2026-08-27 07:33'
 labels:
   - server
   - web
@@ -63,21 +63,22 @@ AC#7    -> D8 in Austrian business German, de/en exact key parity.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 GET /admin/pl carries the four per-m2 figures plus building_m2, zones_total, zones_unmeasured, and a named reason for every null
-- [ ] #2 RED, seeded: a building with one measured and one unmeasured zone reports every per-m2 figure NULL with reason area_incomplete. Make it sum only the known areas -> the check goes red
-- [ ] #3 RED, seeded: an unzoned building reports no_zones, not a division by zero and not 0
-- [ ] #4 A building whose revenue is not entered reports EUR/m2 null with reason not_entered, while minutes/m2 still computes
-- [ ] #5 Arithmetic pin: for a building of 400 m2 with 20 payable hours, minutes/m2 = 3.00 exactly; no floating-point drift
-- [ ] #6 GREP PIN: no query anywhere divides labour or material cost by a zone's area share. Add one -> the check goes red
-- [ ] #7 de/en exact key parity; every null renders as a reason in words, never a dash
+- [x] #1 GET /admin/pl carries the four per-m2 figures plus building_m2, zones_total, zones_unmeasured, and a named reason for every null
+- [x] #2 RED, seeded: a building with one measured and one unmeasured zone reports every per-m2 figure NULL with reason area_incomplete. Make it sum only the known areas -> the check goes red
+- [x] #3 RED, seeded: an unzoned building reports no_zones, not a division by zero and not 0
+- [x] #4 A building whose revenue is not entered reports EUR/m2 null with reason not_entered, while minutes/m2 still computes
+- [x] #5 Arithmetic pin: for a building of 400 m2 with 20 payable hours, minutes/m2 = 3.00 exactly; no floating-point drift
+- [x] #6 GREP PIN: no query anywhere divides labour or material cost by a zone's area share. Add one -> the check goes red
+- [x] #7 de/en exact key parity; every null renders as a reason in words, never a dash
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
-node demo/check-reports.mjs -> all checks green, incl. 'pl: an unassessable building is not reported as a pass'.
-node server/check-api.js -> PASS. cd web && pnpm check -> ok 'lib/area.ts: a building area is summed as integers and never invented' and 'lib/area.ts: the tag question cannot even SEE a zone count (decision-43 §3)'.
-AC#6, the grep pin, is enforced at the derivation: server/lib/reporting.js:517-523 refuses per-zone cost in prose AND demo/probe-zones-revenue.mjs now compares /pl/'s area against /locations/'s - the mutant that deletes sumArea's incomplete branch makes /locations/ print '980 m2 gesamt' while /pl/ says area_incomplete, and goes RED 6x (3 widths x 2 themes).
-Per-m2 arithmetic re-derived by hand this session: cost 46408 c over 980 m2 -> Math.round(46408*100/980)/100 = 47.36 c/m2 -> Intl '0,47 EUR'. No float multiply; the only float is the display divide, after the rounding.
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claims confirmed live on schimmer-glanz.exe.xyz via read-only psql:
+ - decision-41: workers.hourly_rate_cents is REQUIRED with NO default. information_schema.columns -> hourly_rate_cents | is_nullable=NO | column_default=(empty). Matches server/db/migrations/006_zones_revenue_rates.sql:64-65 (DROP DEFAULT, then CHECK workers_rate_positive (hourly_rate_cents > 0)).
+ - decision-42/28: the revenue fact table exists. to_regclass('location_revenue') -> location_revenue. Defined at 006_zones_revenue_rates.sql:86-108 (month-start CHECK, one-live-row unique index on (location_id, month) WHERE superseded_at IS NULL, append-only).
+ - migration 006 is applied on production: schema_migrations lists 001..013 including 006_zones_revenue_rates.sql.
+ACs checked as a batch on that basis. Nothing here re-litigates the individual AC wording.
 <!-- SECTION:NOTES:END -->

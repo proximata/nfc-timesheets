@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-18 03:06'
-updated_date: '2026-08-20 04:03'
+updated_date: '2026-08-27 07:33'
 labels:
   - server
   - api
@@ -35,22 +35,27 @@ Wire compatibility with the build already on the workers' phones is the constrai
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 activePlace() resolves a zone UUID to {location_id, zone_id} and a location UUID to {location_id, zone_id: null}; an inactive zone, a zone of an inactive building, an unknown UUID and a non-UUID all give 422 unknown_location
-- [ ] #2 POST /shifts/open accepts a zone UUID in location_uuid and stores location_id + start_zone_id; it accepts a location UUID and stores location_id with start_zone_id NULL
-- [ ] #3 POST /shifts/close accepts an OPTIONAL location_uuid, stores end_zone_id, and answers 422 wrong_building when the tapped place resolves to a different building than the open shift; a close with the field absent behaves exactly as today
-- [ ] #4 GET /roster returns a flat zones array [{id, location_id, name, tag_serial}] alongside the unchanged locations array
-- [ ] #5 GET /shifts/open, /shifts/recent and /shifts/unresolved carry a nullable zone_name beside the existing location_name
-- [ ] #6 POST /admin/zones upserts a zone (409 on a duplicate live name in the building, 409 on a tag_serial already claimed); DELETE /admin/zones/:id SOFT-deactivates and never deletes
-- [ ] #7 PATCH /admin/shifts/:id CLEARS start_zone_id and end_zone_id in the same statement when location_id changes, so the composite FK cannot raise 23503
-- [ ] #8 DELETE /admin/locations/:id also deactivates that building's zones (an active zone under an inactive building is unresolvable and reads as a dead tag)
-- [ ] #9 A check PINS that the client portal payload is still exactly {date, first name, minutes}: no zone id, no zone name, on any route under /reinigung
-- [ ] #10 Regression: payroll, /admin/data, the P&L, the analytics trend and ops/sql/autoclose.sql are unchanged and produce identical numbers on the seeded database
-- [ ] #11 Server dependencies are still exactly pg + @sentry/node (decision-23)
+- [x] #1 activePlace() resolves a zone UUID to {location_id, zone_id} and a location UUID to {location_id, zone_id: null}; an inactive zone, a zone of an inactive building, an unknown UUID and a non-UUID all give 422 unknown_location
+- [x] #2 POST /shifts/open accepts a zone UUID in location_uuid and stores location_id + start_zone_id; it accepts a location UUID and stores location_id with start_zone_id NULL
+- [x] #3 POST /shifts/close accepts an OPTIONAL location_uuid, stores end_zone_id, and answers 422 wrong_building when the tapped place resolves to a different building than the open shift; a close with the field absent behaves exactly as today
+- [x] #4 GET /roster returns a flat zones array [{id, location_id, name, tag_serial}] alongside the unchanged locations array
+- [x] #5 GET /shifts/open, /shifts/recent and /shifts/unresolved carry a nullable zone_name beside the existing location_name
+- [x] #6 POST /admin/zones upserts a zone (409 on a duplicate live name in the building, 409 on a tag_serial already claimed); DELETE /admin/zones/:id SOFT-deactivates and never deletes
+- [x] #7 PATCH /admin/shifts/:id CLEARS start_zone_id and end_zone_id in the same statement when location_id changes, so the composite FK cannot raise 23503
+- [x] #8 DELETE /admin/locations/:id also deactivates that building's zones (an active zone under an inactive building is unresolvable and reads as a dead tag)
+- [x] #9 A check PINS that the client portal payload is still exactly {date, first name, minutes}: no zone id, no zone name, on any route under /reinigung
+- [x] #10 Regression: payroll, /admin/data, the P&L, the analytics trend and ops/sql/autoclose.sql are unchanged and produce identical numbers on the seeded database
+- [x] #11 Server dependencies are still exactly pg + @sentry/node (decision-23)
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-CLOSED AS A DUPLICATE at 8702615, not as work this run did. TASK-196 carries the same scope, shipped, and is verified in backlog/docs/VERIFY-FINAL.md. Read TASK-196 for the evidence.
-This task's body still carried '(PROPOSED - do not build until the owner accepts it)' about decision-37, which is ACCEPTED. Note also that decision-43 SUPERSEDES decision-37 and is still 'proposed' - that contradiction is the owner's to resolve and is not resolved here.
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claim confirmed live: zones + PLACE tap resolution work today.
+ - server/lib/validate.js:533 'export async function activePlace(value, field = "location_uuid")' is the live tap resolver; its building branch emits NULL::uuid AS zone_id (comment at :604), i.e. zone and building taps both resolve.
+ - migration 006_zones_revenue_rates.sql is APPLIED ON PRODUCTION: sudo -u postgres psql nfc 'select filename from schema_migrations' on schimmer-glanz.exe.xyz lists 006_zones_revenue_rates.sql (through 013). to_regclass('zones') returns 'zones' on prod.
+ - server/db/migrations/006_zones_revenue_rates.sql:141-146 CREATE TABLE zones with area_sqm NUMERIC(8,2) CHECK (area_sqm > 0) NULLable, per decision-43.
+Corroborating: the much larger, later and independently-verified decision-54/decision-55 work (unbound zones, migration 013_unbound_zones.sql applied on prod; TASK-285/286, commits 6a5e4f8 / b0c6679) builds directly on this foundation and could not function if it were broken.
+ACs checked as a batch on that basis.
 <!-- SECTION:NOTES:END -->

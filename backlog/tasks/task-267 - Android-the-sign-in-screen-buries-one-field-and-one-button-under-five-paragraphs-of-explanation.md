@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-24 19:09'
-updated_date: '2026-08-25 06:30'
+updated_date: '2026-08-27 07:33'
 labels:
   - android
   - ux
@@ -38,6 +38,12 @@ Do not reorder the two sign-in doors relative to each other or make either harde
 - [x] #4 The Betreiber section stays reachable without a worker sign-in (TASK-254 depends on that surface)
 - [x] #5 de and en strings.xml keep exact key parity
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AUDIT 2026-08-27 (read-only): all 5 ACs were already checked; no change made. Spot-confirmed at HEAD 68743c6 that the surface still exists - LanguageSection() called on SignInScreen (ui/TimeSheetApp.kt:179) ahead of the reveal sections, values/ and values-en/ strings.xml both 314 <string> entries (exact parity), and android/checks/run.sh re-run this audit: core-check / known-tags-check / tag-writer-check / manifest-check / verify-no-shift-check all OK. Status stays Done.
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 

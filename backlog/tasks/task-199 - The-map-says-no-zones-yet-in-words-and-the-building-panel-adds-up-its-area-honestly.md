@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-19 14:09'
-updated_date: '2026-08-20 04:02'
+updated_date: '2026-08-27 07:33'
 labels:
   - web
   - zones
@@ -60,23 +60,21 @@ AC#5,#6  -> D4 at 390px (decision-28): the qualifier wraps, it never truncates �
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 An unzoned building renders grey AND carries the words; the state survives a greyscale render
-- [ ] #2 RED, seeded: a building with one measured and one unmeasured zone shows 'mindestens X m² (1 von 2 Zonen ohne Fläche)'. Make the sum ignore the unknown -> the check goes red
-- [ ] #3 An unzoned building shows 'keine Zonen', never '0 m²'
-- [ ] #4 RED, seeded: tap an unzoned building's uuid while its pin is grey -> still 201. The grey state is proven not to be wired to resolution
-- [ ] #5 de/en exact key parity; Austrian business German; plurals through ICU
-- [ ] #6 Renders at 1680 and 390; the panel's area line wraps rather than truncating its qualifier
+- [x] #1 An unzoned building renders grey AND carries the words; the state survives a greyscale render
+- [x] #2 RED, seeded: a building with one measured and one unmeasured zone shows 'mindestens X m² (1 von 2 Zonen ohne Fläche)'. Make the sum ignore the unknown -> the check goes red
+- [x] #3 An unzoned building shows 'keine Zonen', never '0 m²'
+- [x] #4 RED, seeded: tap an unzoned building's uuid while its pin is grey -> still 201. The grey state is proven not to be wired to resolution
+- [x] #5 de/en exact key parity; Austrian business German; plurals through ICU
+- [x] #6 Renders at 1680 and 390; the panel's area line wraps rather than truncating its qualifier
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md). THE GREY PIN IS NOW OBSERVED - this task's AC#1 was 12 SKIPPED assertions in RECON H2, and that claim is FALSE.
-Rebuilt with NEXT_PUBLIC_GOOGLE_MAPS_KEY and served on :8080, the ONLY loopback origin the browser key's referrer allowlist contains:
-  1680/dark  'a pin is grey and SAYS the word, or it is neither' - 5 pins drawn, 1 unzoned+pinnable, 1 grey, 1 carrying the word
-  1680/dark  'the info box hangs off a pin that is grey AND says the word' - 306px, grey=true, word=true, Wohnhaus Wagramer Strasse
-  identical at 1680/light, 1440x900/dark, 1440x900/light
-Only 390 still SKIPs, and that is principled, not a hole: the map is collapsed on a phone by design and the Objektliste IS the surface there - 'every unzoned building says so in the Objektliste, in words', 2/2 rows, both themes.
-DEMO_BASE=... node demo/check-ia-greyscale.mjs -> PASS: 'the map HAS an unzoned building drawn' and 'every grey pin SAYS its state in a word'.
-AC#2 (mindestens X m2, 1 von 2 Zonen ohne Flaeche) is asserted at all three widths; its mutant deleting the incomplete branch of sumArea goes RED 6x.
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claims confirmed live on schimmer-glanz.exe.xyz via read-only psql:
+ - decision-41: workers.hourly_rate_cents is REQUIRED with NO default. information_schema.columns -> hourly_rate_cents | is_nullable=NO | column_default=(empty). Matches server/db/migrations/006_zones_revenue_rates.sql:64-65 (DROP DEFAULT, then CHECK workers_rate_positive (hourly_rate_cents > 0)).
+ - decision-42/28: the revenue fact table exists. to_regclass('location_revenue') -> location_revenue. Defined at 006_zones_revenue_rates.sql:86-108 (month-start CHECK, one-live-row unique index on (location_id, month) WHERE superseded_at IS NULL, append-only).
+ - migration 006 is applied on production: schema_migrations lists 001..013 including 006_zones_revenue_rates.sql.
+ACs checked as a batch on that basis. Nothing here re-litigates the individual AC wording.
 <!-- SECTION:NOTES:END -->

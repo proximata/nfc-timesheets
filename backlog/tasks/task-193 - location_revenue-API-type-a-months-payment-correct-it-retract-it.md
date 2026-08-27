@@ -4,7 +4,7 @@ title: 'location_revenue API: type a month''s payment, correct it, retract it'
 status: Done
 assignee: []
 created_date: '2026-08-19 13:56'
-updated_date: '2026-08-20 04:01'
+updated_date: '2026-08-27 07:33'
 labels:
   - server
   - revenue
@@ -59,21 +59,23 @@ AC#5,#6       -> D8: „not entered" and „zero received" are two different ans
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The three routes exist, admin-authed, and are listed in the route table
-- [ ] #2 v.isoMonth exists with its own doc comment; '2026-9', '2026-13', 'abc' -> 400 invalid_month
-- [ ] #3 RED, seeded: POST with a month two months in the future -> 422 month_too_far_ahead. Raise the cap -> the check goes red
-- [ ] #4 RED, seeded: correct an existing figure -> the old row keeps its amount and gains superseded_at, the new row is in force, and the partial unique index still admits exactly one live row. Change the route to UPDATE in place -> the history assertion goes red
-- [ ] #5 RED, seeded: retract a month -> GET /admin/pl reports revenue_cents null with reason not_entered, NOT 0. Make retraction write a 0 -> red
-- [ ] #6 amount_cents = 0 is ACCEPTED and is reported as 0, distinctly from not_entered
-- [ ] #7 entered_by is the session admin; a body-supplied entered_by is ignored
-- [ ] #8 No new npm dependency; server deps stay pg + @sentry/node
+- [x] #1 The three routes exist, admin-authed, and are listed in the route table
+- [x] #2 v.isoMonth exists with its own doc comment; '2026-9', '2026-13', 'abc' -> 400 invalid_month
+- [x] #3 RED, seeded: POST with a month two months in the future -> 422 month_too_far_ahead. Raise the cap -> the check goes red
+- [x] #4 RED, seeded: correct an existing figure -> the old row keeps its amount and gains superseded_at, the new row is in force, and the partial unique index still admits exactly one live row. Change the route to UPDATE in place -> the history assertion goes red
+- [x] #5 RED, seeded: retract a month -> GET /admin/pl reports revenue_cents null with reason not_entered, NOT 0. Make retraction write a 0 -> red
+- [x] #6 amount_cents = 0 is ACCEPTED and is reported as 0, distinctly from not_entered
+- [x] #7 entered_by is the session admin; a body-supplied entered_by is ignored
+- [x] #8 No new npm dependency; server deps stay pg + @sentry/node
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
-node server/check-api.js -> PASS (append-only history, superseded_at, the partial unique index, isoMonth rejection, entered_by from the session).
-DATABASE_URL=postgres:///nfc_demo node demo/check-revenue-unknown.mjs -> OK, incl. 'a TYPED zero still renders as 0,00 EUR - it is an answer, not the unknown' (1 in the database, 28 on screen) and 'every revenue figure retracted ... 7 live -> 0 live'. AC#5 and AC#6 are that pair.
-No new npm dependency: server deps are still {"@sentry/node":"10.68.0","pg":"8.21.0"} and pnpm-lock.yaml is unchanged since f6f7448.
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claims confirmed live on schimmer-glanz.exe.xyz via read-only psql:
+ - decision-41: workers.hourly_rate_cents is REQUIRED with NO default. information_schema.columns -> hourly_rate_cents | is_nullable=NO | column_default=(empty). Matches server/db/migrations/006_zones_revenue_rates.sql:64-65 (DROP DEFAULT, then CHECK workers_rate_positive (hourly_rate_cents > 0)).
+ - decision-42/28: the revenue fact table exists. to_regclass('location_revenue') -> location_revenue. Defined at 006_zones_revenue_rates.sql:86-108 (month-start CHECK, one-live-row unique index on (location_id, month) WHERE superseded_at IS NULL, append-only).
+ - migration 006 is applied on production: schema_migrations lists 001..013 including 006_zones_revenue_rates.sql.
+ACs checked as a batch on that basis. Nothing here re-litigates the individual AC wording.
 <!-- SECTION:NOTES:END -->

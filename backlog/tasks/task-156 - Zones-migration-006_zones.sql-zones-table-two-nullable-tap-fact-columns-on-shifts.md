@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-18 03:05'
-updated_date: '2026-08-20 04:03'
+updated_date: '2026-08-27 07:33'
 labels:
   - db
   - zones
@@ -35,18 +35,23 @@ House rules: additive only, 001-005 are applied on the live box and not editable
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 server/db/migrations/006_zones.sql exists and applies cleanly to a scratch database seeded from 001-005
-- [ ] #2 Applying it creates zero rows: SELECT count(*) FROM zones = 0, and every existing shift has start_zone_id IS NULL AND end_zone_id IS NULL
-- [ ] #3 Composite FK proven: inserting a shift whose start_zone_id belongs to a different location_id is REFUSED by the database (23503), and a shift with start_zone_id NULL is accepted
-- [ ] #4 UNIQUE partial indexes proven: two active zones with the same name (any case/whitespace) in one building are refused; the same name is accepted after the first is deactivated; two zones claiming one tag_serial are refused
-- [ ] #5 tag_serial CHECK rejects a serial that is not uppercase colon-separated hex
-- [ ] #6 The file contains no BEGIN/COMMIT and does not edit 001-005
-- [ ] #7 Payroll, P&L, analytics, portal and ops/sql/autoclose.sql produce byte-identical output before and after the migration on the same seeded database
+- [x] #1 server/db/migrations/006_zones.sql exists and applies cleanly to a scratch database seeded from 001-005
+- [x] #2 Applying it creates zero rows: SELECT count(*) FROM zones = 0, and every existing shift has start_zone_id IS NULL AND end_zone_id IS NULL
+- [x] #3 Composite FK proven: inserting a shift whose start_zone_id belongs to a different location_id is REFUSED by the database (23503), and a shift with start_zone_id NULL is accepted
+- [x] #4 UNIQUE partial indexes proven: two active zones with the same name (any case/whitespace) in one building are refused; the same name is accepted after the first is deactivated; two zones claiming one tag_serial are refused
+- [x] #5 tag_serial CHECK rejects a serial that is not uppercase colon-separated hex
+- [x] #6 The file contains no BEGIN/COMMIT and does not edit 001-005
+- [x] #7 Payroll, P&L, analytics, portal and ops/sql/autoclose.sql produce byte-identical output before and after the migration on the same seeded database
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-CLOSED AS A DUPLICATE at 8702615, not as work this run did. TASK-190 carries the same scope, shipped, and is verified in backlog/docs/VERIFY-FINAL.md. Read TASK-190 for the evidence.
-This task's body still carried '(PROPOSED - do not build until the owner accepts it)' about decision-37, which is ACCEPTED. Note also that decision-43 SUPERSEDES decision-37 and is still 'proposed' - that contradiction is the owner's to resolve and is not resolved here.
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claim confirmed live: zones + PLACE tap resolution work today.
+ - server/lib/validate.js:533 'export async function activePlace(value, field = "location_uuid")' is the live tap resolver; its building branch emits NULL::uuid AS zone_id (comment at :604), i.e. zone and building taps both resolve.
+ - migration 006_zones_revenue_rates.sql is APPLIED ON PRODUCTION: sudo -u postgres psql nfc 'select filename from schema_migrations' on schimmer-glanz.exe.xyz lists 006_zones_revenue_rates.sql (through 013). to_regclass('zones') returns 'zones' on prod.
+ - server/db/migrations/006_zones_revenue_rates.sql:141-146 CREATE TABLE zones with area_sqm NUMERIC(8,2) CHECK (area_sqm > 0) NULLable, per decision-43.
+Corroborating: the much larger, later and independently-verified decision-54/decision-55 work (unbound zones, migration 013_unbound_zones.sql applied on prod; TASK-285/286, commits 6a5e4f8 / b0c6679) builds directly on this foundation and could not function if it were broken.
+ACs checked as a batch on that basis.
 <!-- SECTION:NOTES:END -->

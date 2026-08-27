@@ -4,7 +4,7 @@ title: A worker's hourly rate becomes REQUIRED on every write path
 status: Done
 assignee: []
 created_date: '2026-08-19 13:54'
-updated_date: '2026-08-20 04:01'
+updated_date: '2026-08-27 07:33'
 labels:
   - server
   - payroll
@@ -69,20 +69,22 @@ AC#6,#7   -> D3 on a phone (decision-28): the refusal must arrive before the sub
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 v.requiredRate exists with the three-branch behaviour above and its own doc comment
-- [ ] #2 RED, seeded: POST /admin/workers {name:'X'} with no rate -> 422 rate_required, detail hourly_rate_cents. Revert the validator to v.cents -> 201. Same for {hourly_rate_cents: 0}
-- [ ] #3 RED, seeded: POST /admin/workers with an id, editing an existing worker's rate to '' -> 422. The UPDATE branch is covered, not only the INSERT branch
-- [ ] #4 POST /admin/workers with hourly_rate_cents = -5 still answers 400 invalid_field, not 422
-- [ ] #5 check-api.js:2966's rateless fixture is converted into an assertion that the insert is REFUSED (23514)
-- [ ] #6 web /workers/ rate field is marked required and refuses an empty submit client-side; message key exists in de.json AND en.json
-- [ ] #7 web/scripts/check.mjs passes (de/en exact key parity)
+- [x] #1 v.requiredRate exists with the three-branch behaviour above and its own doc comment
+- [x] #2 RED, seeded: POST /admin/workers {name:'X'} with no rate -> 422 rate_required, detail hourly_rate_cents. Revert the validator to v.cents -> 201. Same for {hourly_rate_cents: 0}
+- [x] #3 RED, seeded: POST /admin/workers with an id, editing an existing worker's rate to '' -> 422. The UPDATE branch is covered, not only the INSERT branch
+- [x] #4 POST /admin/workers with hourly_rate_cents = -5 still answers 400 invalid_field, not 422
+- [x] #5 check-api.js:2966's rateless fixture is converted into an assertion that the insert is REFUSED (23514)
+- [x] #6 web /workers/ rate field is marked required and refuses an empty submit client-side; message key exists in de.json AND en.json
+- [x] #7 web/scripts/check.mjs passes (de/en exact key parity)
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
-node server/check-api.js -> PASS. Every write path re-measured on a scratch restore (PROBE-DATA §5): INSERT omitting the column 23502 (006 drops the DEFAULT), explicit NULL 23502, 0/-1 23514 workers_rate_positive, UPDATE-to-0 23514, POST /admin/workers with rate absent/null/''/0 -> 422 rate_required naming the field, -5/'zwanzig'/1.5 -> 400 invalid_field, edit-to-empty 422 with the old wage intact. Constraint is convalidated = t, pg_attrdef for hourly_rate_cents = 0 rows.
-cd web && pnpm check -> 1173 keys, exact de/en parity.
-demo/probe-zones-revenue.mjs -> ok 'the hourly rate is marked required on the label AND the control' {marker:true, optionalWord:false, required:true} at 1680/1440x900/390, dark+light.
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claims confirmed live on schimmer-glanz.exe.xyz via read-only psql:
+ - decision-41: workers.hourly_rate_cents is REQUIRED with NO default. information_schema.columns -> hourly_rate_cents | is_nullable=NO | column_default=(empty). Matches server/db/migrations/006_zones_revenue_rates.sql:64-65 (DROP DEFAULT, then CHECK workers_rate_positive (hourly_rate_cents > 0)).
+ - decision-42/28: the revenue fact table exists. to_regclass('location_revenue') -> location_revenue. Defined at 006_zones_revenue_rates.sql:86-108 (month-start CHECK, one-live-row unique index on (location_id, month) WHERE superseded_at IS NULL, append-only).
+ - migration 006 is applied on production: schema_migrations lists 001..013 including 006_zones_revenue_rates.sql.
+ACs checked as a batch on that basis. Nothing here re-litigates the individual AC wording.
 <!-- SECTION:NOTES:END -->

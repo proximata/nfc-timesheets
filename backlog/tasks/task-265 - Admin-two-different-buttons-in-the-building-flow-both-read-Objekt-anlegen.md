@@ -4,7 +4,7 @@ title: 'Admin: two different buttons in the building flow both read Objekt anleg
 status: Done
 assignee: []
 created_date: '2026-08-24 19:08'
-updated_date: '2026-08-24 22:44'
+updated_date: '2026-08-27 07:32'
 labels:
   - web
   - ux
@@ -28,11 +28,21 @@ FIX: rename the drawer's submit button to what it does — 'Speichern' or 'Objek
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The header trigger and the drawer submit button on /locations/ no longer share a visible label
-- [ ] #2 The header trigger keeps its current wording; only the submit button changes
-- [ ] #3 The other create drawers (/workers/, /operators/, /clients/) are checked for the same collision and brought into line if they have it
-- [ ] #4 de.json and en.json gain or change the same keys with exact parity
+- [x] #1 The header trigger and the drawer submit button on /locations/ no longer share a visible label
+- [x] #2 The header trigger keeps its current wording; only the submit button changes
+- [x] #3 The other create drawers (/workers/, /operators/, /clients/) are checked for the same collision and brought into line if they have it
+- [x] #4 de.json and en.json gain or change the same keys with exact parity
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AUDIT 2026-08-27 (read-only, re-grepped at HEAD 68743c6).
+AC1/AC2: web/app/locations/page.tsx:1161 header trigger renders t('createHeading') = de.json:385 'Objekt anlegen' (header wording intact); drawer submit page.tsx:1876 renders t('submitCreate') = de.json:412 'Speichern'. No shared label.
+AC3: same split present on the other create drawers - workers de.json:259 'Mitarbeiter anlegen' / :269 'Speichern'; operators :1201 'Betreiber anlegen' / :1228 'Speichern'; clients :592 'Kunde anlegen' / :596 'Speichern' and :598 'Ansprechperson anlegen' / :608 'Speichern'; inventory :736 'Eintrag anlegen' / :746 'Speichern'. Zero createHeading/submitCreate value collisions.
+AC4: web/scripts/check.mjs re-run this audit -> 'All checks passed.' (key-set parity + ICU-argument parity across de.json/en.json).
+Verdict: present in current source, not reverted. Status stays Done.
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 

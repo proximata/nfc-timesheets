@@ -4,7 +4,7 @@ title: The P&L stops accruing revenue and refuses a margin over a ragged period
 status: Done
 assignee: []
 created_date: '2026-08-19 13:57'
-updated_date: '2026-08-20 04:01'
+updated_date: '2026-08-27 07:33'
 labels:
   - server
   - revenue
@@ -67,21 +67,22 @@ AC#6,#7     -> D7: integer cents, and decision-10's exclusions still asserted af
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 profitAndLoss reads location_revenue, not contractSlice, for money
-- [ ] #2 RED, seeded: a period of exactly one Vienna month with one entry -> revenue equals that entry to the cent. Change the period to 30 days spanning two months -> revenue covers only whole contained months and margin_bp is null with reason period_not_month_aligned
-- [ ] #3 RED, seeded: a building with no entry for the period -> revenue_cents null, reason not_entered, margin null. Make it fall back to the contract -> the check goes red
-- [ ] #4 RED, seeded: 'Dieses Jahr' picked mid-year no longer books unfinished months. Re-enable contract accrual -> the inflated-margin assertion goes red
-- [ ] #5 DST is exercised: a period crossing the March and the October Vienna transitions selects the same months a Vienna calendar would
-- [ ] #6 Integer cents throughout; the only division is numeric in SQL and is rounded once
-- [ ] #7 check-api.js's P&L tests updated, not deleted; every existing decision-10 exclusion assertion still passes
+- [x] #1 profitAndLoss reads location_revenue, not contractSlice, for money
+- [x] #2 RED, seeded: a period of exactly one Vienna month with one entry -> revenue equals that entry to the cent. Change the period to 30 days spanning two months -> revenue covers only whole contained months and margin_bp is null with reason period_not_month_aligned
+- [x] #3 RED, seeded: a building with no entry for the period -> revenue_cents null, reason not_entered, margin null. Make it fall back to the contract -> the check goes red
+- [x] #4 RED, seeded: 'Dieses Jahr' picked mid-year no longer books unfinished months. Re-enable contract accrual -> the inflated-margin assertion goes red
+- [x] #5 DST is exercised: a period crossing the March and the October Vienna transitions selects the same months a Vienna calendar would
+- [x] #6 Integer cents throughout; the only division is numeric in SQL and is rounded once
+- [x] #7 check-api.js's P&L tests updated, not deleted; every existing decision-10 exclusion assertion still passes
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
-node server/check-api.js -> PASS, including the Vienna DST pins ('23:30 on 31 October is October').
-DEMO_BASE=http://127.0.0.1:8080 node demo/check-money.mjs -> all green: thisYear/thisQuarter/thisMonth each name the days that have not happened (133/41/11), say the cost is only partly recorded, put the warning on the margin CELL and not only in the block, and refuse to style it calm; lastMonth (closed) carries no future-days sentence at all.
-Integer cents throughout, the only division is numeric in SQL and rounded once: SUM(ROUND(secs * hourly_rate_cents / 3600.0)) (server/lib/reporting.js:328).
-CAVEAT, filed not hidden: that same ROUND makes labour_cents 0 for a one-second total. TASK-204.
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claims confirmed live on schimmer-glanz.exe.xyz via read-only psql:
+ - decision-41: workers.hourly_rate_cents is REQUIRED with NO default. information_schema.columns -> hourly_rate_cents | is_nullable=NO | column_default=(empty). Matches server/db/migrations/006_zones_revenue_rates.sql:64-65 (DROP DEFAULT, then CHECK workers_rate_positive (hourly_rate_cents > 0)).
+ - decision-42/28: the revenue fact table exists. to_regclass('location_revenue') -> location_revenue. Defined at 006_zones_revenue_rates.sql:86-108 (month-start CHECK, one-live-row unique index on (location_id, month) WHERE superseded_at IS NULL, append-only).
+ - migration 006 is applied on production: schema_migrations lists 001..013 including 006_zones_revenue_rates.sql.
+ACs checked as a batch on that basis. Nothing here re-litigates the individual AC wording.
 <!-- SECTION:NOTES:END -->

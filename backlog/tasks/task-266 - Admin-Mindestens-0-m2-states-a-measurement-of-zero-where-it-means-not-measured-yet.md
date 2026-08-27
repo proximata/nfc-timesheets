@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-24 19:08'
-updated_date: '2026-08-25 06:10'
+updated_date: '2026-08-27 07:32'
 labels:
   - web
   - ux
@@ -32,12 +32,23 @@ SAME PATTERN, DIFFERENT SCREENS: TASK-180 is the open task for answer bands prin
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A building whose zones all have NULL area shows a sentence saying the area is not recorded yet, not Mindestens 0 m2
-- [ ] #2 A building with at least one measured zone still reads Mindestens N m2 exactly as today
-- [ ] #3 The count of zones without an area entry stays on the line — nothing true is dropped
-- [ ] #4 NULL versus zero handling in the data layer is untouched (decision-43, ZONES-MODEL.md)
-- [ ] #5 de.json and en.json gain the same keys with exact parity, including plurals
+- [x] #1 A building whose zones all have NULL area shows a sentence saying the area is not recorded yet, not Mindestens 0 m2
+- [x] #2 A building with at least one measured zone still reads Mindestens N m2 exactly as today
+- [x] #3 The count of zones without an area entry stays on the line — nothing true is dropped
+- [x] #4 NULL versus zero handling in the data layer is untouched (decision-43, ZONES-MODEL.md)
+- [x] #5 de.json and en.json gain the same keys with exact parity, including plurals
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AUDIT 2026-08-27 (read-only, re-grepped at HEAD 68743c6). Both areaSentence() copies still carry the zero-guard; the gap named in the first verify comment is still closed.
+AC1: web/app/locations/page.tsx:1138 'if (sum.hundredths === 0) return t(`areaAllUnmeasured`, { zones: sum.unmeasured })' and web/components/BuildingFacts.tsx:145 'if (sum.hundredths === 0) return t(`panelZonesAllUnmeasured`, { unmeasured: sum.unmeasured })'. Those are the only two sumArea consumers in web/.
+AC2/AC3: the guard is inside the incomplete branch only, so a building with >=1 measured zone still falls through to the areaFloor sentence; both new keys carry the unmeasured zone count as their plural argument.
+AC4: lib/area.ts untouched - git log --oneline -1 -- web/lib/area.ts stops before this track; NULL-vs-zero handling unchanged.
+AC5: de.json:526 / en.json:526 areaAllUnmeasured and de.json:111 / en.json:111 panelZonesAllUnmeasured, identical ICU argument names and one/other branches. web/scripts/check.mjs re-run this audit -> 'All checks passed.'
+Verdict: present in current source. Status stays Done.
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 

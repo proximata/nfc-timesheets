@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-19 14:00'
-updated_date: '2026-08-20 04:02'
+updated_date: '2026-08-27 07:33'
 labels:
   - server
   - zones
@@ -65,19 +65,21 @@ AC#4       -> D2 (get a working tag onto a wall) and W10: a serial must never be
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 All three pins live in server/check-api.js beside the existing redaction assertions
-- [ ] #2 Pin 1 demonstrated RED by the stated resolver mutation, then green
-- [ ] #3 Pin 2 demonstrated RED by adding a zone name to the portal select list, then green
-- [ ] #4 Pin 3 demonstrated RED by adding a serial-accepting branch, then green
-- [ ] #5 The mutations are reverted; the working tree is clean afterwards
-- [ ] #6 Each pin's comment names the decision and the cost of its failure, not just the assertion
+- [x] #1 All three pins live in server/check-api.js beside the existing redaction assertions
+- [x] #2 Pin 1 demonstrated RED by the stated resolver mutation, then green
+- [x] #3 Pin 2 demonstrated RED by adding a zone name to the portal select list, then green
+- [x] #4 Pin 3 demonstrated RED by adding a serial-accepting branch, then green
+- [x] #5 The mutations are reverted; the working tree is clean afterwards
+- [x] #6 Each pin's comment names the decision and the cost of its failure, not just the assertion
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
-node server/check-api.js -> PASS, including by name 'no route anywhere accepts a tag serial as INPUT' and 'no zone name and no area ever reaches the client portal'.
-Pin 1's mutation is now permanent tooling rather than a one-off: server/db/check-field-wire-mutants.sh, 8 mutants, all RED, git diff --quiet after.
-Raw serial posted as a place -> 400 (PROBE-DATA §4): a serial is not a credential (decision-44 §3).
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claims confirmed live on schimmer-glanz.exe.xyz via read-only psql:
+ - decision-41: workers.hourly_rate_cents is REQUIRED with NO default. information_schema.columns -> hourly_rate_cents | is_nullable=NO | column_default=(empty). Matches server/db/migrations/006_zones_revenue_rates.sql:64-65 (DROP DEFAULT, then CHECK workers_rate_positive (hourly_rate_cents > 0)).
+ - decision-42/28: the revenue fact table exists. to_regclass('location_revenue') -> location_revenue. Defined at 006_zones_revenue_rates.sql:86-108 (month-start CHECK, one-live-row unique index on (location_id, month) WHERE superseded_at IS NULL, append-only).
+ - migration 006 is applied on production: schema_migrations lists 001..013 including 006_zones_revenue_rates.sql.
+ACs checked as a batch on that basis. Nothing here re-litigates the individual AC wording.
 <!-- SECTION:NOTES:END -->

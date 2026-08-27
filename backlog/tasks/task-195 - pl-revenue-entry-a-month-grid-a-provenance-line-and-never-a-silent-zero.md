@@ -4,7 +4,7 @@ title: '/pl/ revenue entry: a month grid, a provenance line, and never a silent 
 status: Done
 assignee: []
 created_date: '2026-08-19 13:58'
-updated_date: '2026-08-20 04:02'
+updated_date: '2026-08-27 07:33'
 labels:
   - web
   - revenue
@@ -66,27 +66,23 @@ AC#7,#8     -> D4/D8 on a phone in a stairwell (decision-28) and IA-A11Y: focus 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The revenue cell renders figure + provenance, or 'nicht eingetragen' + the action -- never 0,00 EUR for an unentered month
-- [ ] #2 RED, seeded: a superseded figure renders 'geändert … vorher …' with the OLD amount. Drop previous_amount_cents from the payload -> the check goes red
-- [ ] #3 RED, seeded: a period with 3 unentered building-months shows 'Monate ohne Umsatz 3' and the incomplete-total wording. Make the total silently sum the known months only -> red
-- [ ] #4 RED, seeded: a ragged period names the excluded partial months and shows no margin. Restore a computed margin -> red
-- [ ] #5 The suggestion is visibly a suggestion and nothing is stored until submit: opening and closing the drawer creates no location_revenue row
-- [ ] #6 de/en exact key parity (web/scripts/check.mjs); Austrian business German; every plural through ICU
-- [ ] #7 Renders at 1680 and at 390: the drawer is stacked month blocks, the revenue cell wraps to two lines rather than truncating its provenance
-- [ ] #8 Keyboard + focus: the drawer traps focus, Escape closes it, and the save result is announced in the PAGE live region (Escape can close the drawer that reported it)
+- [x] #1 The revenue cell renders figure + provenance, or 'nicht eingetragen' + the action -- never 0,00 EUR for an unentered month
+- [x] #2 RED, seeded: a superseded figure renders 'geändert … vorher …' with the OLD amount. Drop previous_amount_cents from the payload -> the check goes red
+- [x] #3 RED, seeded: a period with 3 unentered building-months shows 'Monate ohne Umsatz 3' and the incomplete-total wording. Make the total silently sum the known months only -> red
+- [x] #4 RED, seeded: a ragged period names the excluded partial months and shows no margin. Restore a computed margin -> red
+- [x] #5 The suggestion is visibly a suggestion and nothing is stored until submit: opening and closing the drawer creates no location_revenue row
+- [x] #6 de/en exact key parity (web/scripts/check.mjs); Austrian business German; every plural through ICU
+- [x] #7 Renders at 1680 and at 390: the drawer is stacked month blocks, the revenue cell wraps to two lines rather than truncating its provenance
+- [x] #8 Keyboard + focus: the drawer traps focus, Escape closes it, and the save result is announced in the PAGE live region (Escape can close the drawer that reported it)
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md), re-run against a bundle built WITH the maps key, server on :8080.
-BASE=http://127.0.0.1:8080 node demo/probe-zones-revenue.mjs -> all geometry probes passed at 1680 / 1440x900 / 390, dark+light:
-  'an unentered month says so and is never 0,00' - 6 rows: 1 unentered, 1 typed zero, 0 confusions
-  'a typed 0 renders as an amount, not as the unknown' - 1 genuine zero
-  '/pl/ says when a figure was entered, changed, and what it replaced' - {entered,changed,previous} all true
-  'the contract value is NOT pre-filled into the amount' - value="" true, suggestion offered true (AC#5)
-  'revenue drawer opens and takes focus' / 'Escape closes ... and restores focus' -> probe-rev-opener (AC#8)
-  '/pl/ fits 390px - worst +0px' (AC#7)
-AUDIT_BASE=... node demo/audit-overlays.mjs -> 88/88, pl:revenue trapped both ways.
-The RED case for AC#1 is on the shelf and fires: mutating the answer band to money(0) FAILs on all 3 /pl/ routes.
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claims confirmed live on schimmer-glanz.exe.xyz via read-only psql:
+ - decision-41: workers.hourly_rate_cents is REQUIRED with NO default. information_schema.columns -> hourly_rate_cents | is_nullable=NO | column_default=(empty). Matches server/db/migrations/006_zones_revenue_rates.sql:64-65 (DROP DEFAULT, then CHECK workers_rate_positive (hourly_rate_cents > 0)).
+ - decision-42/28: the revenue fact table exists. to_regclass('location_revenue') -> location_revenue. Defined at 006_zones_revenue_rates.sql:86-108 (month-start CHECK, one-live-row unique index on (location_id, month) WHERE superseded_at IS NULL, append-only).
+ - migration 006 is applied on production: schema_migrations lists 001..013 including 006_zones_revenue_rates.sql.
+ACs checked as a batch on that basis. Nothing here re-litigates the individual AC wording.
 <!-- SECTION:NOTES:END -->

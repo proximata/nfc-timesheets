@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-24 19:06'
-updated_date: '2026-08-24 20:13'
+updated_date: '2026-08-27 07:32'
 labels:
   - android
   - i18n
@@ -35,12 +35,24 @@ MUST NOT REGRESS: the tap path. A locale change must never sit in, delay or reor
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Einstellungen carries a visible language control that names the available languages
-- [ ] #2 Switching to English changes the app copy without signing the worker out and without touching a running shift
-- [ ] #3 The control is reachable on the oldest Android version the app supports, or the row degrades into an explanation rather than disappearing silently
-- [ ] #4 android/checks/core-check.kt still passes: no tap is delayed, blocked or reordered
-- [ ] #5 de and en strings.xml both carry the new strings with exact key parity
+- [x] #1 Einstellungen carries a visible language control that names the available languages
+- [x] #2 Switching to English changes the app copy without signing the worker out and without touching a running shift
+- [x] #3 The control is reachable on the oldest Android version the app supports, or the row degrades into an explanation rather than disappearing silently
+- [x] #4 android/checks/core-check.kt still passes: no tap is delayed, blocked or reordered
+- [x] #5 de and en strings.xml both carry the new strings with exact key parity
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AUDIT 2026-08-27 (read-only, source re-grepped at HEAD 68743c6).
+AC1: LanguageSection() defined ui/TimeSheetApp.kt:2077, called unconditionally at :1915 (Einstellungen) and :179 (SignInScreen). Names languages as text: settings_language_system/de/en -> 'Systemsprache' / 'Deutsch' / 'English' (values/strings.xml:268-271).
+AC2: switch path TimeSheetApp.kt:2097-2099 = AppLocale.set(context, option) then (context as? Activity)?.recreate(). No sign-out call, no shift mutation in the composable; recreate() retains the ViewModelStore, same as a rotation.
+AC3: mechanism is AppLocale.wrap via attachBaseContext (MainActivity.kt:32, ScanActivity.kt:70, WriteTagActivity.kt:161, VerifyZoneActivity.kt:289) - createConfigurationContext, API 17. app/build.gradle.kts:65 minSdk = 23, so it works on the oldest supported version; no ACTION_APP_LOCALE_SETTINGS/API-33 dependency, no degraded row needed.
+AC4: android/checks/run.sh re-run this audit -> core-check: OK (plus known-tags/tag-writer/manifest/verify-no-shift all OK).
+AC5: settings_language_{title,system,de,en} present in BOTH values/strings.xml:268-271 and values-en/strings.xml:183-186; whole-file counts 314 = 314.
+Verdict: present in current source. Status stays Done. (Known follow-ups from the original comment remain out of scope here: ShiftSignals notification copy off applicationContext; TalkBack selection semantics were since added - TimeSheetApp.kt:2102-2110 selectableGroup + selected.)
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 

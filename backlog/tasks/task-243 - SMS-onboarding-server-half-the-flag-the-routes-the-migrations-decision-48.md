@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-22 21:53'
-updated_date: '2026-08-22 23:07'
+updated_date: '2026-08-27 07:33'
 labels: []
 dependencies: []
 ordinal: 161000
@@ -51,12 +51,24 @@ TWILIO_ACCOUNT_SID and a sender still do not exist, so nobody can send an SMS to
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Migrations 011 and 012 applied on schimmer-glanz.exe.xyz
+- [x] #1 Migrations 011 and 012 applied on schimmer-glanz.exe.xyz
 - [ ] #2 smsConfigured() reads FALSE on production with the real /etc/nfc/env
-- [ ] #3 Every SMS route fails closed with 503 and writes nothing
+- [x] #3 Every SMS route fails closed with 503 and writes nothing
 - [ ] #4 POST /admin/workers/:id/enrolment-code and POST /auth/code are byte-unchanged and proven live
-- [ ] #5 No new npm dependency; server deps stay pg + @sentry/node
+- [x] #5 No new npm dependency; server deps stay pg + @sentry/node
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AUDIT 2026-08-27 (read-only; prod read via ssh, no writes, no deploy).
+AC1 CHECKED: sudo -u postgres psql nfc 'select filename from schema_migrations order by 1' on schimmer-glanz.exe.xyz lists 011_sms_onboarding.sql and 012_sms_otp.sql (through 013_unbound_zones.sql). Applied.
+AC3 CHECKED at source level: the flag guard is the FIRST statement of every SMS handler, ahead of the limiter and every query - routes/admin.js:820 (workers enrolment-code/sms), routes/admin.js:1191 (operators enrolment-code/sms), routes/auth.js:426 (smsRequest), :504 (smsVerify), :626, :697; all 'if (!smsConfigured()) fail(503, "sms_not_configured")'. Nothing is written before that line.
+AC5 CHECKED: server/package.json dependencies are exactly @sentry/node 10.68.0 + pg 8.21.0. No new dependency.
+AC2 LEFT UNCHECKED - MOOT, not a defect. Production has since been GIVEN credentials: journalctl -u nfc-api shows 'sms: configured (sender: number)' at Aug 27 07:20:42 (and Aug 26 20:09/20:12). smsConfigured() therefore reads TRUE on prod today, so the AC as worded ('reads FALSE on production') can no longer be true and must not be ticked. The behaviour it was protecting - derived, no hand-typed SMS_ENABLED boolean - is intact (lib/sms.js is the single derived predicate, evaluated per request). The 'blocked on the owner for TWILIO_ACCOUNT_SID' note in the earlier comment is now stale.
+AC4 LEFT UNCHECKED - cannot be re-proven from here without minting a live enrolment code and a worker session on production, which this read-only audit will not do. The routes exist and are wired (routes/admin.js POST /admin/workers/:id/enrolment-code, routes/auth.js POST /auth/code); byte-unchanged + live 201/200 was evidenced in the 2026-08-23 comment. Not re-verified this run.
+Verdict: shipped work is present; status stays Done.
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 

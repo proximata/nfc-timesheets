@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-24 19:05'
-updated_date: '2026-08-24 20:13'
+updated_date: '2026-08-27 07:32'
 labels:
   - android
   - operators
@@ -47,13 +47,25 @@ FIX SHAPE: give WriteTagActivity the SAME NfcState machine VerifyZoneActivity al
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 On a phone with no NFC adapter, WriteTagActivity says so in German and shows no write instructions and no Betreiber-Code field
-- [ ] #2 On a phone whose NFC is switched OFF, WriteTagActivity says the radio is off — wording distinct from the no-hardware case, because that one the operator can fix
-- [ ] #3 The check runs in onResume and re-evaluates when the operator toggles NFC and returns to the app, matching VerifyZoneActivity
-- [ ] #4 The NfcState machine is REUSED from VerifyZoneActivity, not reimplemented — one definition, two call sites
-- [ ] #5 The no-NFC short-circuit happens BEFORE the operator-code gate: no code is ever requested on a phone that cannot write
-- [ ] #6 de and en strings.xml both carry the new strings with exact key parity
+- [x] #1 On a phone with no NFC adapter, WriteTagActivity says so in German and shows no write instructions and no Betreiber-Code field
+- [x] #2 On a phone whose NFC is switched OFF, WriteTagActivity says the radio is off — wording distinct from the no-hardware case, because that one the operator can fix
+- [x] #3 The check runs in onResume and re-evaluates when the operator toggles NFC and returns to the app, matching VerifyZoneActivity
+- [x] #4 The NfcState machine is REUSED from VerifyZoneActivity, not reimplemented — one definition, two call sites
+- [x] #5 The no-NFC short-circuit happens BEFORE the operator-code gate: no code is ever requested on a phone that cannot write
+- [x] #6 de and en strings.xml both carry the new strings with exact key parity
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AUDIT 2026-08-27 (read-only, source re-grepped at HEAD 68743c6; no app code touched).
+AC1/AC2/AC5: WriteTagActivity.kt:240-243 when(nfcState){UNSUPPORTED->Text(R.string.scan_unsupported); DISABLED->Text(R.string.scan_disabled); READY->WriteBody()}. Betreiber-Code OutlinedTextField lives inside WriteBody() (WriteTagActivity.kt:257+, field at rel. line 293/333), so it is never composed off the READY arm. Distinct wording: values/strings.xml scan_unsupported 'Dieses Telefon hat kein NFC.' vs scan_disabled 'NFC ist ausgeschaltet. Bitte in den Einstellungen aktivieren.'
+AC3: onResume WriteTagActivity.kt:466-472 recomputes nfcState from the adapter each resume.
+AC4: single definition - grep 'enum class NfcState' over android/ returns exactly one hit, nfc/NfcState.kt:7.
+AC6: values/strings.xml and values-en/strings.xml both 314 <string> entries (grep -c).
+Checks re-run this audit: android/checks/run.sh -> core-check OK, known-tags-check OK, tag-writer-check OK, manifest-check OK, verify-no-shift-check OK.
+Verdict: present in current source, not reverted. Status stays Done.
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 

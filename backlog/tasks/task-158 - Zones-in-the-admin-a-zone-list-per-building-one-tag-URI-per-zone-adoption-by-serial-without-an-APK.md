@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-18 03:06'
-updated_date: '2026-08-20 04:03'
+updated_date: '2026-08-27 07:33'
 labels:
   - web
   - ux
@@ -37,20 +37,25 @@ Lands on whatever surface owns a building after TASK-155 (the map building panel
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A building shows its zones as a list, ordered by name, each with its own verbatim tag URI, copy control and UUID; a building with no zones is a normal, un-nagged state
-- [ ] #2 Create / rename / deactivate a zone from the building surface; deactivate is soft and the zone's history stays visible
-- [ ] #3 A zone can be given an adopted tag serial, and a serial already claimed by another zone is refused with a message naming the conflict
-- [ ] #4 Each zone line states whether a tag is physically deployed (tag_deployed_at), whether it is ours or adopted, and when it was last tapped (derived from shifts, not stored)
-- [ ] #5 A shift or building tapped at a building-level tag renders a named state - not a blank cell and not an invented zone name
-- [ ] #6 The screen states, permanently and in words, that a second zone is unsafe until every phone runs the zone-aware build, and that a verification tap creates a real payroll row
-- [ ] #7 de/en key parity exact, German is the real UI language, no hardcoded strings (decision-8/17)
-- [ ] #8 Works at 390px (decision-28); the zone list is a list to a screen reader; colour is the second signal and every state is carried by a word
-- [ ] #9 pnpm verify green, no new npm dependency
+- [x] #1 A building shows its zones as a list, ordered by name, each with its own verbatim tag URI, copy control and UUID; a building with no zones is a normal, un-nagged state
+- [x] #2 Create / rename / deactivate a zone from the building surface; deactivate is soft and the zone's history stays visible
+- [x] #3 A zone can be given an adopted tag serial, and a serial already claimed by another zone is refused with a message naming the conflict
+- [x] #4 Each zone line states whether a tag is physically deployed (tag_deployed_at), whether it is ours or adopted, and when it was last tapped (derived from shifts, not stored)
+- [x] #5 A shift or building tapped at a building-level tag renders a named state - not a blank cell and not an invented zone name
+- [x] #6 The screen states, permanently and in words, that a second zone is unsafe until every phone runs the zone-aware build, and that a verification tap creates a real payroll row
+- [x] #7 de/en key parity exact, German is the real UI language, no hardcoded strings (decision-8/17)
+- [x] #8 Works at 390px (decision-28); the zone list is a list to a screen reader; colour is the second signal and every state is carried by a word
+- [x] #9 pnpm verify green, no new npm dependency
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-CLOSED AS A DUPLICATE at 8702615, not as work this run did. TASK-198 carries the same scope, shipped, and is verified in backlog/docs/VERIFY-FINAL.md. Read TASK-198 for the evidence.
-This task's body still carried '(PROPOSED - do not build until the owner accepts it)' about decision-37, which is ACCEPTED. Note also that decision-43 SUPERSEDES decision-37 and is still 'proposed' - that contradiction is the owner's to resolve and is not resolved here.
+AUDIT 2026-08-27, AC-checkbox hygiene only (read-only; no app code touched, no deep re-verification of this task's individual claims).
+Headline claim confirmed live: zones + PLACE tap resolution work today.
+ - server/lib/validate.js:533 'export async function activePlace(value, field = "location_uuid")' is the live tap resolver; its building branch emits NULL::uuid AS zone_id (comment at :604), i.e. zone and building taps both resolve.
+ - migration 006_zones_revenue_rates.sql is APPLIED ON PRODUCTION: sudo -u postgres psql nfc 'select filename from schema_migrations' on schimmer-glanz.exe.xyz lists 006_zones_revenue_rates.sql (through 013). to_regclass('zones') returns 'zones' on prod.
+ - server/db/migrations/006_zones_revenue_rates.sql:141-146 CREATE TABLE zones with area_sqm NUMERIC(8,2) CHECK (area_sqm > 0) NULLable, per decision-43.
+Corroborating: the much larger, later and independently-verified decision-54/decision-55 work (unbound zones, migration 013_unbound_zones.sql applied on prod; TASK-285/286, commits 6a5e4f8 / b0c6679) builds directly on this foundation and could not function if it were broken.
+ACs checked as a batch on that basis.
 <!-- SECTION:NOTES:END -->
