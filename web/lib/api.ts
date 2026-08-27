@@ -491,6 +491,38 @@ export function resolveTagToExistingZone(
   ).then((data) => data.alias)
 }
 
+/**
+ * Feature flags (decision-57 §1). A name and a boolean is the whole feature — no
+ * percentage rollout, no targeting. Rows are created by a migration alongside the client
+ * code that reads them, so the panel can flip a flag and never create one.
+ *
+ * These two calls are the ONLY ones a 'flags'-role session can make: every other admin
+ * route answers 401 for it, exactly as it does for a logged-out browser.
+ */
+export type FeatureFlag = {
+  name: string
+  enabled: boolean
+  updated_at: string | null
+  updated_by: string | null
+}
+
+export function fetchFlags(signal?: AbortSignal): Promise<FeatureFlag[]> {
+  return apiFetch<{ flags: FeatureFlag[] }>('/admin/flags', { signal }).then((data) => data.flags)
+}
+
+/** `PATCH /admin/flags/:name`. 404 `unknown_flag` when the name has no row. */
+export function setFlag(
+  name: string,
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<FeatureFlag> {
+  return apiFetch<{ flag: FeatureFlag }>(`/admin/flags/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: { enabled },
+    signal,
+  }).then((data) => data.flag)
+}
+
 /** Create (no `id`) or update (`id`, the UUID). Same route either way. */
 export type LocationInput = {
   id?: string

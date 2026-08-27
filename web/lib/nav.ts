@@ -76,7 +76,15 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     headingKey: 'groupAccount',
     hidden: true,
     pinBottom: true,
-    items: [{ href: '/account/', labelKey: 'account' }],
+    items: [
+      { href: '/account/', labelKey: 'account' },
+      /**
+       * decision-57 §4. In the sidebar for BOTH admin roles — the nav is static, and the
+       * scoped 'flags' account has nothing else it can open. Every other entry above still
+       * answers that session a 401 and lands it back on /login/, same as logged out.
+       */
+      { href: '/flags/', labelKey: 'flags' },
+    ],
   },
 ]
 
