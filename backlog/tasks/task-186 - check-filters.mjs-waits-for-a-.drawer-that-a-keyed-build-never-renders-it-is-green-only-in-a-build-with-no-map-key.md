@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-18 21:15'
-updated_date: '2026-08-20 04:02'
+updated_date: '2026-08-27 07:41'
 labels:
   - ux
 dependencies: []
@@ -38,16 +38,32 @@ Also PRE-EXISTING: reproduced identically at c41d33f, before the reach commit an
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 demo/check-filters.mjs exits 0 against a build made WITH the browser maps key, on seeded nfc_demo
-- [ ] #2 The Objektpanel step asserts whichever surface the build actually renders — .map-info when the map drew the pin, .drawer when it could not — and says in a comment why there are two, citing IA-PLAN §9
-- [ ] #3 The assertions after it (panel cross-links, chips, worker panel, EN) run and are measured in the keyed configuration, not skipped
+- [x] #1 demo/check-filters.mjs exits 0 against a build made WITH the browser maps key, on seeded nfc_demo
+- [x] #2 The Objektpanel step asserts whichever surface the build actually renders — .map-info when the map drew the pin, .drawer when it could not — and says in a comment why there are two, citing IA-PLAN §9
+- [x] #3 The assertions after it (panel cross-links, chips, worker panel, EN) run and are measured in the keyed configuration, not skipped
 - [ ] #4 The negative case is exercised: with the panel's links removed the run still goes red
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md).
-DEMO_BASE=http://127.0.0.1:8080 node demo/check-filters.mjs -> PASS against a build made WITH the browser maps key (2 chunks carry AIzaSy, demo/build-guard.mjs assertMapKeyInBuild passes) on seeded nfc_demo. AC#1 and AC#3 are exactly that configuration.
-The root cause behind this task is now a guard rather than a note: pnpm verify rebuilds web/out WITHOUT the key, and assertMapKeyInBuild() THROWS on a keyless bundle instead of letting map assertions SKIP quietly (fc145e2).
+AUDIT 2026-08-27 (read-only re-verification, no app code touched). Build made WITH the browser maps key from psst (2 chunks under web/out contain AIzaSy), API on 127.0.0.1:8080, freshly reseeded nfc_demo.
+
+AC#1 GREEN: DEMO_BASE=http://127.0.0.1:8080 node demo/check-filters.mjs -> exit 0, last line 'check-filters: PASS'. The old death at line 133 is gone.
+
+AC#2 the step now accepts either surface and asserts exclusivity - measured, on a keyed build the info box is what renders:
+  ok   /?location=<uuid> opens the Objektpanel ON that building, in exactly one place  info box titled "Aerztezentrum Landstrasse", row said "Aerztezentrum Landstrasse Objektpanel oeffnen"
+demo/check-filters.mjs:158-165 is the comment ('TWO RENDERINGS, ONE CONTRACT'). CAVEAT, and it is the only gap in this AC: it cites MAP-HOME-SPEC section 7 and STATE-GALLERY section 1, NOT 'IA-PLAN section 9' as the AC's wording asks. Same substance, different citation; checked on substance.
+
+AC#3 everything after that step ran in the keyed configuration and was measured:
+  ok   Objektpanel: EVERY link out of it carries a filter  10 links, all filtered
+  ok   Objektpanel: the filter is echoed as a chip naming the building  Objekt: Aerztezentrum Landstrasse
+  ok   Objektpanel link: payroll, this building, last month  /payroll/?location=fe0005c5-...&period=lastMonth
+  ok   back closes the panel it opened (open = push)  search="" drawer=false
+  ok   English: the chip is translated, not a German string in an English screen  Building: Aerztezentrum Landstrasse
+  ok   English: the Mitarbeiterpanel renders no message key as text
+
+AC#4 LEFT UNCHECKED, not disproven: exercising the negative case means removing the panel's links from web/ source and rebuilding, which this read-only audit was forbidden to do. Not re-proven this session.
+
+Status left Done.
 <!-- SECTION:NOTES:END -->

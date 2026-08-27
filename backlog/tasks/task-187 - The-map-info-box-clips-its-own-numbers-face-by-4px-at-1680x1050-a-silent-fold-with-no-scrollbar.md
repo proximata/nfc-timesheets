@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-18 21:16'
-updated_date: '2026-08-20 04:02'
+updated_date: '2026-08-27 07:41'
 labels:
   - a11y
 dependencies: []
@@ -33,19 +33,33 @@ PRE-EXISTING: reproduced identically at c41d33f, before the reach commit and bef
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 demo/check-map-home.mjs exits 0 against a keyed build of HEAD on seeded nfc_demo
-- [ ] #2 At rest the numbers face has no hidden overflow at 1680x1050 AND at 1680x1000 — the fix is a layout one, not a viewport the check happens to avoid
-- [ ] #3 Nothing is deleted from the face to make it fit: the on-site line, the five numbers and the 'Zeiten bezogen auf' hint are all still rendered
-- [ ] #4 The box still fits inside the map rectangle, collapsed and expanded, and all ten cross-links still land inside it when expanded
+- [x] #1 demo/check-map-home.mjs exits 0 against a keyed build of HEAD on seeded nfc_demo
+- [x] #2 At rest the numbers face has no hidden overflow at 1680x1050 AND at 1680x1000 — the fix is a layout one, not a viewport the check happens to avoid
+- [x] #3 Nothing is deleted from the face to make it fit: the on-site line, the five numbers and the 'Zeiten bezogen auf' hint are all still rendered
+- [x] #4 The box still fits inside the map rectangle, collapsed and expanded, and all ten cross-links still land inside it when expanded
 - [ ] #5 The negative case is exercised: shrinking the face's clamp by a few pixels puts the check back to red
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md), keyed build, real pins drawn.
-node demo/check-map-home.mjs -> PASS.
-demo/probe-zones-revenue.mjs, 1680: 'EVERY pin's box: a fold is drawn or there is no fold' - Ordination Gumpendorf, Aerztezentrum Landstrasse, Wohnhaus Wagramer Strasse, Buerozentrum Handelskai, Wohnhausanlage Donaufeld: no fold (+0px) on all five. And '...and if it DOES fold, the fold is drawn, not silent' - no fold (+0px).
-AC#4: '...and its links face carries the first-zone route, inside the box' - found=true inside=true.
-AC#3: nothing was deleted to make it fit; the info box still carries the numbers face and the on-site line.
+AUDIT 2026-08-27 (read-only re-verification, no app code touched). Keyed build (NEXT_PUBLIC_GOOGLE_MAPS_KEY from psst, 2 chunks carry AIzaSy), server on 127.0.0.1:8080, freshly reseeded nfc_demo (demo/seed.sql + make-admin).
+
+AC#1 GREEN, run twice:
+  DEMO_BASE=http://127.0.0.1:8080 node demo/check-map-home.mjs -> 'check-map-home: PASS' (exit 0)
+  ok   info box: at rest the NUMBERS fit - nothing in the box is hidden behind a silent fold  nothing scrolls
+
+AC#2 measured at BOTH viewports on the real page (.map-info-face clientHeight vs scrollHeight):
+  1680x1050 {"ch":225,"sh":225,"hiddenPx":0,"boxInMap":true}
+  1680x1000 {"ch":225,"sh":225,"hiddenPx":0,"boxInMap":true}
+The 221/225 fold in the description is gone at both heights, so it is a layout fix and not a viewport the check avoids.
+
+AC#3 same measurement: hasOnSite=true (Gerade vor Ort), hasHint=true (Zeiten bezogen auf), 11 links present - nothing was deleted to make it fit.
+
+AC#4 from the same run:
+  ok   info box: it hangs inside the map, so its last cross-link is clickable  box 471,777 in map 443,789
+  ok   info box: one press shows EVERY cross-link inside the box, with nothing scrolled  10 of 10 links on screen, scrolled 0px
+  ok   info box: EXPANDED, it is still inside the map - the growth is clamped, not overflowed  box 499,755 in map 443,789
+
+AC#5 LEFT UNCHECKED, not disproven: the negative case is demo/fix-mutants.sh MUTANT v1 ('the info box is capped too short for the links it hides', max-height 440px -> 160px). It EDITS web CSS and rebuilds, which this audit was forbidden to do, so it was not run in this session. It exists and is wired to RECHECK_ONLY=v1 node demo/recheck.mjs.
 <!-- SECTION:NOTES:END -->

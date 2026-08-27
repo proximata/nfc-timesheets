@@ -4,7 +4,7 @@ title: 'Dashboard wird kartengeführt: die Karte IST die Übersicht'
 status: Done
 assignee: []
 created_date: '2026-08-17 15:45'
-updated_date: '2026-08-18 07:49'
+updated_date: '2026-08-27 07:42'
 labels:
   - ux
   - web
@@ -59,37 +59,25 @@ CONSTRAINTS: Google Maps via a plain script tag, no new npm dependency. The brow
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-DONE, with AC#4 narrowed and said out loud.
+AUDIT 2026-08-27 (read-only re-verification, no app code touched). Keyed build (key from psst, 2 chunks carry AIzaSy), 127.0.0.1:8080, reseeded nfc_demo. DEMO_BASE=http://127.0.0.1:8080 node demo/check-map-home.mjs -> 'check-map-home: PASS' (exit 0, run twice).
 
-WHAT SHIPPED: components/HomeMap.tsx (the region, the pins, the info box, the seven states),
-lib/map.ts (MAP_STYLE_DARK/LIGHT, OverlayView types, language from <html lang>, region=AT),
-lib/objects.ts (ONE derivation for the pin and the list row). /analytics/ lost its map and its
-useEffect reconstruction loop with it.
+AC#4 STAYS UNCHECKED, and the split is: its SECOND half is proven this session, its FIRST half was deliberately narrowed from nine states to seven (see the notes above - 'partially unpinned' is a row state, 'data fetch failed' and 'session lost' belong to the page's error alert and the 401 redirect).
 
-THE mapId TRADE-OFF, taken and written down in lib/map.ts: OverlayView + an inline styles
-array, NO cloud mapId. AdvancedMarkerElement requires a mapId and a mapId makes the API ignore
-styles outright, so the choice is a dark map with a deprecated marker or a white Google map
-inside a dark admin. Upgrade path is in the file. pnpm check asserts no file that constructs a
-map mentions mapId; demo/check-map-home.mjs reads our own #101216 back OUT of the tile request
-Google was sent, which is the end-to-end form of the same guard.
+Second half, script blocked at the network layer - PROVEN, this run:
+  ok   blocked: the sentence names BOTH possibilities, because a browser cannot tell them apart
+  ok   blocked: the map is REMOVED, not covered - no grey Google box is left behind
+  ok   blocked: every building is still listed
+  ok   offline: the region says the map could not be loaded, and that the list is unaffected
+  ok   offline: every building is still listed, with its numbers
+  ok   no coordinates: the region says how many buildings have none, and that the list is complete  6 Objekte haben keine Koordinaten...
+  ok   no coordinates: the whole portfolio is still on screen  6 rows
+  ok   no buildings: the list says so in a sentence about the company, never a blank table
 
-AC#4 — SEVEN STATES, NOT NINE, and the difference is deliberate:
-  noKey · noPins · loading · ready · blocked · failed · timeout, plus collapsed on a phone.
-The spec's 'partially unpinned' is not a state of the map, it is a state of a ROW (the region
-says 'Auf der Karte: 5. Ohne Koordinaten: 1.' and the row says which of the three things
-happened). 'data fetch failed' and 'session lost' were already owned by the page's own error
-alert and by the 401 -> /login/ redirect and are not the map's business; duplicating them here
-would be two renderings of one failure that can disagree.
+States FORCED and screenshotted in this run (13 shots into /tmp/ts-demo): map-1680-dark, map-1680-light, map-info-1680-dark, map-info-links-1680-dark, map-blocked-1680-dark, map-offline-1680-dark, map-390-dark, map-390-light, map-390-open-dark, map-390-sheet-dark, map-390-ghost-dark, map-nopins-1680-dark, map-nobuildings-1680-dark.
 
-PROVEN BY BREAKING, not by reading (demo/check-map-home.mjs, 81 assertions):
-the Maps script blocked at the NETWORK layer, gm_authFailure fired the way Google fires it,
-every coordinate in nfc_demo set to NULL, and every building deactivated. Reds proved and
-reverted: zero pins drawing an empty grey frame, blocked overlaying instead of tearing down,
-the Objektliste demoted to a fallback, greedy gestures, the phone building a map, a mapId
-replacing the styles, fitBounds on a single pin, the info box clipping its own cross-links.
+The one state NOT re-forced this session is noKey: it needs a keyless bundle, and the check now refuses to fake it - MAP_NO_KEY=1 ... node demo/check-map-home.mjs printed 'MAP_NO_KEY=1 was asked for, but this build CARRIES a Maps key. Rebuild without it'. Rebuilding was out of scope for a read-only audit. Unproven this run, not disproven.
 
-NOT DONE HERE: the build-time warning for an empty NEXT_PUBLIC_GOOGLE_MAPS_KEY. The RUNTIME
-rendering is built and checked (MAP_NO_KEY=1 node demo/check-map-home.mjs), which is the part
-the director sees; the console warning is a deploy ergonomics nicety and belongs with the
-deploy work.
+Other ACs spot-re-confirmed in the same run: AC#3 'ok one pin: the map settles on a BLOCK (zoom 16), not on the roof fitBounds would give  tiles report zoom 16'; AC#1 'ok no coordinates: NO empty grey frame is drawn'; AC#5 the blocked lines above.
+
+Status left Done.
 <!-- SECTION:NOTES:END -->

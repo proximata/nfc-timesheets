@@ -4,7 +4,7 @@ title: 'Objektliste on /: the list is day one, and the ledger stays verbatim bel
 status: Done
 assignee: []
 created_date: '2026-08-18 03:17'
-updated_date: '2026-08-18 07:50'
+updated_date: '2026-08-27 07:42'
 labels:
   - ux
   - ia
@@ -53,28 +53,20 @@ THE ANSWER BAND STAYS AT TWO CELLS. No 'Stunden diese Woche' (reads 0:00 on a Mo
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-DONE except AC#6's second half, which turned out to contradict decision-39 §2.
+AUDIT 2026-08-27 (read-only re-verification, no app code touched). Keyed build, 127.0.0.1:8080, reseeded nfc_demo.
 
-components/Objektliste.tsx — five columns, .data-table so the row-to-card transform is free,
-rendered on EVERY path including the ones where the map is gone. lib/objects.ts computes it
-once for the pin and the row, so the two surfaces cannot disagree about a building; that file
-is exercised by pnpm check, not merely read.
+AC#6 STAYS UNCHECKED, and it is a DELIBERATE half, not a defect. Both halves re-measured:
 
-AC#6 IS HALF DONE AND THE OTHER HALF IS WRONG. Sort order (attention -> on-site -> name) is
-built and asserted. 'An inactive building is listed muted and is never dropped' is NOT built:
-decision-39 §2 scopes this list to ACTIVE buildings, a deactivated building is not a pin, and
-a list that disagrees with the map about which buildings exist is the disagreement the single
-derivation was written to prevent. Nothing is destroyed — /locations/ is where a deactivated
-building still lives, and it says so. If the owner wants them here, it is a muted section with
-its own heading, not a row mixed into the live ones.
+Half one, sort order - HOLDS. Read off the rendered Objektliste at 1680 (first cell + on-site cell + attention cell per row, in DOM order):
+  Aerztezentrum Landstrasse   | niemand vor Ort  | 1 Schicht nicht bestaetigt
+  Wohnhausanlage Donaufeld    | niemand vor Ort  | 1 Schicht nicht bestaetigt
+  Ordination Gumpendorf       | 1 Person vor Ort | nichts offen
+  Buerozentrum Handelskai     | niemand vor Ort  | nichts offen
+  Studiohaus Neubaugasse      | niemand vor Ort  | nichts offen
+  Wohnhaus Wagramer Strasse   | niemand vor Ort  | nichts offen
+i.e. attention first (alphabetical within), then the on-site building, then the rest by name. The unit form is green too: cd web && pnpm check -> 'ok lib/objects.ts: the pin and the list row cannot disagree about a building' (its body is assert.deepEqual(ids, ['b','c','a'], 'attention first ..., then on-site, then name')), and 'All checks passed.'
 
-COORDINATES ARE THE POINT OF THIS LIST TODAY: production has one building with lat NULL, so
-every row states which of the three genuinely different things happened — nobody has asked yet
-/ we asked and Google said no / no address — and carries 'Koordinaten holen', the one WRITE on
-this screen. ops/backfill-geocode.mjs is the bulk form of the same fix.
+Half two, 'an inactive building is listed muted and is never dropped' - NOT built, on purpose, per the original notes: decision-39 section 2 scopes this list to ACTIVE buildings. The same check file asserts the opposite as intended behaviour: assert.equal(summaries.find(s => s.id === 'd'), undefined, 'an inactive building is neither'). The demo fixture has no inactive building, so this could not be observed on screen either way. Changing it needs a decision, not a fix - leaving the AC unchecked as the standing record of that.
 
-EVIDENCE: docs/media/map-home/map-nopins-1680-dark.png is the day-one state with every
-coordinate nulled in the database. demo/audit-band.mjs 13 x 18 = 234 measurements clean, so
-no horizontal scroll at any width. The ledger's strings are asserted as STRINGS on all five
-paths (map ready, blocked, offline, 390px, no coordinates, no buildings).
+Status left Done (ACs 1-5 unchanged and not re-opened).
 <!-- SECTION:NOTES:END -->

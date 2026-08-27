@@ -4,7 +4,7 @@ title: 'The new home on a phone: the list is the screen and the map is one tap a
 status: Done
 assignee: []
 created_date: '2026-08-18 03:19'
-updated_date: '2026-08-18 07:50'
+updated_date: '2026-08-27 07:41'
 labels:
   - ux
   - ia
@@ -40,7 +40,7 @@ REGRESSION TO AVOID: review defect R1, sideways scroll between 768 and 1439 px, 
 <!-- AC:BEGIN -->
 - [x] #1 At 390 px one-finger vertical scrolling scrolls the PAGE, not the map, with the map expanded
 - [x] #2 The map is collapsed on first load at 390 px and expands to a 320 px region, never full viewport height
-- [ ] #3 The Objektpanel at 390 px is a modal bottom sheet: focus is trapped inside it, Esc closes it, and focus returns to the row that opened it
+- [x] #3 The Objektpanel at 390 px is a modal bottom sheet: focus is trapped inside it, Esc closes it, and focus returns to the row that opened it
 - [x] #4 No horizontal document scroll at 390, 767, 1024, 1280 or 1440 px - verified by screenshot at each width
 - [x] #5 Every interactive target in the panel and the list is at least 44 px, and no action is reachable only by hover
 <!-- AC:END -->
@@ -48,24 +48,23 @@ REGRESSION TO AVOID: review defect R1, sideways scroll between 768 and 1439 px, 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-DONE. AC#3 is met by a DIFFERENT route than the one written, and better.
+AUDIT 2026-08-27 (read-only re-verification, no app code touched). Keyed build, 127.0.0.1:8080, reseeded nfc_demo.
 
-The phone gets the Objektliste and the map is one tap behind 'Karte anzeigen' (44px,
-aria-expanded). Collapsed means NOT CONSTRUCTED, not display:none — asserted — so a phone in a
-stairwell spends no billed map load and no tiles. Opened: 320px, gestureHandling 'cooperative',
-and one finger over the map scrolls the PAGE, proved with a real dispatched wheel gesture
-rather than by reading the option back.
+AC#3 NOW CHECKED - measured directly at a REAL 390px viewport (Emulation.setDeviceMetricsOverride 390x844, viewport read back as {"w":390,"h":844}), opening the panel from an Objektliste row control:
+  opener: {"found":true,"label":"Ordination Gumpendorf Objektpanel oeffnen"}
+  sheet:  {"drawer":true,"role":"dialog","ariaModal":"true","rect":{"top":0,"height":844,"width":390},"focusInside":true,"activeTag":"BUTTON","bodyOverflow":"hidden","docScrollW":390}
+  afterTabx40:      {"stillInside":true,"active":"Lohn - nur Stunden in diesem Objekt - Vo"}
+  afterShiftTabx5:  {"stillInside":true}
+  afterEsc:         {"drawerGone":true,"url":"","focusBackOnOpener":true,"activeLabel":"Ordination Gumpendorf Objektpanel oeffnen","activeTag":"BUTTON"}
+So: full-height modal sheet (844 of 844, top 0), role=dialog + aria-modal=true, focus trapped through 40 Tab and 5 Shift+Tab presses, Escape closes it and clears ?location=, and focus returns to the SAME NODE that opened it (identity comparison against a reference captured before the click, not a re-query). Page behind is scroll-locked (body overflow hidden) and there is no sideways scroll with the sheet open (docScrollW 390).
 
-AC#3: tapping a pin on a phone opens the DRAWER, not a box on the pin. The info box is a
-desktop presentation — inside a 320px map it would be a ~160px scrolling window holding five
-numbers and eleven links. HomeMap reports 'infoOnPin' up to the page, so exactly one of the two
-renderings of ?location= is ever on screen. The drawer is the existing <Drawer>: focus trapped,
-Esc closes, focus returns to the opener (demo/probe-focus-restore.mjs owns that property).
+AC#1/#2/#4/#5 re-confirmed in the same session by DEMO_BASE=http://127.0.0.1:8080 node demo/check-map-home.mjs -> PASS:
+  ok   390px: the map is COLLAPSED and says so, with a control that says what it does
+  ok   390px: ...and collapsed means NO map was built - no billed load, no mobile data
+  ok   390px: one tap brings a SMALL map - never the whole screen  320px of 844px
+  ok   390px: one finger over the map scrolls the PAGE, it is not swallowed by the map  scrollY 110 -> 430
+  ok   390px: the page does not scroll SIDEWAYS - the five-column cap holds  content 390px in 390px
+  ok   390px: ...and its REMOVE control is on screen and a real target  44x44px
 
-Screenshots: docs/media/map-home/map-390-dark.png (collapsed, day one),
-map-390-light.png, map-390-open-dark.png (one tap, 320px), map-390-sheet-dark.png (the sheet).
-
-MEASURED, NOT ASSUMED: the map work added ZERO new sub-44px targets. Every one audit-phone
-reports on / is the shell brand link or a worker-name link in the LEDGER's tables, and the same
-signature appears on /shifts/ and /locations/, which this work did not touch.
+Status left Done.
 <!-- SECTION:NOTES:END -->

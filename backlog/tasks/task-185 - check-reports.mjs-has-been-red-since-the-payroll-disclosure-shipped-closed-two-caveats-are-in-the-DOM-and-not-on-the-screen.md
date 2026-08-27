@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-18 19:34'
-updated_date: '2026-08-20 04:02'
+updated_date: '2026-08-27 07:41'
 labels:
   - money
 dependencies: []
@@ -48,18 +48,26 @@ argument for the first option.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 demo/check-reports.mjs exits 0 against a build of the payroll screen
-- [ ] #2 Either both caveats are visible without a click, or the check states in a comment exactly which two lines are exempt from the visibility rule and why
-- [ ] #3 The rate-history limitation is not deleted and is not hover-only in either outcome
+- [x] #1 demo/check-reports.mjs exits 0 against a build of the payroll screen
+- [x] #2 Either both caveats are visible without a click, or the check states in a comment exactly which two lines are exempt from the visibility rule and why
+- [x] #3 The rate-history limitation is not deleted and is not hover-only in either outcome
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-VERIFIED at 8702615 (backlog/docs/VERIFY-FINAL.md). The check is GREEN again, in a KEYED build on seeded nfc_demo.
-DEMO_BASE=http://127.0.0.1:8080 node demo/check-reports.mjs -> 'all checks green', incl. by name:
-  'payroll: the rate-HISTORY caveat is still there (it is a different limitation)'  (AC#3)
-  'payroll: the CSV total row explains an exclusion, or has nothing to explain'
-  'payroll: no CSV row claims a worker has no rate - the state is unrepresentable'
-The filename assertion was also strengthened while this was red: it used to be a shape regex that could not tell July from June, and now pins an independent Vienna-Intl oracle - 'the CSV filename is the VIENNA business date of the period start', got payroll-2026-07-01.csv.
+AUDIT 2026-08-27 (read-only re-verification, no app code touched). Keyed build, 127.0.0.1:8080, freshly reseeded nfc_demo.
+
+AC#1 GREEN: DEMO_BASE=http://127.0.0.1:8080 node demo/check-reports.mjs -> exit 0, last line 'all checks green'.
+
+AC#2/AC#3 - outcome ONE was taken for the rate-history caveat (visible with no click), and the disclosure is documented for the other line:
+  ok   payroll: the rate-history caveat needs NO press - unconditional, task-148 AC4  not visible with nothing pressed
+  ok   payroll: the reconciliation sentence is NOT behind the disclosure  not visible with the callout closed
+  ok   payroll: the how-it-works disclosure is on the page, closed, and names itself  found=true open=false summary='Wie diese Seite funktioniert' 28px
+  ok   payroll: ...and it no longer carries the rate-history caveat - that would be TWO copies
+  ok   payroll: ...and one press puts the attribution rule on the screen
+
+demo/check-reports.mjs lines 215-224 carry the comment naming exactly which line is exempt and why: caveatRateHistory is unconditional per task-148 AC4, attributionHint stays inside details.callout. AC#2 is satisfied by the first branch for the caveat and by that written comment for the attribution rule. AC#3 holds - 'vergangene Stunden werden daher zum heutigen Satz bewertet' is asserted VISIBLE with nothing pressed, so not deleted and not hover-only.
+
+Status left Done.
 <!-- SECTION:NOTES:END -->
