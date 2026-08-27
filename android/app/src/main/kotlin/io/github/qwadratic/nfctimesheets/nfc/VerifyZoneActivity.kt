@@ -25,6 +25,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -353,6 +354,13 @@ class VerifyZoneActivity : ComponentActivity() {
 
         setContent {
             TimeSheetsTheme {
+                // THE RADIO FOLLOWS THE STATE, not the other way round (TASK-303). Every
+                // write-flow step change re-asks readerWanted() and DISABLES when it says no —
+                // TASK-301 gated arming only, so a reader already armed for AwaitingCard stayed
+                // armed through Reporting/Naming/Submitting/Failed and a stray tap there
+                // stranded an already-written, already-reported card. Keyed on both flows
+                // because they are the same bug twice.
+                LaunchedEffect(freshStep, reassignStep) { syncReaderMode() }
                 Scaffold { padding ->
                     Column(
                         modifier = Modifier
@@ -395,7 +403,7 @@ class VerifyZoneActivity : ComponentActivity() {
         val zone = selectedZone
         if (zone == null) {
             // SCAN FIRST (decision-55 §2). The card may be held up right now, before anything is
-            // picked — reader mode is already running (see startReaderMode), so this is a
+            // picked — reader mode is already running (see syncReaderMode), so this is a
             // statement of fact and not an invitation to arm something.
             Text(stringResource(R.string.verify_scan_any_hint), style = MaterialTheme.typography.titleMedium)
             ScanFirstStatus()
@@ -643,13 +651,13 @@ class VerifyZoneActivity : ComponentActivity() {
         freshStep = FreshStep.AwaitingCard
         freshName = ""
         freshBuilding = null
-        startReaderMode()
+        syncReaderMode()
     }
 
     private fun cancelFreshCard() {
         freshStep = FreshStep.Idle
         freshBuilding = null
-        startReaderMode()
+        syncReaderMode()
     }
 
     /** One step after [TagWriter] has spoken, on the UI thread. */
@@ -802,7 +810,7 @@ class VerifyZoneActivity : ComponentActivity() {
                     onClick = {
                         picked?.let {
                             reassignStep = ReassignStep.AwaitingCard(it)
-                            startReaderMode()
+                            syncReaderMode()
                         }
                     },
                     enabled = picked != null && picked.id != zone.locationId,
@@ -1072,7 +1080,7 @@ class VerifyZoneActivity : ComponentActivity() {
             loadZonesFromCache()
             lifecycleScope.launch { refreshZones() }
         }
-        startReaderMode()
+        syncReaderMode()
     }
 
     override fun onPause() {
@@ -1085,10 +1093,20 @@ class VerifyZoneActivity : ComponentActivity() {
      * callback, exactly as [WriteTagActivity.startReaderMode] documents it: with reader
      * mode never enabled the NFC service never delivers a tag to this screen at all, so
      * there is no code path on which an unpicked or unauthorised scan touches a card.
+     *
+     * SYNC, NOT START (TASK-303). This is the ONLY thing in this screen that touches reader
+     * mode on the write paths, and it moves the radio in BOTH directions: enable when
+     * [readerWanted] says yes, disableReaderMode when it says no. A start-only shape made
+     * readerWanted()'s "single authority" KDoc a lie — declining to arm does nothing to a
+     * reader that is already armed, which is exactly the state every one of these flows
+     * begins in.
      */
-    private fun startReaderMode() {
-        if (!operatorReady || !readerWanted()) return
+    private fun syncReaderMode() {
         val nfc = adapter ?: return
+        if (!operatorReady || !readerWanted()) {
+            nfc.disableReaderMode(this)
+            return
+        }
         if (!nfc.isEnabled) return
         val flags = NfcAdapter.FLAG_READER_NFC_A or
             NfcAdapter.FLAG_READER_NFC_B or
@@ -1151,7 +1169,7 @@ class VerifyZoneActivity : ComponentActivity() {
         unbindConfirming = false
         if (zone.isBound) {
             bindStep = BindStep.Idle
-            startReaderMode()
+            syncReaderMode()
         } else {
             loadBindLocations()
         }
@@ -1172,10 +1190,10 @@ class VerifyZoneActivity : ComponentActivity() {
         reassignBuilding = null
         freshStep = FreshStep.Idle
         freshBuilding = null
-        // NOT disableReaderMode: with no zone picked this screen is the scan-first one
-        // (decision-55 §2), which reads cards precisely in that state. Restarting is a no-op
-        // when reader mode is already on and the honest thing when it was off.
-        startReaderMode()
+        // This ARMS rather than disarms: with no zone picked this screen is the scan-first one
+        // (decision-55 §2), which reads cards precisely in that state. syncReaderMode() enabling
+        // is a no-op when reader mode is already on and the honest thing when it was off.
+        syncReaderMode()
     }
 
     /**
@@ -1246,7 +1264,7 @@ class VerifyZoneActivity : ComponentActivity() {
     private fun cancelReassign() {
         reassignStep = ReassignStep.Idle
         reassignBuilding = null
-        startReaderMode()
+        syncReaderMode()
     }
 
     /**
@@ -1438,7 +1456,7 @@ class VerifyZoneActivity : ComponentActivity() {
                 // not that envelope. The next resume refreshes it from the server anyway.
                 selectedZone = bound
                 bindStep = BindStep.Bound(bound.locationName ?: building.name)
-                startReaderMode()
+                syncReaderMode()
             } catch (e: ApiFailure) {
                 bindStep = BindStep.Failed(e.code)
             } catch (_: Exception) {
