@@ -1117,6 +1117,12 @@ class VerifyZoneActivity : ComponentActivity() {
         // The write-fresh recovery (decision-58 §3) is the SECOND tap in this screen that
         // writes, and like the first it is armed only while a card is actually expected.
         freshStep is FreshStep.AwaitingCard || freshStep is FreshStep.WriteRefused -> true
+        // ...and DISARMED for every other mid-recovery state (TASK-301). Reporting/Naming/
+        // Submitting/Failed mean the card is already written and reported; a stray tap there
+        // would fall through to the ordinary read, re-classify away from Unreadable and take
+        // FreshCardSection out of the composition with no way back. Must stay BELOW the arming
+        // arm above. Mirrors the reassign pair two lines down.
+        freshStep !is FreshStep.Idle -> false
         reassignStep is ReassignStep.AwaitingCard || reassignStep is ReassignStep.WriteRefused -> true
         reassignStep !is ReassignStep.Idle && reassignStep !is ReassignStep.Done -> false
         selectedZone == null -> true

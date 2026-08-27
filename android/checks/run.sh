@@ -104,3 +104,7 @@ sh checks/manifest-check.sh
 # worker-session client — by reading its source the same way manifest-check.sh reads the
 # manifest. See checks/verify-no-shift-check.sh.
 sh checks/verify-no-shift-check.sh
+
+# THE READER IS DISARMED MID-RECOVERY (TASK-301). Same reason this is a source check and not
+# a JVM one: readerWanted() imports android.nfc and the state it guards needs a real card.
+sh checks/reader-armed-check.sh
