@@ -105,9 +105,48 @@ fun main() {
     pendingWork()
     theBackgroundPush()
     theBrandPalette()
+    featureFlags()
 
     if (failed) exitProcess(1)
     println("core-check: OK")
+}
+
+// ---------------------------------------------------------------------------------
+// 18. FEATURE FLAGS (decision-57 §1). The whole client half is one decoder and one
+//     default, and the default is the part that matters: an absent name, a malformed
+//     value or a server too old to have the route must all leave the phone on the OFF
+//     path, which is bit-for-bit the screen that shipped.
+// ---------------------------------------------------------------------------------
+private fun featureFlags() {
+    val on = Wire.flags(JSONObject("""{"fun_shift_screen":true,"other":false}"""))
+    check(on["fun_shift_screen"] == true, "GET /flags decodes a true flag")
+    check(on["other"] == false, "GET /flags decodes a false flag")
+    check(on["never_heard_of_it"] == null, "an unnamed flag decodes to nothing, i.e. OFF")
+
+    check(Wire.flags(JSONObject("{}")).isEmpty(), "an empty flag set is empty, not a crash")
+
+    // NOT COERCED. "true" the string and 1 the number are a server bug or a proxy
+    // rewriting a body; neither is somebody deliberately switching a flag on.
+    val junk = Wire.flags(JSONObject("""{"a":"true","b":1,"c":null,"d":true}"""))
+    check(junk.keys == setOf("d"), "only real JSON booleans become flags, got ${junk.keys}")
+
+    // The screen itself: the flag-ON black is a LITERAL, never derived. The full argument
+    // and the wallpaper history are in demo/check-fun-shift-black.mjs; this is the part
+    // that can be proven without a device, so it runs on every checks/run.sh.
+    val theme = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/Theme.kt").readText()
+    check(
+        Regex("""val Black = Color\(0xFF000000\)""").containsMatchIn(theme),
+        "decision-57 §3: the fun screen's black is a fixed literal in Theme.kt",
+    )
+    val screen = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetApp.kt").readText()
+    check(
+        screen.contains("funTheme -> FunShift.Black"),
+        "the running screen takes that literal, not a MaterialTheme role, when the flag is on",
+    )
+    check(
+        screen.contains("funTheme: Boolean = false"),
+        "and the flag DEFAULTS TO OFF at the composable itself — OFF is the shipped screen",
+    )
 }
 
 // ---------------------------------------------------------------------------------
@@ -2880,7 +2919,14 @@ private fun theBrandPalette() {
     // grey #767C85 is spread 15 on purpose: it is the brand's #ACACAC family nudged for
     // contrast. Measured, not guessed — a single budget of 12 failed this check against
     // a value taken verbatim out of the design document it is enforcing.
-    val chromatic = setOf("AccentDark", "AccentLight", "AmberDark", "AmberLight", "ErrorDark", "OnErrorDark", "ErrorLight")
+    // FunShift.Overdue is Material's own error pair again (decision-57 §3): the flag may
+    // repaint the field black, but the one state that must never read as "fine" keeps its
+    // red. Named here for the same reason the others are — the exceptions cannot grow by
+    // accident.
+    val chromatic = setOf(
+        "AccentDark", "AccentLight", "AmberDark", "AmberLight",
+        "ErrorDark", "OnErrorDark", "ErrorLight", "Overdue",
+    )
     for (m in Regex("""val (\w+) = Color\(0xFF([0-9A-Fa-f]{6})\)""").findAll(theme)) {
         val (name, hex) = m.destructured
         if (name in chromatic) continue

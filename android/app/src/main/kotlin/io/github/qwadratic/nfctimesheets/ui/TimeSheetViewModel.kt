@@ -17,6 +17,7 @@ import io.github.qwadratic.nfctimesheets.core.WireMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.WireShift
 import io.github.qwadratic.nfctimesheets.core.WireWorker
 import io.github.qwadratic.nfctimesheets.core.Zones
+import io.github.qwadratic.nfctimesheets.data.FlagCache
 import io.github.qwadratic.nfctimesheets.data.LocalShift
 import io.github.qwadratic.nfctimesheets.notify.ShiftSignals
 import io.github.qwadratic.nfctimesheets.sync.SyncScheduler
@@ -153,6 +154,18 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
         inbox.take()?.let(::handleTap)
         _pendingTap.value = null
     }
+
+    // ---- feature flags (decision-57 §1) --------------------------------------------
+    //
+    // Seeded from the CACHE, not from false: the screen must not flicker out of the
+    // variant the worker was already looking at while the fetch is in flight. Refreshed
+    // beside the roster in [refresh]; a failure there leaves this exactly as it is.
+
+    private val _funShiftScreen =
+        MutableStateFlow(app.flags.isOn(FlagCache.FUN_SHIFT_SCREEN))
+
+    /** decision-57 §3: the running-shift screen's playful variant. Default OFF. */
+    val funShiftScreen: StateFlow<Boolean> = _funShiftScreen.asStateFlow()
 
     private val _session = MutableStateFlow<SessionState>(SessionState.Unknown)
     val session: StateFlow<SessionState> = _session.asStateFlow()
@@ -564,6 +577,7 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             // off the main thread.
             val pending = withContext(Dispatchers.IO) {
                 app.sync.refreshRoster()
+                app.sync.refreshFlags()
                 app.sync.adoptServerOpenShift()
                 val remaining = app.sync.push(worker.id)
                 // Anything the foreground pass could not deliver is handed to the platform:
@@ -577,6 +591,7 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 // platform, which is the side that gets to be right.
                 remaining to SyncScheduler.isScheduled(app)
             }
+            _funShiftScreen.value = app.flags.isOn(FlagCache.FUN_SHIFT_SCREEN)
             val unresolved = runCatching { app.api.unresolvedShifts() }.getOrDefault(_log.value.unresolved)
             _log.value = _log.value.copy(
                 shifts = io { app.store.all() },

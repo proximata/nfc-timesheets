@@ -6,6 +6,7 @@ import io.github.qwadratic.nfctimesheets.core.TagLink
 import io.github.qwadratic.nfctimesheets.nfc.OperatorZoneCache
 import io.github.qwadratic.nfctimesheets.nfc.PendingTagReport
 import io.github.qwadratic.nfctimesheets.nfc.TagWriter
+import io.github.qwadratic.nfctimesheets.data.FlagCache
 import io.github.qwadratic.nfctimesheets.data.MaterialStore
 import io.github.qwadratic.nfctimesheets.data.MaterialSync
 import io.github.qwadratic.nfctimesheets.data.ShiftStore
@@ -101,7 +102,10 @@ class TimeSheetsApplication : Application() {
      */
     val pendingTagReport: PendingTagReport by lazy { PendingTagReport(this) }
 
-    val sync: ShiftSync by lazy { ShiftSync(api, store) }
+    /** decision-57 §1: the last GET /flags answer. Paints a screen, gates nothing. */
+    val flags: FlagCache by lazy { FlagCache(this) }
+
+    val sync: ShiftSync by lazy { ShiftSync(api, store, flags) }
 
     /**
      * Material requests. A SEPARATE database file from [store] — see MaterialStore's

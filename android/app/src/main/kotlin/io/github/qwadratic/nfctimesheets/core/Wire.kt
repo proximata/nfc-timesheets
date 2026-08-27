@@ -108,6 +108,22 @@ object Wire {
     }
 
     /**
+     * GET /flags -> {name: bool} for every row (decision-57 §1). NOT a typed envelope: the
+     * whole feature is a name and a boolean, and a second flag must cost a server row and
+     * nothing on the phone. Anything that is not a JSON boolean is DROPPED rather than
+     * coerced — a flag whose value arrived as a string or a number is a flag nobody
+     * deliberately switched on, and the default for every unknown name is false.
+     */
+    fun flags(o: JSONObject): Map<String, Boolean> {
+        val out = mutableMapOf<String, Boolean>()
+        for (name in o.keys()) {
+            val value = o.get(name)
+            if (value is Boolean) out[name] = value
+        }
+        return out
+    }
+
+    /**
      * One row of GET /operator/zones (decision-47) — the operator's worklist entry.
      * NOT [zone]/[WireZone]: this carries fields a cleaner's roster must never see
      * (`tag_deployed_at`, `verified_at`) and a worker-facing name (`location_name`) the

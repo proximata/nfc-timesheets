@@ -716,6 +716,8 @@ private fun LogScreen(
 ) {
     val log by model.log.collectAsStateWithLifecycle()
     val pendingTap by model.pendingTap.collectAsStateWithLifecycle()
+    // decision-57 §3. Default FALSE, and FALSE is today's screen exactly.
+    val funTheme by model.funShiftScreen.collectAsStateWithLifecycle()
     var showResolver by remember { mutableStateOf(false) }
     // decision-56's two dialogs. Both start closed and both are one confirmation away from
     // the call: neither action may be a single accidental tap (decision-56 §4).
@@ -770,6 +772,7 @@ private fun LogScreen(
             readiness = readiness,
             openIntent = openIntent,
             onStop = { showManualStop = true },
+            funTheme = funTheme,
         )
         if (showResolver) {
             ResolveDialog(model, log.unresolved) { showResolver = false }
@@ -958,6 +961,12 @@ private fun ShiftRunningScreen(
     openIntent: (Intent) -> Unit,
     /** decision-56's Stop button. Opens the confirmation dialog; never closes anything. */
     onStop: () -> Unit,
+    /**
+     * decision-57 §3's `fun_shift_screen`, server-side, OFF by default. FALSE is
+     * bit-for-bit this screen as it was before the flag existed — every colour below still
+     * comes from [MaterialTheme] and nothing extra is composed.
+     */
+    funTheme: Boolean = false,
 ) {
     val context = LocalContext.current
 
@@ -976,15 +985,21 @@ private fun ShiftRunningScreen(
     // Colour is the SECOND signal, never the only one: the state is spelled out in words
     // directly under the clock. Theme colours, so this is legible in dark mode and under
     // the system's high-contrast settings instead of being two hardcoded hex values.
-    val container = if (overdue) {
-        MaterialTheme.colorScheme.errorContainer
-    } else {
-        MaterialTheme.colorScheme.tertiaryContainer
+    //
+    // decision-57 §3: with `fun_shift_screen` ON these become FIXED literals from
+    // ui/Theme.kt's FunShift — a true black regardless of isSystemInDarkTheme(), so the
+    // screen is the same on every phone and a wallpaper still cannot reach it. Overdue
+    // keeps a red ON-colour in both variants: that is the one state that must never read
+    // as "fine", and it stays a colour AND a word.
+    val container = when {
+        funTheme -> FunShift.Black
+        overdue -> MaterialTheme.colorScheme.errorContainer
+        else -> MaterialTheme.colorScheme.tertiaryContainer
     }
-    val onContainer = if (overdue) {
-        MaterialTheme.colorScheme.onErrorContainer
-    } else {
-        MaterialTheme.colorScheme.onTertiaryContainer
+    val onContainer = when {
+        funTheme -> if (overdue) FunShift.Overdue else FunShift.OnBlack
+        overdue -> MaterialTheme.colorScheme.onErrorContainer
+        else -> MaterialTheme.colorScheme.onTertiaryContainer
     }
 
     // THE PERMISSION MOMENT. After the first successful clock-in, from the screen that is
@@ -1014,10 +1029,14 @@ private fun ShiftRunningScreen(
         onPauseOrDispose { }
     }
 
+    // The animation is a SIBLING drawn first, never a background of the content: it has to
+    // sit behind the words without being able to scroll, resize or clip them. Flag OFF, the
+    // Box holds exactly one child and the tree is what it always was.
+    Box(Modifier.fillMaxSize().background(container)) {
+    if (funTheme) FunShiftBackdrop()
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(container)
             .windowInsetsPadding(WindowInsets.safeDrawing)
             // At 200% font scale this content is far taller than the screen, and a locked
             // screen that clips its own instructions is worse than no lock at all.
@@ -1214,6 +1233,7 @@ private fun ShiftRunningScreen(
             color = onContainer,
             textAlign = TextAlign.Center,
         )
+    }
     }
 }
 

@@ -166,6 +166,12 @@ class Api(
      */
     suspend fun roster(): WireRoster = Wire.roster(get("/roster"))
 
+    /**
+     * GET /flags -> {name: bool} (decision-57 §1, auth: worker). Fetched beside the roster
+     * and cached; nothing on the tap path waits for it.
+     */
+    suspend fun flags(): Map<String, Boolean> = Wire.flags(get("/flags"))
+
     // ---- operator: the person who mounts tags --------------------------------------
     //
     // These two are reached through a SEPARATE Api instance holding a SEPARATE cookie jar

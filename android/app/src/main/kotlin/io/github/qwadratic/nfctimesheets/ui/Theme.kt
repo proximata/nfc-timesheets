@@ -74,6 +74,37 @@ fun TimeSheetsTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = colors, content = content)
 }
 
+/**
+ * THE OPT-IN PLAYFUL RUNNING-SHIFT SCREEN (decision-57 §3), AND WHY IT DOES NOT REOPEN
+ * THE BUG THE REST OF THIS FILE CLOSES.
+ *
+ * These are FIXED LITERALS, exactly like every other value in this file, and they are the
+ * only ones the flag-ON screen paints with. They are NOT derived from `MaterialTheme`, NOT
+ * from `dynamicDarkColorScheme`, and NOT from `isSystemInDarkTheme()` — the whole point of
+ * the flag is a screen that is the SAME black on every phone, so a wallpaper still cannot
+ * reach it. `demo/check-fun-shift-black.mjs` reads this file and fails if it ever becomes
+ * anything but a literal black.
+ *
+ * The flag is OFF by default and OFF is bit-for-bit today's screen: nothing below is read
+ * unless the server has switched `fun_shift_screen` on, and `TimeSheetsTheme` itself is
+ * untouched, so `check-app-not-wallpaper.mjs`, `check-shift-screen-brand.mjs` and
+ * `core-check.kt` § 17 keep measuring exactly what they measured before.
+ *
+ * CONTRAST, computed the same way as above: FunOnBlack #E9EAEC on #000000 is 16.9:1, and
+ * FunOverdue #FFB4AB on #000000 is 10.0:1 — both above AA for body text. The silhouettes
+ * are drawn at #1A1D22, i.e. 1.2:1 against the black: they are texture, never a signal,
+ * and they are painted BEHIND the words, which keep their own full contrast.
+ */
+object FunShift {
+    /** A true black, on purpose and regardless of the system theme (decision-57 §3). */
+    val Black = Color(0xFF000000)
+    val OnBlack = Color(0xFFE9EAEC)
+    /** Overdue still reads red — the one thing that must never mean "fine". */
+    val Overdue = Color(0xFFFFB4AB)
+    /** The moving shapes. Barely above the background: decoration, never the state. */
+    val Silhouette = Color(0xFF1A1D22)
+}
+
 // DESIGN.md § 3.1 surfaces, § 3.2 text, § 3.3 accent. Names are the document's names.
 private val BgBaseDark = Color(0xFF0B0C0E)
 private val BgRaisedDark = Color(0xFF131519)

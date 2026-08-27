@@ -17,7 +17,11 @@ import io.github.qwadratic.nfctimesheets.net.Api
  * a FORCE-STOPPED app runs nothing at all until a human opens it, which is why
  * core/PendingWork.kt makes the queue visible instead of pretending delivery is certain.
  */
-class ShiftSync(private val api: Api, private val store: ShiftStore) {
+class ShiftSync(
+    private val api: Api,
+    private val store: ShiftStore,
+    private val flags: FlagCache? = null,
+) {
 
     /**
      * @param sessionWorkerId the worker the SERVER says holds this session (decision-22).
@@ -81,6 +85,22 @@ class ShiftSync(private val api: Api, private val store: ShiftStore) {
             return
         }
         store.replaceRoster(roster.locations, roster.zones)
+    }
+
+    /**
+     * GET /flags -> cache it (decision-57 §1). Silent on failure for the same reason
+     * [refreshRoster] is, and one step stronger: a server too old to have the route at all
+     * answers 404, which must leave the phone on its cached values rather than throwing on
+     * every refresh. Nothing here can fail a tap — the only flag today paints a screen.
+     */
+    suspend fun refreshFlags() {
+        val cache = flags ?: return
+        val fetched = try {
+            api.flags()
+        } catch (_: ApiFailure) {
+            return
+        }
+        cache.replace(fetched)
     }
 
     /** decision-19: the server, not the phone, is authoritative for "who is clocked in". */
