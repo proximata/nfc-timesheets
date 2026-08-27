@@ -524,7 +524,16 @@ async function classifyTag({ params }) {
  * *** NO PARTIAL APPLICATION, AND THAT IS WHAT THE CTE SHAPE IS FOR (decision-55 §3). ***
  * ONE statement, four CTEs, each gated on the previous one by EXISTS/derivation:
  *   old     the zone, read ONLY if it is ACTIVE and BOUND — no row here and nothing below
- *           can produce one either.
+ *           can produce one either. FOR UPDATE, and that clause is load-bearing (TASK-285):
+ *           without it two overlapping reassigns of the SAME zone into DIFFERENT buildings
+ *           both see it live in their own READ COMMITTED snapshots and BOTH mint, leaving
+ *           one door with two live zones in two buildings. With the lock the second
+ *           statement blocks here, re-reads after the winner commits, sees active = false,
+ *           produces no row, and the whole chain collapses to a clean 404 unknown_zone with
+ *           nothing written. The tempting alternative — re-predicating the `retired` UPDATE
+ *           with `AND active` — is WORSE than the defect: the loser's claim and mint have
+ *           already committed by then, so it would produce exactly the partial application
+ *           decision-55 §3 forbids. Do not.
  *   claim   stamps `reported_tags.resolved_at`, gated `EXISTS (SELECT 1 FROM old)`: a card
  *           is never consumed against a zone that was not live and bound at that instant.
  *   minted  the new zone, SELECTed from claim CROSS JOIN old: it exists only if BOTH did.
@@ -543,6 +552,31 @@ async function classifyTag({ params }) {
  *   409 id_in_use               UUIDv4 collision on new_tag_id itself (vanishingly unlikely)
  *   422 unknown_location        no such building, or it is deactivated
  */
+/**
+ * The one statement, exported ONLY so check-api.js can race the REAL text on two real
+ * connections instead of a copy that could drift away from it (TASK-285 AC#2/#3). Nothing
+ * else imports it; the route is still the only caller in the server.
+ */
+export const REASSIGN_ZONE_SQL = `WITH old AS (
+     SELECT id, name, note FROM zones WHERE id = $1 AND active AND location_id IS NOT NULL
+     FOR UPDATE
+   ),
+   claim AS (
+     UPDATE reported_tags SET resolved_at = now()
+      WHERE id = $2 AND resolved_at IS NULL AND EXISTS (SELECT 1 FROM old)
+     RETURNING id, reported_at
+   ),
+   minted AS (
+     INSERT INTO zones (id, location_id, name, note, tag_deployed_at)
+       SELECT c.id, $3, o.name, o.note, c.reported_at FROM claim c CROSS JOIN old o
+     RETURNING ${OP_ZONE_COLS}
+   ),
+   retired AS (
+     UPDATE zones SET active = false WHERE id = $1 AND EXISTS (SELECT 1 FROM minted)
+     RETURNING id
+   )
+   SELECT m.*, r.id AS retired_zone_id FROM minted m JOIN retired r ON true`;
+
 async function reassignZoneBuilding({ params, body }) {
   const zoneId = v.uuid(params.id, "id");
   const newTagId = v.uuid(body.new_tag_id, "new_tag_id");
@@ -558,27 +592,7 @@ async function reassignZoneBuilding({ params, body }) {
 
   let row;
   try {
-    row = await one(
-      `WITH old AS (
-         SELECT id, name, note FROM zones WHERE id = $1 AND active AND location_id IS NOT NULL
-       ),
-       claim AS (
-         UPDATE reported_tags SET resolved_at = now()
-          WHERE id = $2 AND resolved_at IS NULL AND EXISTS (SELECT 1 FROM old)
-         RETURNING id, reported_at
-       ),
-       minted AS (
-         INSERT INTO zones (id, location_id, name, note, tag_deployed_at)
-           SELECT c.id, $3, o.name, o.note, c.reported_at FROM claim c CROSS JOIN old o
-         RETURNING ${OP_ZONE_COLS}
-       ),
-       retired AS (
-         UPDATE zones SET active = false WHERE id = $1 AND EXISTS (SELECT 1 FROM minted)
-         RETURNING id
-       )
-       SELECT m.*, r.id AS retired_zone_id FROM minted m JOIN retired r ON true`,
-      [zoneId, newTagId, locationId],
-    );
+    row = await one(REASSIGN_ZONE_SQL, [zoneId, newTagId, locationId]);
   } catch (err) {
     // Two indexes are reachable. `zones_one_live_name_idx` on (location_id,
     // lower(btrim(name))) fires when the TARGET building already has a live zone by the

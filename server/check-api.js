@@ -6974,6 +6974,127 @@ try {
       await oldIsUntouched("and none of the refusals above moved anything");
     });
 
+    // TASK-285. NOT mockable, and not fakeable with two sequential awaits on ONE connection:
+    // the claim under test is about two SEPARATE Postgres backends holding two READ COMMITTED
+    // snapshots at the same instant. So this opens two real clients and overlaps them by hand:
+    // A runs the statement inside an open transaction and HOLDS it; B starts the same statement
+    // against the SAME zone into a DIFFERENT building while A is still uncommitted; only then
+    // does A commit. Deterministic overlap, no sleep-and-hope on the outcome.
+    //
+    // THE RED CASE IS RUN HERE, IN THIS TEST, not described in a comment: the same race is
+    // played twice, once against the shipped statement and once against the SAME statement with
+    // FOR UPDATE stripped out. Stripped, both statements mint and ONE DOOR ENDS UP WITH TWO
+    // LIVE ZONES IN TWO BUILDINGS. That is the defect, reproduced every run, and the repo is
+    // never left in that state because the broken text exists only as a local string.
+    //
+    // The statement text is IMPORTED from routes/operator.js rather than copied, so a future
+    // edit to the route cannot leave this race testing a stale copy of it.
+    await test("reassign-building: two overlapping reassigns of one zone cannot both mint (TASK-285)", async () => {
+      const { REASSIGN_ZONE_SQL } = await import("./routes/operator.js");
+      const WITHOUT_LOCK = REASSIGN_ZONE_SQL.replace("\n     FOR UPDATE", "");
+      assert.ok(REASSIGN_ZONE_SQL.includes("FOR UPDATE"), "AC#1: the old CTE takes the row lock");
+      assert.ok(!WITHOUT_LOCK.includes("FOR UPDATE"), "the RED variant really is the plain SELECT");
+      // AC#1's other half: the fix is the LOCK, never a re-predicate on the retired UPDATE.
+      // Re-predicating there would make the loser's retire match 0 rows AFTER its claim and
+      // mint had already committed — a real partial application, worse than the race.
+      assert.ok(
+        /UPDATE zones SET active = false WHERE id = \$1 AND EXISTS \(SELECT 1 FROM minted\)/.test(REASSIGN_ZONE_SQL),
+        "the retired UPDATE's WHERE is untouched",
+      );
+
+      /** Play the race once with the given statement text; return what the door ended up with. */
+      const race = async (sql, tag) => {
+        const from = await newHouse(`rennen-alt-${tag}`, `Rennhaus Alt ${tag}`);
+        const toA = await newHouse(`rennen-a-${tag}`, `Rennhaus A ${tag}`);
+        const toB = await newHouse(`rennen-b-${tag}`, `Rennhaus B ${tag}`);
+        const zone = (await newZoneRow({ location_id: from, name: `Stiege Rennen ${tag}` })).zone;
+        const tagA = uuid(84 + (tag === "green" ? 0 : 2));
+        const tagB = uuid(85 + (tag === "green" ? 0 : 2));
+        for (const t of [tagA, tagB]) await expect(await reportTag(t, op1.cookie), 201);
+
+        const clients = [0, 1].map(() => new pg.Client({ connectionString: BASE_URL, connectionTimeoutMillis: 2000 }));
+        const outcome = { a: null, b: null, bBlocked: false };
+        try {
+          for (const c of clients) {
+            await c.connect();
+            await c.query(`SET search_path TO ${pg.escapeIdentifier(SCHEMA)}`);
+            await c.query("BEGIN");
+          }
+          const [ca, cb] = clients;
+          outcome.a = (await ca.query(sql, [zone.id, tagA, toA])).rows.length;
+          // B goes in-flight while A is still UNCOMMITTED. Not awaited yet — that is the race.
+          const pending = cb.query(sql, [zone.id, tagB, toB]);
+          const marker = Symbol("pending");
+          outcome.bBlocked =
+            (await Promise.race([pending.then(() => "done"), new Promise((r) => setTimeout(() => r(marker), 300))])) ===
+            marker;
+          await ca.query("COMMIT");
+          outcome.b = (await pending).rows.length;
+          await cb.query("COMMIT");
+        } finally {
+          for (const c of clients) await c.end().catch(() => {});
+        }
+
+        const live = (
+          await admin.query(
+            "SELECT id, location_id FROM zones WHERE active AND name = $1 ORDER BY id",
+            [`Stiege Rennen ${tag}`],
+          )
+        ).rows;
+        const claimed = await countOf("SELECT count(*) AS n FROM reported_tags WHERE id = ANY($1) AND resolved_at IS NOT NULL", [
+          [tagA, tagB],
+        ]);
+        const old = (await admin.query("SELECT active FROM zones WHERE id = $1", [zone.id])).rows[0];
+        return { ...outcome, live, claimed, oldActive: old.active, zone, tagA, tagB, toA, toB };
+      };
+
+      // ---- RED: the plain SELECT, i.e. the code as it shipped before this fix ----
+      const red = await race(WITHOUT_LOCK, "red");
+      console.log(
+        `  [TASK-285 RED, plain SELECT] live zones for the door: ${red.live.length} in buildings ${red.live
+          .map((z) => z.location_id)
+          .join(" | ")}`,
+      );
+      assert.equal(red.live.length, 2, "RED REPRODUCED: without FOR UPDATE one door ends up with TWO live zones");
+      assert.notEqual(red.live[0].location_id, red.live[1].location_id, "...in TWO different buildings");
+      assert.equal(red.b, 1, "the loser minted as well: its EPQ recheck still matched the retired UPDATE");
+      // Clean the reproduced damage away so nothing downstream inherits a two-zone door.
+      await admin.query("DELETE FROM zones WHERE id = ANY($1)", [[red.tagA, red.tagB]]);
+
+      // ---- GREEN: the shipped statement ----
+      const green = await race(REASSIGN_ZONE_SQL, "green");
+      console.log(
+        `  [TASK-285 GREEN, FOR UPDATE] loser blocked: ${green.bBlocked}, loser rows: ${green.b}, live zones: ${green.live.length}, claimed cards: ${green.claimed}`,
+      );
+      assert.equal(green.bBlocked, true, "the second statement BLOCKS on the old zone's row lock");
+      assert.equal(green.a, 1, "the winner reassigns normally");
+      assert.equal(green.b, 0, "the loser produces no row at all — the whole chain collapses");
+      assert.equal(green.live.length, 1, "AC#2: exactly ONE live replacement zone for that door");
+      assert.equal(green.live[0].id, green.tagA);
+      assert.equal(green.live[0].location_id, green.toA);
+      assert.equal(green.oldActive, false, "the old zone is retired exactly once");
+      assert.equal(green.claimed, 1, "AC#4: no claimed-but-orphaned reported_tag — the loser's card is untouched");
+      assert.equal(
+        await countOf("SELECT count(*) AS n FROM zones WHERE id = $1", [green.tagB]),
+        0,
+        "AC#4: no stray minted zone from the loser",
+      );
+
+      // And the loser's HTTP answer is the clean 404, with its card still reusable.
+      const late = await call(`/operator/zones/${green.zone.id}/reassign-building`, {
+        method: "POST",
+        cookie: op1.cookie,
+        body: { new_tag_id: green.tagB, location_id: green.toB },
+      });
+      assert.equal(late.status, 404);
+      assert.equal((await late.json()).error, "unknown_zone");
+      assert.equal(
+        (await admin.query("SELECT resolved_at FROM reported_tags WHERE id = $1", [green.tagB])).rows[0].resolved_at,
+        null,
+        "the loser walks away with an unclaimed card and writes it again",
+      );
+    });
+
     // ---- operator SMS sign-in (decision-54 §5) --------------------------------------
     //
     // NO REAL SMS IS SENT BY ANY OF THIS, AND NONE CAN BE. The mechanism is the one
