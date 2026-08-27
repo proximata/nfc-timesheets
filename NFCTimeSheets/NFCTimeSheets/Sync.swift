@@ -51,6 +51,18 @@ func refreshRoster(context: ModelContext) async {
     try? context.save()
 }
 
+// MARK: - Feature flags
+
+/// GET /flags -> cache in UserDefaults (decision-57).
+///
+/// Fetched on the same pass as the roster, and FAILS SILENTLY on purpose: a flag is
+/// decoration, so a server that is unreachable - or old enough not to serve /flags at all -
+/// leaves the last cached answer standing and the app keeps working exactly as before.
+func refreshFlags() async {
+    guard let flags = try? await FlagsAPI.fetch() else { return }
+    FeatureFlags.store(flags)
+}
+
 // MARK: - Shift sync
 
 /// Push every local shift the server has not acknowledged yet.

@@ -548,3 +548,9 @@ enum RosterAPI {
     /// GET /roster -> workers + locations the app may pick from.
     static func fetch() async throws -> WireRoster { try await apiGet("/roster") }
 }
+
+/// decision-57. GET /flags (worker auth) -> {name: bool} for every row in feature_flags.
+/// No envelope: the object IS the map, so a second flag costs a row and no client change.
+enum FlagsAPI {
+    static func fetch() async throws -> [String: Bool] { try await apiGet("/flags") }
+}

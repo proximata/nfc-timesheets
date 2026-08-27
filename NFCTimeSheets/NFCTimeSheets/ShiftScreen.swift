@@ -37,6 +37,13 @@ struct ShiftScreen: View {
     @Environment(\.openURL) private var openURL
     @State private var confirmingStop = false
 
+    /// decision-57, OFF by default and OFF whenever the server has never answered: with
+    /// the flag off every line below behaves exactly as it did before this flag existed.
+    /// Read straight out of the cache rather than passed in, so the call site (and every
+    /// preview) keeps the old, unflagged screen for free.
+    @AppStorage(FeatureFlags.defaultsKey(FeatureFlags.funShiftScreen))
+    private var funTheme = false
+
     /// THE WHOLE SCREEN is inside one TimelineView, ticking once a minute, and that is
     /// deliberate rather than tidy: the 8h boundary has to flip the heading, the colour,
     /// the words AND the clock together. An earlier shape put the TimelineView around only
@@ -51,7 +58,11 @@ struct ShiftScreen: View {
             let overdue = ShiftSignal.phase(of: running, now: context.date) == .overdue
             // Colour is the SECOND signal, never the only one - the state is spelled out
             // in words directly under the clock. Green while it is fine, red once it is not.
-            let tint: Color = overdue ? .red : .green
+            //
+            // decision-57: with fun_shift_screen ON the "fine" colour becomes blue. RED IS
+            // NOT FLAGGED and never will be - the one thing that must never mean "fine" is
+            // the only colour on this screen that carries a consequence.
+            let tint: Color = overdue ? .red : (funTheme ? .blue : .green)
 
             // ScrollView, not a fixed stack: at 200% Dynamic Type this content is far
             // taller than the screen, and a locked screen that clips its own instructions
@@ -70,7 +81,7 @@ struct ShiftScreen: View {
                 .frame(maxWidth: .infinity)
                 .padding(24)
             }
-            .background(tint.opacity(0.14).ignoresSafeArea())
+            .background(background(tint: tint).ignoresSafeArea())
         }
         // The permission moment. AFTER the first clock-in, from the screen that is already
         // explaining what the reminder buys, and never on the tap path itself - the gate
@@ -78,6 +89,28 @@ struct ShiftScreen: View {
         // at a door at 06:02 with gloves on says no once, permanently.
         .task {
             await signals.requestAuthorizationIfNeeded()
+        }
+    }
+
+    // MARK: - Background
+
+    /// Flag OFF: the wash this screen has always had. Flag ON: TRUE BLACK plus a procedural
+    /// animation (decision-57 §3).
+    ///
+    /// It is a BACKGROUND and stays one. Everything that says what state the shift is in -
+    /// the header words, the clock card, "Running", the resolver - is drawn on top of it in
+    /// its own opaque card, so the figures can never sit between the worker and the words.
+    /// Their opacity is deliberately low for the same reason.
+    @ViewBuilder
+    private func background(tint: Color) -> some View {
+        if funTheme {
+            ZStack {
+                Color.black
+                WorkerSilhouettes(tint: tint)
+                    .accessibilityHidden(true)     // decoration; VoiceOver reads the words
+            }
+        } else {
+            tint.opacity(0.14)
         }
     }
 
@@ -245,5 +278,53 @@ struct ShiftScreen: View {
         }
         .padding(16)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+/// decision-57 §3: the procedural half of the fun theme. SwiftUI `Canvas` + `TimelineView`,
+/// both already in the dependency tree - NO new asset pipeline, no Lottie/Rive, no bundled
+/// image or video. Four silhouettes walk along the bottom of the screen sweeping.
+///
+/// It draws ONLY in the lower band of the screen and only at low opacity, because the clock
+/// and the state words live above it in opaque cards. Nothing here is ever the signal; the
+/// screen must read identically with this view deleted.
+private struct WorkerSilhouettes: View {
+    let tint: Color
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            Canvas { ctx, size in
+                let unit = min(size.width, size.height) * 0.09      // one figure's head-ish
+                let ground = size.height * 0.88
+                ctx.opacity = 0.22
+                for figure in 0..<FunShiftAnimation.figureCount {
+                    let phase = FunShiftAnimation.walkPhase(figure: figure, at: t)
+                    // Off the left edge by a whole figure, so one walks IN rather than
+                    // popping into existence at x = 0.
+                    let x = phase * (size.width + unit * 3) - unit * 1.5
+                    let y = ground - unit * Double(figure % 2) * 0.6  // a shallow two-row crowd
+                    draw(&ctx, at: CGPoint(x: x, y: y), unit: unit,
+                         swing: FunShiftAnimation.sweepSwing(figure: figure, at: t))
+                }
+            }
+            .drawingGroup()     // one offscreen pass, not four layers composited per frame
+        }
+    }
+
+    /// Head + body + the mop handle. Deliberately crude - see FunShiftAnimation's ceiling.
+    private func draw(_ ctx: inout GraphicsContext, at origin: CGPoint, unit: Double, swing: Double) {
+        let head = Path(ellipseIn: CGRect(x: origin.x - unit * 0.25, y: origin.y - unit * 2.2,
+                                          width: unit * 0.5, height: unit * 0.5))
+        let body = Path(roundedRect: CGRect(x: origin.x - unit * 0.28, y: origin.y - unit * 1.7,
+                                            width: unit * 0.56, height: unit * 1.7),
+                        cornerRadius: unit * 0.22)
+        ctx.fill(head, with: .color(tint))
+        ctx.fill(body, with: .color(tint))
+
+        var mop = Path()
+        mop.move(to: CGPoint(x: origin.x + unit * 0.2, y: origin.y - unit * 1.2))
+        mop.addLine(to: CGPoint(x: origin.x + unit * (0.9 + swing * 0.35), y: origin.y))
+        ctx.stroke(mop, with: .color(tint), lineWidth: unit * 0.12)
     }
 }
