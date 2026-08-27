@@ -6,6 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-18 09:37'
+updated_date: '2026-08-27 07:49'
 labels:
   - a11y
   - map
@@ -51,8 +52,33 @@ MUST NOT REGRESS: decision-39; no cloud mapId (it makes the API ignore our style
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Escape closes the info box and restores focus to the opener
-- [ ] #2 keyboard activation of Oeffnen moves focus into the box
+- [x] #1 Escape closes the info box and restores focus to the opener
+- [x] #2 keyboard activation of Oeffnen moves focus into the box
 - [ ] #3 audit-map-a11y reports 32/32
-- [ ] #4 the phone bottom sheet does not regress
+- [x] #4 the phone bottom sheet does not regress
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AUDIT 2026-08-27, demo/audit-map-a11y.mjs against 127.0.0.1:8080 (keyed build, nfc_demo). No app code touched.
+
+All four failures named in the description are GONE. Real stdout, section 2:
+  ok   map info box: focus moves INTO it  - SECTION 'Aerztezentrum Landstrasse'
+  ok   map info box: Tab LEAVES it - a non-modal popover may not trap focus (2 focusables) - left at press 3 onto BUTTON 'Vergroessern'
+  ok   map info box: Escape closes it
+  ok   map info box: focus RESTORED to the opener - BUTTON 'Oeffnen Aerztezentrum Landstrasse'
+section 3:
+  ok   info box: reachable by pressing Tab FORWARD from the control that opened it - 1 presses
+  ok   info box: reachable at all with the keyboard (Shift+Tab) - 7 presses back
+  ok   info box: the cross-links really are inside it - 10 links
+AC1, AC2 checked from those lines. Note the 'Tab is trapped' assertion was deliberately INVERTED by the fix - the box is not a dialog, matching the description's 'a full focus trap is NOT wanted'.
+
+AC4 checked - phone section 6 is 8/8 ok, including 'phone Objektpanel: Escape closes it', 'focus RESTORED to the opener' and 'body scroll released after close'.
+
+AC3 LEFT UNCHECKED, and it is now unreachable as literally written: the script has grown to 34 assertions, not 32. Real footer:
+  32/34 passed, 2 FAILED
+    FAIL Objektpanel drawer: body scroll released after close
+    FAIL map info box: body scroll released after close
+Neither failure is this task: both are the desktop scroll-lock NOT being released after close, the same defect audit-overlays reports on four unrelated drawers (shifts:correct, shifts:create, workers:edit, workers:deactivate-confirm). The phone sheet passes the same assertion. Status left Done; the scroll-release defect needs its own task.
+<!-- SECTION:NOTES:END -->

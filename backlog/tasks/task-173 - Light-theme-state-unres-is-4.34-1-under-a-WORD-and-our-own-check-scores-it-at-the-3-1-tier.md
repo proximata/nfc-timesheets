@@ -6,6 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-18 09:37'
+updated_date: '2026-08-27 07:49'
 labels:
   - a11y
   - design
@@ -51,7 +52,31 @@ on (lib/map.ts #6c7178 / #7b8189). Separate call: it is context, not our data.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 light --state-unres clears 4.5:1 on --bg-base and --bg-raised
+- [x] #1 light --state-unres clears 4.5:1 on --bg-base and --bg-raised
 - [ ] #2 audit-contrast scores the three state tokens at the 4.5:1 body tier and goes RED on the old value
-- [ ] #3 dark theme unchanged and check-ia-greyscale still PASSes
+- [x] #3 dark theme unchanged and check-ia-greyscale still PASSes
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AUDIT 2026-08-27, demo/audit-contrast.mjs + demo/check-ia-greyscale.mjs on 127.0.0.1:8080. No app code touched.
+
+AC1 VERIFIED. Light theme rows, real stdout:
+  ok     4.72:1  need 4.5:1  --state-unres on --bg-base    - .badge.unres WORD
+  ok     4.92:1  need 4.5:1  --state-unres on --bg-raised  - .badge.unres word inside a panel
+Was 4.16:1 / 4.34:1. Token in the file is the prescribed value: web/app/globals.css:131  --state-unres: oklch(0.55 0.11 75);
+
+AC1 second half, dark unchanged: web/app/globals.css:54  --state-unres: oklch(0.78 0.14 75);
+  ok     9.58:1  need 4.5:1  --state-unres on --bg-base
+  ok     8.95:1  need 4.5:1  --state-unres on --bg-raised
+i.e. identical to the 8.95/9.58 recorded in the description.
+
+AC3 VERIFIED. demo/check-ia-greyscale.mjs final line: 'check-ia-greyscale: PASS - images in /tmp/ts-demo/ia-states/', including 'greyscale: every grey pin SAYS its state in a word (decision-43) - 1 grey pin(s), 1 carrying the word'.
+
+AC2 LEFT UNCHECKED - half proven, half not provable in a read-only audit. The TIER half is proven: audit-contrast now scores all three state tokens at the body tier -
+  ok     4.64:1  need 4.5:1  --state-open on --bg-base
+  ok     4.72:1  need 4.5:1  --state-unres on --bg-base
+  ok     5.51:1  need 4.5:1  --state-corrected on --bg-base
+(the 3:1 tier the description complains about is gone; the only 'need 3:1' rows left are --border, --border-strong and --focus). The MUTATION half - 'goes RED if the token is put back' - needs an edit to web/app/globals.css, which this audit run is forbidden from making, so it is not claimed. Footer: '0 unexpected contrast failure(s); 4 accepted (4 listed).'
+<!-- SECTION:NOTES:END -->
