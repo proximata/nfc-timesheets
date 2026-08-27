@@ -41,6 +41,7 @@ import {
   formatDuration,
   fromBusinessInput,
   isManualEntry,
+  manualEnds,
   overlappingShift,
   type ShiftState,
   shiftState,
@@ -1131,6 +1132,14 @@ export default function ShiftsPage() {
                           ) : (
                             <span className="shift-origin-tap">{t('originTap')}</span>
                           )}
+                          {/* decision-56: one line per END the worker pressed a button for.
+                              Both flags set = both lines, so start-only, close-only and
+                              both-ends read differently without relying on colour. */}
+                          {manualEnds(shift).map((end) => (
+                            <span key={end} className="shift-origin-manual shift-manual-end">
+                              {end === 'start' ? t('manualStart') : t('manualClose')}
+                            </span>
+                          ))}
                         </td>
                         <td className="cell-actions">
                           <button

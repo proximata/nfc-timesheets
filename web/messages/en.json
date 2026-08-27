@@ -709,6 +709,8 @@
     "payable": "Counts towards pay",
     "originTap": "Tapped on the tag",
     "originManual": "Entered by hand",
+    "manualStart": "Started by hand",
+    "manualClose": "Ended by hand",
     "endMissing": "No end yet",
     "durationRunning": "Still running",
     "correct": "Correct",

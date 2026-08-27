@@ -709,6 +709,8 @@
     "payable": "Zählt zur Bezahlung",
     "originTap": "Am Tag gescannt",
     "originManual": "Manuell erfasst",
+    "manualStart": "Start manuell erfasst",
+    "manualClose": "Ende manuell erfasst",
     "endMissing": "Noch kein Ende",
     "durationRunning": "Läuft noch",
     "correct": "Korrigieren",

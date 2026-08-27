@@ -965,6 +965,14 @@ a {
   font-weight: 600;
 }
 
+/* decision-56: one line per manually pressed END, under whatever the cell already says.
+   Own line, not a tint - start-only, close-only and both-ends have to be tellable apart
+   in greyscale and out loud. */
+.shift-manual-end {
+  display: block;
+  font-weight: 600;
+}
+
 /* C8 (LOOK.md): `.cell-muted` (italic + --text-muted) means "there is nothing here"
    everywhere else in this product ("Noch kein Ende", "Läuft noch", "Keine Nummer…") -
    except this one cell, where it was typeset over a REAL value: the whole audit

@@ -881,6 +881,12 @@ export type Shift = {
    * rather than tapped — there is no separate flag, see `isManualEntry` in lib/shifts.ts.
    */
   client_uuid: string | null
+  /**
+   * decision-56: the worker pressed "start without a tag" / "stop" in the app instead of
+   * tapping. Independent of `client_uuid` — a manual END is still a phone-originated row.
+   */
+  manual_start: boolean
+  manual_close: boolean
   created_at: string
 }
 

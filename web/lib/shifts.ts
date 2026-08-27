@@ -46,6 +46,24 @@ export function isManualEntry(shift: Pick<Shift, 'client_uuid'>): boolean {
   return shift.client_uuid === null
 }
 
+/** Which END(s) of a shift a worker pressed a button for instead of tapping a tag. */
+export type ManualEnd = 'start' | 'close'
+
+/**
+ * decision-56's two flags, as the list of ends to LABEL. Empty = tapped on both ends.
+ *
+ * Separate from `isManualEntry`, and deliberately not folded into it: that one means "an
+ * admin typed this row", these mean "the worker was on the phone but not on the tag". A
+ * row can be neither, either, or both, and an audit has to be able to tell which — so the
+ * two ends stay two values rather than one "manual" boolean.
+ */
+export function manualEnds(shift: Pick<Shift, 'manual_start' | 'manual_close'>): ManualEnd[] {
+  const ends: ManualEnd[] = []
+  if (shift.manual_start) ends.push('start')
+  if (shift.manual_close) ends.push('close')
+  return ends
+}
+
 /**
  * The shift of `workerId` that already covers part of [startIso, endIso), or `null`.
  *

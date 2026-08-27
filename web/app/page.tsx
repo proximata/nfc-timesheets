@@ -34,6 +34,7 @@ import {
   blocksPayroll,
   durationMinutes,
   formatDuration,
+  manualEnds,
   shiftState,
 } from '@/lib/shifts'
 
@@ -115,6 +116,9 @@ export default function DashboardPage() {
   const t = useTranslations('home')
   const tFilter = useTranslations('filters')
   const tError = useTranslations('error')
+  // decision-56's two flag labels are the shift log's words; borrowed rather than
+  // duplicated into `home`, so the two screens can never drift apart.
+  const tShift = useTranslations('shifts')
   const format = useFormatter()
   const router = useRouter()
 
@@ -665,7 +669,12 @@ export default function DashboardPage() {
                             <span className="visually-hidden"> {t('panelOpen')}</span>
                           </button>
                         </td>
-                        <td>{clockTime(shift.start_time)}</td>
+                        {/* decision-56: a shift started without a tag says so here, on the
+                            one screen that claims somebody is on site right now. */}
+                        <td>
+                          {clockTime(shift.start_time)}
+                          {shift.manual_start ? ` — ${tShift('manualStart')}` : ''}
+                        </td>
                         {/* Text, not colour: the warning has to survive greyscale. */}
                         <td>
                           {t('elapsedValue', { duration: formatDuration(minutes) })}
@@ -722,7 +731,14 @@ export default function DashboardPage() {
                           <span className="visually-hidden"> {t('panelOpen')}</span>
                         </button>
                       </td>
-                      <td>{formatDuration(durationMinutes(shift.start_time, shift.end_time))}</td>
+                      <td>
+                        {formatDuration(durationMinutes(shift.start_time, shift.end_time))}
+                        {manualEnds(shift).map((end) => (
+                          <span key={end} className="shift-manual-end">
+                            {end === 'start' ? tShift('manualStart') : tShift('manualClose')}
+                          </span>
+                        ))}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
