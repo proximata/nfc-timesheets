@@ -275,6 +275,22 @@
         }
       }
     },
+    "Auto-closed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autom. beendet"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto-closed"
+          }
+        }
+      }
+    },
     "Binding the zone…" : {
       "localizations" : {
         "de" : {
@@ -411,6 +427,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Endzeiten bestätigen"
+          }
+        }
+      }
+    },
+    "Corrected" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Korrigiert"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corrected"
           }
         }
       }
@@ -691,6 +723,22 @@
         }
       }
     },
+    "In progress" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Läuft"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In progress"
+          }
+        }
+      }
+    },
     "Installed: %@ (%@)" : {
       "localizations" : {
         "de" : {
@@ -787,6 +835,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Manuell"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manual"
           }
         }
       }

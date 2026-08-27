@@ -474,6 +474,7 @@ struct LogView: View {
 
     private func refresh() async {
         await refreshRoster(context: context)
+        await refreshFlags()     // decision-57: same pass as the roster, never blocking
         await adoptServerOpenShift(context: context)
         await syncPending(context: context, workerId: worker.id)
         unresolved = await fetchUnresolved()
@@ -658,7 +659,13 @@ struct ShiftRow: View {
     }
 }
 
-private func pill(_ t: String, _ c: Color) -> some View {
+/// TASK-298: the parameter is a LocalizedStringKey, not a String, ON PURPOSE.
+/// Text(_ content: S) where S: StringProtocol is the VERBATIM initializer - it looks
+/// nothing up, so every pill shipped its English literal on a German device. Only
+/// Text(_ key: LocalizedStringKey) consults the catalogue. All call sites pass literals,
+/// so they compile unchanged; a future caller with a RUNTIME String will not compile,
+/// which is the point - it would have to say what key it means.
+private func pill(_ t: LocalizedStringKey, _ c: Color) -> some View {
     Text(t).font(.caption2).padding(.horizontal, 6).padding(.vertical, 2)
         .background(c.opacity(0.2)).foregroundStyle(c).clipShape(Capsule())
 }
