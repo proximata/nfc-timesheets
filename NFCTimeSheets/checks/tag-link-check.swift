@@ -149,15 +149,43 @@ let key = "6b3a2c1d-0e4f-4a8b-9c7d-1e2f3a4b5c6d"
 // field back to make a server error go away, this line fails first.
 let openBody = json(OpenShiftRequest(clientUuid: key,
                                      locationUuid: "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
-                                     startTime: start))
+                                     startTime: start,
+                                     manual: nil))
 check(openBody
         == #"{"client_uuid":"6b3a2c1d-0e4f-4a8b-9c7d-1e2f3a4b5c6d","location_uuid":"3f2504e0-4f89-11d3-9a0c-0305e82c3301","start_time":"2026-07-14T03:43:11.412Z"}"#,
       "POST /shifts/open body: \(openBody)")
 check(!openBody.contains("worker"), "no worker identity may ride in a shift body")
 
-check(json(CloseShiftRequest(clientUuid: key, endTime: start, autoClosed: false))
+check(json(CloseShiftRequest(clientUuid: key, endTime: start, autoClosed: false, manual: nil))
         == #"{"auto_closed":false,"client_uuid":"6b3a2c1d-0e4f-4a8b-9c7d-1e2f3a4b5c6d","end_time":"2026-07-14T03:43:11.412Z"}"#,
       "POST /shifts/close body")
+
+// decision-56, and the two halves of it are one assertion each.
+//
+// THE ABSENCE IS THE FIRST HALF and it is why `manual` is `Bool?` rather than `Bool`: a tap
+// must keep sending the bytes it has always sent, so a server that has not shipped
+// TASK-287's migration yet sees nothing new at all. The two checks above pin exactly that -
+// they would fail the moment a `false` started riding along.
+//
+// THE PRESENCE IS THE SECOND. `manual: true` is a top-level boolean named `manual` on BOTH
+// routes - not `manual_start` / `manual_close`, which are the SERVER's column names and not
+// its request fields. Getting that wrong is silent: the row files, the flag never lands, and
+// the office reviews nothing.
+let manualOpen = json(OpenShiftRequest(clientUuid: key,
+                                       locationUuid: "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+                                       startTime: start,
+                                       manual: true))
+check(manualOpen
+        == #"{"client_uuid":"6b3a2c1d-0e4f-4a8b-9c7d-1e2f3a4b5c6d","location_uuid":"3f2504e0-4f89-11d3-9a0c-0305e82c3301","manual":true,"start_time":"2026-07-14T03:43:11.412Z"}"#,
+      "POST /shifts/open manual body: \(manualOpen)")
+
+// auto_closed AND manual are independent facts and both go on the wire (decision-56 §3):
+// a manual stop is not the 8h timer, and the day something conflates them one of these two
+// fields disappears from this line.
+let manualClose = json(CloseShiftRequest(clientUuid: key, endTime: start, autoClosed: false, manual: true))
+check(manualClose
+        == #"{"auto_closed":false,"client_uuid":"6b3a2c1d-0e4f-4a8b-9c7d-1e2f3a4b5c6d","end_time":"2026-07-14T03:43:11.412Z","manual":true}"#,
+      "POST /shifts/close manual body: \(manualClose)")
 
 // POST /auth/apple, AppleSignInRequest and AppleNonce are gone from this file with
 // decision-50 - Sign in with Apple is retired from this app. server/routes/auth.js keeps

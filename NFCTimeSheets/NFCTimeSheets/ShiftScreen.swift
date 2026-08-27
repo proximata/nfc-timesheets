@@ -29,9 +29,13 @@ struct ShiftScreen: View {
     /// The "your open shift was moved to another building" sentence, when there is one.
     let notice: String?
     let onDismissNotice: () -> Void
+    /// decision-56: end this shift NOW, without a tag. The confirmation lives here; the
+    /// caller only ever hears about a decision the worker already confirmed.
+    let onManualStop: () -> Void
 
     @Environment(ShiftSignalCenter.self) private var signals
     @Environment(\.openURL) private var openURL
+    @State private var confirmingStop = false
 
     /// THE WHOLE SCREEN is inside one TimelineView, ticking once a minute, and that is
     /// deliberate rather than tidy: the 8h boundary has to flip the heading, the colour,
@@ -57,6 +61,7 @@ struct ShiftScreen: View {
                     header(overdue: overdue, tint: tint)
                     clock(overdue: overdue, now: context.date)
                     instruction(tint: tint)
+                    stopButton
                     if let notice { noticeCard(notice) }
                     if unresolvedCount > 0 { resolverCard }
                     if signals.outOfAppSignalsSilenced { notificationsOffCard }
@@ -137,9 +142,18 @@ struct ShiftScreen: View {
         )
     }
 
-    /// The single obvious way to end the shift. There is no in-app button and there must
-    /// not be one: clocking out is a tag tap, and a second path to the same row is how
-    /// two mechanisms start disagreeing about somebody's hours.
+    /// The PRIMARY way to end the shift, and still the only silent one.
+    ///
+    /// This comment used to read "there is no in-app button and there must not be one:
+    /// clocking out is a tag tap, and a second path to the same row is how two mechanisms
+    /// start disagreeing about somebody's hours". decision-56 supersedes that for this one
+    /// action, and the reasoning survives intact rather than being deleted, because it is
+    /// exactly WHY the button below is safe: the second path is not silent. A manual stop
+    /// sends `manual: true`, the server stamps `manual_close` (and `corrected_at` in the
+    /// same update), and every list that shows shifts shows it - forever. The two mechanisms
+    /// cannot disagree about somebody's hours without an admin being able to see which one
+    /// produced the row. Prevention was never on the table (a worker with a broken tag had
+    /// no way to clock out at all); visibility is.
     private func instruction(tint: Color) -> some View {
         VStack(spacing: 10) {
             Image(systemName: "wave.3.right")
@@ -154,6 +168,25 @@ struct ShiftScreen: View {
         .padding(20)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 20))
         .accessibilityElement(children: .combine)
+    }
+
+    /// SECONDARY, and below the tap instruction on purpose: the tag is still the normal way
+    /// out. `.bordered` + a confirmation dialog, never a single destructive tap - decision-56
+    /// §4 requires the confirmation on both new paths, and the dialog NAMES the building so
+    /// a mis-tap on the wrong phone is caught before it costs somebody an afternoon.
+    private var stopButton: some View {
+        Button(role: .destructive) { confirmingStop = true } label: {
+            Label("Finish shift without a tag", systemImage: "stop.circle")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .confirmationDialog(Text("Finish your shift at \(running.locationName) now?"),
+                            isPresented: $confirmingStop,
+                            titleVisibility: .visible) {
+            Button("Finish now", role: .destructive, action: onManualStop)
+        } message: {
+            Text("This ends the shift at this moment and is marked for the office to review. Use the tag when you can.")
+        }
     }
 
     private func noticeCard(_ text: String) -> some View {

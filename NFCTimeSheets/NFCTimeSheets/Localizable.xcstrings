@@ -525,12 +525,42 @@
         }
       }
     },
+    "Finish now" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jetzt beenden"
+          }
+        }
+      }
+    },
+    "Finish shift without a tag" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schicht ohne Tag beenden"
+          }
+        }
+      }
+    },
     "Finish time is before the start time." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Die Endzeit liegt vor der Startzeit."
+          }
+        }
+      }
+    },
+    "Finish your shift at %@ now?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schicht bei %@ jetzt beenden?"
           }
         }
       }
@@ -751,12 +781,32 @@
         }
       }
     },
+    "Manual" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manuell"
+          }
+        }
+      }
+    },
     "Materials" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Material"
+          }
+        }
+      }
+    },
+    "Mock: off" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mock: aus"
           }
         }
       }
@@ -881,6 +931,16 @@
         }
       }
     },
+    "No buildings on this phone yet. Connect to the internet and pull down to refresh." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auf diesem Telefon sind noch keine Objekte gespeichert. Verbinde dich mit dem Internet und ziehe zum Aktualisieren nach unten."
+          }
+        }
+      }
+    },
     "No completed shifts yet." : {
       "localizations" : {
         "de" : {
@@ -907,6 +967,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Keine Verbindung – wird gesendet, sobald Sie wieder online sind."
+          }
+        }
+      }
+    },
+    "No network. Arms canned /shifts responses; the buttons above stay the real ones." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kein Netzwerk. Aktiviert vorgefertigte /shifts-Antworten; die Buttons oben bleiben die echten."
           }
         }
       }
@@ -1670,12 +1740,52 @@
         }
       }
     },
+    "Start" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starten"
+          }
+        }
+      }
+    },
+    "Start a shift at %@?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schicht bei %@ starten?"
+          }
+        }
+      }
+    },
+    "Start shift" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schicht starten"
+          }
+        }
+      }
+    },
     "Start with 0 or +43, for example 0664 1234567." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mit 0 oder +43 beginnen, zum Beispiel 0664 1234567."
+          }
+        }
+      }
+    },
+    "Start without a tag" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ohne Tag starten"
           }
         }
       }
@@ -1716,6 +1826,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Übersicht"
+          }
+        }
+      }
+    },
+    "Tag missing or unreachable? Pick the building instead. The office sees this as a manual entry." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tag fehlt oder ist nicht erreichbar? Wähle stattdessen das Objekt. Die Verwaltung sieht das als manuelle Erfassung."
           }
         }
       }
@@ -1836,6 +1956,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Die Karte ist beschrieben, aber das Büro weiß noch nichts davon. Mit Signal erneut versuchen."
+          }
+        }
+      }
+    },
+    "The clock starts now and this is marked for the office to review. Use the tag when you can." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Zeit läuft ab jetzt. Der Eintrag wird für die Verwaltung markiert. Nutze den Tag, sobald es geht."
           }
         }
       }
@@ -2056,6 +2186,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Diese Karte wurde gemeldet, aber noch niemand hat sie zugeordnet. Fragen Sie eine Verwaltungsperson."
+          }
+        }
+      }
+    },
+    "This ends the shift at this moment and is marked for the office to review. Use the tag when you can." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Damit endet die Schicht in diesem Moment. Der Eintrag wird für die Verwaltung markiert. Nutze den Tag, sobald es geht."
           }
         }
       }
@@ -2556,6 +2696,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sie wurden abgemeldet. Bitte melden Sie sich erneut an."
+          }
+        }
+      }
+    },
+    "Your admin will see that this shift was started without a tag." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deine Verwaltung sieht, dass diese Schicht ohne Tag gestartet wurde."
           }
         }
       }

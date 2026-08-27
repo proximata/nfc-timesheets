@@ -269,6 +269,10 @@ struct WireShift: Codable, Identifiable {
     let endTime: Date?
     let autoClosed: Bool
     let correctedAt: Date?
+    /// decision-56. Additive and OPTIONAL: a server that has not shipped the migration yet
+    /// simply omits them, and `?? false` keeps every existing row reading exactly as before.
+    let manualStart: Bool?
+    let manualClose: Bool?
     /// Nullable in the schema, and not necessarily UUID-shaped for rows the server made
     /// itself, so it is decoded as a plain String.
     let clientUuid: String?
@@ -283,6 +287,8 @@ struct WireShift: Codable, Identifiable {
         case endTime = "end_time"
         case autoClosed = "auto_closed"
         case correctedAt = "corrected_at"
+        case manualStart = "manual_start"
+        case manualClose = "manual_close"
         case clientUuid = "client_uuid"
         case locationSlug = "location_slug"
         case locationName = "location_name"
@@ -313,11 +319,17 @@ struct OpenShiftRequest: Encodable {
     let clientUuid: String
     let locationUuid: String
     let startTime: Date
+    /// decision-56: the worker picked the building out of the roster instead of tapping a
+    /// card. OPTIONAL on the wire and omitted when false, so a server that predates the
+    /// field sees byte-identical bodies to the ones it has always taken. Validation is
+    /// UNCHANGED server-side - a manual open only succeeds where a real tap would too.
+    let manual: Bool?
 
     enum CodingKeys: String, CodingKey {
         case clientUuid = "client_uuid"
         case locationUuid = "location_uuid"
         case startTime = "start_time"
+        case manual
     }
 }
 
@@ -328,11 +340,17 @@ struct CloseShiftRequest: Encodable {
     /// (today: they tapped a different building first). The end time is then the moment they
     /// turned up elsewhere, which nobody confirmed, so the server flags it for resolution.
     let autoClosed: Bool
+    /// decision-56: the worker pressed Stop instead of tapping out. NOT the same fact as
+    /// `autoClosed` and never conflated with it - the 8h timer / other-building path is
+    /// untouched. The server stamps `corrected_at` in the same update, so this row lands
+    /// already resolved and needs no follow-up confirmation. Omitted when false.
+    let manual: Bool?
 
     enum CodingKeys: String, CodingKey {
         case clientUuid = "client_uuid"
         case endTime = "end_time"
         case autoClosed = "auto_closed"
+        case manual
     }
 }
 
@@ -471,20 +489,24 @@ enum ShiftAPI {
     /// POST /shifts/open  {client_uuid, location_uuid, start_time}
     /// 201 new · 200 duplicate (same client_uuid) · 409 shift_already_open.
     /// The worker is the session's worker. See OpenShiftRequest for why.
-    static func open(clientUuid: String, locationId: String, startTime: Date) async throws
+    static func open(clientUuid: String, locationId: String, startTime: Date,
+                     manual: Bool = false) async throws
         -> WireShiftEnvelope
     {
         try await apiPost("/shifts/open",
                           OpenShiftRequest(clientUuid: clientUuid,
                                            locationUuid: locationId,
-                                           startTime: startTime))
+                                           startTime: startTime,
+                                           manual: manual ? true : nil))
     }
 
     /// POST /shifts/close {client_uuid, end_time}. No duration ceiling any more: the old
     /// 422 shift_too_long blocked exactly the worker the 8h net exists for (decision-10).
-    static func close(clientUuid: String, endTime: Date, autoClosed: Bool = false) async throws -> WireShiftEnvelope {
+    static func close(clientUuid: String, endTime: Date, autoClosed: Bool = false,
+                      manual: Bool = false) async throws -> WireShiftEnvelope {
         try await apiPost("/shifts/close",
-                          CloseShiftRequest(clientUuid: clientUuid, endTime: endTime, autoClosed: autoClosed))
+                          CloseShiftRequest(clientUuid: clientUuid, endTime: endTime,
+                                            autoClosed: autoClosed, manual: manual ? true : nil))
     }
 
     /// GET /shifts/open - the server, not the phone, is authoritative for "who is clocked

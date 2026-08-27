@@ -101,9 +101,10 @@ private func pushOpen(_ shift: Shift, as workerId: Int) async -> Bool {
         return false
     }
     do {
-        let envelope = try await ShiftAPI.open(clientUuid: shift.clientUuidString,
-                                               locationId: shift.locationId,
-                                               startTime: shift.startTime)
+        let envelope = try await ShiftFlowAPI.open(clientUuid: shift.clientUuidString,
+                                                   locationId: shift.locationId,
+                                                   startTime: shift.startTime,
+                                                   manual: shift.manualStart)
         apply(envelope.shift, to: shift)
         shift.openSyncedAt = .now
         shift.syncError = nil
@@ -122,9 +123,12 @@ private func pushClose(_ shift: Shift, end: Date) async {
     do {
         // Carry the local flag up. The server only ever raises auto_closed, never clears it,
         // so a plain tap-out cannot downgrade a shift the 8h timer already flagged.
-        let envelope = try await ShiftAPI.close(clientUuid: shift.clientUuidString,
-                                                endTime: end,
-                                                autoClosed: shift.autoClosed)
+        // `manual` rides up the same way `autoClosed` does, from the local row, so a Stop
+        // pressed with no signal still lands flagged when the queue drains hours later.
+        let envelope = try await ShiftFlowAPI.close(clientUuid: shift.clientUuidString,
+                                                    endTime: end,
+                                                    autoClosed: shift.autoClosed,
+                                                    manual: shift.manualClose)
         // The server's row wins. If the 8h timer got there first this comes back with
         // auto_closed = true and corrected_at = null, and the worker is routed to the
         // resolution sheet: closing does NOT silently resolve a timer-closed shift.
@@ -144,6 +148,11 @@ private func apply(_ wire: WireShift, to shift: Shift) {
     shift.serverId = wire.id
     shift.autoClosed = wire.autoClosed
     shift.correctedAt = wire.correctedAt
+    // The server's row wins here too, but ONLY upwards: a build talking to a server that has
+    // not shipped decision-56's migration yet gets nil back, and `??` keeps the local truth
+    // instead of quietly un-flagging a manual row the worker really did create.
+    shift.manualStart = wire.manualStart ?? shift.manualStart
+    shift.manualClose = wire.manualClose ?? shift.manualClose
     if let end = wire.endTime { shift.endTime = end }
 }
 
@@ -191,6 +200,8 @@ func adoptServerOpenShift(context: ModelContext) async {
     local.openSyncedAt = .now
     local.autoClosed = remote.autoClosed
     local.correctedAt = remote.correctedAt
+    local.manualStart = remote.manualStart ?? false
+    local.manualClose = remote.manualClose ?? false
     context.insert(local)
     try? context.save()
 }

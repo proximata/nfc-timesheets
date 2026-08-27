@@ -204,6 +204,12 @@ struct LogView: View {
     @State private var switchNotice: String?
     @State private var unresolved: [WireShift] = []
     @State private var showResolver = false
+    /// decision-56: the building picked in the "start without a tag" sheet, and whether the
+    /// confirmation for it is up. Two pieces of state, not one, because the pick is not the
+    /// decision - nothing is posted until the dialog is confirmed.
+    @State private var showManualStart = false
+    @State private var manualPick: String?
+    @State private var confirmingManualStart = false
 
     private var open: [Shift] { shifts.filter(\.isOpen) }
     private var recent: [Shift] { Array(shifts.filter { !$0.isOpen }.prefix(5)) }
@@ -253,7 +259,8 @@ struct LogView: View {
                                 unresolvedCount: unresolved.count,
                                 onResolve: { showResolver = true },
                                 notice: switchNotice,
-                                onDismissNotice: { switchNotice = nil })
+                                onDismissNotice: { switchNotice = nil },
+                                onManualStop: manualStop)
                 } else {
                     idleList
                 }
@@ -288,6 +295,7 @@ struct LogView: View {
             .sheet(isPresented: $showResolver, onDismiss: { signals.arm(for: currentRunning()) }) {
                 ResolveSheet(shifts: $unresolved, siteName: siteName)
             }
+            .sheet(isPresented: $showManualStart) { manualStartSheet }
             // Coming back from the background is the only chance to re-arm a Live Activity
             // the worker dismissed by hand, or to notice that notifications were switched
             // on (or off) in Settings while the app was not running.
@@ -330,6 +338,22 @@ struct LogView: View {
                 .padding(.vertical, 8)
                 .accessibilityElement(children: .combine)
             }
+            // decision-56 §4. CLEARLY SECONDARY: a plain row under the tap instruction, not
+            // a prominent button beside it - the tag stays the normal way in, and this is the
+            // answer to a broken card, an unreachable one, or a phone whose NFC is dead.
+            // Flagged, never silent; the footer says so before it is pressed, not after.
+            Section {
+                Button("Start without a tag") {
+                    manualPick = nil
+                    showManualStart = true
+                }
+            } footer: {
+                Text("Tag missing or unreachable? Pick the building instead. The office sees this as a manual entry.")
+                    .font(.footnote)
+            }
+            #if DEBUG
+            manualMockSection
+            #endif
             Section {
                 // Android has said this out loud since day one and iOS only had it as a
                 // code comment (parity row 20). Promising a notification to somebody who
@@ -340,6 +364,113 @@ struct LogView: View {
             }
         }
     }
+
+    /// decision-56 §4: the picker, built from the roster this app ALREADY caches (`sites`,
+    /// filled by refreshRoster) - no new endpoint and no new cache. An empty list is a real
+    /// state on a fresh install with no signal, so it says so instead of showing an empty
+    /// wheel above a live Start button.
+    private var manualStartSheet: some View {
+        NavigationStack {
+            Form {
+                if pickableSites.isEmpty {
+                    Text("No buildings on this phone yet. Connect to the internet and pull down to refresh.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Picker("Building", selection: $manualPick) {
+                        // Always present, always first, for the same reason BuildingPicker
+                        // has one: a nil selection with no matching tag renders BLANK, which
+                        // reads as a broken control rather than an unanswered question.
+                        Text("Choose a building").tag(String?.none)
+                        ForEach(pickableSites, id: \.self) { id in
+                            Text(siteName(id)).tag(String?.some(id))
+                        }
+                    }
+                    Text("Your admin will see that this shift was started without a tag.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Start without a tag")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showManualStart = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Start") { confirmingManualStart = true }
+                        .disabled(manualPick == nil)
+                }
+            }
+            .confirmationDialog(Text("Start a shift at \(siteName(manualPick ?? ""))?"),
+                                isPresented: $confirmingManualStart,
+                                titleVisibility: .visible) {
+                Button("Start shift") { startManual() }
+            } message: {
+                Text("The clock starts now and this is marked for the office to review. Use the tag when you can.")
+            }
+        }
+    }
+
+    /// Cached buildings, plus - only while a debug mock is armed - the canned one, so the
+    /// picker is walkable on a simulator that can reach no server. Never written to the
+    /// SwiftData cache; see ShiftMockFlows.swift.
+    private var pickableSites: [String] {
+        var ids = sites.map(\.locationId)
+        #if DEBUG
+        if ShiftMocks.active != nil {
+            ids += ShiftMocks.locations.map(\.id).filter { !ids.contains($0) }
+        }
+        #endif
+        return ids
+    }
+
+    /// decision-56 §4, and note what it does NOT do: it calls the SAME handleTap the tag
+    /// path calls, with one flag flipped. Every rejection the server can answer with - 409
+    /// shift_already_open, 422 zone_unverified, 422 unknown_location - therefore lands in
+    /// APIFailure.workerMessage and on the row exactly as a tap's would, in the same words.
+    /// A separate post here would have been a second place for that copy to drift.
+    private func startManual() {
+        guard let id = manualPick else { return }
+        showManualStart = false
+        handleTap(id, manual: true)
+    }
+
+    /// decision-56 §4/§3. Closes the LOCAL row first, exactly as a tap-out does, so a Stop
+    /// pressed in a basement still counts; `manualClose` rides up with the queued close.
+    /// `autoClosed` is deliberately left alone: this is a worker confirming their own finish
+    /// time in the moment, not the 8h timer guessing, so it must not enter the decision-10
+    /// resolver - the server stamps corrected_at instead.
+    private func manualStop() {
+        guard let running = shifts.first(where: \.isOpen) else { return }
+        running.endTime = .now
+        running.manualClose = true
+        running.closeSyncedAt = nil
+        try? context.save()
+        // AFTER the save, never before it - same ordering rule as handleTap.
+        signals.arm(for: currentRunning())
+        Telemetry.log("manual clock-out", .info, [
+            "ts.location.id": running.locationId,
+            "ts.shift.client_uuid": running.clientUuidString,
+        ])
+        Task { await syncPending(context: context, workerId: worker.id) }
+    }
+
+    #if DEBUG
+    /// Absent from a Release build, byte for byte - see ShiftMockFlows.swift. It ARMS the
+    /// canned responses and nothing else: the worker then presses the shipping "Start without
+    /// a tag" and the shipping Stop, so what is walked is this file's real code.
+    @ViewBuilder
+    private var manualMockSection: some View {
+        Section {
+            ForEach(ShiftMockFlow.allCases) { flow in
+                Button(flow.label) { ShiftMocks.arm(flow) }
+            }
+            Button("Mock: off") { ShiftMocks.arm(nil) }
+        } header: {
+            Text("Simulate (debug builds only)")
+        } footer: {
+            Text("No network. Arms canned /shifts responses; the buttons above stay the real ones.")
+        }
+    }
+    #endif
 
     private func refresh() async {
         await refreshRoster(context: context)
@@ -374,7 +505,10 @@ struct LogView: View {
     /// renders in red. That rejection path exists end to end; the guard only pre-empted it
     /// with a worse answer. A missing NAME is cosmetic (siteName falls back below); a
     /// missing SHIFT is unpaid work.
-    private func handleTap(_ locationId: String) {
+    ///
+    /// `manual` (decision-56) changes exactly one thing: the flag stamped on a row this
+    /// function was going to write anyway. It is NOT a second code path - see startManual().
+    private func handleTap(_ locationId: String, manual: Bool = false) {
         let trace = Telemetry.beginTap(locationId: locationId, cachedLocations: sites.count)
         let write = trace.child("db", "shift.local_write")
 
@@ -415,7 +549,12 @@ struct LogView: View {
             }
         } else {
             touched = startShift(at: locationId)
-            action = "open"
+            // decision-56, set ONLY on a row this call is creating. A manual clock-in is
+            // unreachable while a shift is running (the button lives on the idle screen), so
+            // the close and switch branches above can never be handed manual = true - and if
+            // that ever changes, it must not silently re-flag somebody else's open row.
+            touched.manualStart = manual
+            action = manual ? "manual_open" : "open"
         }
         try? context.save()
 
@@ -486,6 +625,10 @@ struct ShiftRow: View {
             HStack {
                 Text(name).font(.headline)
                 Spacer()
+                // decision-56 §5: "every list that shows shifts must show this". A manual row
+                // is never indistinguishable from a tap-confirmed one, on the worker's own
+                // phone either - the admin should not be the only one who can tell.
+                if shift.manualStart || shift.manualClose { pill("Manual", .blue) }
                 if shift.isOpen { pill("In progress", .orange) }
                 else if shift.autoClosed && shift.correctedAt == nil { pill("Auto-closed", .red) }
                 else if shift.correctedAt != nil { pill("Corrected", .purple) }

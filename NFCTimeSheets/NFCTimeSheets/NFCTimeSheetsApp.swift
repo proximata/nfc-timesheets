@@ -40,6 +40,14 @@ final class Shift {
     var autoClosed: Bool = false
     var correctedAt: Date?
 
+    // decision-56, mirroring the server's two new columns. ONE FIELD PER INDEPENDENT FACT,
+    // for the same reason `manualFinish` died: "started without a tag" and "stopped without
+    // a tag" are different things and neither is `autoClosed`. Defaulted, so SwiftData's
+    // lightweight migration adds them to an existing store without a mapping model.
+    var manualStart: Bool = false
+    var manualClose: Bool = false
+
+
     var serverId: Int?         // set once /shifts/open has landed
     var openSyncedAt: Date?    // nil = the server has not been told this shift started
     var closeSyncedAt: Date?   // nil = the server has not been told it finished
