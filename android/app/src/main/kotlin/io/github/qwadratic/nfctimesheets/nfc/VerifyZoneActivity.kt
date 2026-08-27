@@ -535,16 +535,36 @@ class VerifyZoneActivity : ComponentActivity() {
                     emptyText = stringResource(R.string.verify_bind_locations_empty),
                     onPick = { reassignBuilding = it },
                 )
+                // The zone's CURRENT building is not a move (TASK-286, matching
+                // VerifyZoneScreen.swift:434). Disabled rather than hidden: an operator
+                // scanning the list for the building they meant needs to see the one they
+                // are leaving. The guard sits BEFORE AwaitingCard on purpose — past it a
+                // card is physically written and reported, and the server's own 409
+                // duplicate_zone_name then arrives about the zone already on screen.
+                val picked = reassignBuilding
                 Button(
                     onClick = {
-                        reassignBuilding?.let {
+                        picked?.let {
                             reassignStep = ReassignStep.AwaitingCard(it)
                             startReaderMode()
                         }
                     },
-                    enabled = reassignBuilding != null,
+                    enabled = picked != null && picked.id != zone.locationId,
                     modifier = Modifier.heightIn(min = 48.dp),
                 ) { Text(stringResource(R.string.verify_reassign_submit)) }
+
+                // DEBUG BUILDS ONLY: reassignPickSimulations() is empty in src/release/
+                // (nfc/VerifySimulation.kt). Picks a building INTO the real picker state —
+                // it does not fake an outcome, so the button's own enabled-ness is what is
+                // being shown.
+                for (simulation in reassignPickSimulations(zone, step.locations)) {
+                    OutlinedButton(
+                        onClick = { reassignBuilding = simulation.location },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                    ) { Text("\u25b6 ${simulation.label}") }
+                }
             }
 
             is ReassignStep.AwaitingCard -> Text(

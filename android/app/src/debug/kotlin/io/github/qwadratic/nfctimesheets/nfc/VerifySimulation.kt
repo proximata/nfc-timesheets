@@ -330,6 +330,46 @@ fun simulatedClassification(id: String): WireTagClassification? {
 }
 
 /**
+ * ONE TAP THAT PICKS A BUILDING IN THE REASSIGN PICKER, so the submit's enabled-ness can be
+ * seen on an emulator (TASK-286). It fakes NOTHING: it sets the same `reassignBuilding` a tap
+ * on the row sets, and the real guard on the real Button decides what happens next.
+ *
+ * THE CURRENT BUILDING IS THE POINT. `GET /operator/locations` returns every active building
+ * INCLUDING the one this zone already sits in, and picking it is not a move — going through
+ * with it would write a physical card and report it before the server refused with 409
+ * duplicate_zone_name, about the zone on screen. The second scenario is the control: a
+ * DIFFERENT building must leave the submit enabled.
+ */
+data class ReassignPickSimulation(
+    val label: String,
+    val location: WireOperatorLocation,
+)
+
+fun reassignPickSimulations(
+    zone: WireOperatorZone,
+    locations: List<WireOperatorLocation>,
+): List<ReassignPickSimulation> {
+    val scenarios = mutableListOf<ReassignPickSimulation>()
+    locations.firstOrNull { it.id == zone.locationId }?.let {
+        scenarios.add(
+            ReassignPickSimulation(
+                "SIMULATED: aktuelles Gebaeude waehlen \u2014 Weiter muss GESPERRT bleiben",
+                it,
+            ),
+        )
+    }
+    locations.firstOrNull { it.id != zone.locationId }?.let {
+        scenarios.add(
+            ReassignPickSimulation(
+                "SIMULATED: anderes Gebaeude waehlen \u2014 Weiter muss FREI sein",
+                it,
+            ),
+        )
+    }
+    return scenarios
+}
+
+/**
  * `POST /operator/zones/:id/reassign-building`'s 201 body (decision-55 §3), answered here.
  *
  * THE NEW ZONE IS KEYED BY THE CARD THAT WAS JUST WRITTEN and carries the OLD zone's name

@@ -85,6 +85,21 @@ fun classifyTapSimulations(tagLink: TagLink): List<VerifyTapSimulation> = emptyL
  */
 fun simulatedClassification(id: String): WireTagClassification? = null
 
+data class ReassignPickSimulation(
+    val label: String,
+    val location: WireOperatorLocation,
+)
+
+/**
+ * Always empty. A release build's reassign picker is tapped by a human or not at all — the
+ * guard on the submit (TASK-286) is the same code either way, only its debug demonstration is
+ * missing here.
+ */
+fun reassignPickSimulations(
+    zone: WireOperatorZone,
+    locations: List<WireOperatorLocation>,
+): List<ReassignPickSimulation> = emptyList()
+
 /**
  * Unreachable by construction: its only caller is behind [isSimulatedZone], constantly false
  * here. Present so both source sets expose the same surface to the screen.
