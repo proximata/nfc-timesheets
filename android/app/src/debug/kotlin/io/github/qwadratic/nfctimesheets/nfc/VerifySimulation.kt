@@ -1,7 +1,9 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
+import io.github.qwadratic.nfctimesheets.core.NdefTag
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.core.TagTlv
 import io.github.qwadratic.nfctimesheets.core.Wire
 import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
 import io.github.qwadratic.nfctimesheets.core.WireOperatorZone
@@ -75,6 +77,24 @@ fun verifyTapSimulations(
             uid = "SI:MU:LA:TE:D2",
             uriString = null,
         ),
+        // decision-58 §1: the likeliest real cause of the dead end this screen used to be —
+        // a card written by a phone still on an old build, i.e. a perfectly good URL on a
+        // host that is not ours. Must name that host instead of saying "unreadable".
+        VerifyTapSimulation(
+            label = "SIMULATED: Karte mit FREMDEM Host \u2014 muss den gefundenen Host nennen",
+            techs = listOf("nfca", "mifareultralight", "ndef"),
+            uid = "SI:MU:LA:TE:D4",
+            uriString = FOREIGN_HOST_URI,
+        ),
+        // decision-58 §2: the platform's Ndef helper answered nothing and the raw TLV walk
+        // did. The bytes below go through the REAL TagTlv + NdefTag.uriFrom, so this button
+        // exercises the fallback decoder and not a canned string.
+        VerifyTapSimulation(
+            label = "SIMULATED: Ndef-API liefert nichts, Roh-Fallback liest die Karte",
+            techs = listOf("nfca", "mifareultralight"),
+            uid = "SI:MU:LA:TE:D5",
+            uriString = rawFallbackUri(tagLink, selected.id),
+        ),
     )
     // Only offered when a second zone actually exists to borrow a card from.
     all.firstOrNull { it.id != selected.id }?.let { other ->
@@ -129,6 +149,28 @@ private const val SIM_ZONES_JSON = """
 
 /** The one simulated zone whose unbind is REFUSED — see [runUnbindSimulation]. */
 private const val SIM_ZONE_WITH_SHIFTS = "5111d0de-0000-4000-8000-0000000000c3"
+
+/**
+ * A REAL URL ON SOMEBODY ELSE'S HOST. Deliberately not the live tag host in any form —
+ * android/checks fails on any occurrence of it under app/src, and a mismatch fixture that
+ * carried it would be no mismatch at all.
+ */
+private const val FOREIGN_HOST_URI = "https://timesheets-old.example.org/t?l=$HOIV_LOCATION"
+
+/**
+ * WHAT THE RAW PAGES OF A TYPE 2 TAG WOULD HOLD, decoded by the code that will decode a real
+ * one: a Lock Control TLV the walker must step over, then the NDEF Message TLV.
+ *
+ * Returns null if the round trip fails, which is itself the finding — the button then shows the
+ * unreadable state and the fallback is not doing what this file claims it does.
+ */
+private fun rawFallbackUri(tagLink: TagLink, locationId: String): String? {
+    val message = NdefTag.message(tagLink.uriFor(locationId)?.toString() ?: return null) ?: return null
+    val pages = byteArrayOf(0x01, 0x03, 0x00, 0x00, 0x00) +          // Lock Control TLV, skipped
+        byteArrayOf(0x03, message.size.toByte()) + message +          // the NDEF Message TLV
+        byteArrayOf(0xFE.toByte())                                    // terminator
+    return NdefTag.uriFrom(TagTlv.ndefMessage(pages))
+}
 
 fun simulatedZones(): List<WireOperatorZone> = Wire.operatorZones(JSONObject(SIM_ZONES_JSON))
 
@@ -303,6 +345,61 @@ fun classifyTapSimulations(tagLink: TagLink): List<VerifyTapSimulation> {
         card("SIMULATED: gemeldete, aber unbenannte Karte", "SC:AN:00:00:05", SIM_TAG_REPORTED),
         card("SIMULATED: fremde Karte", "SC:AN:00:00:06", SIM_TAG_UNKNOWN),
         card("SIMULATED: leere oder unlesbare Karte", "SC:AN:00:00:07", null),
+        // decision-58 §1/§2, on the scan-first path too: the dead end is reachable from both.
+        VerifyTapSimulation(
+            "SIMULATED: Karte mit FREMDEM Host \u2014 muss den gefundenen Host nennen",
+            listOf("nfca", "mifareultralight", "ndef"),
+            "SC:AN:00:00:08",
+            FOREIGN_HOST_URI,
+        ),
+        VerifyTapSimulation(
+            "SIMULATED: Ndef-API liefert nichts, Roh-Fallback liest die Karte",
+            listOf("nfca", "mifareultralight"),
+            "SC:AN:00:00:09",
+            rawFallbackUri(tagLink, zones.getOrNull(1)?.id ?: HOIV_LOCATION),
+        ),
+    )
+}
+
+// ---- decision-58 §3: the write-fresh recovery, without a card and without a server --------
+
+/**
+ * The ids a SIMULATED write put on a "card". Same reasoning as [reassignedSimulatedZones]: the
+ * id is minted on the phone, so it cannot be a constant here, and without this the very next
+ * calls (report, resolve-zone) would go to the real server and answer 401 on an emulator.
+ *
+ * BY ID, never by a mode the screen is in — a real card written in a debug build is NOT in this
+ * set and therefore takes the real path, report and all.
+ */
+private val simulatedWrittenTags = mutableSetOf<String>()
+
+/** Called by the screen's DEBUG-only write buttons, immediately before the fake write. */
+fun noteSimulatedWrite(tagId: String) {
+    simulatedWrittenTags += tagId
+}
+
+fun isSimulatedTag(tagId: String): Boolean = tagId in simulatedWrittenTags
+
+/**
+ * `POST /operator/tags/:id/resolve-zone`'s 201 body, for a simulated card only. The new zone is
+ * keyed by the id that was just "written", is UNVERIFIED, and carries the picked building — so
+ * the screen lands on it and the next honest step is the test scan, exactly as after a real one.
+ */
+fun runFreshZoneSimulation(
+    tagId: String,
+    name: String,
+    location: WireOperatorLocation?,
+): WireOperatorZone {
+    reassignedSimulatedZones += tagId
+    return Wire.operatorZone(
+        JSONObject(
+            "{\"id\":${JSONObject.quote(tagId)}" +
+                ",\"location_id\":${location?.let { JSONObject.quote(it.id) } ?: "null"}" +
+                ",\"location_name\":${location?.let { JSONObject.quote(it.name) } ?: "null"}" +
+                ",\"name\":${JSONObject.quote(name)}" +
+                ",\"tag_serial\":null,\"tag_deployed_at\":\"2026-08-27T09:00:00Z\"" +
+                ",\"verified_at\":null}",
+        ),
     )
 }
 

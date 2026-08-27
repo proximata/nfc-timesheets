@@ -38,6 +38,7 @@ import io.github.qwadratic.nfctimesheets.core.SmsVerifyBody
 import io.github.qwadratic.nfctimesheets.core.SyncPlan
 import io.github.qwadratic.nfctimesheets.core.SyncPlan.QueuedShift
 import io.github.qwadratic.nfctimesheets.core.TagLink
+import io.github.qwadratic.nfctimesheets.core.TagTlv
 import io.github.qwadratic.nfctimesheets.core.TapInbox
 import io.github.qwadratic.nfctimesheets.core.NdefTag
 import io.github.qwadratic.nfctimesheets.core.Wire
@@ -83,6 +84,7 @@ private val serverAuthRoute = File("../server/routes/auth.js")
 
 fun main() {
     tagLink()
+    tagTlv()
     retryClassification()
     wireBytes()
     wireDecoding()
@@ -159,7 +161,124 @@ private fun tagLink() {
 
     check(TagLink.normalizedUuid("  $UUID_A  ") == UUID_A, "surrounding whitespace trimmed")
 
+    tagDiagnosis()
     fieldTags()
+}
+
+// ---------------------------------------------------------------------------------
+// 1a. THE DIAGNOSIS (decision-58 §1). locationId() collapses every failure into one
+//     null, which is right at a trust boundary and useless at a door: "an iPhone on an
+//     old build wrote the wrong host" and "nothing parseable at all" need different
+//     next actions from the operator holding the card. diagnose() names which happened
+//     and DECIDES NOTHING — the assertions below pin both halves of that.
+// ---------------------------------------------------------------------------------
+private fun tagDiagnosis() {
+    val found = tags.diagnose("https://$host/t?l=$UUID_A")
+    check(
+        found is TagLink.Diagnosis.Found && found.locationId == UUID_A,
+        "a canonical link diagnoses as Found with the same id locationId() returns",
+    )
+
+    // The case decision-58 exists for: a real URL of ours, on a host that is not ours.
+    val mismatch = tags.diagnose("https://timesheets-old.example.org/t?l=$UUID_A")
+    check(
+        mismatch is TagLink.Diagnosis.HostMismatch && mismatch.found == "timesheets-old.example.org",
+        "a foreign host is HostMismatch and NAMES the host found on the card: $mismatch",
+    )
+    // The userinfo trick must diagnose by AUTHORITY, never by the string's prefix — the same
+    // trap locationId() documents. Reporting our own host here would tell an operator the
+    // card is fine when it points at somebody else's server.
+    val userinfo = tags.diagnose("https://$host@evil.example.com/t?l=$UUID_A")
+    check(
+        userinfo is TagLink.Diagnosis.HostMismatch && userinfo.found == "evil.example.com",
+        "userinfo does not make it our host, in the diagnosis either: $userinfo",
+    )
+
+    // Malformed or absent: nothing to name, one answer, one next move (write a fresh card).
+    val malformed = listOf(
+        null to "a card with no URI at all",
+        "" to "empty",
+        "not a url at all" to "unparseable",
+        "https://$host/t?l=westbahnhof" to "our host, a slug instead of a uuid (decision-21)",
+        "https://$host/admin?l=$UUID_A" to "our host, wrong path",
+        "http://$host/t?l=$UUID_A" to "our host, not https",
+    )
+    for ((raw, why) in malformed) {
+        check(tags.diagnose(raw) == TagLink.Diagnosis.Malformed, "Malformed ($why): $raw")
+    }
+
+    // AND IT DECIDES NOTHING. Every string above still resolves through locationId() exactly
+    // as it did before — a diagnosis that widened what the app accepts would be a trust-
+    // boundary regression wearing an error message.
+    check(tags.locationId("https://timesheets-old.example.org/t?l=$UUID_A") == null, "diagnose() did not widen locationId()")
+}
+
+// ---------------------------------------------------------------------------------
+// 1b. THE RAW TYPE 2 TAG TLV WALK (decision-58 §2). The fallback that runs when the
+//     platform's own Ndef helper answers nothing. Its page reads live in
+//     nfc/RawTagIo.kt and need a card; the byte walking is here, where a laptop can
+//     prove it against fixed inputs.
+// ---------------------------------------------------------------------------------
+private fun tagTlv() {
+    val message = NdefTag.message("https://$host/t?l=$HOIV_LOCATION")!!
+
+    fun tlv(vararg parts: ByteArray): ByteArray = parts.reduce { a, b -> a + b }
+    val ndefTlv = byteArrayOf(0x03, message.size.toByte()) + message
+    val terminator = byteArrayOf(0xFE.toByte())
+
+    check(
+        TagTlv.ndefMessage(tlv(ndefTlv, terminator)).contentEquals(message),
+        "the plain case: one NDEF Message TLV, 1-byte length",
+    )
+
+    // THE WHOLE POINT OF WALKING RATHER THAN ASSUMING AN OFFSET: NTAG21x cards carry Lock
+    // and Memory Control TLVs before the message, and a reader that starts at a fixed byte
+    // reads their contents as an NDEF record.
+    val lock = byteArrayOf(0x01, 0x03, 0x00, 0x00, 0x00)
+    val memory = byteArrayOf(0x02, 0x03, 0x01, 0x02, 0x03)
+    val proprietary = byteArrayOf(0xFD.toByte(), 0x02, 0x00, 0x00)
+    check(
+        TagTlv.ndefMessage(tlv(byteArrayOf(0x00), lock, memory, proprietary, ndefTlv, terminator))
+            .contentEquals(message),
+        "NULL, Lock Control, Memory Control and Proprietary TLVs are stepped over, not parsed",
+    )
+
+    // The 3-byte extended-length form. Padded to 255 bytes because that is the shortest
+    // length the long form is legal for — and the fixture proves the walker reads the
+    // 16-bit length rather than the 0xFF marker as a length.
+    val long = message + ByteArray(255 - message.size)
+    val longTlv = byteArrayOf(0x03, 0xFF.toByte(), 0x00, 0xFF.toByte()) + long
+    check(
+        TagTlv.ndefMessage(tlv(longTlv, terminator)).contentEquals(long),
+        "the 3-byte extended length form is read as a 16-bit length",
+    )
+
+    // Refusals. Every one of these comes off an unlocked, attacker-writable card
+    // (decision-15), and a guess here is a card that reads as ours and is not.
+    check(TagTlv.ndefMessage(null) == null, "nothing read is not a message")
+    check(TagTlv.ndefMessage(ByteArray(0)) == null, "an empty data area is not a message")
+    check(TagTlv.ndefMessage(terminator) == null, "a terminator before any message ends the walk")
+    check(TagTlv.ndefMessage(ByteArray(16)) == null, "an all-NULL data area holds no message")
+    check(
+        TagTlv.ndefMessage(byteArrayOf(0x03, 0x40, 0x01, 0x02)) == null,
+        "a length running past the end of what was read is refused, not truncated",
+    )
+    check(
+        TagTlv.ndefMessage(byteArrayOf(0x03, 0xFF.toByte(), 0x00, 0x10, 0x01)) == null,
+        "a 3-byte length that would fit in one byte is a card written by something confused",
+    )
+    check(
+        TagTlv.ndefMessage(byteArrayOf(0x42, 0x02, 0x00, 0x00) + ndefTlv) == null,
+        "an unknown TLV type stops the walk rather than being skipped by a guessed length",
+    )
+
+    // AND THE FALLBACK ENDS IN THE SAME DECODER THE WRITE PATH USES. Not a second parser:
+    // TagTlv finds the bytes, NdefTag.uriFrom says what they mean, TagLink says whose they are.
+    val uri = NdefTag.uriFrom(TagTlv.ndefMessage(tlv(lock, ndefTlv, terminator)))
+    check(
+        tags.locationId(uri) == HOIV_LOCATION,
+        "raw pages -> TagTlv -> NdefTag.uriFrom -> TagLink resolves to the same id a stock read would",
+    )
 }
 
 // ---------------------------------------------------------------------------------

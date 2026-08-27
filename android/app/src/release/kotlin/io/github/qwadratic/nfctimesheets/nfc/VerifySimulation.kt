@@ -109,3 +109,27 @@ fun runReassignSimulation(
     newTagId: String,
     location: WireOperatorLocation,
 ): WireReassignedZone = WireReassignedZone(zone = zone, retiredZoneId = null)
+
+/**
+ * decision-58 §3's write-fresh recovery has no fixtures here either. [noteSimulatedWrite] does
+ * nothing and [isSimulatedTag] is CONSTANTLY FALSE, so in a shipped build every recovered card is
+ * really written, really reported through POST /operator/tags, and really resolved into a zone by
+ * the server — and [runFreshZoneSimulation] below is unreachable by construction.
+ */
+fun noteSimulatedWrite(tagId: String) = Unit
+
+fun isSimulatedTag(tagId: String): Boolean = false
+
+fun runFreshZoneSimulation(
+    tagId: String,
+    name: String,
+    location: WireOperatorLocation?,
+): WireOperatorZone = WireOperatorZone(
+    id = tagId,
+    locationId = location?.id,
+    locationName = location?.name,
+    name = name,
+    tagSerial = null,
+    tagDeployedAt = null,
+    verifiedAt = null,
+)

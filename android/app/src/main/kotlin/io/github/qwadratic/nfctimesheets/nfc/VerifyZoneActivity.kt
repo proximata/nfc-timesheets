@@ -20,6 +20,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,6 +39,7 @@ import io.github.qwadratic.nfctimesheets.AppLocale
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
+import io.github.qwadratic.nfctimesheets.core.TagLink
 import io.github.qwadratic.nfctimesheets.core.Wire
 import io.github.qwadratic.nfctimesheets.core.WireOperatorLocation
 import io.github.qwadratic.nfctimesheets.core.WireOperatorZone
@@ -149,6 +151,13 @@ class VerifyZoneActivity : ComponentActivity() {
      */
     private var reassignTagId by mutableStateOf(UUID.randomUUID().toString())
 
+    private var freshStep by mutableStateOf<FreshStep>(FreshStep.Idle)
+    private var freshName by mutableStateOf("")
+    private var freshBuilding by mutableStateOf<WireOperatorLocation?>(null)
+
+    /** The id the WRITE-FRESH recovery puts on the card. Minted here for [reassignTagId]'s reason. */
+    private var freshTagId by mutableStateOf(UUID.randomUUID().toString())
+
     /** What a completed test scan showed. Rendered as a named sentence, never a raw code. */
     private sealed interface VerifyOutcome {
         data class Verified(val result: WireZoneVerifyResult) : VerifyOutcome
@@ -156,7 +165,11 @@ class VerifyZoneActivity : ComponentActivity() {
         data object Unbound : VerifyOutcome
         data object UnknownLocation : VerifyOutcome
         data object UnknownZone : VerifyOutcome
-        data class Unreadable(val techs: List<String>, val uid: String) : VerifyOutcome
+        data class Unreadable(
+            val techs: List<String>,
+            val uid: String,
+            val diagnosis: TagLink.Diagnosis,
+        ) : VerifyOutcome
         data class Failure(val serverSide: Boolean) : VerifyOutcome
     }
 
@@ -219,7 +232,11 @@ class VerifyZoneActivity : ComponentActivity() {
         data object Unknown : ScanStep
 
         /** No URI and no worklist serial: never reached the server, because there was no id. */
-        data class Unreadable(val techs: List<String>, val uid: String) : ScanStep
+        data class Unreadable(
+            val techs: List<String>,
+            val uid: String,
+            val diagnosis: TagLink.Diagnosis,
+        ) : ScanStep
         data class Failed(val code: String) : ScanStep
     }
 
@@ -271,6 +288,47 @@ class VerifyZoneActivity : ComponentActivity() {
 
         /** Done. The screen has already moved to the NEW zone; this is one sentence over it. */
         data class Done(val zoneName: String, val building: String) : ReassignStep
+    }
+
+    /**
+     * WRITE A FRESH CARD, FROM A DEAD END (decision-58 §3) — offered ONLY from an Unreadable
+     * outcome, on both the worklist-first and the scan-first path.
+     *
+     * WHATEVER IS ON THE CARD, THE OPERATOR IS HOLDING IT. Before this, a card whose URI this
+     * app cannot parse ended the screen: no id, so no classification, so no action at all. Now
+     * it gets overwritten with a card that is guaranteed to work, because the same app writes
+     * it and reads it back ([TagWriter], byte equality) — the same `app.tagWriter` and the same
+     * `POST /operator/tags` the reassign flow above already uses, called and not copied.
+     *
+     * IT ENDS IN A ZONE, exactly as a fresh write from [WriteTagActivity] does: report the card,
+     * then `POST /operator/tags/:id/resolve-zone` with a name and an optional building, then the
+     * screen selects that new zone — whose very next step is the test scan it was already on.
+     *
+     * NO OVERWRITE OVERRIDE, for [applyReassignWrite]'s reason: a card already carrying one of
+     * our ids is a card on somebody's wall, and `WriteGuard` refusing it is the right answer.
+     */
+    private sealed interface FreshStep {
+        /** Not recovering. Renders one button under the unreadable sentence. */
+        data object Idle : FreshStep
+
+        /** Hold the card against the phone again — this time it gets written. */
+        data object AwaitingCard : FreshStep
+
+        /** Not written. The card is untouched and another one may be presented. */
+        data class WriteRefused(val reason: String) : FreshStep
+
+        /** Written; telling the office the card exists. */
+        data object Reporting : FreshStep
+
+        /** Reported. Name the door, optionally pick its building — the write flow's question. */
+        data class Naming(val locations: List<WireOperatorLocation>) : FreshStep
+        data object Submitting : FreshStep
+
+        /**
+         * The card is written and correct; a server call did not land. Retryable without
+         * touching the card again — the report is idempotent and resolve-zone is one statement.
+         */
+        data class Failed(val code: String) : FreshStep
     }
 
     private sealed interface UnbindStep {
@@ -341,6 +399,9 @@ class VerifyZoneActivity : ComponentActivity() {
             // statement of fact and not an invitation to arm something.
             Text(stringResource(R.string.verify_scan_any_hint), style = MaterialTheme.typography.titleMedium)
             ScanFirstStatus()
+            // THE DEAD END GETS AN EXIT (decision-58 §3). Same section, same writer, on both
+            // paths — only the state that reveals it differs.
+            if (scanStep is ScanStep.Unreadable) FreshCardSection()
 
             // DEBUG BUILDS ONLY, same split and same checking script as every other simulator
             // on this screen: classifyTapSimulations() is empty in src/release/.
@@ -426,6 +487,7 @@ class VerifyZoneActivity : ComponentActivity() {
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
+        if (outcome is VerifyOutcome.Unreadable) FreshCardSection()
 
         // DEBUG BUILDS ONLY. verifyTapSimulations() is defined twice, once in src/debug/
         // with real scenarios and once in src/release/ returning an empty list — same
@@ -466,8 +528,7 @@ class VerifyZoneActivity : ComponentActivity() {
             ScanStep.Retired -> stringResource(R.string.verify_scan_any_retired)
             ScanStep.TagReported -> stringResource(R.string.verify_scan_any_reported)
             ScanStep.Unknown -> stringResource(R.string.verify_scan_any_unknown)
-            is ScanStep.Unreadable ->
-                getString(R.string.verify_no_uri, step.techs.joinToString(", "), step.uid)
+            is ScanStep.Unreadable -> unreadableText(step.techs, step.uid, step.diagnosis)
             is ScanStep.Failed -> getString(R.string.verify_scan_any_failed, step.code)
         }
         Text(
@@ -481,6 +542,201 @@ class VerifyZoneActivity : ComponentActivity() {
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
     }
+
+    /**
+     * THE RECOVERY FROM AN UNREADABLE CARD (decision-58 §3). Drawn only under an Unreadable
+     * state — both callers check that — and a button until it is used, because a screen that is
+     * always ready to overwrite a card is a screen that eventually overwrites the wrong one.
+     */
+    @Composable
+    private fun FreshCardSection() {
+        when (val step = freshStep) {
+            FreshStep.Idle -> {
+                OutlinedButton(
+                    onClick = ::startFreshCard,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.verify_fresh_action)) }
+                return
+            }
+
+            FreshStep.AwaitingCard -> Text(
+                stringResource(R.string.verify_fresh_awaiting),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+
+            is FreshStep.WriteRefused -> Text(
+                getString(R.string.verify_fresh_write_failed, step.reason),
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+
+            FreshStep.Reporting -> Text(stringResource(R.string.verify_fresh_reporting))
+            FreshStep.Submitting -> Text(stringResource(R.string.verify_fresh_submitting))
+
+            is FreshStep.Naming -> {
+                Text(
+                    stringResource(R.string.verify_fresh_naming),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                OutlinedTextField(
+                    value = freshName,
+                    onValueChange = { freshName = it },
+                    label = { Text(stringResource(R.string.verify_fresh_name_label)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                // The same picker the bind and reassign forms use. No building is a resting
+                // state, not a failure: the zone lands unbound and the bind form is the very
+                // next thing this screen shows.
+                BuildingPicker(
+                    locations = step.locations,
+                    selectedId = freshBuilding?.id,
+                    emptyText = stringResource(R.string.verify_bind_locations_empty),
+                    onPick = { freshBuilding = it },
+                )
+                Button(
+                    onClick = ::submitFreshZone,
+                    enabled = freshName.isNotBlank(),
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.verify_fresh_submit)) }
+            }
+
+            is FreshStep.Failed -> {
+                Text(
+                    getString(R.string.verify_fresh_failed, step.code),
+                    color = MaterialTheme.colorScheme.error,
+                )
+                OutlinedButton(
+                    onClick = ::submitFreshZone,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.verify_reassign_retry)) }
+            }
+        }
+
+        // DEBUG BUILDS ONLY, and the write screen's own fixtures: writeSimulations() is empty
+        // in src/release/ (nfc/WriteSimulation.kt), so this loop draws nothing there.
+        if (freshStep is FreshStep.AwaitingCard || freshStep is FreshStep.WriteRefused) {
+            for (simulation in writeSimulations()) {
+                OutlinedButton(
+                    onClick = {
+                        noteSimulatedWrite(freshTagId)
+                        applyFreshWrite(runSimulation(simulation, app.tagLink, freshTagId))
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text("\u25b6 ${simulation.label}") }
+            }
+        }
+
+        OutlinedButton(
+            onClick = ::cancelFreshCard,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
+        ) { Text(stringResource(R.string.verify_fresh_cancel)) }
+    }
+
+    /** Arm the write. Reader mode is (re)started because this is now a tap that WRITES. */
+    private fun startFreshCard() {
+        freshStep = FreshStep.AwaitingCard
+        freshName = ""
+        freshBuilding = null
+        startReaderMode()
+    }
+
+    private fun cancelFreshCard() {
+        freshStep = FreshStep.Idle
+        freshBuilding = null
+        startReaderMode()
+    }
+
+    /** One step after [TagWriter] has spoken, on the UI thread. */
+    private fun applyFreshWrite(result: TagWriter.Outcome) {
+        if (result !is TagWriter.Outcome.Written) {
+            freshStep = FreshStep.WriteRefused(writeRefusalToken(result))
+            return
+        }
+        freshStep = FreshStep.Reporting
+        lifecycleScope.launch {
+            val locations = try {
+                reportFreshTag(freshTagId)
+                // A building list that will not load is not a reason to strand a written card:
+                // the picker shows its empty text and the zone can still be created unbound.
+                runCatching { freshLocations(freshTagId) }.getOrDefault(emptyList())
+            } catch (e: ApiFailure) {
+                freshStep = FreshStep.Failed(e.code)
+                return@launch
+            } catch (_: Exception) {
+                freshStep = FreshStep.Failed("unknown")
+                return@launch
+            }
+            freshStep = FreshStep.Naming(locations)
+        }
+    }
+
+    /**
+     * POST /operator/tags/:id/resolve-zone — the write flow's own last step, called here.
+     *
+     * The report is REPEATED before it, so a retry after a failed report needs no second card:
+     * `POST /operator/tags` is idempotent and answering `already_resolved` is the server's job.
+     */
+    private fun submitFreshZone() {
+        val name = freshName.trim()
+        if (name.isEmpty()) return
+        val building = freshBuilding
+        val tagId = freshTagId
+        freshStep = FreshStep.Submitting
+        lifecycleScope.launch {
+            val zone = try {
+                reportFreshTag(tagId)
+                if (isSimulatedTag(tagId)) {
+                    runFreshZoneSimulation(tagId, name, building)
+                } else {
+                    val resolved = app.operatorApi.resolveZone(tagId, name, building?.id)
+                    // The route answers OP_ZONE_COLS with no location_name, and the operator just
+                    // tapped the building's name — substituted rather than re-fetched, exactly as
+                    // finishReassign does.
+                    WireOperatorZone(
+                        id = resolved.id,
+                        locationId = resolved.locationId,
+                        locationName = if (resolved.locationId == null) null else building?.name,
+                        name = resolved.name,
+                        tagSerial = null,
+                        tagDeployedAt = null,
+                        verifiedAt = null,
+                    )
+                }
+            } catch (e: ApiFailure) {
+                freshStep = FreshStep.Failed(e.code)
+                return@launch
+            } catch (_: Exception) {
+                freshStep = FreshStep.Failed("unknown")
+                return@launch
+            }
+            // The id is on a card and now names a zone: the NEXT card must not reuse it.
+            freshTagId = UUID.randomUUID().toString()
+            zones = zones + zone
+            selectZone(zone)
+            freshStep = FreshStep.Idle
+            freshName = ""
+            freshBuilding = null
+        }
+    }
+
+    /**
+     * The unchanged report route — skipped only for a card the DEBUG simulator "wrote".
+     * [isSimulatedTag] is constantly false in a release build (nfc/VerifySimulation.kt), so a
+     * shipped build always reports.
+     */
+    private suspend fun reportFreshTag(tagId: String) {
+        if (isSimulatedTag(tagId)) return
+        app.operatorApi.reportTag(tagId)
+    }
+
+    private suspend fun freshLocations(tagId: String): List<WireOperatorLocation> =
+        if (isSimulatedTag(tagId)) simulatedBindLocations() else app.operatorApi.operatorLocations()
 
     /**
      * REASSIGN THIS DOOR TO A DIFFERENT BUILDING (decision-55 §3). Drawn only under a BOUND
@@ -858,6 +1114,9 @@ class VerifyZoneActivity : ComponentActivity() {
      *                    callback, not a message after the fact.
      */
     private fun readerWanted(): Boolean = when {
+        // The write-fresh recovery (decision-58 §3) is the SECOND tap in this screen that
+        // writes, and like the first it is armed only while a card is actually expected.
+        freshStep is FreshStep.AwaitingCard || freshStep is FreshStep.WriteRefused -> true
         reassignStep is ReassignStep.AwaitingCard || reassignStep is ReassignStep.WriteRefused -> true
         reassignStep !is ReassignStep.Idle && reassignStep !is ReassignStep.Done -> false
         selectedZone == null -> true
@@ -877,6 +1136,8 @@ class VerifyZoneActivity : ComponentActivity() {
         scanStep = ScanStep.Idle
         reassignStep = ReassignStep.Idle
         reassignBuilding = null
+        freshStep = FreshStep.Idle
+        freshBuilding = null
         bindBuilding = null
         shifts = null
         shiftsError = false
@@ -903,6 +1164,8 @@ class VerifyZoneActivity : ComponentActivity() {
         scanStep = ScanStep.Idle
         reassignStep = ReassignStep.Idle
         reassignBuilding = null
+        freshStep = FreshStep.Idle
+        freshBuilding = null
         // NOT disableReaderMode: with no zone picked this screen is the scan-first one
         // (decision-55 §2), which reads cards precisely in that state. Restarting is a no-op
         // when reader mode is already on and the honest thing when it was off.
@@ -925,7 +1188,7 @@ class VerifyZoneActivity : ComponentActivity() {
     private fun handleScanFirst(techs: List<String>, uid: String, uriString: String?) {
         val placeUuid = app.tagLink.locationId(uriString) ?: matchSerial(uid)
         if (placeUuid == null) {
-            scanStep = ScanStep.Unreadable(techs, uid)
+            scanStep = ScanStep.Unreadable(techs, uid, app.tagLink.diagnose(uriString))
             return
         }
         scanStep = ScanStep.Checking
@@ -1212,6 +1475,15 @@ class VerifyZoneActivity : ComponentActivity() {
         // while a reassignment is waiting for a fresh card. The write runs HERE, on the NFC
         // thread, exactly as WriteTagActivity.onTag does — app.tagWriter is that screen's
         // writer, called, not copied.
+        // THE WRITE-FRESH RECOVERY (decision-58 §3), same writer, same thread, same rule: only
+        // while a card is expected. Checked FIRST because it is reachable with no zone selected,
+        // which the reassign branch below is not.
+        if (freshStep is FreshStep.AwaitingCard || freshStep is FreshStep.WriteRefused) {
+            val result = app.tagWriter.write(tag, freshTagId, confirmedOverwriteOf = null)
+            runOnUiThread { applyFreshWrite(result) }
+            return
+        }
+
         val awaiting = reassignStep as? ReassignStep.AwaitingCard
             ?: (reassignStep as? ReassignStep.WriteRefused)?.let { ReassignStep.AwaitingCard(it.building) }
         val zone = selectedZone
@@ -1223,7 +1495,8 @@ class VerifyZoneActivity : ComponentActivity() {
 
         val techs = tag.techList.map { it.substringAfterLast('.') }
         val uid = tag.id.joinToString(":") { "%02X".format(it) }
-        val uri = readUri(tag)?.toString()
+        // THE STOCK ROUTE FIRST, THE RAW PAGES ONLY IF IT ANSWERED NOTHING (decision-58 §2).
+        val uri = readUri(tag)?.toString() ?: RawTagIo.uri(tag)
         // NO ZONE PICKED = the scan-first classification (decision-55 §2); a picked zone is the
         // test scan it always was.
         runOnUiThread { if (zone == null) handleScanFirst(techs, uid, uri) else handleRead(techs, uid, uri) }
@@ -1244,7 +1517,7 @@ class VerifyZoneActivity : ComponentActivity() {
         val placeUuid = fromUri ?: fromSerial
 
         if (placeUuid == null) {
-            outcome = VerifyOutcome.Unreadable(techs, uid)
+            outcome = VerifyOutcome.Unreadable(techs, uid, app.tagLink.diagnose(uriString))
             return
         }
 
@@ -1350,10 +1623,27 @@ class VerifyZoneActivity : ComponentActivity() {
         VerifyOutcome.Unbound -> getString(R.string.verify_unbound)
         VerifyOutcome.UnknownLocation -> getString(R.string.verify_unknown_location)
         VerifyOutcome.UnknownZone -> getString(R.string.verify_unknown_zone)
-        is VerifyOutcome.Unreadable -> getString(R.string.verify_no_uri, o.techs.joinToString(", "), o.uid)
+        is VerifyOutcome.Unreadable -> unreadableText(o.techs, o.uid, o.diagnosis)
         is VerifyOutcome.Failure ->
             getString(if (o.serverSide) R.string.verify_server_error else R.string.verify_network_error)
     }
+
+    /**
+     * WHY THIS CARD DID NOT RESOLVE, named (decision-58 §1) — one sentence per cause, because
+     * the operator's next move differs: a card carrying a DIFFERENT HOST was written by a phone
+     * on an old build (TASK-188), and the fix there is updating that phone, not this card.
+     *
+     * The found host rides untranslated inside a translated sentence, exactly as this screen
+     * already renders raw server codes.
+     */
+    private fun unreadableText(techs: List<String>, uid: String, diagnosis: TagLink.Diagnosis): String =
+        when (diagnosis) {
+            is TagLink.Diagnosis.HostMismatch ->
+                getString(R.string.verify_no_uri_host, diagnosis.found, techs.joinToString(", "), uid)
+            // Found() cannot reach here — an id that parsed is an id this screen used — and is
+            // rendered as the generic case rather than given a branch that cannot be seen.
+            else -> getString(R.string.verify_no_uri, techs.joinToString(", "), uid)
+        }
 
     private fun formatted(instant: Instant): String = dateTimeFormat.format(instant)
 

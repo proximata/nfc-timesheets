@@ -69,6 +69,40 @@ class TagLink(host: String) {
     }
 
     /**
+     * WHY A CARD DID NOT RESOLVE — for OPERATOR ERROR COPY ONLY (decision-58 §1).
+     *
+     * [locationId] collapses every failure into one null, which is right at a trust boundary
+     * and useless at a door: "wrong host" (an iPhone still on an old build, TASK-188) and
+     * "nothing parseable at all" need different next actions from the person holding the card.
+     * This names which happened. It decides NOTHING — every caller that acts on a card still
+     * goes through [locationId], unchanged.
+     */
+    fun diagnose(raw: String?): Diagnosis {
+        locationId(raw)?.let { return Diagnosis.Found(it) }
+        if (raw.isNullOrBlank()) return Diagnosis.Malformed
+        val uri = try {
+            URI(raw)
+        } catch (_: Exception) {
+            return Diagnosis.Malformed
+        }
+        // URI.getHost(), never a prefix test — same userinfo trap [locationId] documents.
+        val found = uri.host?.lowercase() ?: return Diagnosis.Malformed
+        if (found != host) return Diagnosis.HostMismatch(found)
+        // Our host, but the scheme, path or uuid is not ours. One case, because the operator's
+        // next move is the same for all three: write a fresh card.
+        return Diagnosis.Malformed
+    }
+
+    /** What [diagnose] found. Never a decision, only a sentence. */
+    sealed interface Diagnosis {
+        data class Found(val locationId: String) : Diagnosis
+
+        /** A real URL, on a host that is not ours. [found] is what the card actually carries. */
+        data class HostMismatch(val found: String) : Diagnosis
+        data object Malformed : Diagnosis
+    }
+
+    /**
      * The tag link this build would write for a location — the inverse of [locationId].
      *
      * Only for ADOPTED tags (see nfc/KnownTags), which carry no URL of their own and so

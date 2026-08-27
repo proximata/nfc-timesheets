@@ -51,7 +51,7 @@ CORE=app/src/main/kotlin/io/github/qwadratic/nfctimesheets/core
 "$KOTLINC" -nowarn -cp "$JSON_JAR" -d "$OUT" \
   "$CORE"/TagLink.kt "$CORE"/ApiFailure.kt "$CORE"/TapInbox.kt "$CORE"/Wire.kt "$CORE"/SyncPlan.kt \
   "$CORE"/PendingWork.kt "$CORE"/EnrolmentCode.kt "$CORE"/SessionCookie.kt "$CORE"/MaterialQueue.kt "$CORE"/ShiftSignal.kt \
-  "$CORE"/Zones.kt "$CORE"/NdefTag.kt "$CORE"/WriteGuard.kt \
+  "$CORE"/Zones.kt "$CORE"/NdefTag.kt "$CORE"/WriteGuard.kt "$CORE"/TagTlv.kt \
   checks/core-check.kt
 
 KOTLIN_HOME="$(dirname "$(dirname "$(command -v "$KOTLINC")")")"

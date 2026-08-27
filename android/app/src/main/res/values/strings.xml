@@ -509,6 +509,20 @@
     <string name="verify_unknown_location">Diese Karte gehört nicht zu diesem System.</string>
     <string name="verify_unknown_zone">Diese Zone wurde inzwischen entfernt. Bitte Liste neu laden.</string>
     <string name="verify_no_uri">Karte gelesen, aber ohne Web-Adresse und ohne bekannte Seriennummer.\n\nTechnologien: %1$s\nUID: %2$s</string>
+    <!-- decision-58: %1$s = der auf der Karte gefundene Host, %2$s = Technologien, %3$s = UID -->
+    <string name="verify_no_uri_host">Karte gelesen, aber sie zeigt auf eine fremde Adresse: %1$s. Sie wurde wahrscheinlich mit einer alten App-Version beschrieben — dieses Telefon aktualisieren oder unten eine neue Karte schreiben.\n\nTechnologien: %2$s\nUID: %3$s</string>
+    <string name="verify_fresh_action">Jetzt neue Karte schreiben</string>
+    <string name="verify_fresh_awaiting">Karte an das Telefon halten — sie wird jetzt neu beschrieben.</string>
+    <!-- %1$s = technischer Grund, absichtlich unuebersetzt -->
+    <string name="verify_fresh_write_failed">Karte wurde NICHT beschrieben (%1$s). Bitte eine andere Karte verwenden.</string>
+    <string name="verify_fresh_reporting">Karte beschrieben. Wird dem Büro gemeldet …</string>
+    <string name="verify_fresh_naming">Karte beschrieben. Wie heißt diese Tür?</string>
+    <string name="verify_fresh_name_label">Name der Zone</string>
+    <string name="verify_fresh_submit">Zone anlegen</string>
+    <string name="verify_fresh_submitting">Zone wird angelegt …</string>
+    <!-- %1$s = Fehlercode des Servers, absichtlich unuebersetzt -->
+    <string name="verify_fresh_failed">Die Karte ist beschrieben, aber der Server hat nicht geantwortet (%1$s). Erneut versuchen — die Karte bleibt unverändert.</string>
+    <string name="verify_fresh_cancel">Abbrechen</string>
     <string name="verify_network_error">Keine Verbindung zum Server. Bitte prüfen und erneut versuchen.</string>
     <string name="verify_server_error">Serverproblem. Bitte erneut versuchen.</string>
     <string name="verify_scan_again">Nochmal prüfen</string>

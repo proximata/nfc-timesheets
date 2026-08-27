@@ -377,6 +377,20 @@
     <string name="verify_unknown_location">This card does not belong to this system.</string>
     <string name="verify_unknown_zone">This zone has since been removed. Please reload the list.</string>
     <string name="verify_no_uri">Card read, but it carries no web address and no known serial number.\n\nTechnologies: %1$s\nUID: %2$s</string>
+    <!-- decision-58: %1$s = the host actually found on the card, %2$s = technologies, %3$s = UID -->
+    <string name="verify_no_uri_host">Card read, but it points at a foreign address: %1$s. It was most likely written by an old app version — update that phone, or write a fresh card below.\n\nTechnologies: %2$s\nUID: %3$s</string>
+    <string name="verify_fresh_action">Write a fresh tag now</string>
+    <string name="verify_fresh_awaiting">Hold the card to the phone — it is being rewritten now.</string>
+    <!-- %1$s = technical reason, deliberately untranslated -->
+    <string name="verify_fresh_write_failed">The card was NOT written (%1$s). Please use a different card.</string>
+    <string name="verify_fresh_reporting">Card written. Reporting it to the office …</string>
+    <string name="verify_fresh_naming">Card written. What is this door called?</string>
+    <string name="verify_fresh_name_label">Zone name</string>
+    <string name="verify_fresh_submit">Create zone</string>
+    <string name="verify_fresh_submitting">Creating the zone …</string>
+    <!-- %1$s = the server's error code, deliberately untranslated -->
+    <string name="verify_fresh_failed">The card is written, but the server did not answer (%1$s). Try again — the card stays as it is.</string>
+    <string name="verify_fresh_cancel">Cancel</string>
     <string name="verify_network_error">No connection to the server. Please check and try again.</string>
     <string name="verify_server_error">Server problem. Please try again.</string>
     <string name="verify_scan_again">Test again</string>
