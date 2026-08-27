@@ -4,7 +4,7 @@ title: Edit individual shift (admin)
 status: Done
 assignee: []
 created_date: '2026-07-28 13:50'
-updated_date: '2026-08-04 16:48'
+updated_date: '2026-08-27 07:31'
 labels:
   - web
 milestone: m-3
@@ -32,17 +32,5 @@ Click shift row -> edit modal. Change start/end time. Audit logged (who, when, o
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-TRIAGE 2026-08-04 — DONE.
-
-Live routes, both registered (401 unauthenticated, not 404):
-  POST  /admin/shifts       — create a shift by hand (the phone-died case)
-  PATCH /admin/shifts/:id   — edit one
-server/routes/admin.js:1292-1293. A hand-created shift has client_uuid NULL, which is exactly how
-the reporting layer tells a phone-originated shift from an office-entered one
-(server/db/README.md:141).
-
-This route is also the only remaining fallback for an unreadable tag, since the in-app manual
-scanner was removed (TASK-9 AC3). Worth knowing when a worker calls.
-
-Frame: `docs/media/admin-shifts.png`.
+Audit 2026-08-27: AC5 (manualFinish=true flag) is dead by design, not a gap - decision-10 replaced the single manual_finish column with two independent facts (auto_closed + corrected_at); server/db/check-migrate.js:138-140 asserts the old column must be GONE from the schema. Left unchecked deliberately.
 <!-- SECTION:NOTES:END -->

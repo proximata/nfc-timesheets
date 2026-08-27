@@ -4,7 +4,7 @@ title: 'Auth: admin PIN login'
 status: Done
 assignee: []
 created_date: '2026-07-28 13:49'
-updated_date: '2026-08-04 16:48'
+updated_date: '2026-08-27 07:31'
 labels:
   - web
   - auth
@@ -34,21 +34,5 @@ PIN login page. POST PIN to server, get session token (JWT or opaque). httpOnly 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-TRIAGE 2026-08-04 — DONE, but the MECHANISM changed. decision-20 deleted the PIN entirely.
-
-AC1 stays unchecked and must: there is no PIN login page and there will not be one. What shipped
-instead is email + password against the `admins` table.
-
-Evidence:
-- `POST /admin/login`, `POST /admin/logout`, `GET /admin/session` are all registered live (401
-  unauthenticated). AC5 = the logout route.
-- Production `admins` table holds 1 row.
-- `curl https://timesheets.exe.xyz/login/` -> 200 (web/app/login/page.tsx).
-- AC4: server/lib/auth.js:175 issues
-  `<name>=<token>; Path=/; Max-Age=…; HttpOnly; Secure; SameSite=Strict`. HttpOnly means script
-  cannot read it, SameSite=Strict means a third-party page cannot ride it.
-- Admin creation is out-of-band: server/bin/create-admin.js. No self-signup.
-- AC2: wrong credentials return the same 401 shape as no credentials.
-
-The old ADMIN_PIN is gone from /etc/nfc/env — the file holds only APP_KEY, DATABASE_URL, PORT.
+Audit 2026-08-27: AC1 (login page accepts PIN) is dead, not a gap - decision-20 removed PIN auth entirely; web admin uses email+password. Left unchecked deliberately.
 <!-- SECTION:NOTES:END -->
