@@ -3,9 +3,10 @@ id: TASK-301
 title: >-
   Android: the write-fresh recovery leaves the NFC reader armed mid-flow, so a
   stray tap strands a written+reported card
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-08-27 11:29'
+updated_date: '2026-08-27 16:09'
 labels:
   - android
   - decision-58
@@ -42,3 +43,45 @@ ACCEPTANCE EVIDENCE. A debug-build walk-through: enter the recovery from BOTH Un
 
 MUST NOT REGRESS. The AwaitingCard and WriteRefused states must still write (that is the only tap in this screen that writes, decision-58 section 3). The reassign flow's own gating must be left exactly as it is. No new server endpoint.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Fix applied + committed cffe9ca.
+
+readerWanted() now reads:
+  freshStep is FreshStep.AwaitingCard || freshStep is FreshStep.WriteRefused -> true
+  freshStep !is FreshStep.Idle -> false
+(arming arm above suppressing arm). Reassign gating untouched, no server change.
+
+EVIDENCE DONE: android/checks/run.sh green end to end, incl. the new
+checks/reader-armed-check.sh, which extracts readerWanted()'s body and asserts both
+clauses AND their order; MUTANT=nosuppress and MUTANT=order each go red, so it is not
+vacuous. (Source check because VerifyZoneActivity imports android.nfc and cannot be
+compiled into the JVM checks.)
+
+--- TASK-296 REVIEW GATE, 2026-08-27, re-read of cffe9ca ---
+
+CONFIRMED, independently: the clause is present, in the right order (arming above
+suppressing), reassign's own pair untouched, no server change. android/checks/run.sh
+re-run by the gate: core-check OK, known-tags OK, tag-writer OK, manifest OK,
+verify-no-shift OK, reader-armed OK (4 of 4 assertions, incl. the order one).
+FreshStep has no Done state and submitFreshZone() -> selectZone() resets freshStep to
+Idle BEFORE calling startReaderMode(), so the simpler '!is Idle' (vs reassign's
+'!is Idle && !is Done') does not strand the post-create test scan. That part is right.
+
+BUT THE FIX DOES NOT CLOSE THE REPORTED BUG. readerWanted() has exactly one caller -
+the early return in startReaderMode() - and disableReaderMode is called only in
+onPause() (:1080) and submitUnbind() (:1377). Nothing on the write-fresh path disables
+anything, and there is no LaunchedEffect observing freshStep. The reader is already
+enabled when AwaitingCard is entered, so on Reporting/Naming/Submitting/Failed it stays
+enabled: a stray tap still reaches onTag(), still falls through to the ordinary read,
+still re-classifies away from Unreadable, and FreshCardSection still leaves the
+composition with the card written and reported. The task's own WHAT BREAKS paragraph is
+still true on HEAD. What the commit did buy is the onResume() case (a backgrounded phone
+no longer RE-arms mid-Naming), which is narrower than the field case described.
+
+STAYS IN PROGRESS. Two open items: the disarm gap, filed as TASK-303 (with the same hole
+in the reassign flow it was mirrored from), and the debug-build walk-through, still not
+performed - no device/emulator run of the recovery from both Unreadable states.
+<!-- SECTION:NOTES:END -->
