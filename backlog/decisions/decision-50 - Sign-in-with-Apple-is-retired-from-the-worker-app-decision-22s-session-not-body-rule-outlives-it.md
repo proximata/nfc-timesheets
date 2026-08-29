@@ -6,7 +6,12 @@ title: >-
 date: '2026-08-24 13:06'
 status: proposed
 ---
-**PROPOSED. Not accepted. The owner accepts decisions.**
+**ACCEPTED 2026-08-29 by the owner**, concurrently with decision-59, which strikes and replaces
+clause 1's "no capabilities gate on iOS" rule below. Everything else in this record — Apple
+Sign-In removed from the worker app, the structural session-not-body rule, the deprecate-
+don't-delete handling of `POST /auth/apple` — stands as written. This record was already
+fully implemented in shipped code before acceptance; acceptance here just makes the board
+match reality.
 
 AMENDS decision-22. Relates to decision-8 (German first), decision-26 (the enrolment code,
 kept verbatim), decision-45 (`phone_identities` is the one phone namespace), decision-48
