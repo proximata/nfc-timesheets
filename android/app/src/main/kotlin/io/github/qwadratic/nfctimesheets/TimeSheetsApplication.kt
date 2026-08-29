@@ -14,6 +14,7 @@ import io.github.qwadratic.nfctimesheets.data.ShiftSync
 import io.github.qwadratic.nfctimesheets.data.WorkerCache
 import io.github.qwadratic.nfctimesheets.net.Api
 import io.github.qwadratic.nfctimesheets.net.CookieJar
+import io.github.qwadratic.nfctimesheets.net.OperatorSession
 import io.github.qwadratic.nfctimesheets.net.PrefsCookieJar
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -70,10 +71,12 @@ class TimeSheetsApplication : Application() {
      * request the operator's screen makes to be capable of carrying a worker cookie. There
      * is no request in this app that sends both.
      *
-     * `onSessionRejected` is a no-op rather than [sessionRejected]: a 401 from the tag-write
-     * screen means the OPERATOR session died. Latching the worker flag over it would sign a
-     * cleaner out of a running shift because somebody wrote a tag — the two identities must
-     * not be able to knock each other over.
+     * `onSessionRejected` goes to [operatorSession] and NEVER to [sessionRejected]: a 401 from
+     * the tag-write screen means the OPERATOR session died. Latching the worker flag over it
+     * would sign a cleaner out of a running shift because somebody wrote a tag — the two
+     * identities must not be able to knock each other over. It was a no-op until TASK-401,
+     * which is why a phone whose operator session the server had deleted kept showing a
+     * signed-in gate over a stale worklist for ever; see net/OperatorSession.kt.
      *
      * `by lazy`: a cleaner's phone never constructs any of it.
      */
@@ -85,7 +88,16 @@ class TimeSheetsApplication : Application() {
     // an operator — an operator does not clock in (decision-45) and has no shift queue. The
     // worker's count must not ride on the operator's cookie; the two identities do not share
     // a jar and they do not share a heartbeat either.
-    val operatorApi: Api by lazy { Api(operatorCookies, { /* not the worker's session */ }) }
+    val operatorApi: Api by lazy { Api(operatorCookies, operatorSession::reject) }
+
+    /**
+     * The operator gate's state, and the ONE place a 401 on `ts_operator` is acted on.
+     * Clears the cached worklist with the cookie: neither belongs to a session the server
+     * has already refused.
+     */
+    val operatorSession: OperatorSession by lazy {
+        OperatorSession(operatorCookies) { operatorZones.clear() }
+    }
 
     /** Encodes and verifies the bytes that go onto a physical card. See nfc/TagWriter.kt. */
     val tagWriter: TagWriter by lazy { TagWriter(tagLink) }

@@ -352,6 +352,23 @@ class VerifyZoneActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         adapter = NfcAdapter.getDefaultAdapter(this)
 
+        // A 401 ON ANY OPERATOR CALL, acted on WHILE THE SCREEN IS OPEN (TASK-401). The
+        // resume-time cookie read below cannot see this: the operator is standing at the door
+        // with the screen in their hand when the worklist refresh (or a verify/bind/unbind/
+        // reassign) comes back 401 because the server no longer has the session. Before this,
+        // that painted „could not load“ — the same sentence a basement paints — over a stale
+        // cached worklist that still looked signed in. The zones go with the cookie
+        // (OperatorSession clears the cache) so nothing stale survives the transition.
+        lifecycleScope.launch {
+            app.operatorSession.rejected.collect { rejected ->
+                if (!rejected) return@collect
+                operatorReady = false
+                selectedZone = null
+                zones = emptyList()
+                syncReaderMode()
+            }
+        }
+
         setContent {
             TimeSheetsTheme {
                 // THE RADIO FOLLOWS THE STATE, not the other way round (TASK-303). Every
@@ -1075,7 +1092,7 @@ class VerifyZoneActivity : ComponentActivity() {
         }
         // Re-read on every resume, not once in onCreate: enrolment can have happened in
         // another screen, and a session can have been cleared while this one was backgrounded.
-        operatorReady = app.operatorCookies.header() != null
+        operatorReady = app.operatorSession.ready()
         if (operatorReady) {
             loadZonesFromCache()
             lifecycleScope.launch { refreshZones() }

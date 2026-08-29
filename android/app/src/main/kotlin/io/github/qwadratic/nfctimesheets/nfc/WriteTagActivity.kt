@@ -221,6 +221,18 @@ class WriteTagActivity : ComponentActivity() {
             outcome = written
         }
 
+        // THE SESSION CAN DIE WHILE THIS SCREEN IS OPEN AND IN THE OPERATOR'S HAND, which is
+        // the one moment the resume-time cookie read below cannot help with: the server wipes
+        // its sessions, the report 401s, and until TASK-401 the only visible effect was one
+        // failed-report line. Now the radio goes down and the screen says why (see WriteBody).
+        lifecycleScope.launch {
+            app.operatorSession.rejected.collect { rejected ->
+                if (!rejected) return@collect
+                operatorReady = false
+                adapter?.disableReaderMode(this@WriteTagActivity)
+            }
+        }
+
         setContent {
             io.github.qwadratic.nfctimesheets.ui.TimeSheetsTheme {
                 Scaffold { padding ->
@@ -474,7 +486,7 @@ class WriteTagActivity : ComponentActivity() {
         // Re-read on every resume, not once in onCreate: enrolment can have happened in
         // another screen, and a session can have been cleared while this one was in the
         // background.
-        operatorReady = app.operatorCookies.header() != null
+        operatorReady = app.operatorSession.ready()
         startReaderMode()
     }
 

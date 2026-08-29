@@ -108,3 +108,21 @@ sh checks/verify-no-shift-check.sh
 # THE READER IS DISARMED MID-RECOVERY (TASK-301). Same reason this is a source check and not
 # a JVM one: readerWanted() imports android.nfc and the state it guards needs a real card.
 sh checks/reader-armed-check.sh
+
+# THE OPERATOR SESSION DIES AND THE PHONE FINDS OUT (TASK-401). The only check here that
+# makes a real network request: it starts an HTTPS server on loopback, points BuildConfig at
+# it and drives the SHIPPING net/Api.kt into a real 401 on a real operator route. That is
+# what makes "the stale cookie is cleared and the gate closes" an observation rather than a
+# reading of the source. Needs kotlinx-coroutines (Api is suspending), which kotlinc ships.
+OUT_NET=checks/.out-net
+NET=app/src/main/kotlin/io/github/qwadratic/nfctimesheets/net
+COROUTINES="$(find "$KOTLIN_HOME" -name 'kotlinx-coroutines-core-jvm*.jar' | head -1)"
+[ -n "$COROUTINES" ] || { echo "checks: kotlinx-coroutines-core-jvm.jar not found in $KOTLIN_HOME" >&2; exit 127; }
+mkdir -p "$OUT_NET"
+"$KOTLINC" -nowarn -cp "$JSON_JAR:$COROUTINES" -d "$OUT_NET" \
+  "$CORE"/TagLink.kt "$CORE"/ApiFailure.kt "$CORE"/MaterialQueue.kt "$CORE"/Wire.kt "$CORE"/Zones.kt \
+  "$CORE"/PendingWork.kt "$CORE"/SyncPlan.kt "$CORE"/SessionCookie.kt \
+  checks/fake/build-config.kt checks/fake/android-content.kt \
+  "$NET"/CookieJar.kt "$NET"/OperatorSession.kt "$NET"/Api.kt checks/operator-401-check.kt
+
+"$JAVA_BIN" -cp "$OUT_NET:$JSON_JAR:$STDLIB:$COROUTINES" io.github.qwadratic.nfctimesheets.checks.Operator401Check

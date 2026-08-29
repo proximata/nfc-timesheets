@@ -1376,6 +1376,22 @@ private fun smsSignIn() {
     // this decision exists to delete.
     val callSites = Regex("""CodeSignInSection\(""").findAll(app).count()
     check(callSites == 3, "CodeSignInSection( appears $callSites times — expected exactly 3 (declaration + worker + operator)")
+
+    // BOTH CALL SITES PASS THE REAL FLAG (decision-59 §4). The guard inside the form is
+    // necessary but NOT sufficient: either caller could hand it a literal `true` and only
+    // that one role's door would leak, silently, on a box with sms_login off. decision-59
+    // requires this to be PROVEN rather than assumed — it was previously only ever
+    // confirmed by a source read in a review, which is not a thing that runs again.
+    // RED CASE: change either site to `smsAvailable = true` and this fails.
+    check(
+        signInScreen.contains("smsAvailable = smsAvailable"),
+        "the WORKER door passes the fetched capability to the shared form, never a literal",
+    )
+    check(
+        Regex("""smsAvailable = smsAvailable""").findAll(app).count() == 2,
+        "exactly TWO call sites pass the fetched capability — the worker door and the " +
+            "operator gate. A third would be an ungated form; fewer means one door leaks.",
+    )
     check(
         Regex("""OutlinedTextField\(""").findAll(signInScreen).count() == 0,
         "SignInScreen must not build a code field of its own — the shared form is the only one",
@@ -1405,6 +1421,13 @@ private fun smsSignIn() {
     // THE OPERATOR GATE (decision-54 §4). The two operator entry points must be behind the
     // stored ts_operator session, and nothing else on this screen may open them.
     val gate = app.substringAfter("private fun OperatorSection(").substringBefore("\n/**")
+    // The operator half of the decision-59 §4 pair above, asserted against the gate's own
+    // text so it cannot be satisfied by the worker screen's line.
+    check(
+        gate.contains("smsAvailable = smsAvailable"),
+        "the OPERATOR door passes the fetched capability too — the /auth/operator-sms/* " +
+            "routes are gated by the SAME sms_login flag server-side",
+    )
     check(
         gate.indexOf("if (!ready) {") < gate.indexOf("WriteTagActivity::class.java"),
         "Write a tag / Test a tag compose only AFTER the !operatorReady branch has returned",
@@ -2379,9 +2402,20 @@ private fun theOverwriteGuard() {
     val screen = strippedOfComments(
         File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/nfc/WriteTagActivity.kt").readText(),
     )
-    check(screen.contains("operatorCookies.header() != null"), "the screen reads the operator session off disk")
     // Off DISK and not off the network: the operator is in a stairwell. A gate that needs a
-    // round trip is a gate that fails shut exactly where it is used.
+    // round trip is a gate that fails shut exactly where it is used. The read moved into
+    // net/OperatorSession.ready() (TASK-401) so the 401 recovery could share it, so BOTH
+    // halves are pinned — the screen asks that class, and that class asks the jar and
+    // nothing else. checks/operator-401-check.kt proves the other direction (the 401).
+    check(screen.contains("app.operatorSession.ready()"), "the screen reads the operator gate")
+    val gate = strippedOfComments(
+        File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/net/OperatorSession.kt").readText(),
+    )
+    check(
+        Regex("""fun ready\(\): Boolean \{\s*val ready = cookies\.header\(\) != null""").containsMatchIn(gate),
+        "the gate is still the stored cookie, read off disk and never a request",
+    )
+    check(!gate.contains("Api"), "...and OperatorSession cannot make one: it does not know the transport")
     check(
         Regex("""private fun startReaderMode\(\) \{\s*if \(!operatorReady\) return""").containsMatchIn(screen),
         "reader mode is not started at all without an operator session",

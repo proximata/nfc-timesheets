@@ -241,7 +241,7 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
      * is how an operator ends up at a card with no credential.
      */
     fun refreshOperatorReady() {
-        _operatorReady.value = app.operatorCookies.header() != null
+        _operatorReady.value = app.operatorSession.ready()
     }
 
     /**
@@ -316,6 +316,13 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
         // choke point, immediate — the same shape iOS's API.send() has always had.
         viewModelScope.launch {
             app.sessionRejected.collect { rejected -> if (rejected) dropToSignedOut() }
+        }
+        // The operator's twin of the line above, and deliberately NOT dropToSignedOut():
+        // an operator session dying must not touch the cleaner's session, the log or a
+        // running shift. The cookie is already gone by the time this fires (OperatorSession
+        // clears it), so re-reading the gate is what puts the sign-in section back.
+        viewModelScope.launch {
+            app.operatorSession.rejected.collect { rejected -> if (rejected) refreshOperatorReady() }
         }
         // THE APP'S ONE PUBLIC CAPABILITY READ, at launch, silently — no spinner, no
         // screen anywhere waits on it. Runs regardless of session state because the ONE screen that needs the answer,

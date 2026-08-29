@@ -40,6 +40,15 @@ class OperatorZoneCache(context: Context) {
         return runCatching { Wire.operatorZones(JSONObject(raw)) }.getOrDefault(emptyList())
     }
 
+    /**
+     * Forget it. Called from net/OperatorSession on a 401: a worklist fetched with a session
+     * the server has thrown away must not outlive the cookie that fetched it — it may be
+     * another operator's zones, and the next sign-in refetches in one request anyway.
+     */
+    fun clear() {
+        prefs.edit().remove(KEY).apply()
+    }
+
     private companion object {
         const val KEY = "zones_json"
     }
