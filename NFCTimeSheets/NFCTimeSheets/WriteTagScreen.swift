@@ -203,6 +203,19 @@ struct WriteTagScreen: View {
                 Button("Create zone") { Task { await createZone() } }
                     .disabled(busy || zoneName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            // THE WAY OUT OF THE LAST STEP, and the reason it is a button and not a note:
+            // one panel renders at a time, so once a report lands this section is the WHOLE
+            // screen. Without this control an operator who has just finished card 1 has no
+            // reachable way to start card 2 - the Write buttons live on the other two
+            // panels - and the only escape is popping the navigation stack, which nothing
+            // on screen says. (A DEBUG build hid this: the Simulate section renders outside
+            // the switch, so a mock walk always had a way back.)
+            //
+            // It resets rather than writing immediately: `resetForNewWrite()` is the SAME
+            // call `write()` makes, and landing on the plan panel shows the next card's id
+            // and URI before the NFC sheet opens, which is what the plan panel is for.
+            Button("Write another card") { resetForNewWrite() }
+                .disabled(busy)
         }
     }
 

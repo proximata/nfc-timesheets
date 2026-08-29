@@ -2704,6 +2704,16 @@
         }
       }
     },
+    "Write another card" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weitere Karte schreiben"
+          }
+        }
+      }
+    },
     "Write it in your own words, for example: two mops and a large bottle of glass cleaner" : {
       "localizations" : {
         "de" : {
