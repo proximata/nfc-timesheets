@@ -274,16 +274,7 @@
     <string name="settings_push_reason">Antwort des Systems: %1$s</string>
     <string name="settings_sign_out_note">Bereits gesendete Schichten bleiben auf dem Server. Was noch nicht gesendet wurde, bleibt liegen, bis Sie sich wieder anmelden. Zum erneuten Anmelden brauchen Sie einen neuen Anmeldecode von Ihrer Verwaltung – der alte gilt nicht mehr.</string>
 
-    <!-- Sprachwahl (TASK-258). Reine In-App-Anzeige, kein Konto-Attribut: die Auswahl
-         wirkt sofort auf allen Bildschirmen, ohne Abmelden und ohne eine laufende Schicht
-         zu beruehren. Auf ZWEI Bildschirmen platziert (SignInScreen und SettingsScreen),
-         weil ein Telefon, das nur einem Betreiber gehoert, nie ein Arbeiter-Konto anmeldet
-         und Einstellungen nie erreicht. -->
-    <string name="settings_language_title">Sprache</string>
-    <string name="settings_language_system">Systemsprache</string>
-    <string name="settings_language_de">Deutsch</string>
-    <string name="settings_language_en">English</string>
-
+    
     <!-- TASK-253: plain version line in Settings, no self-update behind it. -->
     <!-- %1$s = Versionsname, %2$d = Versionsnummer -->
     <string name="app_version_line">Installiert: %1$s (%2$d)</string>

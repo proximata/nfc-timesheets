@@ -187,16 +187,7 @@
     <string name="settings_push_reason">System answer: %1$s</string>
     <string name="settings_sign_out_note">Shifts already sent stay on the server. Anything still waiting to send will be blocked until you sign back in. Signing back in needs a NEW code from your admin — the old one no longer works.</string>
 
-    <!-- Language picker (TASK-258). A pure in-app display choice, not an account
-         attribute: it takes effect on every screen immediately, without signing out and
-         without touching a running shift. Placed on TWO screens (SignInScreen and
-         SettingsScreen), because a phone that only ever belongs to an operator never signs
-         a worker in and never reaches Settings. -->
-    <string name="settings_language_title">Language</string>
-    <string name="settings_language_system">System language</string>
-    <string name="settings_language_de">Deutsch</string>
-    <string name="settings_language_en">English</string>
-
+    
     <!-- %1$s = version name, %2$d = version code -->
     <string name="app_version_line">Installed: %1$s (%2$d)</string>
 

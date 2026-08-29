@@ -1,6 +1,5 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
-import android.content.Context
 import android.net.Uri
 import android.nfc.NfcAdapter
 import android.nfc.Tag
@@ -36,7 +35,6 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
-import io.github.qwadratic.nfctimesheets.AppLocale
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
@@ -344,9 +342,6 @@ class VerifyZoneActivity : ComponentActivity() {
         data class Failed(val code: String) : UnbindStep
     }
 
-    override fun attachBaseContext(newBase: Context) {
-        super.attachBaseContext(AppLocale.wrap(newBase))
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

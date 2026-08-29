@@ -9,7 +9,6 @@ import android.os.Build
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import io.github.qwadratic.nfctimesheets.AppLocale
 import io.github.qwadratic.nfctimesheets.MainActivity
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.core.RunningShift
@@ -63,22 +62,16 @@ object ShiftSignals {
     internal const val EXTRA_LOCATION = "location"
 
     /**
-     * EVERY USER-VISIBLE STRING IN THIS FILE COMES FROM HERE (TASK-268).
+     * EVERY USER-VISIBLE STRING IN THIS FILE COMES FROM HERE (TASK-268, decision-61).
      *
-     * A notification has no Activity, and AppLocale.wrap is installed in
-     * `attachBaseContext` on the UI Activities ONLY — the Application object is
-     * deliberately untouched (see AppLocale.kt), so `applicationContext.getString`
-     * resolves against the OS locale, not the picker. Measured: a worker who picked
-     * English in Einstellungen got an English app and German shift reminders; the
-     * reverse held on an English phone that picked Deutsch.
-     *
-     * Resolved at the point of USE and never cached: the choice can change between two
-     * arms, and a cached Context would keep posting the old language until the process
-     * died. AppLocale.wrap hands back `context` itself for Choice.SYSTEM, so a phone
-     * that never opened the picker behaves exactly as it did before this existed.
+     * The OS-supplied `Resources`, completely unmodified. There used to be an in-app
+     * language override wrapped around this Context (AppLocale.wrap); decision-61 removed
+     * it from the whole app, so the app text and the notification text now come from the
+     * one place they always agreed on — the phone's own locale. The indirection is kept
+     * because every user-visible string in this file goes through it, which is the
+     * property TASK-268 was about.
      */
-    internal fun strings(context: Context): Context =
-        AppLocale.wrap(context.applicationContext)
+    internal fun strings(context: Context): Context = context.applicationContext
 
     /**
      * Arm every out-of-app signal for [running], or tear all of them down when it is null.

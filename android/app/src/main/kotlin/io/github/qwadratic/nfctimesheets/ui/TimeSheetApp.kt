@@ -84,9 +84,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
-import io.github.qwadratic.nfctimesheets.AppLocale
 import io.github.qwadratic.nfctimesheets.BuildConfig
-import io.github.qwadratic.nfctimesheets.Choice
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
@@ -172,11 +170,6 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.semantics { heading() },
         )
-        // A phone that is an operator's and NOTHING ELSE never signs a worker in and so
-        // never reaches Settings (see this screen's own operator-entry buttons below) —
-        // the language picker has to live here too, or that phone has no screen on which
-        // to ever SET the preference in the first place.
-        LanguageSection()
 
         // AC4 (TASK-262): a genuine session expiry used to bounce here with an empty code
         // field and no explanation -- the field's own refusal line only renders after a
@@ -2176,9 +2169,6 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
         ) { Text(stringResource(R.string.myhours_open)) }
 
         HorizontalDivider()
-        LanguageSection()
-
-        HorizontalDivider()
         PushSection(model)
 
         // TASK-253: a plain version line, visible without any dev tooling -- the whole
@@ -2325,70 +2315,6 @@ private fun myHoursStatusRes(shift: WireShift): Int = when {
     shift.needsResolution -> R.string.status_auto_closed
     shift.correctedAt != null -> R.string.status_corrected
     else -> R.string.status_closed
-}
-
-/**
- * TASK-258: names the app's available languages and applies the choice everywhere without
- * signing the worker out and without touching a running shift. See AppLocale.kt for the
- * mechanism and why `Activity.recreate()` is what makes that hold structurally — it is the
- * SAME path a screen rotation takes, so the ViewModelStore (session, running shift, sync
- * queue) is retained across it, not destroyed.
- *
- * TWO CALL SITES, one composable — [SignInScreen] and [SettingsScreen]. See the SignInScreen
- * call site for why the picker cannot live in Settings alone.
- */
-@Composable
-private fun LanguageSection() {
-    val context = LocalContext.current
-    var choice by remember { mutableStateOf(AppLocale.get(context)) }
-    val options = listOf(
-        Choice.SYSTEM to R.string.settings_language_system,
-        Choice.GERMAN to R.string.settings_language_de,
-        Choice.ENGLISH to R.string.settings_language_en,
-    )
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            stringResource(R.string.settings_language_title),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.semantics { heading() },
-        )
-        Row(
-            modifier = Modifier.selectableGroup(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            for ((option, labelRes) in options) {
-                val pick: () -> Unit = {
-                    choice = option
-                    AppLocale.set(context, option)
-                    (context as? Activity)?.recreate()
-                }
-                // TASK-268: the active language used to be marked in PIXELS ALONE —
-                // filled Button vs outline — so TalkBack read three identical buttons on
-                // the one screen a worker who cannot read the current language most needs
-                // to operate by ear. selectableGroup() on the Row is what makes TalkBack
-                // say "2 of 3"; `selected` is what makes it say which one.
-                //
-                // `isSelected`, not `selected`: inside the semantics lambda the left side
-                // of `selected = selected` resolves to the local val and does not compile.
-                val isSelected = option == choice
-                val marked = Modifier
-                    .heightIn(min = 48.dp)
-                    .semantics {
-                        selected = isSelected
-                        role = Role.RadioButton
-                    }
-                if (isSelected) {
-                    Button(onClick = pick, modifier = marked) {
-                        Text(stringResource(labelRes))
-                    }
-                } else {
-                    OutlinedButton(onClick = pick, modifier = marked) {
-                        Text(stringResource(labelRes))
-                    }
-                }
-            }
-        }
-    }
 }
 
 /**

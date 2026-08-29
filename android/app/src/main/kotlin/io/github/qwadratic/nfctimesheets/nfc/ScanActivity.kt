@@ -1,7 +1,6 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
 import android.app.Activity
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.nfc.NfcAdapter
@@ -30,7 +29,6 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import io.github.qwadratic.nfctimesheets.AppLocale
 import io.github.qwadratic.nfctimesheets.BuildConfig
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
@@ -66,9 +64,6 @@ class ScanActivity : ComponentActivity() {
     /** What the last read saw. Shown verbatim: this screen's job is to be honest, not tidy. */
     private var status by mutableStateOf<ScanStatus>(ScanStatus.Waiting)
 
-    override fun attachBaseContext(newBase: Context) {
-        super.attachBaseContext(AppLocale.wrap(newBase))
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

@@ -1,6 +1,5 @@
 package io.github.qwadratic.nfctimesheets.nfc
 
-import android.content.Context
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
@@ -31,7 +30,6 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
-import io.github.qwadratic.nfctimesheets.AppLocale
 import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
@@ -157,9 +155,6 @@ class WriteTagActivity : ComponentActivity() {
      */
     private var zoneSimulated by mutableStateOf(false)
 
-    override fun attachBaseContext(newBase: Context) {
-        super.attachBaseContext(AppLocale.wrap(newBase))
-    }
 
     private sealed interface ReportState {
         data object Idle : ReportState
