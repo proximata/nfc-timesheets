@@ -8,12 +8,19 @@
 #
 # WHAT MAKES THE APP TALK TO THE DEMO SERVER, and why it needs no edit:
 #
-#   API.swift builds its base URL as `https://\(TagLink.host)`, TagLink.host is
-#   Branding.tagHost, and Branding.tagHost reads the `TSTagHost` Info.plist key, which Xcode
-#   substitutes from the `TS_TAG_HOST` BUILD SETTING. A build setting can be given on the
-#   xcodebuild command line, so `TS_TAG_HOST=127.0.0.1:8443` produces a build that talks to
-#   the demo server with Branding.xcconfig, Info.plist, the entitlements and
-#   project.pbxproj all untouched. `git status` is clean after this script.
+#   API.swift builds its base URL as `https://\(Branding.apiHost)`, which reads the
+#   `TSApiHost` Info.plist key, substituted by Xcode from the `TS_API_HOST` BUILD SETTING;
+#   the tag host is the separate `TSTagHost`/`TS_TAG_HOST` pair (decision-40). Build
+#   settings can be given on the xcodebuild command line, so passing BOTH as
+#   `127.0.0.1:8443` produces a build that talks to the demo server with Branding.xcconfig,
+#   Info.plist, the entitlements and project.pbxproj all untouched. `git status` is clean
+#   after this script.
+#
+#   BOTH are load-bearing. TS_API_HOST unset does NOT mean "unconfigured" — Branding.apiHost
+#   falls back to defaultApiHost, i.e. the LIVE PRODUCTION server, and since DemoHooks.isActive
+#   arms only when API.base.host is loopback, the demo would silently point a forged-sign-in
+#   build at production instead of refusing to run. Overriding the tag host alone was exactly
+#   that bug.
 #
 # THREE THINGS A SIMULATOR CANNOT DO, and what is done about each:
 #
@@ -53,13 +60,18 @@ SIM="${DEMO_SIM:-iPhone 17}"
 TLS_DIR="${TLS_DIR:-/tmp/ts-demo/tls}"
 DD="${DEMO_DERIVED:-/tmp/ts-demo/dd}"
 TAG_HOST="${DEMO_TAG_HOST:-127.0.0.1:8443}"
+# The demo server is one process behind one TLS front (demo/tls-front.mjs, https :8443), so
+# the API host is the same loopback authority as the tag host.
+API_HOST="${DEMO_API_HOST:-$TAG_HOST}"
 
 # Same refusal as record-admin.mjs, record-android.mjs and tls-front.mjs. A build that can
 # be handed a forged sign-in must never be able to reach the live server.
-case "${TAG_HOST%%:*}" in
-  127.0.0.1|localhost|::1) ;;
-  *) echo "ios-setup: refusing DEMO_TAG_HOST \"$TAG_HOST\" — loopback only."; exit 1 ;;
-esac
+for h in "$TAG_HOST" "$API_HOST"; do
+  case "${h%%:*}" in
+    127.0.0.1|localhost|::1) ;;
+    *) echo "ios-setup: refusing demo host \"$h\" — loopback only."; exit 1 ;;
+  esac
+done
 
 # ---------------------------------------------------------------------------------------
 # --prove-release: the demo hooks are #if DEBUG, so a Release build must not contain one
@@ -164,23 +176,27 @@ echo "== trusting the demo CA inside the simulator =="
 xcrun simctl keychain booted add-root-cert "$TLS_DIR/ca.pem"
 
 # ---------------------------------------------------------------------------------------
-# 3. Build with TS_TAG_HOST overridden, and PROVE the override landed. A silent failure
-#    here is a build that quietly points at the live host, which is the one outcome this
-#    whole rig exists to prevent.
+# 3. Build with TS_TAG_HOST and TS_API_HOST overridden, and PROVE both overrides landed. A
+#    silent failure here is a build that quietly points at the live host, which is the one
+#    outcome this whole rig exists to prevent.
 # ---------------------------------------------------------------------------------------
-echo "== building Debug for the simulator with TS_TAG_HOST=$TAG_HOST =="
+echo "== building Debug for the simulator with TS_TAG_HOST=$TAG_HOST TS_API_HOST=$API_HOST =="
 xcodebuild -project NFCTimeSheets/NFCTimeSheets.xcodeproj -scheme NFCTimeSheets \
   -configuration Debug -sdk iphonesimulator \
   -destination "platform=iOS Simulator,name=$SIM" \
-  -derivedDataPath "$DD" TS_TAG_HOST="$TAG_HOST" CODE_SIGNING_ALLOWED=NO build >/dev/null
+  -derivedDataPath "$DD" TS_TAG_HOST="$TAG_HOST" TS_API_HOST="$API_HOST" \
+  CODE_SIGNING_ALLOWED=NO build >/dev/null
 
 APP="$DD/Build/Products/Debug-iphonesimulator/NFCTimeSheets.app"
-GOT=$(/usr/libexec/PlistBuddy -c 'Print :TSTagHost' "$APP/Info.plist")
-if [ "$GOT" != "$TAG_HOST" ]; then
-  echo "ios-setup: built Info.plist says TSTagHost=\"$GOT\", expected \"$TAG_HOST\" — refusing to install."
-  exit 1
-fi
-echo "  TSTagHost = $GOT"
+for pair in "TSTagHost=$TAG_HOST" "TSApiHost=$API_HOST"; do
+  key="${pair%%=*}"; want="${pair#*=}"
+  got=$(/usr/libexec/PlistBuddy -c "Print :$key" "$APP/Info.plist")
+  if [ "$got" != "$want" ]; then
+    echo "ios-setup: built Info.plist says $key=\"$got\", expected \"$want\" — refusing to install."
+    exit 1
+  fi
+  echo "  $key = $got"
+done
 
 echo "== installing =="
 xcrun simctl install booted "$APP"

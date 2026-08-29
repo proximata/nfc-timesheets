@@ -155,6 +155,15 @@ else
   ok "demo/ios-setup.sh refuses a non-loopback tag host"
 fi
 
+# The API host is the one API.base is actually built from (decision-40), and an UNSET
+# TS_API_HOST falls back to the LIVE server — which silently disarms DemoHooks.isActive's
+# loopback guard. Refusal here is the same rule as above, on the host that matters more.
+if DEMO_API_HOST=schimmer-glanz.exe.xyz sh demo/ios-setup.sh >/dev/null 2>&1; then
+  fail "demo/ios-setup.sh built against a non-loopback API host"
+else
+  ok "demo/ios-setup.sh refuses a non-loopback API host"
+fi
+
 # EVERY CHECK IN demo/ MUST AT LEAST PARSE.
 #
 # Two of them did not, for a whole round. Both had a comment written INSIDE a
