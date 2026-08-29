@@ -461,6 +461,34 @@ enum AuthAPI {
         try await apiPost("/auth/code", CodeRequest(code: code))
     }
 
+    /// GET /auth/capabilities -> {sms: Bool}. THE APP'S ONE PUBLIC CAPABILITY READ
+    /// (decision-59 §2), the twin of Android's `Api.capabilities()`.
+    ///
+    /// `auth: "app"`, NO SESSION: the screen that needs the answer is exactly the screen a
+    /// phone with no session yet is showing, so this must be askable before any cookie
+    /// exists. It carries the app key like every other call here and nothing else.
+    ///
+    /// The server ANDs two things into the one field - Twilio being configured and the
+    /// `sms_login` flag (server/routes/auth.js `capabilities`) - so the phone never learns,
+    /// and never needs to learn, WHICH of the two closed the door.
+    ///
+    /// Prefer `smsDoorAvailable()` below at call sites; it is the fail-closed read.
+    static func capabilities() async throws -> WireCapabilities {
+        try await apiGet("/auth/capabilities")
+    }
+
+    /// `capabilities().sms`, with EVERY failure read as false - offline, a timeout, an old
+    /// server that predates the route, a malformed body. Byte-for-byte the intent of
+    /// Android's `runCatching { app.api.capabilities() }.getOrDefault(false)`.
+    ///
+    /// FAIL CLOSED IS THE FEATURE, not defensive habit: a phone that could not confirm the
+    /// SMS door is open must behave exactly like a phone whose server says it is shut,
+    /// never like one where it is open. Drawing a control on a guess is the 503-on-tap this
+    /// route exists to delete.
+    static func smsDoorAvailable() async -> Bool {
+        (try? await capabilities())?.sms ?? false
+    }
+
     /// GET /auth/session - is this cookie still a worker? 401 when it is not.
     /// Asked on every launch: the server, not the phone, decides who is signed in, so
     /// deactivating a worker in the admin panel locks them out on their next launch.
@@ -470,6 +498,13 @@ enum AuthAPI {
     static func logout() async throws {
         let _: WireEmpty = try await apiPost("/auth/logout", WireLogoutRequest())
     }
+}
+
+/// 200 body of GET /auth/capabilities. ONE FIELD, and deliberately no `missing[]` or
+/// `sender_kind`: that detail is for the person who can fix it (GET /admin/sms-status,
+/// admin-auth only), not for anyone holding the app key `strings` recovers from an IPA.
+struct WireCapabilities: Decodable {
+    let sms: Bool
 }
 
 private struct PhoneRequest: Encodable { let phone: String }

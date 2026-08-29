@@ -28,6 +28,13 @@ import SwiftUI
 
 struct OperatorHomeScreen: View {
     @Environment(OperatorSession.self) private var operatorSession
+    @Environment(\.scenePhase) private var scenePhase
+    /// The SMS half of the sign-in form, gated on GET /auth/capabilities (decision-59 §2).
+    /// False until the server says otherwise, and re-read on every appearance and resume -
+    /// see the note on the modifiers below, and SignInView, which does the identical thing
+    /// for the worker door. The operator's SMS routes are gated by the SAME `sms_login`
+    /// flag server-side, so one capability read is the honest answer for both roles.
+    @State private var smsAvailable = false
 
     var body: some View {
         Form {
@@ -46,6 +53,7 @@ struct OperatorHomeScreen: View {
                     }
                 }
                 CodeSignInSection(role: .tagOperator,
+                                  smsAvailable: smsAvailable,
                                   busy: operatorSession.busy,
                                   requestSms: { try await operatorSession.requestSmsCode(phone: $0) },
                                   verifySms: { try await operatorSession.verifySmsCode(phone: $0, code: $1) },
@@ -63,5 +71,15 @@ struct OperatorHomeScreen: View {
         .navigationTitle("Operator")
         .scrollDismissesKeyboard(.interactively)
         .onAppear { operatorSession.refresh() }
+        // The capability is asked the same way and on the same schedule as the cookie above
+        // it: every appearance, plus every return to foreground, so turning `sms_login` off
+        // (or back on) takes effect on the next look at this screen rather than on the next
+        // cold launch. Unlike the cookie read this one IS a network call - and nothing on
+        // screen waits for it, because it can only ever REMOVE a control.
+        .task { smsAvailable = await AuthAPI.smsDoorAvailable() }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { smsAvailable = await AuthAPI.smsDoorAvailable() }
+        }
     }
 }

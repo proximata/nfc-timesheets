@@ -36,6 +36,19 @@ struct CodeSignInSection: View {
     }
 
     let role: Role
+    /// Does the SERVER say the SMS door exists (GET /auth/capabilities)? decision-59 §1-2.
+    ///
+    /// FALSE DRAWS NOTHING - no phone field, no send button, no OTP field, no "use a
+    /// different number". Not styled invisible, not disabled-with-a-sentence: absent. The
+    /// enrolment-code half below is untouched by this flag and is what remains, which is
+    /// the one-door state decision-59 accepts ON PURPOSE (the flag's own purpose is a
+    /// controlled testing window, where an admin is present issuing codes).
+    ///
+    /// The caller ALWAYS passes a fail-closed read (`AuthAPI.smsDoorAvailable()`), so a
+    /// phone that could not reach the server composes the same form as a phone told no.
+    /// This mirrors Android's `CodeSignInSection(smsAvailable = …)` parameter exactly -
+    /// same name, same meaning, same guard position (TimeSheetApp.kt).
+    let smsAvailable: Bool
     /// A call is in flight. The caller's own session object owns this - this view never
     /// derives it, so two forms on one screen could never disagree about it.
     let busy: Bool
@@ -55,31 +68,40 @@ struct CodeSignInSection: View {
 
     /// SMS mode. The single source for every per-field difference below - keyboard,
     /// content type, filtering, button copy and which call the submit button makes.
-    private var otpMode: Bool { sentTo != nil }
+    ///
+    /// `smsAvailable` is ANDed in, not merely checked at the draw site: if the flag is
+    /// switched off server-side while a challenge happens to be live, the form must fall
+    /// back to the enrolment code rather than strand a 6-digit field whose verify call can
+    /// only answer 503 and whose "use a different number" escape has just been removed.
+    private var otpMode: Bool { smsAvailable && sentTo != nil }
 
     var body: some View {
         Section {
-            if let target = sentTo {
-                Text("A 6-digit code was sent to \(target).")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
-                TextField("Phone number", text: $phone)
-                    .keyboardType(.phonePad)
-                    .textContentType(.telephoneNumber)
-                    .onChange(of: phone) { _, _ in phoneErrorMessage = nil }
-                    .accessibilityLabel("Phone number")
-                if let phoneErrorMessage {
-                    Text(phoneErrorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                } else {
-                    Text("Start with 0 or +43, for example 0664 1234567.")
+            // THE SMS HALF, and the whole of it. Guard textually BEFORE the phone field,
+            // exactly where Android's `if (smsAvailable) {` sits (decision-59 §1).
+            if smsAvailable {
+                if let target = sentTo {
+                    Text("A 6-digit code was sent to \(target).")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                } else {
+                    TextField("Phone number", text: $phone)
+                        .keyboardType(.phonePad)
+                        .textContentType(.telephoneNumber)
+                        .onChange(of: phone) { _, _ in phoneErrorMessage = nil }
+                        .accessibilityLabel("Phone number")
+                    if let phoneErrorMessage {
+                        Text(phoneErrorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    } else {
+                        Text("Start with 0 or +43, for example 0664 1234567.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Button("Send code") { requestOtp() }
+                        .disabled(busy || phone.isEmpty)
                 }
-                Button("Send code") { requestOtp() }
-                    .disabled(busy || phone.isEmpty)
             }
 
             TextField(otpMode ? "SMS code" : "Access code", text: $code)
@@ -130,7 +152,9 @@ struct CodeSignInSection: View {
     // MARK: Actions
 
     private func requestOtp() {
-        guard !busy, !phone.isEmpty else { return }
+        // `smsAvailable` guards the only control that reaches this, and guards it again
+        // here: the door the server says is shut is never knocked on.
+        guard smsAvailable, !busy, !phone.isEmpty else { return }
         let requested = phone
         Task {
             do {
@@ -151,7 +175,7 @@ struct CodeSignInSection: View {
         guard !busy, submittable else { return }
         Task {
             do {
-                if let target = sentTo {
+                if otpMode, let target = sentTo {
                     try await verifySms(target, code)
                 } else {
                     try await submitCode(EnrolmentCode.normalise(code)!)

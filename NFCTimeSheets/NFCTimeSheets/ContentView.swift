@@ -96,18 +96,26 @@ struct ContentView: View {
 
 // MARK: - State (a): signed out
 
-/// Two doors, both always visible, neither gated (decision-50): an SMS one-time code, and
-/// the admin-issued enrolment code. ONE FORM NOW SERVES BOTH (decision-54 §5) - see
-/// CodeSignInSection.swift, which the operator gate uses too. No `GET
-/// /auth/capabilities` check here, unlike Android - with
-/// Apple gone, hiding SMS behind a flag could leave a phone with exactly one door, and a
-/// control that answers 503 the moment it is pressed says so in the copy right where the
-/// tap happened (decision-50 §1).
+/// Two doors: an SMS one-time code, and the admin-issued enrolment code. ONE FORM SERVES
+/// BOTH (decision-54 §5) - see CodeSignInSection.swift, which the operator gate uses too.
+///
+/// THE SMS DOOR IS CAPABILITIES-GATED (decision-59 §2), which STRIKES decision-50 §1's
+/// "no `GET /auth/capabilities` check here, unlike Android". That rule reasoned that with
+/// Apple gone, hiding SMS could leave a phone with exactly one door. The owner accepted
+/// that consequence explicitly for THIS flag: `sms_login` exists for controlled testing
+/// windows, and every phone in one has an admin a phone call away who can issue an
+/// enrolment code on demand. One rule now - capabilities decides visibility - on every
+/// platform, with no iOS carve-out to remember.
 struct SignInView: View {
     @Environment(Session.self) private var session
+    @Environment(\.scenePhase) private var scenePhase
     /// Why the last attempt failed, if it did. Screen-level only (e.g. a dropped
     /// session) - the field-level SMS/code errors below are local @State.
     let reason: String?
+    /// FALSE UNTIL THE SERVER SAYS OTHERWISE, and false again the moment it says so. The
+    /// initial value is the fail-closed one, so the first frame - drawn before any request
+    /// can possibly have returned - never flashes a door that is shut.
+    @State private var smsAvailable = false
 
     var body: some View {
         // OperatorHomeScreen is pushed from operatorSection below, so whatever presents
@@ -145,6 +153,7 @@ struct SignInView: View {
                 // three calls stay Session's; this view kept no auth state of its own
                 // when it consolidated.
                 CodeSignInSection(role: .worker,
+                                  smsAvailable: smsAvailable,
                                   busy: session.busy,
                                   requestSms: { try await session.requestSmsCode(phone: $0) },
                                   verifySms: { try await session.verifySmsCode(phone: $0, code: $1) },
@@ -152,6 +161,17 @@ struct SignInView: View {
                 operatorSection
             }
             .scrollDismissesKeyboard(.interactively)
+            // EVERY APPEARANCE AND EVERY RESUME, not once per process (decision-59 §2,
+            // and the same reasoning TASK-276 applied to the operator gate). Android reads
+            // this at launch because its sign-in screen IS the launch screen; on iOS this
+            // view is pushed and popped, so a launch-only read would mean flipping the flag
+            // server-side did nothing until the worker force-quit the app. No spinner and
+            // nothing waits on it: the code field is already usable while it is in flight.
+            .task { smsAvailable = await AuthAPI.smsDoorAvailable() }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task { smsAvailable = await AuthAPI.smsDoorAvailable() }
+            }
         }
     }
 
