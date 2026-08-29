@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-08-24 19:06'
-updated_date: '2026-08-27 07:32'
+updated_date: '2026-08-29 18:45'
 labels:
   - android
   - i18n
@@ -52,6 +52,8 @@ AC3: mechanism is AppLocale.wrap via attachBaseContext (MainActivity.kt:32, Scan
 AC4: android/checks/run.sh re-run this audit -> core-check: OK (plus known-tags/tag-writer/manifest/verify-no-shift all OK).
 AC5: settings_language_{title,system,de,en} present in BOTH values/strings.xml:268-271 and values-en/strings.xml:183-186; whole-file counts 314 = 314.
 Verdict: present in current source. Status stays Done. (Known follow-ups from the original comment remain out of scope here: ShiftSignals notification copy off applicationContext; TalkBack selection semantics were since added - TimeSheetApp.kt:2102-2110 selectableGroup + selected.)
+
+REVERSED 2026-08-29 by decision-61: owner ruled both platforms follow the OS system language only, no in-app override. This feature (AppLocale.kt, the language chips) is being deleted - not because it was broken, but at explicit owner direction, to remove the starkest platform asymmetry found by the 2026-08-29 cross-platform UX audit. Left Done as accurate historical record, same precedent as TASK-254.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
