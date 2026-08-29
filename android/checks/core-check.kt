@@ -130,22 +130,28 @@ private fun featureFlags() {
     val junk = Wire.flags(JSONObject("""{"a":"true","b":1,"c":null,"d":true}"""))
     check(junk.keys == setOf("d"), "only real JSON booleans become flags, got ${junk.keys}")
 
-    // The screen itself: the flag-ON black is a LITERAL, never derived. The full argument
-    // and the wallpaper history are in demo/check-fun-shift-black.mjs; this is the part
-    // that can be proven without a device, so it runs on every checks/run.sh.
+    // The screen itself: the flag-ON colours are LITERALS, never derived. decision-60 §3
+    // supersedes decision-57 §3's true black with an animated dark-to-light BLUE gradient;
+    // what did NOT change is that every value it paints is a constant, which is the only
+    // thing that keeps Material You and Material's baseline roles off this screen. The full
+    // argument and the wallpaper history are in demo/check-fun-shift-black.mjs; this is the
+    // part that can be proven without a device, so it runs on every checks/run.sh.
     val theme = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/Theme.kt").readText()
-    check(
-        Regex("""val Black = Color\(0xFF000000\)""").containsMatchIn(theme),
-        "decision-57 §3: the fun screen's black is a fixed literal in Theme.kt",
-    )
+    for ((name, hex) in listOf("Deep" to "0A1626", "Lift" to "1F4E85")) {
+        check(
+            Regex("""val $name = Color\(0xFF$hex\)""").containsMatchIn(theme),
+            "decision-60 §3: the fun screen's FunShift.$name is the fixed literal #$hex in Theme.kt",
+        )
+    }
     val screen = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetApp.kt").readText()
     check(
-        screen.contains("funTheme -> FunShift.Black"),
-        "the running screen takes that literal, not a MaterialTheme role, when the flag is on",
+        screen.contains("else -> ShiftBrand.Container"),
+        "the running screen takes a fixed literal, not a MaterialTheme role, as its field",
     )
     check(
         screen.contains("funTheme: Boolean = false"),
-        "and the flag DEFAULTS TO OFF at the composable itself — OFF is the shipped screen",
+        "and the flag DEFAULTS TO OFF at the composable itself — decision-60 changed the two " +
+            "baseline colours, not the flag's OFF-by-default posture",
     )
 }
 
@@ -2932,13 +2938,30 @@ private fun theBrandPalette() {
             "0.5.2/9. Missing: ${missing.sorted()}",
     )
 
-    // The two roles the running shift is painted with, named explicitly. The set comparison
-    // above would go green again the moment somebody stopped USING them, and the finding was
-    // about that screen.
+    // THE RUNNING SHIFT'S FIELD, named explicitly. The set comparison above would go green
+    // again the moment somebody stopped USING a role, and the finding was about that screen.
+    //
+    // It used to be `colorScheme.tertiaryContainer`, i.e. a role this project defines rather
+    // than a Material default. decision-60 §2 moves it OFF the role system entirely, to a
+    // fixed blue literal: the screen is now the one place in the app that carries a hue by
+    // default, and a literal is the only form that neither Material You nor a Material
+    // baseline can reach. The INVARIANT is unchanged and is what is asserted — this screen's
+    // colour is never derived from a system/wallpaper-driven value.
     val app = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/TimeSheetApp.kt").readText()
     check(
-        app.contains("colorScheme.tertiaryContainer") && dark.contains("tertiaryContainer"),
-        "the RUNNING shift's field is a role this project defines, not a Material default",
+        app.contains("else -> ShiftBrand.Container") && app.contains("else -> ShiftBrand.OnContainer"),
+        "the RUNNING shift's field is a fixed literal (decision-60 §2), not a Material role",
+    )
+    for ((name, hex) in listOf("Container" to "10243D", "OnContainer" to "E6ECF5", "Outline" to "9FC4E8")) {
+        check(
+            Regex("""val $name = Color\(0xFF$hex\)""").containsMatchIn(theme),
+            "…and ShiftBrand.$name is that literal, #$hex — the value " +
+                "demo/check-shift-screen-brand.mjs measures on a device",
+        )
+    }
+    check(
+        !strippedOfComments(app).contains("isSystemInDarkTheme"),
+        "…and no screen branches on isSystemInDarkTheme(): only Theme.kt picks a scheme",
     )
 
     // Achromatic, computed from the hexes in the file rather than trusted. DESIGN.md
@@ -2957,9 +2980,14 @@ private fun theBrandPalette() {
     // repaint the field black, but the one state that must never read as "fine" keeps its
     // red. Named here for the same reason the others are — the exceptions cannot grow by
     // accident.
+    // ShiftBrand's three and FunShift's two blues are the newest named exceptions
+    // (decision-60): the running-shift screen is the ONE screen the owner ruled must carry
+    // a hue, it is exactly two objects wide, and demo/check-fun-shift-black.mjs asserts
+    // every one of their hexes by name so "blue" cannot quietly become anything else.
     val chromatic = setOf(
         "AccentDark", "AccentLight", "AmberDark", "AmberLight",
         "ErrorDark", "OnErrorDark", "ErrorLight", "Overdue",
+        "Container", "OnContainer", "Outline", "Deep", "Lift",
     )
     for (m in Regex("""val (\w+) = Color\(0xFF([0-9A-Fa-f]{6})\)""").findAll(theme)) {
         val (name, hex) = m.destructured

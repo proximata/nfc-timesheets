@@ -30,9 +30,17 @@
 // wallpaper, and the clock in the corner changes between the two samples.
 //
 // It restores whatever palette the device had when it started, in a finally.
+//
+// SCOPE, MADE EXPLICIT FOR decision-60. This file cold-starts the app with no tap intent,
+// so what it photographs is the IDLE screen — never the running one (that is
+// check-shift-screen-brand.mjs's job, and the split is the finding TASK-238 was reopened
+// over). decision-60 §2 gave the RUNNING screen a fixed blue; the idle screen is untouched
+// and is still achromatic, so the assertions below are unchanged in substance and now say
+// which screen they are about. The invariant this file exists for is the one that never
+// moves: identical pixels under two maximally different system palettes.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const PKG = "io.github.qwadratic.NFCTimeSheets";
 const ACTIVITY = `${PKG}/io.github.qwadratic.nfctimesheets.MainActivity`;
@@ -141,17 +149,32 @@ async function main() {
       );
     }
 
-    // The brand is achromatic and dark-first, so the largest area on any screen must be a
-    // GREY. Asserted independently of the comparison above: two identical wrong colours
-    // would pass the equality on their own.
+    // The brand is achromatic and dark-first, so the largest area on THIS screen — the
+    // idle one, which is what a cold start with no tap intent renders — must be a GREY.
+    // Asserted independently of the comparison above: two identical wrong colours would
+    // pass the equality on their own. decision-60 §2's blue lives on the RUNNING screen
+    // only and is measured by check-shift-screen-brand.mjs; it cannot appear here, and if
+    // it ever does that is a genuine failure and this check should say so.
     for (const [name, px] of seen) {
       const r = Number.parseInt(px.dominant.slice(1, 3), 16);
       const g = Number.parseInt(px.dominant.slice(3, 5), 16);
       const bl = Number.parseInt(px.dominant.slice(5, 7), 16);
       const spread = Math.max(r, g, bl) - Math.min(r, g, bl);
-      if (spread <= 12) ok(`…and under ${name} the dominant surface ${px.dominant} is achromatic (channel spread ${spread})`);
-      else bad(`under ${name} the dominant surface ${px.dominant} is a COLOUR (channel spread ${spread}, budget 12)`);
+      if (spread <= 12) ok(`…and under ${name} the IDLE screen's dominant surface ${px.dominant} is achromatic (channel spread ${spread})`);
+      else bad(`under ${name} the IDLE screen's dominant surface ${px.dominant} is a COLOUR (channel spread ${spread}, budget 12)`);
     }
+    // THE RUNNING SCREEN'S BLUE, PROVEN THE ONE WAY THIS FILE CAN. It is not on screen
+    // here and cannot be, but decision-60 §2 requires it to be a LITERAL and never derived
+    // from a system/wallpaper-driven value — and that half is readable off the source on
+    // any machine, so a device run says it too instead of leaving it to a check nobody
+    // runs at the same time.
+    const themeKt = readFileSync(
+      "android/app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/Theme.kt",
+      "utf8",
+    );
+    const container = /val Container = Color\(0xFF([0-9A-Fa-f]{6})\)/.exec(themeKt);
+    if (container) ok(`the RUNNING screen's field is the fixed literal #${container[1].toUpperCase()} (decision-60 §2), not a dynamic scheme`);
+    else bad("ShiftBrand.Container is not a Color(0xFF……) literal in ui/Theme.kt — that is the wallpaper-bleed class itself");
   } finally {
     if (restore && restore !== "null") tryShell(`settings put secure ${KEY} '${restore}'`);
     else clearPalette();

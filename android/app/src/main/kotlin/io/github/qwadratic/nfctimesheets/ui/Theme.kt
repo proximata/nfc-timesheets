@@ -75,34 +75,70 @@ fun TimeSheetsTheme(content: @Composable () -> Unit) {
 }
 
 /**
- * THE OPT-IN PLAYFUL RUNNING-SHIFT SCREEN (decision-57 §3), AND WHY IT DOES NOT REOPEN
- * THE BUG THE REST OF THIS FILE CLOSES.
+ * THE RUNNING-SHIFT SCREEN'S OWN COLOUR (decision-60 §2), AND WHY IT DOES NOT REOPEN THE
+ * BUG THE REST OF THIS FILE CLOSES.
  *
- * These are FIXED LITERALS, exactly like every other value in this file, and they are the
- * only ones the flag-ON screen paints with. They are NOT derived from `MaterialTheme`, NOT
- * from `dynamicDarkColorScheme`, and NOT from `isSystemInDarkTheme()` — the whole point of
- * the flag is a screen that is the SAME black on every phone, so a wallpaper still cannot
- * reach it. `demo/check-fun-shift-black.mjs` reads this file and fails if it ever becomes
- * anything but a literal black.
+ * decision-57 §3 froze this screen's flag-OFF default as achromatic and required a
+ * superseding decision before touching it. decision-60 is that decision: the owner ruled
+ * out green on iOS and ruled the Android baseline over to a BLUE. So the running screen —
+ * and only the running screen — is the one place in this app that carries a hue by
+ * default.
  *
- * The flag is OFF by default and OFF is bit-for-bit today's screen: nothing below is read
- * unless the server has switched `fun_shift_screen` on, and `TimeSheetsTheme` itself is
- * untouched, so `check-app-not-wallpaper.mjs`, `check-shift-screen-brand.mjs` and
- * `core-check.kt` § 17 keep measuring exactly what they measured before.
+ * THESE ARE FIXED LITERALS. Not `MaterialTheme`, not `dynamicDarkColorScheme`, not
+ * `isSystemInDarkTheme()`. The wallpaper-bleed regression this file's header describes at
+ * length (Material You painting the clocked-in screen bright pink, then Material's
+ * BASELINE PURPLE painting it pink again through unassigned roles) is a class of bug, and
+ * the way it stays impossible is that this screen's colour is a constant — which colour
+ * the constant is was never the point. `demo/check-shift-screen-brand.mjs` measures these
+ * exact values on a device, `demo/check-app-not-wallpaper.mjs` proves the app still does
+ * not follow the system palette, and `checks/core-check.kt` § 17/§ 18 read them out of
+ * this file on a plain JVM.
  *
- * CONTRAST, computed the same way as above: FunOnBlack #E9EAEC on #000000 is 16.9:1, and
- * FunOverdue #FFB4AB on #000000 is 10.0:1 — both above AA for body text. The silhouettes
- * are drawn at #1A1D22, i.e. 1.2:1 against the black: they are texture, never a signal,
- * and they are painted BEHIND the words, which keep their own full contrast.
+ * CONTRAST, computed (WCAG 2.1 relative luminance), not eyeballed:
+ *   OnContainer #E6ECF5 on Container #10243D   13.2:1
+ *   Outline     #9FC4E8 on Container #10243D    8.6:1
+ * The state word under the clock (DESIGN.md § 3.4) still carries the meaning in WORDS —
+ * greyscale legibility is unaffected by any of this.
+ */
+object ShiftBrand {
+    /** The running shift's field. Fixed, dark, blue-tinted (decision-60 §2). */
+    val Container = Color(0xFF10243D)
+    val OnContainer = Color(0xFFE6ECF5)
+
+    /**
+     * The border of an OUTLINED control sitting ON [Container]. Material resolves an
+     * OutlinedButton's border from `colorScheme.outline`, which is this project's muted
+     * grey — chosen against the app's own surfaces, not against this screen's overridden
+     * field. The result was a „Ohne Tag beenden" button with no visible border at all: the
+     * one control a worker reaches for when their card will not read, looking inert (the
+     * 2026-08-29 cross-platform UX audit's B1). 8.6:1 against [Container].
+     */
+    val Outline = Color(0xFF9FC4E8)
+}
+
+/**
+ * THE OPT-IN PLAYFUL RUNNING-SHIFT SCREEN (decision-57 §3, as amended by decision-60 §3).
+ *
+ * The flag's visual payload used to be a true black plus walking silhouettes. decision-60
+ * §3 replaces it with a slow gradient cycling between a darker and a lighter blue — the
+ * SAME native-primitives-only ceiling (Compose `Canvas` + `rememberInfiniteTransition`, no
+ * asset, no library), and the same literal-only rule as [ShiftBrand] above. The
+ * silhouettes are gone rather than layered under the gradient: two decorations competing
+ * on one screen is exactly the clutter decision-60 §3 tells the implementer to cut.
+ *
+ * The flag is still OFF by default, and OFF is now [ShiftBrand]'s plain blue.
+ *
+ * CONTRAST at the WORST point of the cycle, i.e. against [Lift], the lightest the screen
+ * ever gets: [ShiftBrand.OnContainer] 7.1:1, [Overdue] 5.0:1, [ShiftBrand.Outline] 4.6:1.
+ * All above AA for body text, so no frame of the animation can make a word unreadable.
  */
 object FunShift {
-    /** A true black, on purpose and regardless of the system theme (decision-57 §3). */
-    val Black = Color(0xFF000000)
-    val OnBlack = Color(0xFFE9EAEC)
+    /** The bottom of the cycle. */
+    val Deep = Color(0xFF0A1626)
+    /** The top of the cycle, and the contrast floor every value above is computed against. */
+    val Lift = Color(0xFF1F4E85)
     /** Overdue still reads red — the one thing that must never mean "fine". */
     val Overdue = Color(0xFFFFB4AB)
-    /** The moving shapes. Barely above the background: decoration, never the state. */
-    val Silhouette = Color(0xFF1A1D22)
 }
 
 // DESIGN.md § 3.1 surfaces, § 3.2 text, § 3.3 accent. Names are the document's names.

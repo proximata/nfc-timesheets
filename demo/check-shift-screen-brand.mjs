@@ -39,8 +39,17 @@
 // SHOW IT RED: run it against the build that shipped the bug.
 //     adb install -r android/dist/nfc-timesheets-0.5.2-9-release.apk
 //     node demo/check-shift-screen-brand.mjs        # -> FAIL, #FFD8E4, spread 39
+//
+// UPDATED FOR decision-60 §2. The owner ruled this one screen over to a BLUE, so
+// "achromatic everywhere" is no longer the right assertion here — the running field is now
+// ShiftBrand.Container, a fixed #10243D, and its text ShiftBrand.OnContainer. What is
+// UNCHANGED, and is the only reason this file exists, is that the colour must be a value
+// THIS PROJECT chose: the dominant field is asserted to be that exact hex, and every other
+// significant area still has to be achromatic. A build that follows the wallpaper fails on
+// both halves; the 0.5.2/9 negative case above still goes red, on #FFD8E4 and on the
+// lavender behind it.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const PKG = "io.github.qwadratic.NFCTimeSheets";
 const ACTIVITY = `${PKG}/io.github.qwadratic.nfctimesheets.MainActivity`;
@@ -53,6 +62,16 @@ const OUT = process.env.OUT_DIR ?? ".field-recordings/shift-screen-brand";
 const JOB_ID = 225;
 /** DESIGN.md § 1: the mark is achromatic, saturation exactly zero. Same budget as its sibling. */
 const SPREAD_BUDGET = 12;
+/**
+ * decision-60 §2's fixed field, read from the source rather than retyped here: two copies
+ * of a hex is how a check and the thing it checks start disagreeing silently. Missing or
+ * non-literal in Theme.kt is itself a failure — that is the wallpaper-bleed class.
+ */
+const THEME_KT = "android/app/src/main/kotlin/io/github/qwadratic/nfctimesheets/ui/Theme.kt";
+const shiftBrand = (name) => {
+  const m = new RegExp(`val ${name} = Color\\(0xFF([0-9A-Fa-f]{6})\\)`).exec(readFileSync(THEME_KT, "utf8"));
+  return m ? `#${m[1].toUpperCase()}` : null;
+};
 /** A colour has to own this much of the screen before "dominant" means anything. */
 const MIN_SHARE = 0.02;
 
@@ -166,21 +185,38 @@ async function main() {
       console.log(`    ${c.hex}  ${(100 * c.share).toFixed(1)}%  channel spread ${c.spread}`);
     }
 
-    // EVERY significant area, not just the largest. The pink was 47.9% and the lavender
-    // 40.9%: an assertion on the single dominant colour would have caught one of the two,
-    // and a build that fixed only that one would then read as correct.
-    const coloured = colours.filter((c) => c.spread > SPREAD_BUDGET);
-    if (coloured.length === 0) {
-      const worst = colours.reduce((a, b) => (a.spread > b.spread ? a : b));
-      ok(
-        `every area of the running screen is achromatic — worst is ${worst.hex} at spread ${worst.spread}, ` +
-          `budget ${SPREAD_BUDGET} (DESIGN.md § 1)`,
+    // THE FIELD IS THE COLOUR THIS PROJECT CHOSE (decision-60 §2), asserted against the
+    // literal in Theme.kt rather than a hex retyped in this file.
+    const expected = shiftBrand("Container");
+    if (expected === null) {
+      bad(`ShiftBrand.Container is not a Color(0xFF……) literal in ${THEME_KT} — that is the wallpaper-bleed class itself`);
+      return;
+    }
+    const field = colours[0];
+    if (field.hex === expected) {
+      ok(`the running field is ShiftBrand.Container ${expected} at ${(100 * field.share).toFixed(1)}% — the fixed value decision-60 §2 names`);
+    } else {
+      bad(
+        `the running field is ${field.hex} at ${(100 * field.share).toFixed(1)}%, not ShiftBrand.Container ${expected}. ` +
+          "Either this screen is being painted by something other than the literal (a Material role, a dynamic scheme, " +
+          "the wallpaper), or Theme.kt and the installed build have drifted.",
       );
+    }
+
+    // EVERY OTHER significant area, not just the largest. The pink was 47.9% and the
+    // lavender 40.9%: an assertion on the single dominant colour would have caught one of
+    // the two, and a build that fixed only that one would then read as correct. The field
+    // above is the ONE exemption, and it is exempt because it was named, not because it
+    // is big.
+    const coloured = colours.filter((c) => c.hex !== expected && c.spread > SPREAD_BUDGET);
+    if (coloured.length === 0) {
+      ok(`every OTHER area of the running screen is achromatic (budget ${SPREAD_BUDGET}, DESIGN.md § 1)`);
     } else {
       for (const c of coloured) {
         bad(
           `${c.hex} covers ${(100 * c.share).toFixed(1)}% of the running screen at channel spread ${c.spread} ` +
-            `(budget ${SPREAD_BUDGET}). The brand is achromatic; this is a Material baseline role falling through.`,
+            `(budget ${SPREAD_BUDGET}). Only ShiftBrand.Container is allowed a hue here; this is a Material ` +
+            "baseline role falling through.",
         );
       }
     }

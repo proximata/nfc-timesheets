@@ -1,13 +1,13 @@
 package io.github.qwadratic.nfctimesheets.ui
 
 import android.Manifest
-import android.app.Activity
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,10 +26,10 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
@@ -976,23 +976,27 @@ private fun ShiftRunningScreen(
     val (hours, minutes) = ShiftSignal.elapsed(running.startTime, now)
 
     // Colour is the SECOND signal, never the only one: the state is spelled out in words
-    // directly under the clock. Theme colours, so this is legible in dark mode and under
-    // the system's high-contrast settings instead of being two hardcoded hex values.
+    // directly under the clock.
     //
-    // decision-57 §3: with `fun_shift_screen` ON these become FIXED literals from
-    // ui/Theme.kt's FunShift — a true black regardless of isSystemInDarkTheme(), so the
-    // screen is the same on every phone and a wallpaper still cannot reach it. Overdue
-    // keeps a red ON-colour in both variants: that is the one state that must never read
-    // as "fine", and it stays a colour AND a word.
+    // decision-60 §2: the RUNNING field is now a FIXED literal from ui/Theme.kt's
+    // ShiftBrand — a dark blue, the same on every phone, with or without the flag. It is
+    // deliberately NOT a MaterialTheme role and NOT derived from isSystemInDarkTheme():
+    // this screen has been repainted by somebody else's palette twice (Material You off
+    // the wallpaper, then Material's baseline purple through an unassigned role), and a
+    // constant is what makes that impossible. Which colour the constant is was never the
+    // part that mattered.
+    //
+    // OVERDUE IS UNTOUCHED by decision-60 — it keeps the error pair, because that is the
+    // one state that must never read as "fine", and it stays a colour AND a word. With
+    // `fun_shift_screen` ON the field is the animated gradient's base and overdue keeps a
+    // red ON-colour over it, exactly as it did over the old black.
     val container = when {
-        funTheme -> FunShift.Black
-        overdue -> MaterialTheme.colorScheme.errorContainer
-        else -> MaterialTheme.colorScheme.tertiaryContainer
+        overdue && !funTheme -> MaterialTheme.colorScheme.errorContainer
+        else -> ShiftBrand.Container
     }
     val onContainer = when {
-        funTheme -> if (overdue) FunShift.Overdue else FunShift.OnBlack
-        overdue -> MaterialTheme.colorScheme.onErrorContainer
-        else -> MaterialTheme.colorScheme.onTertiaryContainer
+        overdue -> if (funTheme) FunShift.Overdue else MaterialTheme.colorScheme.onErrorContainer
+        else -> ShiftBrand.OnContainer
     }
 
     // THE PERMISSION MOMENT. After the first successful clock-in, from the screen that is
@@ -1113,8 +1117,19 @@ private fun ShiftRunningScreen(
         //
         // OutlinedButton, not a filled one: the tap is still the way to finish, and the line
         // under it still says so.
+        //
+        // ITS BORDER AND ITS LABEL ARE NAMED HERE, and that is a BUG FIX, not styling (the
+        // 2026-08-29 cross-platform UX audit's B1). Material resolves an OutlinedButton's
+        // border and content from the colour scheme, which is chosen against the app's own
+        // surfaces — not against this screen's overridden `container`. On the field above
+        // the border came out invisible and the label low-contrast, so the ONE control a
+        // worker reaches for when their card will not read looked disabled. Both are now
+        // ShiftBrand values computed against ShiftBrand.Container (8.6:1 and 13.2:1), and
+        // against FunShift.Lift, the lightest the flag-ON animation ever gets (4.6:1).
         OutlinedButton(
             onClick = onStop,
+            border = BorderStroke(1.dp, ShiftBrand.Outline),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = ShiftBrand.OnContainer),
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 48.dp),
@@ -1141,8 +1156,12 @@ private fun ShiftRunningScreen(
         // closed by hand in the admin panel. A clock-in you cannot reverse is worse than no
         // clock-in at all.
         if (readiness != NfcReadiness.UNSUPPORTED) {
+            // Same border/content override, same reason, as the Stop button above: this
+            // one sits on the same overridden field and had the same invisible border.
             OutlinedButton(
                 onClick = { openIntent(Intent(context, ScanActivity::class.java)) },
+                border = BorderStroke(1.dp, ShiftBrand.Outline),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = ShiftBrand.OnContainer),
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp),
