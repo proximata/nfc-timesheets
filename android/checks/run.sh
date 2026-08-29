@@ -92,6 +92,22 @@ mkdir -p "$OUT_NFC"
 
 "$JAVA_BIN" -cp "$OUT_NFC:$JSON_JAR:$STDLIB" io.github.qwadratic.nfctimesheets.checks.Tag_writer_checkKt
 
+# THE FALLBACK READ. nfc/RawTagIo.kt is the other half of the same problem: it imports
+# android.nfc.tech and needs a physical Type 2 Tag, so nothing had ever executed it either —
+# and it is the code that runs ONLY once the platform reader has already failed, i.e. only on
+# the card that is already going wrong. checks/fake/RawCard.kt models a Type 2 memory (page
+# reads, and both behaviours at the end of it) so the collection loop can be driven off-device.
+# Its own output dir, for android-nfc-tech.kt's reason: android.nfc.* stays off every other
+# check's classpath.
+OUT_RAW=checks/.out-raw
+mkdir -p "$OUT_RAW"
+"$KOTLINC" -nowarn -d "$OUT_RAW" \
+  "$CORE"/TagLink.kt "$CORE"/NdefTag.kt "$CORE"/TagTlv.kt \
+  checks/fake/android-nfc.kt checks/fake/RawCard.kt checks/fake/android-nfc-tech-raw.kt \
+  "$NFC"/RawTagIo.kt checks/raw-tag-io-check.kt
+
+"$JAVA_BIN" -cp "$OUT_RAW:$STDLIB" io.github.qwadratic.nfctimesheets.checks.Raw_tag_io_checkKt
+
 # THE MANIFEST. Everything above this line reads Android-free Kotlin, which is what makes
 # it runnable on a laptop — and is also why none of it could see that the background push
 # was dead on every device for want of one <uses-permission> line (TASK-225). This last

@@ -40,7 +40,6 @@ object RawTagIo {
     private const val MAX_BYTES = 256
 
     private const val PAGE_BYTES = 4
-    private const val TERMINATOR: Byte = 0xFE.toByte()
 
     /** READ command, Type 2 Tag: returns 4 pages (16 bytes) starting at the given page. */
     private const val CMD_READ: Byte = 0x30
@@ -75,9 +74,23 @@ object RawTagIo {
     }
 
     /**
-     * Pages from [FIRST_DATA_PAGE] until the terminator, the ceiling, or the first refusal.
-     * A read that throws ENDS the collection and keeps what came before it, rather than
-     * discarding a message that is already complete.
+     * Pages from [FIRST_DATA_PAGE] until the ceiling or the first refusal. A read that throws
+     * ENDS the collection and keeps what came before it, rather than discarding a message that
+     * is already complete.
+     *
+     * WHERE THE DATA ENDS IS [TagTlv]'S QUESTION, NOT THIS LOOP'S (TASK-311). This used to stop
+     * at the first 16-byte chunk containing a 0xFE byte anywhere in it, as a cheap "we have
+     * passed the terminator" test. 0xFE is only a terminator AT A TLV BOUNDARY; inside another
+     * TLV's value it is ordinary data. So a card carrying, say, a Proprietary TLV with a 0xFE
+     * in it ahead of the NDEF TLV had its collection cut off mid-message, [TagTlv] correctly
+     * refused the truncated buffer, and the operator was told the card was unreadable — on
+     * exactly the foreign-written card this whole fallback exists to rescue. Reproduced in
+     * checks/raw-tag-io-check.kt § 2.
+     *
+     * The cost of dropping it is reads, not correctness: [MAX_BYTES] caps this at 16 page reads
+     * instead of the 5 our own message needs, and a card that rolls over past its last page
+     * simply appends repeats of bytes [TagTlv] has already walked past. It stops at the first
+     * refusal either way, which is what a NAKing card gives us at the end of memory.
      */
     private fun collect(read: (Int) -> ByteArray): ByteArray? {
         val out = ByteArrayOutputStream()
@@ -91,7 +104,6 @@ object RawTagIo {
             if (chunk.size < PAGE_BYTES) break
             out.write(chunk, 0, chunk.size)
             page += chunk.size / PAGE_BYTES
-            if (chunk.any { it == TERMINATOR }) break
         }
         return if (out.size() == 0) null else out.toByteArray()
     }
