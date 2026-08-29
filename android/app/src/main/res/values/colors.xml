@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#FF00325A</color>
+    <!--
+      The launcher icon's background LAYER. Neutral, and taken from docs/brand/DESIGN.md
+      section 3.1 (BgOverlayLight #F0F1F3) rather than invented: the company's mark is
+      achromatic (DESIGN.md section 1, saturation exactly zero), so its icon does not get a
+      colour it does not have. This used to be #00325A, a blue that came from nowhere and
+      sat behind a placeholder NFC wave.
+    -->
+    <color name="ic_launcher_background">#FFF0F1F3</color>
 </resources>

@@ -1,15 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Adaptive icon only. minSdk is 26, which is exactly where adaptive icons landed, so no
-  density-bucket PNGs are needed and none are committed — a placeholder binary is a thing
-  nobody remembers to replace.
+  THE REAL COMPANY MARK. The foreground used to be ic_launcher_foreground.xml, a hand-drawn
+  NFC wave that its own comment admitted "is not a brand". It is now the handshake from
+  Schimmer & Glanz Gebaeudereinigung GmbH's own logo (schimmer-wien.at), as density-bucket
+  PNGs, because a raster is what the source is.
 
-  ponytail: a plain NFC wave mark. CEILING: it is not a brand. The operator replaces
-  ic_launcher_foreground.xml (and this file, if they want a raster) as part of
-  white-labelling; nothing in the code refers to either.
+  WHY THE HANDSHAKE ALONE and not the whole logo: the source mark is a wordmark
+  ("SCHIMMER DIENSTLEISTUNGEN") over a handshake, and at 48dp the words are unreadable
+  mush. The full logo, wordmark included, is @drawable-nodpi/brand_mark.png and is what the
+  sign-in screen shows, where there is room for it.
+
+  REGENERATE, from the 270x270 source crop (270px up to 432px is a mild upscale and this
+  mark is flat, so it survives it):
+
+    for pair in "mdpi 108" "hdpi 162" "xhdpi 216" "xxhdpi 324" "xxxhdpi 432"; do
+      set  $pair; inner=$(python3 -c "print(round($2*0.60))")
+      ffmpeg -y -i schimmer-wien-fav-270.png -vf \
+        "crop=190:66:40:142,format=rgba,colorkey=0xFFFFFF:0.06:0.02,scale=$inner:-1:flags=lanczos,\
+pad=$2:$2:(ow-iw)/2:(oh-ih)/2:color=0x00000000" \
+        app/src/main/res/mipmap-$1/ic_launcher_foreground.png
+    done
+
+  (that inner loop's argument reset is written as "set" plus the pair; the literal two-dash
+  form XML comments forbid is what an XML comment forbids, not what bash needs.)
+
+  The crop takes the handshake and nothing else; colorkey knocks the white page out to
+  alpha so the mark sits on the background LAYER rather than on a white tile; 0.60 keeps it
+  inside the adaptive icon's 72/108 safe zone with room for every OEM mask.
+
+  NO COLOUR IS INVENTED. docs/brand/DESIGN.md section 1 measured this mark as achromatic
+  (saturation exactly zero; re-measured on this file at max channel spread 1 across 212
+  distinct values), so the background is a neutral from the document's own palette
+  (section 3.1 BgOverlayLight) and the mark keeps the greys it ships with.
 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
-    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_foreground" />
 </adaptive-icon>

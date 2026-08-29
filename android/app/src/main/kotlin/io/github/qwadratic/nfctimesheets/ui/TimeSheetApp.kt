@@ -8,6 +8,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -61,6 +63,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentType
@@ -165,11 +168,35 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
             .padding(28.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(
-            stringResource(R.string.app_name),
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.semantics { heading() },
-        )
+        // THE BRAND BLOCK. This screen used to open with the words "NFC TimeSheets",
+        // left-aligned, and no mark of any kind — the 2026-08-29 cross-platform UX audit's
+        // missing-brand finding. The mark is now the company's own
+        // (schimmer-wien.at, Schimmer & Glanz Gebaeudereinigung GmbH), the FULL logo
+        // including the wordmark, because there is room for it here; the launcher icon
+        // takes the handshake alone (see res/mipmap-anydpi-v26/ic_launcher.xml).
+        //
+        // It is a PNG in drawable-nodpi and sized in dp, so there is no density bucket to
+        // guess wrong: 240dp wide gives the wordmark room to be read on the narrowest
+        // phone this app supports.
+        //
+        // contentDescription = null, deliberately. The app's name is the very next
+        // element, as real text; describing the image would make TalkBack say it twice.
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Image(
+                painter = painterResource(R.drawable.brand_mark),
+                contentDescription = null,
+                modifier = Modifier.width(240.dp),
+            )
+            Text(
+                stringResource(R.string.app_name),
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.semantics { heading() },
+            )
+        }
 
         // AC4 (TASK-262): a genuine session expiry used to bounce here with an empty code
         // field and no explanation -- the field's own refusal line only renders after a
