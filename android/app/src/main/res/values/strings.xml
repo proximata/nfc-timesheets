@@ -49,6 +49,18 @@
          Betreiber-Code-Felder in WriteTagActivity/VerifyZoneActivity sind dafür entfallen:
          ein Formular, an einer Stelle. -->
     <string name="signin_operator_gate_intro">Bitte zuerst als Betreiber anmelden — mit dem Betreiber-Code oder per SMS an die hinterlegte Nummer.</string>
+    <!-- Dieselbe Zeile ohne den SMS-Halbsatz. SMS ist serverseitig freigeschaltet
+         (decision-59); wo sie es nicht ist, wird auch kein SMS-Feld angezeigt — dann darf
+         der Text keine Tür benennen, die es nicht gibt. -->
+    <string name="signin_operator_gate_intro_nosms">Bitte zuerst als Betreiber anmelden — mit dem Betreiber-Code.</string>
+    <!-- Überschrift des eigenen Betreiber-Bildschirms. Vorher war der Betreiber-Zugang eine
+         aufklappbare Sektion AUF dem Anmeldebildschirm: zwei Felder „Anmeldecode“ und zwei
+         Schaltflächen „Anmelden“ auf einer Seite, unterscheidbar nur am Absatz darüber. -->
+    <string name="operator_title">Betreiber</string>
+    <!-- Einstieg aus den Einstellungen, für angemeldete Mitarbeiter: vorher musste man sich
+         abmelden, um an die Betreiber-Funktionen zu kommen. Entspricht der iOS-Zeile in
+         SettingsView. -->
+    <string name="settings_operator_open">Tags beschreiben oder prüfen</string>
     <!-- Nur für den Fall, dass die Sitzung abläuft, WÄHREND einer der beiden
          Betreiber-Bildschirme offen ist. Kein zweites Code-Feld: der Weg zurück ist das
          Formular, das den Bildschirm überhaupt geöffnet hat. -->

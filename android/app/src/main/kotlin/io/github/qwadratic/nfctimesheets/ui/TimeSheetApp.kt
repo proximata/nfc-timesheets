@@ -8,6 +8,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -59,6 +61,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
@@ -152,6 +155,19 @@ fun TimeSheetApp(
 // -------------------------------------------------------------------------------------
 @Composable
 private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openIntent: (Intent) -> Unit) {
+    // THE OPERATOR DOOR IS A DESTINATION NOW, not an accordion on this screen (the
+    // 2026-08-29 cross-platform UX audit's worst finding). It used to be a RevealSection
+    // that expanded [OperatorSection] INLINE, below the worker's own form — so one scroll
+    // could hold TWO fields both labelled „Anmeldecode" and TWO buttons both labelled
+    // „Anmelden", told apart only by which paragraph sat above them. A worker who typed
+    // their enrolment code into the lower one got a refusal that said nothing about why.
+    // iOS has always had this as its own screen; this is Android matching it.
+    var showOperator by rememberSaveable { mutableStateOf(false) }
+    if (showOperator) {
+        OperatorScreen(model, openIntent) { showOperator = false }
+        return
+    }
+
     // Signing out does NOT delete a queued shift — it belongs to the worker who logged it
     // and goes out when that worker signs back in. So the count has to be on THIS screen,
     // or somebody hands the phone back believing their hours went with it (TASK-225).
@@ -244,7 +260,16 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
         // signin_code_help and nfc_first_run_note both still exist verbatim, just behind
         // one disclosure instead of printed automatically.
         RevealSection(label = {
-            Text(stringResource(R.string.signin_more_info), style = MaterialTheme.typography.bodyMedium)
+            // A chevron, because this row goes somewhere. It used to be bare text in a
+            // clickable Box, i.e. a caption that happened to be tappable.
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.signin_more_info),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Chevron()
+            }
         }) {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
@@ -265,20 +290,98 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
         // BEFORE any worker session exists (TASK-252's Android half - the shape iOS's
         // SettingsView bug had: a phone that is an operator's and NOTHING ELSE had no way
         // into WriteTagActivity/VerifyZoneActivity at all, because both buttons used to
-        // live only on the WORKER'S post-sign-in log screen). This whole block composes
+        // live only on the WORKER'S post-sign-in log screen). This row composes
         // unconditionally on SignInScreen -- reached from SessionState.SignedOut with no
-        // worker session required (TASK-267 AC4) -- and the reveal below is local Compose
-        // state only, so collapsing it by default touches no auth gate.
+        // worker session required (TASK-267 AC4) -- and it is a NAVIGATION control, so it
+        // touches no auth gate: the gate is on the screen it opens.
         HorizontalDivider(Modifier.padding(top = 8.dp))
-        RevealSection(label = {
-            Text(
-                stringResource(R.string.signin_operator_heading),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }) {
-            OperatorSection(model, openIntent)
-        }
+        RowLink(stringResource(R.string.signin_operator_heading)) { showOperator = true }
+    }
+}
+
+/**
+ * A text row that goes SOMEWHERE, with a chevron saying so.
+ *
+ * Both of this screen's non-form rows used to be bare [Text] inside a clickable [Box] — no
+ * affordance at all, so „Mehr Informationen" and the operator door read as captions rather
+ * than as controls (the 2026-08-29 cross-platform UX audit). The chevron is a drawn glyph
+ * and not an icon dependency: nothing else in this app uses `material-icons`, and one
+ * triangle is not worth adding it for.
+ *
+ * ponytail: hand-drawn chevron. CEILING: a single ‹› shape at one size. UPGRADE PATH: if a
+ * second icon is ever needed, take the dependency and delete this.
+ */
+@Composable
+private fun RowLink(label: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(role = Role.Button, onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Chevron()
+    }
+}
+
+/** The ›. `clearAndSetSemantics`: the row it sits in is already one button with a label. */
+@Composable
+private fun Chevron() {
+    val colour = MaterialTheme.colorScheme.onSurfaceVariant
+    Canvas(
+        Modifier
+            .padding(start = 12.dp)
+            .size(width = 10.dp, height = 18.dp)
+            .clearAndSetSemantics { },
+    ) {
+        val w = size.width
+        val h = size.height
+        drawLine(colour, Offset(w * 0.15f, h * 0.15f), Offset(w * 0.85f, h * 0.5f), strokeWidth = w * 0.2f)
+        drawLine(colour, Offset(w * 0.85f, h * 0.5f), Offset(w * 0.15f, h * 0.85f), strokeWidth = w * 0.2f)
+    }
+}
+
+/**
+ * THE OPERATOR DOOR, AS ITS OWN SCREEN (decision-54 §4, restructured 2026-08-29).
+ *
+ * Reached from TWO places and composed the same way from both: [SignInScreen]'s row, for a
+ * phone that is an operator's and nothing else, and [SettingsScreen]'s row, for a worker
+ * who is already signed in and must NOT have to sign out to write or test a card. That
+ * second door is the audit's B3: before it, a signed-in worker's only operator entry was
+ * an item on the idle log list, which is not there at all on a phone whose NFC is off — so
+ * "turn NFC on" and "write the tag that turns NFC on into something useful" were mutually
+ * exclusive.
+ *
+ * NOTHING ABOUT THE GATE ITSELF CHANGED: [OperatorSection] is the same composable, against
+ * the same /auth/operator-* routes, on the same second cookie jar. What changed is that it
+ * is no longer rendered on the same scroll as the worker's own identical-looking form.
+ */
+@Composable
+private fun OperatorScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Unit, onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .verticalScroll(rememberScrollState())
+            .padding(28.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        // Explicit control, not gesture-only (house rule, and the same shape MyHoursScreen
+        // uses).
+        TextButton(onClick = onBack) { Text(stringResource(R.string.back)) }
+        Text(
+            stringResource(R.string.operator_title),
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.semantics { heading() },
+        )
+        OperatorSection(model, openIntent)
     }
 }
 
@@ -313,8 +416,17 @@ private fun OperatorSection(model: TimeSheetViewModel, openIntent: (Intent) -> U
 
     if (!ready) {
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            // NEVER NAME A DOOR THAT IS NOT THERE (the 2026-08-29 audit's B2). This
+            // sentence said "… mit dem Betreiber-Code ODER PER SMS an die hinterlegte
+            // Nummer" unconditionally, while the SMS control it promises is gated on
+            // `smsAvailable` (decision-59) and is simply absent on a build or a server
+            // where SMS is off. An operator then read about an SMS option, looked for it,
+            // and found nothing. Same flag, same composable, one condition.
             Text(
-                stringResource(R.string.signin_operator_gate_intro),
+                stringResource(
+                    if (smsAvailable) R.string.signin_operator_gate_intro
+                    else R.string.signin_operator_gate_intro_nosms,
+                ),
                 style = MaterialTheme.typography.bodyMedium,
             )
             // THE SAME FORM the worker uses, six lines up -- not a lookalike. Only the
@@ -846,15 +958,16 @@ private fun LogScreen(
                         .heightIn(min = 48.dp),
                 ) { Text(stringResource(R.string.scan_open)) }
             }
-            // WRITE A TAG / THE TEST SCAN (decision-45, decision-47), and since decision-54
-            // §4 behind the operator gate rather than loose on the screen: a signed-in WORKER
-            // is not an operator, and the two links used to be reachable by anyone who got
-            // this far. Same [OperatorSection] as the sign-in screen — not a lookalike — so
-            // there is exactly one place in the app that launches either activity, and a
-            // cleaner holding a phone to a wall is never one mis-tap away from a screen that
-            // OVERWRITES the tag they are standing at. Nothing behind either button can open
-            // or close a shift — android/checks/verify-no-shift-check.sh pins that.
-            item { OperatorSection(model, openIntent) }
+            // WRITE A TAG / THE TEST SCAN used to be a THIRD copy of [OperatorSection],
+            // inline on this list and inside this `readiness != UNSUPPORTED` branch. It
+            // moved to Einstellungen (the 2026-08-29 audit's B3), for two reasons. The
+            // reachability one: gated on the NFC chip, it was absent exactly on the phone
+            // whose NFC is off — so a signed-in worker could not reach the operator door at
+            // all without signing out first. The ranking one: this is the tap screen, and
+            // an operator's tool sitting between the scan button and the recent list
+            // outranked the instruction that is the actual product. Nothing about the gate
+            // changed — same composable, same routes, same second cookie jar, and nothing
+            // behind it can open or close a shift (android/checks/verify-no-shift-check.sh).
         }
 
         if (log.unresolved.isNotEmpty()) {
@@ -877,20 +990,6 @@ private fun LogScreen(
                     }
                 }
             }
-        }
-
-        // START WITHOUT A TAG (decision-56). A TextButton, under the scan button and above
-        // everything else: deliberately the quietest control on the screen, because the
-        // product is still the tap and this is the fallback for a broken or missing card.
-        // Shown on EVERY phone, including one with no NFC chip at all — that phone is
-        // exactly the one that cannot scan and previously could not clock in.
-        item {
-            TextButton(
-                onClick = { showManualStart = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp),
-            ) { Text(stringResource(R.string.manual_start_open)) }
         }
 
         item { SectionHeading(R.string.log_recent_section) }
@@ -920,6 +1019,26 @@ private fun LogScreen(
                     .fillMaxWidth()
                     .padding(vertical = 24.dp),
             )
+        }
+
+        // START WITHOUT A TAG (decision-56), and it sits HERE — directly under the tap
+        // instruction — rather than above the recent list where it used to be.
+        //
+        // The old position ranked it above the instruction it is the fallback FOR, and a
+        // TextButton renders in the accent colour, so the loudest thing on the idle screen
+        // was the escape hatch. The 2026-08-29 audit's proposed order is
+        // state -> subject -> time -> metric -> primary instruction -> secondary action ->
+        // banners, and iOS already places its equivalent as "clearly secondary". The
+        // control itself is unchanged: same dialog, same confirmation, same manual_start
+        // stamp, and still shown on EVERY phone including one with no NFC chip — that phone
+        // is exactly the one that cannot scan and could once not clock in at all.
+        item {
+            TextButton(
+                onClick = { showManualStart = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.manual_start_open)) }
         }
 
         item {
@@ -2170,6 +2289,23 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
         return
     }
 
+    // THE OPERATOR DOOR FOR A WORKER WHO IS ALREADY SIGNED IN (the 2026-08-29 audit's B3,
+    // mirroring iOS's existing "Write or test tags" row in SettingsView). Before this, the
+    // only in-app operator entry for a signed-in worker was an item on the idle log list,
+    // itself gated on the phone having an NFC chip — so on a phone with NFC off the answer
+    // was "sign out first", which throws away the session and, with it, the ability to get
+    // back in without a fresh enrolment code from the office. Signing out to write a tag
+    // is not a workflow; it is a dead end with a cost.
+    //
+    // It opens exactly the same [OperatorScreen] the sign-in screen's row opens, so there
+    // is one operator gate in this app and it is still a gate: reaching this row proves
+    // somebody is a WORKER, and proves nothing at all about being an operator.
+    var showOperator by rememberSaveable { mutableStateOf(false) }
+    if (showOperator) {
+        OperatorScreen(model, openIntent) { showOperator = false }
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -2213,6 +2349,9 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
                 .fillMaxWidth()
                 .heightIn(min = 48.dp),
         ) { Text(stringResource(R.string.myhours_open)) }
+
+        HorizontalDivider()
+        RowLink(stringResource(R.string.settings_operator_open)) { showOperator = true }
 
         HorizontalDivider()
         PushSection(model)

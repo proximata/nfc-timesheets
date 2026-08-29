@@ -25,6 +25,18 @@
     <!-- decision-54 §4: the two buttons are no longer reachable directly — without an
          operator session the same form as above appears first, pointed at /auth/operator-*. -->
     <string name="signin_operator_gate_intro">Sign in as an operator first — with the operator code, or by SMS to the number on file.</string>
+    <!-- The same line without the SMS clause. SMS is enabled server-side (decision-59);
+         where it is not, no SMS control is drawn either, so the text must not name a door
+         that is not there. -->
+    <string name="signin_operator_gate_intro_nosms">Sign in as an operator first — with the operator code.</string>
+    <!-- Heading of the operator's own screen. It used to be an expanding section ON the
+         sign-in screen: two fields both labelled "Sign-in code" and two buttons both
+         labelled "Sign in" on one scroll. -->
+    <string name="operator_title">Operator</string>
+    <!-- Entry point from Settings, for a worker who is already signed in: reaching the
+         operator features used to require signing out first. Mirrors the iOS row in
+         SettingsView. -->
+    <string name="settings_operator_open">Write or test tags</string>
     <string name="operator_session_expired">Your operator sign-in has expired. This screen no longer reads a card. Close it and sign in as an operator again.</string>
 
     <string name="signin_sms_intro">Your admin has a phone number on file for you? You can also sign in with it by SMS.</string>
