@@ -414,12 +414,18 @@ async function adminData({ query }) {
     all(
       `SELECT ${WORKER_COLS.split(", ").map((c) => `w.${c}`).join(", ")},
               pi.phone_e164,
+              -- decision-64 section 6: the LOGIN ADDRESS (email_identities, 020), a THIRD
+              -- fact, distinct from both w.email (the dead Apple column, still selected above
+              -- by WORKER_COLS and still shown as contact data) and pi.phone_e164. Aliased
+              -- login_email so the two can never be confused on the wire.
+              ei.email     AS login_email,
               s.status     AS sms_last_status,
               s.reason     AS sms_last_reason,
               s.created_at AS sms_last_at,
               COALESCE(t.n, 0)::int AS sms_count
          FROM workers w
          LEFT JOIN phone_identities pi ON pi.worker_id = w.id
+         LEFT JOIN email_identities ei ON ei.worker_id = w.id
          LEFT JOIN LATERAL (
            SELECT status, reason, created_at FROM sms_deliveries
             WHERE worker_id = w.id ORDER BY created_at DESC LIMIT 1
@@ -434,9 +440,11 @@ async function adminData({ query }) {
     // query below — adding one here and not there would be a new inconsistency, not a fix.
     all(
       `SELECT o.id, o.name, o.active, o.created_at, o.enrolment_code_expires_at, o.enrolment_code_redeemed_at,
-              pi.phone_e164, pi.worker_id AS linked_worker_id, w.name AS linked_worker_name
+              pi.phone_e164, ei.email AS login_email,
+              pi.worker_id AS linked_worker_id, w.name AS linked_worker_name
          FROM operators o
          LEFT JOIN phone_identities pi ON pi.operator_id = o.id
+         LEFT JOIN email_identities ei ON ei.operator_id = o.id
          LEFT JOIN workers w ON w.id = pi.worker_id
         ORDER BY o.active DESC, o.name`,
     ),
@@ -979,6 +987,91 @@ async function deleteWorkerPhone({ params }) {
  * one-statement version answering `500 ... violates check constraint
  * "phone_identities_claims"`.
  */
+/**
+ * PUT /admin/workers/:id/email {email} -> 200 {worker:{id}, login_email}
+ *
+ * decision-64 §6: the email door is ADMIN-PROVISIONED, exactly as the login phone number is
+ * — not self-service. This is `putWorkerPhone` above with `email_identities` where
+ * `phone_identities` was, and it is on `/email` for the same reason that one is on `/phone`.
+ *
+ * IT DOES NOT TOUCH `workers.email`. That column is the vestigial Sign-in-with-Apple
+ * eligibility field (002, retired by decision-50) and decision-64 leaves it dead and
+ * unrelated — `POST /admin/workers` still writes it and nothing reads it. The LOGIN address
+ * is `email_identities.email` and nowhere else, so the two are allowed to disagree and the
+ * panel shows both, precisely as it does for `workers.phone` vs `phone_identities.phone_e164`.
+ *
+ *   409 email_claimed names NOBODY — anti-enumeration, the same posture putWorkerPhone and
+ *   createOperator already take.
+ */
+async function putWorkerEmail({ params, body }) {
+  const workerId = v.id(params.id, "id");
+  const email = v.identityEmail(body.email, "email");
+
+  const worker = await one("SELECT id FROM workers WHERE id = $1 AND active", [workerId]);
+  if (!worker) fail(404, "unknown_worker");
+
+  // REFUSE BEFORE RELEASING, verbatim putWorkerPhone's reasoning: the worker's own previous
+  // claim has to go before the new one can be inserted (`worker_id` is UNIQUE — one person,
+  // one login address), and releasing first would mean a refused claim left the worker with
+  // no address at all. Any row held by ANYBODY else refuses — including one held by an
+  // OPERATOR, which is where this diverges from putWorkerPhone's adopt-the-other-half branch:
+  // 020’s `email_identities_one_claim` CHECK makes a two-role row unrepresentable
+  // (decision-64 §1 says exactly one). That ceiling is written down in 020’s header.
+  const held = await one("SELECT worker_id, operator_id FROM email_identities WHERE email = $1", [email]);
+  if (held && (held.operator_id !== null || Number(held.worker_id) !== workerId)) fail(409, "email_claimed");
+
+  await releaseWorkerEmail(workerId, email);
+
+  try {
+    // `worker_id = $2` on the conflict branch keeps re-saving the SAME address idempotent
+    // instead of answering 409 for a no-op; it cannot STEAL one, because a row held by
+    // anyone else has a different (non-NULL) worker_id or an operator_id and matches nothing.
+    const claimed = await one(
+      `INSERT INTO email_identities (email, worker_id) VALUES ($1, $2)
+         ON CONFLICT (email) DO UPDATE SET worker_id = $2
+            WHERE email_identities.worker_id = $2
+       RETURNING email`,
+      [email, workerId],
+    );
+    if (!claimed) fail(409, "email_claimed"); // lost a race between the SELECT and here
+
+    return { status: 200, body: { worker: { id: workerId }, login_email: email } };
+  } catch (err) {
+    // The database, not this function, is what makes the collision impossible. Same opaque
+    // answer, naming nobody.
+    if (err?.code === "23505") fail(409, "email_claimed");
+    throw err;
+  }
+}
+
+/**
+ * DELETE /admin/workers/:id/email -> 200. Releases the claim. Idempotent and 200 whether or
+ * not there was one — same posture as deleteWorkerPhone and revokeEnrolmentCode.
+ */
+async function deleteWorkerEmail({ params }) {
+  const workerId = v.id(params.id, "id");
+  await releaseWorkerEmail(workerId, null);
+  return { status: 200, body: { worker: { id: workerId }, login_email: null } };
+}
+
+/**
+ * ONE STATEMENT, not `releaseWorkerPhone`'s two, and the difference is a constraint rather
+ * than a preference. 007's phone row may be half-owned by an operator, so nulling the worker
+ * half is sometimes right and sometimes raises 23514 — hence two statements there. 020’s
+ * `email_identities_one_claim` CHECK admits EXACTLY ONE owner, so a worker's row is never
+ * also an operator's and a plain DELETE is always correct. A row owned by nobody is
+ * unrepresentable either way, so there is no litter to sweep (decision-45's named cleanup).
+ *
+ * The live challenges go with it: `email_challenges.email` is ON DELETE CASCADE (020), so a
+ * code minted against a released claim cannot outlive it.
+ */
+async function releaseWorkerEmail(workerId, keepEmail) {
+  await query(`DELETE FROM email_identities WHERE worker_id = $1 AND ($2::text IS NULL OR email <> $2)`, [
+    workerId,
+    keepEmail,
+  ]);
+}
+
 async function releaseWorkerPhone(workerId, keepPhone) {
   await query(
     `DELETE FROM phone_identities
@@ -1111,6 +1204,66 @@ async function deleteOperator({ params }) {
  * inactive operator, so reactivate-then-issue-a-code is the deliberate two-click path
  * (TASK-219's own "NOT DECIDED HERE" note).
  */
+/**
+ * PUT /admin/operators/:id/email {email} -> 200 {operator:{id}, login_email}
+ * DELETE /admin/operators/:id/email    -> 200 {operator:{id}, login_email:null}
+ *
+ * decision-64 §6, and byte-for-byte `putWorkerEmail`/`deleteWorkerEmail` against
+ * `email_identities.operator_id`. `operators` gains NO email column — decision-64 §1 routes
+ * email through the registry for the same reason 011 refused a `workers.phone_e164`: a second
+ * namespace is a collision the PRIMARY KEY would no longer catch.
+ *
+ * THESE TWO EXIST WHERE THERE IS NO `PUT .../phone` FOR AN OPERATOR because the phone is set
+ * at creation and createOperator has no update branch ("a phone that needs to change is a new
+ * identity claim"). An address is not the operator's identity here — it is a door added to an
+ * existing one — so it has to be editable after the fact, or an operator created before this
+ * shipped could never be given one.
+ *
+ *   404 unknown_operator | 409 email_claimed (naming nobody) | 422 invalid_email
+ */
+async function putOperatorEmail({ params, body }) {
+  const operatorId = v.id(params.id, "id");
+  const email = v.identityEmail(body.email, "email");
+
+  const operator = await one("SELECT id FROM operators WHERE id = $1 AND active", [operatorId]);
+  if (!operator) fail(404, "unknown_operator");
+
+  const held = await one("SELECT worker_id, operator_id FROM email_identities WHERE email = $1", [email]);
+  if (held && (held.worker_id !== null || Number(held.operator_id) !== operatorId)) fail(409, "email_claimed");
+
+  await releaseOperatorEmail(operatorId, email);
+
+  try {
+    const claimed = await one(
+      `INSERT INTO email_identities (email, operator_id) VALUES ($1, $2)
+         ON CONFLICT (email) DO UPDATE SET operator_id = $2
+            WHERE email_identities.operator_id = $2
+       RETURNING email`,
+      [email, operatorId],
+    );
+    if (!claimed) fail(409, "email_claimed");
+
+    return { status: 200, body: { operator: { id: operatorId }, login_email: email } };
+  } catch (err) {
+    if (err?.code === "23505") fail(409, "email_claimed");
+    throw err;
+  }
+}
+
+async function deleteOperatorEmail({ params }) {
+  const operatorId = v.id(params.id, "id");
+  await releaseOperatorEmail(operatorId, null);
+  return { status: 200, body: { operator: { id: operatorId }, login_email: null } };
+}
+
+/** One statement, for the reason releaseWorkerEmail gives: 020 admits exactly one owner. */
+async function releaseOperatorEmail(operatorId, keepEmail) {
+  await query(`DELETE FROM email_identities WHERE operator_id = $1 AND ($2::text IS NULL OR email <> $2)`, [
+    operatorId,
+    keepEmail,
+  ]);
+}
+
 async function reactivateOperator({ params }) {
   const operatorId = v.id(params.id, "id");
   const row = await one("UPDATE operators SET active = true WHERE id = $1 RETURNING id, active", [operatorId]);
@@ -2637,6 +2790,12 @@ export const adminRoutes = [
   { method: "POST", path: "/admin/workers/:id/enrolment-code/sms", auth: "admin", handler: sendEnrolmentCodeBySms },
   { method: "PUT", path: "/admin/workers/:id/phone", auth: "admin", handler: putWorkerPhone },
   { method: "DELETE", path: "/admin/workers/:id/phone", auth: "admin", handler: deleteWorkerPhone },
+  // decision-64 §6. The LOGIN ADDRESS (email_identities), never `workers.email` — see
+  // putWorkerEmail's docblock. Admin-only, exactly like the /phone pair above it.
+  { method: "PUT", path: "/admin/workers/:id/email", auth: "admin", handler: putWorkerEmail },
+  { method: "DELETE", path: "/admin/workers/:id/email", auth: "admin", handler: deleteWorkerEmail },
+  { method: "PUT", path: "/admin/operators/:id/email", auth: "admin", handler: putOperatorEmail },
+  { method: "DELETE", path: "/admin/operators/:id/email", auth: "admin", handler: deleteOperatorEmail },
   { method: "GET", path: "/admin/sms-status", auth: "admin", handler: smsStatusRoute },
   // decision-45. POST /operator/workers is deliberately NOT in this list — see the
   // comment above createOperator.

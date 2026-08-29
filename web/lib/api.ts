@@ -193,6 +193,14 @@ export type Worker = {
    */
   phone_e164: string | null
   /**
+   * THE LOGIN ADDRESS (`email_identities`, decision-64) — a THIRD fact, and in particular a
+   * DIFFERENT one from `email` above. That one is `workers.email`, the vestigial
+   * Sign-in-with-Apple eligibility column (migration 002) that decision-50 retired and
+   * decision-64 explicitly leaves dead; nothing reads it for login. THIS is the address an
+   * email sign-in code goes to. Null = nobody has claimed one for this worker.
+   */
+  login_email: string | null
+  /**
    * WHAT THE LAST SMS ATTEMPT DID (append-only `sms_deliveries`, decision-48 §2.2). This is
    * what makes a stored "preferred channel" unnecessary: it is a FACT about what happened,
    * not an intention. Null on all three = no attempt has ever been made for this worker.
@@ -515,6 +523,13 @@ export type FeatureFlag = {
  */
 export const SMS_LOGIN_FLAG = 'sms_login'
 
+/**
+ * decision-64 §2, the same shape and the same reason as `SMS_LOGIN_FLAG` above. Must match
+ * server/db/migrations/021_email_login_flag.sql. SEEDED OFF, and no box holds a
+ * RESEND_API_KEY either, so the email door is inert today on both counts.
+ */
+export const EMAIL_LOGIN_FLAG = 'email_login'
+
 export function fetchFlags(signal?: AbortSignal): Promise<FeatureFlag[]> {
   return apiFetch<{ flags: FeatureFlag[] }>('/admin/flags', { signal }).then((data) => data.flags)
 }
@@ -629,6 +644,31 @@ export function setWorkerLoginPhone(
 /** `DELETE /admin/workers/:id/phone`. Idempotent: releasing an unclaimed number is a 200. */
 export function clearWorkerLoginPhone(workerId: number, signal?: AbortSignal): Promise<void> {
   return apiFetch<void>(`/admin/workers/${workerId}/phone`, { method: 'DELETE', signal }).then(
+    () => undefined,
+  )
+}
+
+/**
+ * `PUT /admin/workers/:id/email` — claims a LOGIN ADDRESS for this worker
+ * (`email_identities`, decision-64 §6), the one an email sign-in code goes to. NEVER
+ * `workers.email` (the dead Apple column `WorkerInput.email` still writes): the two are
+ * separate facts on separate routes, exactly like `phone` vs the login phone above.
+ * `409 email_claimed` names nobody — the same anti-enumeration posture.
+ */
+export function setWorkerLoginEmail(
+  workerId: number,
+  email: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  return apiFetch<{ worker: { id: number }; login_email: string }>(
+    `/admin/workers/${workerId}/email`,
+    { method: 'PUT', body: { email }, signal },
+  ).then((data) => data.login_email)
+}
+
+/** `DELETE /admin/workers/:id/email`. Idempotent: releasing an unclaimed address is a 200. */
+export function clearWorkerLoginEmail(workerId: number, signal?: AbortSignal): Promise<void> {
+  return apiFetch<void>(`/admin/workers/${workerId}/email`, { method: 'DELETE', signal }).then(
     () => undefined,
   )
 }
@@ -751,6 +791,12 @@ export type Operator = {
   active: boolean
   created_at: string
   phone_e164: string | null
+  /**
+   * THE LOGIN ADDRESS (`email_identities`, decision-64 §6). `operators` gains NO email
+   * column — the registry is the single namespace, for the reason 011 refused a second
+   * phone column. Null = none claimed, which is every operator until an admin types one.
+   */
+  login_email: string | null
   /** Set only when this same phone also claims a `workers` row (decision-45 §3). */
   linked_worker_id: number | null
   linked_worker_name: string | null
@@ -787,6 +833,30 @@ export function saveOperator(input: OperatorInput, signal?: AbortSignal): Promis
     body: input,
     signal,
   }).then((data) => data.operator)
+}
+
+/**
+ * `PUT`/`DELETE /admin/operators/:id/email` — the operator half of the pair above, same
+ * contract, same 409. These exist where no `PUT .../phone` does for an operator because the
+ * phone IS the operator's identity and is set at creation, whereas an address is a door
+ * added to an existing one and must be editable after the fact (the routes' own docblock).
+ */
+export function setOperatorLoginEmail(
+  operatorId: number,
+  email: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  return apiFetch<{ operator: { id: number }; login_email: string }>(
+    `/admin/operators/${operatorId}/email`,
+    { method: 'PUT', body: { email }, signal },
+  ).then((data) => data.login_email)
+}
+
+export function clearOperatorLoginEmail(operatorId: number, signal?: AbortSignal): Promise<void> {
+  return apiFetch<void>(`/admin/operators/${operatorId}/email`, {
+    method: 'DELETE',
+    signal,
+  }).then(() => undefined)
 }
 
 /** Soft delete (`active = false`) — mirrors `DELETE /admin/operators/:id` exactly. */

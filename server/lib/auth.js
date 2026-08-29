@@ -485,9 +485,60 @@ export async function checkSmsRequestRate(ip) {
   spendRolling(`smsreq:${ip}`, [{ windowMs: SMS_REQUEST_WINDOW_MS, limit }]);
 }
 
-/** Throws 429 once the process has spent its per-minute OTP verification budget. */
+/**
+ * Throws 429 once the process has spent its per-minute OTP verification budget.
+ *
+ * ROLE-BLIND AND CHANNEL-BLIND ON PURPOSE, and shared by all six verify routes (worker and
+ * operator, SMS and email): the question it bounds is "how fast may this process be made to
+ * check a guess", which has neither a role nor a carrier in it. Splitting it per channel
+ * would simply double the ceiling for an attacker who posts to both.
+ */
 export function checkGlobalOtpVerifyRate() {
   spendRolling("otp:verify", OTP_VERIFY_RULES);
+}
+
+// ---- EMAIL (decision-64) ----------------------------------------------------------
+//
+// OWN BUCKETS, NEVER THE SMS ONES, for the reason SMS_SPEND_RULES gives for not sharing the
+// enrolment counter: these are sized against a DIFFERENT bill and a different abuse shape,
+// and sharing would mean a flood of email requests could stop a real worker from ever
+// receiving a text (or the reverse). The NUMBERS are the SMS ones unchanged — an email is
+// cheaper than an SMS, so the SMS ceiling is a safe over-tight bound, and picking a second,
+// looser set of figures would need arithmetic nobody has done. ponytail CEILING: email is
+// rate-limited as if it cost 4 cents a message. UPGRADE PATH: measured, separate numbers the
+// day email volume is real.
+const EMAIL_SPEND_RULES = SMS_SPEND_RULES;
+
+/** Throws 429 once the process has spent its rolling email budget. Call BEFORE minting. */
+export function checkGlobalEmailSpend() {
+  spendRolling("email:spend", EMAIL_SPEND_RULES);
+}
+
+/**
+ * Throws 429 once this SOURCE ADDRESS has asked for too many email codes in the last 5
+ * minutes. Reads the SAME admin-tunable `sms_otp_requests_per_5min` setting `checkSmsRequestRate`
+ * reads — one knob for "how many sign-in codes may one source address ask for", because that
+ * is one question and a second key would be a second thing to remember to turn down during an
+ * incident. The BUCKET is separate (`emailreq:`), so the two channels cannot exhaust each
+ * other. Same clamp: a NULL, a float or an unparseable row ALL fall back to the default —
+ * this is a security control and must never resolve to unlimited.
+ */
+export async function checkEmailRequestRate(ip) {
+  const row = await one("SELECT value FROM app_settings WHERE key = $1", [SMS_OTP_REQUESTS_KEY]);
+  const n = row ? Number(row.value) : Number.NaN;
+  const limit =
+    Number.isSafeInteger(n) && n >= SMS_OTP_REQUESTS_MIN && n <= SMS_OTP_REQUESTS_MAX ? n : SMS_OTP_REQUESTS_DEFAULT;
+  spendRolling(`emailreq:${ip}`, [{ windowMs: SMS_REQUEST_WINDOW_MS, limit }]);
+}
+
+/**
+ * Test seam only — clears the GLOBAL enrolment ceiling and nothing else, so a case that is
+ * exercising the PER-IP bucket can spend more than GLOBAL_LIMIT attempts without the shared
+ * ceiling (5/min since decision-63) answering first and hiding what it meant to test.
+ */
+export function resetGlobalEnrolmentRate() {
+  globalWindowStart = 0;
+  globalCount = 0;
 }
 
 /** Test seam only — check-api.js resets between cases. */

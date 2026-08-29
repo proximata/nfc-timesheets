@@ -35,6 +35,8 @@ import { verifyIdentityToken } from "../lib/apple.js";
 import {
   OPERATOR_SESSION_COOKIE,
   WORKER_SESSION_COOKIE,
+  checkEmailRequestRate,
+  checkGlobalEmailSpend,
   checkGlobalEnrolmentRate,
   checkGlobalOtpVerifyRate,
   checkGlobalSmsSpend,
@@ -52,6 +54,7 @@ import {
   sessionCookie,
 } from "../lib/auth.js";
 import { one, query } from "../lib/db.js";
+import { emailConfigured, renderOtpEmail, sendEmail } from "../lib/email.js";
 import { DECOY_PRESENTED, DECOY_STORED, normaliseCode } from "../lib/enrolment.js";
 import { fail } from "../lib/http.js";
 import {
@@ -315,7 +318,28 @@ async function smsLoginEnabled() {
  * button that would answer 503 the moment it is pressed.
  */
 async function capabilities() {
-  return { status: 200, body: { sms: smsConfigured() && (await smsLoginEnabled()) } };
+  return {
+    status: 200,
+    body: {
+      sms: smsConfigured() && (await smsLoginEnabled()),
+      // decision-64 §5, ADDITIVE: a field beside `sms`, never a replacement for it, and TRUE
+      // ONLY when a provider is configured AND the flag is on — the identical two-gate rule.
+      // It reads FALSE on every box today for BOTH reasons (no RESEND_API_KEY anywhere, and
+      // migration 021 seeds `email_login` disabled), so no client's behaviour changes.
+      email: emailConfigured() && (await emailLoginEnabled()),
+    },
+  };
+}
+
+/**
+ * The `email_login` flag (decision-64 §2, migration 021) — the exact shape of
+ * `smsLoginEnabled()` above, against its own row. Read PER REQUEST, never cached, so a toggle
+ * on the admin Flags page is believed by the very next call. A MISSING ROW READS AS OFF
+ * (`?? false`, never `?? true`): a box whose migration has not run must not offer a door.
+ */
+async function emailLoginEnabled() {
+  const row = await one("SELECT enabled FROM feature_flags WHERE name = $1", ["email_login"]);
+  return row?.enabled === true;
 }
 
 /**
@@ -788,6 +812,305 @@ async function operatorSmsVerify({ body, ip }) {
   };
 }
 
+// ===================================================================================
+// EMAIL — THE THIRD DOOR (decision-64). Four routes, and every one of them is the SMS route
+// above with `email` where `phone` was.
+//
+// WHAT IS DELIBERATELY IDENTICAL, clause for clause, because decision-64 §3 says "mirroring
+// the SMS OTP shape exactly" and every one of these was argued for once already:
+//   * the TWO-GATE 503 (`emailConfigured()` AND the `email_login` flag), before any work;
+//   * decision-51's disclosure posture — 404 for an address this server does not recognise,
+//     422 for a SHAPE failure on /request, and NEVER a 422 on /verify (there a malformed
+//     address and a wrong code must be indistinguishable, or the shape check becomes a free
+//     existence probe);
+//   * three limiters on /request (per-IP, process-wide spend, spent BEFORE the database is
+//     touched — a refusal must be cheaper than the work it refuses) and two on /verify
+//     (guessing must never spend the SEND budget);
+//   * EXACTLY ONE constant-time comparison on every path, hit or miss, against the same
+//     per-process decoys;
+//   * a wrong answer BURNS AN ATTEMPT on the live challenge, or the 5-attempt cap is fiction;
+//   * single use DECIDED BY THE DATABASE — one UPDATE whose predicate is repeated in full,
+//     so the loser of a race updates nothing;
+//   * the code is NEVER WRITTEN DOWN: a local here, a SHA-256 in the database, dropped from
+//     every Sentry event by lib/scrub.js.
+//
+// WHAT DIFFERS, and it is only this: the registry is `email_identities` (020) and the
+// challenge table is `email_challenges` (020). There is NO delivery log — 011's
+// sms_deliveries has no email counterpart and decision-64 does not ask for one, so a send
+// result is recorded nowhere and, exactly as on the SMS routes, NEVER changes the response.
+//
+// THE ENROLMENT CODE AND THE SMS DOOR ARE UNAFFECTED BY ALL FOUR. Nothing here touches
+// workers/operators.enrolment_code_*, nothing spends `checkGlobalEnrolmentRate` or
+// `checkGlobalSmsSpend`, and every bucket below is its own.
+// ===================================================================================
+
+/**
+ * POST /auth/email/request {email} -> 202 {status:"accepted"}, or 404 for an address this
+ * server does not recognise as an ACTIVE WORKER.
+ *
+ *   202 {status:"accepted"}          resolves to an ACTIVE worker; a message was attempted
+ *   404 {error:"unknown_email"}      no such address, an operator-only row, or a DEACTIVATED
+ *                                    worker — the three collapse to one answer on purpose
+ *   422 {error:"invalid_email"}      SHAPE ONLY — never existence
+ *   429 {error:"too_many_attempts"}
+ *   503 {error:"email_not_configured"}
+ */
+async function emailRequest({ body, ip }) {
+  if (!emailConfigured() || !(await emailLoginEnabled())) fail(503, "email_not_configured");
+
+  // Shape, in the SAME normaliser the admin claim route uses (lib/validate.js identityEmail)
+  // — lower-cased, so what is typed here and what an admin stored agree byte for byte.
+  const email = v.identityEmail(body.email, "email");
+
+  // Spent BEFORE the database is touched (decision-51 §6): a refusal must be cheaper than the
+  // work it refuses, including for an address that turns out to be unknown.
+  await checkEmailRequestRate(ip);
+  checkGlobalEmailSpend();
+
+  // WORKER-ONLY: an email_identities row that carries only `operator_id`, and a DEACTIVATED
+  // worker's row, both fall through to the same 404 as a genuinely unknown address.
+  const target = await one(
+    `SELECT w.id, w.name
+       FROM email_identities ei
+       JOIN workers w ON w.id = ei.worker_id
+      WHERE ei.email = $1 AND w.active`,
+    [email],
+  );
+  if (!target) fail(404, "unknown_email");
+
+  await mintAndSendEmailOtp(email);
+  return { status: 202, body: { status: "accepted" } };
+}
+
+/**
+ * POST /auth/operator-email/request {email} -> the same, against `operators`.
+ * Mirrors `operatorSmsRequest`'s relationship to `smsRequest` exactly: ONE thing differs and
+ * it is the JOIN. The limiters are the SAME role-blind buckets `emailRequest` spends, for the
+ * reason `operatorSmsRequest` states: neither "how fast may one address make us send" nor
+ * "what is the bill" has a role in it, and splitting them would double both ceilings for an
+ * attacker who simply posts to both routes.
+ */
+async function operatorEmailRequest({ body, ip }) {
+  if (!emailConfigured() || !(await emailLoginEnabled())) fail(503, "email_not_configured");
+
+  const email = v.identityEmail(body.email, "email");
+
+  await checkEmailRequestRate(ip);
+  checkGlobalEmailSpend();
+
+  const target = await one(
+    `SELECT o.id, o.name
+       FROM email_identities ei
+       JOIN operators o ON o.id = ei.operator_id
+      WHERE ei.email = $1 AND o.active`,
+    [email],
+  );
+  if (!target) fail(404, "unknown_email");
+
+  await mintAndSendEmailOtp(email);
+  return { status: 202, body: { status: "accepted" } };
+}
+
+/**
+ * Mint one challenge for an address and attempt one delivery. EXTRACTED, unlike the SMS pair
+ * which repeats itself, for the reason decision-48 §5.1 gives for extracting
+ * `mintEnrolmentCode`: the worker route and the operator route must never be able to mint a
+ * DIFFERENT credential from one another. The SMS pair could not share this because each of
+ * them writes a different `sms_deliveries` column; there is no delivery log here, so the two
+ * bodies really are identical and one copy is the honest number.
+ *
+ * THE RESULT DOES NOT CHANGE THE RESPONSE — verbatim the SMS rule: a provider rejection is a
+ * fact about the provider, and the caller is told only that a request was accepted. It is not
+ * silently swallowed either: `sendEmail` reports every failure to Sentry as a vocabulary word
+ * (lib/email.js), which is the only place a failed send is visible today (its own CEILING).
+ */
+async function mintAndSendEmailOtp(email) {
+  const code = newOtpCode();
+  const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+  await query("INSERT INTO email_challenges (email, code_hash, expires_at) VALUES ($1, $2, $3)", [
+    email,
+    hashToken(code),
+    expiresAt,
+  ]);
+  // Opportunistic sweep, the same idiom the SMS routes and createWorkerSession use: cheaper
+  // than owning another systemd timer for it.
+  await query("DELETE FROM email_challenges WHERE expires_at < now() - interval '1 day'");
+
+  await sendEmail(email, renderOtpEmail({ name: senderName(), code, ttlMinutes: OTP_TTL_MINUTES }));
+}
+
+/**
+ * POST /auth/email/verify {email, code} -> worker session cookie.
+ *
+ * THE 200 BODY AND THE COOKIE ARE BYTE-IDENTICAL TO POST /auth/code's and POST
+ * /auth/sms/verify's, because it is the same `createWorkerSession()` call, the same
+ * `worker_sessions` row, the same `ts_worker` cookie and the same 90-day TTL.
+ *
+ *   200 {worker:{id,name}, expires_at}  + Set-Cookie: ts_worker
+ *   401 {error:"invalid_code"}          EVERY other outcome, byte for byte
+ *   429 {error:"too_many_attempts"}
+ *   503 {error:"email_not_configured"}
+ */
+async function emailVerify({ body, ip }) {
+  if (!emailConfigured() || !(await emailLoginEnabled())) fail(503, "email_not_configured");
+
+  checkGlobalOtpVerifyRate();
+  // OWN per-IP bucket — `emailotp:`, never `smsotp:` and never `enrol:` — so a stranger
+  // guessing email codes cannot lock a worker out of the other two doors from the same
+  // office address. Same idiom as `enrolop:` and `smsotpop:`.
+  const bucket = `emailotp:${ip}`;
+  checkLoginRate(bucket);
+
+  const { email, presented } = normaliseEmailVerifyInput(body);
+
+  const row =
+    email === null || presented === null ? null : (
+      await one(
+        `SELECT c.id, c.code_hash AS stored, w.id AS worker_id, w.name
+           FROM email_challenges c
+           JOIN email_identities ei ON ei.email = c.email
+           JOIN workers w ON w.id = ei.worker_id
+          WHERE c.email = $1
+            AND c.consumed_at IS NULL
+            AND c.expires_at > now()
+            AND c.attempts < $2
+            AND w.active
+          ORDER BY c.created_at DESC
+          LIMIT 1`,
+        [email, OTP_MAX_ATTEMPTS],
+      )
+    );
+
+  const matched = safeEqual(row?.stored ?? DECOY_STORED, presented ?? DECOY_PRESENTED);
+  if (!matched || row === null) {
+    await burnEmailAttempt(email);
+    recordLoginFailure(bucket);
+    fail(401, "invalid_code");
+  }
+
+  const claimed = await redeemEmailChallenge(row.id, presented);
+  if (!claimed) {
+    recordLoginFailure(bucket);
+    fail(401, "invalid_code"); // lost the race. Same answer.
+  }
+
+  clearLoginFailures(bucket);
+  const { token, expiresAt } = await createWorkerSession(row.worker_id);
+  return {
+    status: 200,
+    body: { worker: { id: row.worker_id, name: row.name }, expires_at: expiresAt.toISOString() },
+    headers: { "set-cookie": sessionCookie(token, expiresAt, WORKER_SESSION_COOKIE) },
+  };
+}
+
+/**
+ * POST /auth/operator-email/verify {email, code} -> operator session cookie. Ends in
+ * `createOperatorSession()` and the `ts_operator` cookie, so the 200 body is byte-identical to
+ * POST /auth/operator-code's.
+ *
+ * A WORKER'S LIVE CHALLENGE CANNOT BE REDEEMED HERE and vice versa: the challenge row is
+ * address-keyed, but the JOIN below demands an ACTIVE OPERATOR for that address, so a code
+ * mailed to a worker-only address fails this route with the same opaque 401 a wrong guess
+ * gets. Under 020’s `email_identities_one_claim` CHECK an address that is BOTH is not even
+ * representable.
+ */
+async function operatorEmailVerify({ body, ip }) {
+  if (!emailConfigured() || !(await emailLoginEnabled())) fail(503, "email_not_configured");
+
+  checkGlobalOtpVerifyRate();
+  const bucket = `emailotpop:${ip}`;
+  checkLoginRate(bucket);
+
+  const { email, presented } = normaliseEmailVerifyInput(body);
+
+  const row =
+    email === null || presented === null ? null : (
+      await one(
+        `SELECT c.id, c.code_hash AS stored, o.id AS operator_id, o.name
+           FROM email_challenges c
+           JOIN email_identities ei ON ei.email = c.email
+           JOIN operators o ON o.id = ei.operator_id
+          WHERE c.email = $1
+            AND c.consumed_at IS NULL
+            AND c.expires_at > now()
+            AND c.attempts < $2
+            AND o.active
+          ORDER BY c.created_at DESC
+          LIMIT 1`,
+        [email, OTP_MAX_ATTEMPTS],
+      )
+    );
+
+  const matched = safeEqual(row?.stored ?? DECOY_STORED, presented ?? DECOY_PRESENTED);
+  if (!matched || row === null) {
+    await burnEmailAttempt(email);
+    recordLoginFailure(bucket);
+    fail(401, "invalid_code");
+  }
+
+  const claimed = await redeemEmailChallenge(row.id, presented);
+  if (!claimed) {
+    recordLoginFailure(bucket);
+    fail(401, "invalid_code");
+  }
+
+  clearLoginFailures(bucket);
+  const { token, expiresAt } = await createOperatorSession(row.operator_id);
+  return {
+    status: 200,
+    body: { operator: { id: row.operator_id, name: row.name }, expires_at: expiresAt.toISOString() },
+    headers: { "set-cookie": sessionCookie(token, expiresAt, OPERATOR_SESSION_COOKIE) },
+  };
+}
+
+/**
+ * SHAPE ONLY, AND IT MUST NOT 422 (the SMS verify routes' rule): on a verify route a
+ * malformed address and a wrong code have to be indistinguishable, or the shape check becomes
+ * a free existence probe. `null` is the only failure signal on both halves and the caller
+ * treats it exactly like a code that is unknown, expired or already used.
+ */
+function normaliseEmailVerifyInput(body) {
+  let email = null;
+  try {
+    email = v.identityEmail(body.email, "email");
+  } catch {
+    email = null;
+  }
+  const code = normaliseOtp(body.code);
+  return { email, presented: code === null ? null : hashToken(code) };
+}
+
+/**
+ * A WRONG ANSWER BURNS AN ATTEMPT ON THE LIVE CHALLENGE. Without this the 5-attempt cap in
+ * 012's arithmetic would be fiction and the only bound would be the rate limiter. Best-effort:
+ * a failure to record must not change the 401 the caller is about to get.
+ */
+async function burnEmailAttempt(email) {
+  if (email === null) return;
+  await query(
+    `UPDATE email_challenges SET attempts = attempts + 1
+      WHERE id = (SELECT id FROM email_challenges
+                   WHERE email = $1 AND consumed_at IS NULL AND expires_at > now()
+                   ORDER BY created_at DESC LIMIT 1)`,
+    [email],
+  ).catch(() => {});
+}
+
+/**
+ * SINGLE USE, DECIDED BY THE DATABASE (012's redemption note). The predicate is repeated in
+ * full rather than trusting the SELECT that found the row: between the two statements the
+ * challenge can expire or be consumed, and the loser of a race must update nothing.
+ */
+function redeemEmailChallenge(id, presented) {
+  return one(
+    `UPDATE email_challenges SET consumed_at = now()
+      WHERE id = $1 AND code_hash = $2 AND expires_at > now()
+        AND consumed_at IS NULL AND attempts < $3
+      RETURNING id`,
+    [id, presented, OTP_MAX_ATTEMPTS],
+  );
+}
+
 export const authRoutes = [
   // `auth: "app"` and not `null`: the X-App-Key gate stays in front of sign-in as
   // defence in depth, so this endpoint is not reachable from a browser or curl.
@@ -819,4 +1142,14 @@ export const authRoutes = [
   // the owner forbade.
   { method: "POST", path: "/auth/sms/request", auth: "app", handler: smsRequest },
   { method: "POST", path: "/auth/sms/verify", auth: "app", handler: smsVerify },
+  // decision-64 §3. THE THIRD DOOR, added BESIDE the other two and never instead of either:
+  // the four lines above and the code lines above them are untouched. Same coarse app-key
+  // gate as every other sign-in door. INERT TODAY — no box holds a RESEND_API_KEY and
+  // migration 021 seeds `email_login` OFF, so all four answer 503 and
+  // GET /auth/capabilities reports `email:false`; no mobile build offers any of this (§7
+  // defers the mobile sign-in UI to a follow-up).
+  { method: "POST", path: "/auth/email/request", auth: "app", handler: emailRequest },
+  { method: "POST", path: "/auth/email/verify", auth: "app", handler: emailVerify },
+  { method: "POST", path: "/auth/operator-email/request", auth: "app", handler: operatorEmailRequest },
+  { method: "POST", path: "/auth/operator-email/verify", auth: "app", handler: operatorEmailVerify },
 ];

@@ -12,6 +12,7 @@ import { ListPanel } from '@/components/ListPanel'
 import { PageHeader } from '@/components/PageHeader'
 import {
   ApiError,
+  clearOperatorLoginEmail,
   deactivateOperator,
   type FeatureFlag,
   type FreshOperatorCode,
@@ -26,6 +27,7 @@ import {
   type SmsStatus,
   saveOperator,
   sendOperatorEnrolmentCodeBySms,
+  setOperatorLoginEmail,
 } from '@/lib/api'
 import { codeStateOf } from '@/lib/enrolment'
 import { filterHref } from '@/lib/filters'
@@ -38,9 +40,14 @@ import { BUSINESS_TIME_ZONE } from '@/lib/shifts'
  * Operators — a person recognised by phone, who reads and writes tags and never clocks in
  * (decision-45). Off-nav (decision-39 §6), reached only from the link `/workers/` carries.
  *
- * CREATE ONLY. `POST /admin/operators` has no update branch (routes/admin.js's own comment:
- * a phone that needs to change is a new identity claim, not an edit of an old one), so unlike
- * `/workers/` there is no edit mode, no `draftOf()`, and the Drawer's title never changes.
+ * CREATE, PLUS ONE EDITABLE FIELD. `POST /admin/operators` still has no update branch
+ * (routes/admin.js's own comment: a phone that needs to change is a new identity claim, not an
+ * edit of an old one), so there is no general edit mode and no `draftOf()`. The ONE exception
+ * is the LOGIN ADDRESS (decision-64 §6): an address is a DOOR added to an existing identity
+ * rather than the identity itself, and it has its own claim/release routes
+ * (PUT/DELETE /admin/operators/:id/email), so it must be editable after the fact — otherwise
+ * every operator created before decision-64 could never be given one. Hence the drawer has
+ * two modes and the title branches on which one is open.
  *
  * `POST /operator/workers` — "create a worker from the phone" — is not this screen's job and
  * is not built anywhere in this tree: OPERATOR-MODEL.md §8 flags it as blocked on decision-41
@@ -53,18 +60,37 @@ const WORKERS_PATH = '/workers/'
 /** Mirrors the workers screen: 30 s is plenty against a 5-day code lifetime. */
 const CODE_TICK_MS = 30_000
 
-type Draft = { name: string; phone: string }
+/**
+ * `operatorId` absent = CREATE (name + phone + an optional address). Present = the
+ * address-only edit of that existing operator; `name` is carried for the drawer's title and
+ * `phone` is unused in that mode.
+ */
+type Draft = {
+  operatorId?: number
+  name: string
+  phone: string
+  /** THE LOGIN ADDRESS (`email_identities`, decision-64). '' = none / clear it. */
+  loginEmail: string
+  /** As loaded, never edited — tells `onSubmit` whether a write is needed at all. */
+  originalLoginEmail: string | null
+}
 
-const EMPTY_DRAFT: Draft = { name: '', phone: '' }
+const EMPTY_DRAFT: Draft = { name: '', phone: '', loginEmail: '', originalLoginEmail: null }
+
+/** Mirrors `server/lib/validate.js`'s deliberately-loose shape check. UX only. */
+const EMAIL_RE = /^[^\s@,]+@[^\s@,.]+(\.[^\s@,.]+)+$/
 
 type ErrorMessage =
   | 'errorNameRequired'
   | 'errorPhoneRequired'
   | 'errorPhoneInvalid'
   | 'errorPhoneClaimed'
+  | 'errorLoginEmailInvalid'
+  | 'errorLoginEmailClaimed'
   | 'errorRejected'
+  | 'loginEmailNotSaved'
 
-type FieldErrors = { name?: ErrorMessage; phone?: ErrorMessage }
+type FieldErrors = { name?: ErrorMessage; phone?: ErrorMessage; loginEmail?: ErrorMessage }
 
 /** The one irreversible action waiting for a plain yes/no. */
 type Pending = { kind: 'revoke' | 'reissue' | 'deactivate'; operator: Operator }
@@ -78,6 +104,7 @@ export default function OperatorsPage() {
   const formId = useId()
   const nameId = useId()
   const phoneId = useId()
+  const loginEmailId = useId()
   const codeHeadingId = useId()
   const codeValueId = useId()
   const codeOnceId = useId()
@@ -186,12 +213,36 @@ export default function OperatorsPage() {
     setSaveError(null)
   }
 
-  /** Maps a failed create onto the field it belongs to. 409 can only be phone_claimed. */
+  /** The address-only mode (decision-64 §6). Opened per row, never from the page header. */
+  function openEmailEdit(operator: Operator) {
+    setDraft({
+      operatorId: operator.id,
+      name: operator.name,
+      phone: operator.phone_e164 ?? '',
+      loginEmail: operator.login_email ?? '',
+      originalLoginEmail: operator.login_email,
+    })
+    setFieldErrors({})
+    setFormError(null)
+    setSaveError(null)
+    setNotice(null)
+  }
+
+  /**
+   * Maps a failed write onto the field it belongs to. On CREATE a 409 can only be
+   * phone_claimed (createOperator's own comment: `phone_identities_pkey` is its sole 23505
+   * source); on the address write it can only be email_claimed. Both name NOBODY.
+   */
   function reportSaveFailure(cause: unknown) {
     if (handleAuthLoss(cause)) return
     if (cause instanceof ApiError && cause.status === 409 && cause.code === 'phone_claimed') {
       setFieldErrors({ phone: 'errorPhoneClaimed' })
       setFormError('errorPhoneClaimed')
+      return
+    }
+    if (cause instanceof ApiError && cause.status === 409 && cause.code === 'email_claimed') {
+      setFieldErrors({ loginEmail: 'errorLoginEmailClaimed' })
+      setFormError('errorLoginEmailClaimed')
       return
     }
     setFormError(
@@ -211,14 +262,26 @@ export default function OperatorsPage() {
     if (busy || draft === null) return
 
     const name = draft.name.trim()
-    const phone = normaliseIdentityPhone(draft.phone)
+    const editing = draft.operatorId !== undefined
+    const phone = editing ? draft.phone : normaliseIdentityPhone(draft.phone)
 
-    // Client-side validation is UX only — server/lib/validate.js's identityPhone decides
-    // for real, and the collision check is server-only, structurally, forever (§7).
+    // Lower-cased and trimmed — the same two steps `identityEmail` does server-side, so an
+    // untouched field compares equal to `originalLoginEmail` (already lower-case) and spends
+    // no write at all.
+    const rawEmail = draft.loginEmail.trim().toLowerCase()
+    const loginEmail = rawEmail === '' ? null : rawEmail
+
+    // Client-side validation is UX only — server/lib/validate.js decides for real, and the
+    // collision check is server-only, structurally, forever (§7).
     const errors: FieldErrors = {}
-    if (name === '') errors.name = 'errorNameRequired'
-    if (phone === null)
-      errors.phone = draft.phone.trim() === '' ? 'errorPhoneRequired' : 'errorPhoneInvalid'
+    if (!editing) {
+      if (name === '') errors.name = 'errorNameRequired'
+      if (phone === null)
+        errors.phone = draft.phone.trim() === '' ? 'errorPhoneRequired' : 'errorPhoneInvalid'
+    }
+    if (loginEmail !== null && !EMAIL_RE.test(loginEmail)) {
+      errors.loginEmail = 'errorLoginEmailInvalid'
+    }
     setFieldErrors(errors)
     setFormError(null)
     setSaveError(null)
@@ -226,8 +289,42 @@ export default function OperatorsPage() {
 
     setBusy(true)
     try {
-      await saveOperator({ name, phone })
-      setNotice({ ok: true, text: t('saved') })
+      /*
+       * THE ADDRESS IS ALWAYS ITS OWN WRITE (PUT/DELETE .../email), never folded into
+       * `POST /admin/operators` — decision-64 §6 keeps the claim on its own route, exactly as
+       * decision-45 does for the login phone on /workers/. On CREATE that means the operator
+       * row lands FIRST and the address second, so a refused address leaves a real operator
+       * behind rather than losing the whole form; the drawer stays open bound to that new id,
+       * and a retry writes only what failed.
+       */
+      const operatorId = editing
+        ? (draft.operatorId as number)
+        : (await saveOperator({ name, phone })).id
+
+      const emailChanged = loginEmail !== draft.originalLoginEmail
+      if (emailChanged) {
+        try {
+          if (loginEmail === null) await clearOperatorLoginEmail(operatorId)
+          else await setOperatorLoginEmail(operatorId, loginEmail)
+        } catch (cause) {
+          reportSaveFailure(cause)
+          if (formErrorIsNotClaim(cause)) setFormError('loginEmailNotSaved')
+          setDraft({ ...draft, operatorId })
+          await load()
+          return
+        }
+      }
+
+      setNotice({
+        ok: true,
+        text: !emailChanged
+          ? t(editing ? 'loginEmailSavedPlain' : 'saved')
+          : `${t(editing ? 'loginEmailSavedPlain' : 'saved')} ${
+              loginEmail === null
+                ? t('loginEmailCleared')
+                : t('loginEmailSaved', { email: loginEmail })
+            }`,
+      })
       closeDrawer()
       await load()
     } catch (cause) {
@@ -235,6 +332,14 @@ export default function OperatorsPage() {
     } finally {
       setBusy(false)
     }
+  }
+
+  /**
+   * A 409 already binds itself to the address field with its own sentence; anything else is a
+   * half-applied save and needs saying in words rather than being swallowed by „gespeichert“.
+   */
+  function formErrorIsNotClaim(cause: unknown): boolean {
+    return !(cause instanceof ApiError && cause.status === 409)
   }
 
   async function copyCode(code: string) {
@@ -517,7 +622,31 @@ export default function OperatorsPage() {
                   {/* Always a number: createOperator's one writable CTE either claims a
                       phone alongside the operator row or creates neither — there is no
                       operator row this screen can ever load with no phone. */}
-                  <td>{operator.phone_e164}</td>
+                  <td>
+                    {operator.phone_e164}
+                    {/* The LOGIN ADDRESS (decision-64 §6) rides in the phone cell rather than
+                        in a seventh column: this table already carries six and the two are
+                        the same fact — „how does this person get in“ — in two channels. */}
+                    <p className={operator.login_email === null ? 'cell-muted' : 'cell-code'}>
+                      {operator.login_email === null
+                        ? t('loginEmailNone')
+                        : t('loginEmailRow', { email: operator.login_email })}
+                    </p>
+                    {operator.active ? (
+                      <div className="cell-actions">
+                        <button
+                          type="button"
+                          className="btn btn-quiet"
+                          onClick={() => openEmailEdit(operator)}
+                        >
+                          {t('loginEmailEdit')}
+                          <span className="visually-hidden">
+                            {t('forOperator', { name: operator.name })}
+                          </span>
+                        </button>
+                      </div>
+                    ) : null}
+                  </td>
                   <td>
                     {operator.linked_worker_id === null ? (
                       <span className="cell-muted">{t('alsoWorkerNone')}</span>
@@ -615,11 +744,16 @@ export default function OperatorsPage() {
         )}
       </ListPanel>
 
-      {/* CREATE ONLY — no title branch, no `id` on the draft. See the file header. */}
+      {/* TWO MODES: create, or the address-only edit of one existing operator. See the file
+          header for why that one field is editable and nothing else is. */}
       <Drawer
         open={draft !== null}
         onClose={closeDrawer}
-        title={t('createHeading')}
+        title={
+          draft?.operatorId === undefined
+            ? t('createHeading')
+            : t('loginEmailHeading', { name: draft.name })
+        }
         busy={busy}
         footer={
           <>
@@ -627,7 +761,11 @@ export default function OperatorsPage() {
               {t('cancel')}
             </button>
             <button type="submit" form={formId} className="btn btn-primary" disabled={busy}>
-              {busy ? t('submitting') : t('submitCreate')}
+              {busy
+                ? t('submitting')
+                : draft?.operatorId === undefined
+                  ? t('submitCreate')
+                  : t('submitSave')}
             </button>
           </>
         }
@@ -638,38 +776,66 @@ export default function OperatorsPage() {
               {formError !== null ? t(formError) : saveError !== null ? tError(saveError) : ''}
             </p>
 
-            <Field
-              id={nameId}
-              label={t('fieldName')}
-              required
-              error={fieldErrors.name === undefined ? undefined : t(fieldErrors.name)}
-            >
-              <input
-                type="text"
-                required
-                value={draft.name}
-                onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-                maxLength={120}
-                autoComplete="off"
-                disabled={busy}
-              />
-            </Field>
+            {/* Name and phone ARE the identity and are set once, at creation — so in the
+                address-only mode they are not rendered at all rather than rendered disabled:
+                a greyed control invites a director to look for the way to enable it. */}
+            {draft.operatorId !== undefined ? null : (
+              <>
+                <Field
+                  id={nameId}
+                  label={t('fieldName')}
+                  required
+                  error={fieldErrors.name === undefined ? undefined : t(fieldErrors.name)}
+                >
+                  <input
+                    type="text"
+                    required
+                    value={draft.name}
+                    onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                    maxLength={120}
+                    autoComplete="off"
+                    disabled={busy}
+                  />
+                </Field>
 
+                <Field
+                  id={phoneId}
+                  label={t('fieldPhone')}
+                  required
+                  help={
+                    phonePreview === null
+                      ? t('phoneHint')
+                      : t('phonePreview', { phone: phonePreview })
+                  }
+                  error={fieldErrors.phone === undefined ? undefined : t(fieldErrors.phone)}
+                >
+                  <input
+                    type="tel"
+                    required
+                    value={draft.phone}
+                    onChange={(event) => setDraft({ ...draft, phone: event.target.value })}
+                    maxLength={40}
+                    autoComplete="off"
+                    disabled={busy}
+                  />
+                </Field>
+              </>
+            )}
+
+            {/* THE LOGIN ADDRESS (decision-64 §6) — optional in both modes, and always its own
+                write. Clearing it releases the claim. */}
             <Field
-              id={phoneId}
-              label={t('fieldPhone')}
-              required
-              help={
-                phonePreview === null ? t('phoneHint') : t('phonePreview', { phone: phonePreview })
-              }
-              error={fieldErrors.phone === undefined ? undefined : t(fieldErrors.phone)}
+              id={loginEmailId}
+              label={t('fieldLoginEmail')}
+              optional
+              help={t('loginEmailHint')}
+              error={fieldErrors.loginEmail === undefined ? undefined : t(fieldErrors.loginEmail)}
             >
               <input
-                type="tel"
-                required
-                value={draft.phone}
-                onChange={(event) => setDraft({ ...draft, phone: event.target.value })}
-                maxLength={40}
+                type="email"
+                value={draft.loginEmail}
+                onChange={(event) => setDraft({ ...draft, loginEmail: event.target.value })}
+                maxLength={320}
                 autoComplete="off"
                 disabled={busy}
               />

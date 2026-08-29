@@ -321,8 +321,11 @@ try {
     // No session, no admin cookie — this is what a phone asks before it has anything.
     const res = await call("/auth/capabilities");
     assert.equal(res.status, 200, JSON.stringify(res.body));
-    assert.deepEqual(res.body, { sms: false }, "exactly one field, and it must read false with no TWILIO_* set");
-    ok("{sms:false} — the sign-in screen composes nothing behind this");
+    // `email` joined `sms` here in decision-64 and is ADDITIVE: this check is about the SMS
+    // half, and the email half must read false for its own two reasons (no RESEND_API_KEY in
+    // this process, `email_login` seeded OFF by migration 021).
+    assert.deepEqual(res.body, { sms: false, email: false }, "both doors read false with no TWILIO_*/RESEND_* set");
+    ok("{sms:false, email:false} — the sign-in screen composes nothing behind either");
   });
 
   await test("THE FALLBACK IS RIGHT THERE: the enrolment code still mints and still redeems", async () => {
@@ -362,7 +365,7 @@ try {
   // ===================================================================================
   await test("feature_flags.sms_login is OFF by default, EVEN WITH SMS fully configured", async () => {
     const res = await call("/auth/capabilities");
-    assert.deepEqual(res.body, { sms: false }, "Twilio being wired must not be enough on its own");
+    assert.deepEqual(res.body, { sms: false, email: false }, "Twilio being wired must not be enough on its own");
     const asked = await call("/auth/sms/request", { method: "POST", body: { phone: WORKER_PHONE_TYPED } });
     assert.equal(asked.status, 503, JSON.stringify(asked.body));
     assert.deepEqual(asked.body, { error: "sms_not_configured" }, "the SAME error a missing Twilio credential gives");
@@ -382,10 +385,14 @@ try {
   await test("GET /auth/capabilities flips to sms:true in the SAME PROCESS — no session, no admin cookie", async () => {
     const res = await call("/auth/capabilities");
     assert.equal(res.status, 200, JSON.stringify(res.body));
-    assert.deepEqual(res.body, { sms: true }, "the app's one read agrees with the admin's detailed one");
-    // NAMES NOTHING beyond the boolean — this is the whole point of a separate, minimal
+    assert.deepEqual(
+      res.body,
+      { sms: true, email: false },
+      "the app's one read agrees with the admin's detailed one — and the EMAIL door is untouched by an SMS flag",
+    );
+    // NAMES NOTHING beyond the booleans — this is the whole point of a separate, minimal
     // route rather than handing the app a slice of GET /admin/sms-status.
-    assert.deepEqual(Object.keys(res.body), ["sms"]);
+    assert.deepEqual(Object.keys(res.body).sort(), ["email", "sms"]);
     ok("{sms:true} — the sign-in screen may now compose the section");
   });
 

@@ -15,6 +15,7 @@ import { WorkerPanel } from '@/components/WorkerPanel'
 import {
   ApiError,
   clearSetting,
+  clearWorkerLoginEmail,
   clearWorkerLoginPhone,
   type FeatureFlag,
   type FreshEnrolmentCode,
@@ -32,6 +33,7 @@ import {
   saveSetting,
   saveWorker,
   sendEnrolmentCodeBySms,
+  setWorkerLoginEmail,
   setWorkerLoginPhone,
   type Worker,
   type WorkerSnapshot,
@@ -109,6 +111,14 @@ type Draft = {
    * never spends a second write — or a second failure mode — on a no-op.
    */
   originalLoginPhone: string | null
+  /**
+   * THE LOGIN ADDRESS (`email_identities`, decision-64 §6) — a DIFFERENT field from `email`
+   * above, which is `workers.email`, the dead Sign-in-with-Apple column. Same relationship,
+   * same second-write mechanics and the same original-value pair as `loginPhone`.
+   */
+  loginEmail: string
+  /** `worker.login_email` as loaded, NEVER edited. See `originalLoginPhone`. */
+  originalLoginEmail: string | null
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -119,6 +129,8 @@ const EMPTY_DRAFT: Draft = {
   active: true,
   loginPhone: '',
   originalLoginPhone: null,
+  loginEmail: '',
+  originalLoginEmail: null,
 }
 
 function draftOf(worker: Worker): Draft {
@@ -133,6 +145,8 @@ function draftOf(worker: Worker): Draft {
     active: worker.active,
     loginPhone: worker.phone_e164 ?? '',
     originalLoginPhone: worker.phone_e164,
+    loginEmail: worker.login_email ?? '',
+    originalLoginEmail: worker.login_email,
   }
 }
 
@@ -146,8 +160,11 @@ type ErrorMessage =
   | 'errorRateInvalid'
   | 'errorLoginPhoneInvalid'
   | 'errorLoginPhoneClaimed'
+  | 'errorLoginEmailInvalid'
+  | 'errorLoginEmailClaimed'
   | 'errorRejected'
   | 'loginPhoneNotSaved'
+  | 'loginEmailNotSaved'
 
 type FieldErrors = {
   name?: ErrorMessage
@@ -155,6 +172,7 @@ type FieldErrors = {
   phone?: ErrorMessage
   rate?: ErrorMessage
   loginPhone?: ErrorMessage
+  loginEmail?: ErrorMessage
 }
 
 /** The one irreversible-or-destructive action waiting for a plain yes/no. */
@@ -172,6 +190,7 @@ export default function WorkersPage() {
   const emailId = useId()
   const phoneId = useId()
   const loginPhoneId = useId()
+  const loginEmailId = useId()
   const rateId = useId()
   const activeId = useId()
   const codeHeadingId = useId()
@@ -360,9 +379,32 @@ export default function WorkersPage() {
    * handling `reportSaveFailure` uses.
    */
   function reportLoginPhoneFailure(cause: unknown) {
+    reportSecondWriteFailure(cause, 'loginPhone', 'errorLoginPhoneClaimed', 'loginPhoneNotSaved')
+  }
+
+  /**
+   * The login ADDRESS half of the same story (decision-64 §6): a third write, after the
+   * master data and after the login number, with the identical half-applied-save hazard and
+   * therefore the identical treatment.
+   */
+  function reportLoginEmailFailure(cause: unknown) {
+    reportSecondWriteFailure(cause, 'loginEmail', 'errorLoginEmailClaimed', 'loginEmailNotSaved')
+  }
+
+  /**
+   * Shared by both of the above rather than written twice: the two claim routes have the
+   * same contract (409 names nobody, everything else is 5xx/offline), so two copies could
+   * only ever drift into treating one of them differently for no reason.
+   */
+  function reportSecondWriteFailure(
+    cause: unknown,
+    field: 'loginPhone' | 'loginEmail',
+    claimed: ErrorMessage,
+    summary: ErrorMessage,
+  ) {
     if (handleAuthLoss(cause)) return
     if (cause instanceof ApiError && cause.status === 409) {
-      setFieldErrors({ loginPhone: 'errorLoginPhoneClaimed' })
+      setFieldErrors({ [field]: claimed })
     } else {
       setFieldErrors({})
       if (cause instanceof ApiError && (cause.status === 0 || cause.status >= 500)) {
@@ -370,7 +412,7 @@ export default function WorkersPage() {
         setSaveError(cause.messageKey)
       }
     }
-    setFormError('loginPhoneNotSaved')
+    setFormError(summary)
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -407,6 +449,18 @@ export default function WorkersPage() {
     const normalisedLoginPhone = rawLoginPhone === '' ? null : normaliseIdentityPhone(rawLoginPhone)
     const loginPhoneChanged = normalisedLoginPhone !== draft.originalLoginPhone
 
+    /*
+     * THE LOGIN ADDRESS IS A THIRD, SEPARATE WRITE (PUT/DELETE .../email), for the identical
+     * reason: decision-64 §6 routes it through `email_identities`, not through the
+     * `workers.email` column this form's single POST still writes. Normalising here is just
+     * lower-casing and trimming — the same two steps `identityEmail` does server-side — so an
+     * untouched field compares equal to `originalLoginEmail` (already lower-case) and spends
+     * no write.
+     */
+    const rawLoginEmail = draft.loginEmail.trim().toLowerCase()
+    const normalisedLoginEmail = rawLoginEmail === '' ? null : rawLoginEmail
+    const loginEmailChanged = normalisedLoginEmail !== draft.originalLoginEmail
+
     // Client-side validation is UX only — server/lib/validate.js decides for real.
     const errors: FieldErrors = {}
     if (name === '') errors.name = 'errorNameRequired'
@@ -416,6 +470,9 @@ export default function WorkersPage() {
     else if (cents === null || cents <= 0) errors.rate = 'errorRateInvalid'
     if (rawLoginPhone !== '' && normalisedLoginPhone === null) {
       errors.loginPhone = 'errorLoginPhoneInvalid'
+    }
+    if (normalisedLoginEmail !== null && !EMAIL_RE.test(normalisedLoginEmail)) {
+      errors.loginEmail = 'errorLoginEmailInvalid'
     }
     setFieldErrors(errors)
     setFormError(null)
@@ -448,17 +505,41 @@ export default function WorkersPage() {
         }
       }
 
+      if (loginEmailChanged) {
+        try {
+          if (normalisedLoginEmail === null) await clearWorkerLoginEmail(saved.id)
+          else await setWorkerLoginEmail(saved.id, normalisedLoginEmail)
+        } catch (cause) {
+          // Same half-applied-save hazard as the number above, and the same treatment: the
+          // drawer STAYS OPEN, bound to `saved.id`, so a retry writes only what failed.
+          reportLoginEmailFailure(cause)
+          setDraft({ ...draft, id: saved.id })
+          await load()
+          return
+        }
+      }
+
       // The result is announced by the PAGE, not by the drawer: the drawer closes on
       // success and would take its own success message with it, unread.
       setNotice({
         ok: true,
-        text: !loginPhoneChanged
-          ? t('saved')
-          : `${t('saved')} ${
-              normalisedLoginPhone === null
-                ? t('loginPhoneCleared')
-                : t('loginPhoneSaved', { phone: normalisedLoginPhone })
-            }`,
+        text: [
+          t('saved'),
+          ...(loginPhoneChanged
+            ? [
+                normalisedLoginPhone === null
+                  ? t('loginPhoneCleared')
+                  : t('loginPhoneSaved', { phone: normalisedLoginPhone }),
+              ]
+            : []),
+          ...(loginEmailChanged
+            ? [
+                normalisedLoginEmail === null
+                  ? t('loginEmailCleared')
+                  : t('loginEmailSaved', { email: normalisedLoginEmail }),
+              ]
+            : []),
+        ].join(' '),
       })
       closeDrawer()
       await load()
@@ -967,6 +1048,15 @@ export default function WorkersPage() {
                     ) : (
                       worker.email
                     )}
+                    {/* The LOGIN address (decision-64), under the contact address it is NOT
+                        — the same contrast the phone cell to the right already draws between
+                        `phone` and `phone_e164`, and for the same reason: a director who
+                        assumes the top line is a login provisions nobody. */}
+                    <p className={worker.login_email === null ? 'cell-muted' : 'cell-code'}>
+                      {worker.login_email === null
+                        ? t('loginEmailNone')
+                        : t('loginEmailRow', { email: worker.login_email })}
+                    </p>
                   </td>
                   <td>
                     {worker.phone === null ? (
@@ -1220,6 +1310,27 @@ export default function WorkersPage() {
                 value={draft.loginPhone}
                 onChange={(event) => setDraft({ ...draft, loginPhone: event.target.value })}
                 maxLength={40}
+                autoComplete="off"
+                disabled={busy}
+              />
+            </Field>
+
+            {/* THE LOGIN ADDRESS (decision-64 §6), directly under the login NUMBER it sits
+                beside as a third door, and edited by its OWN write (PUT/DELETE .../email) —
+                never folded into this form's single POST, which still writes the unrelated
+                `workers.email` column two fields above. */}
+            <Field
+              id={loginEmailId}
+              label={t('fieldLoginEmail')}
+              optional
+              help={t('loginEmailHint')}
+              error={fieldErrors.loginEmail === undefined ? undefined : t(fieldErrors.loginEmail)}
+            >
+              <input
+                type="email"
+                value={draft.loginEmail}
+                onChange={(event) => setDraft({ ...draft, loginEmail: event.target.value })}
+                maxLength={320}
                 autoComplete="off"
                 disabled={busy}
               />

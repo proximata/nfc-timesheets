@@ -380,7 +380,16 @@
     "rateLimitReset": "Auf Standardwert zurücksetzen",
     "rateLimitSaved": "Limit gespeichert: {value} Anfragen pro 5 Minuten.",
     "rateLimitCleared": "Zurückgesetzt. Es gilt wieder der Standardwert ({default}).",
-    "rateLimitSaveFailed": "Die Einstellung konnte nicht gespeichert werden. Bitte erneut versuchen."
+    "rateLimitSaveFailed": "Die Einstellung konnte nicht gespeichert werden. Bitte erneut versuchen.",
+    "fieldLoginEmail": "Login-Adresse (E-Mail-Anmeldung)",
+    "loginEmailHint": "Mit dieser Adresse meldet sich diese Person per E-Mail in der App an – sie ist NICHT die E-Mail oben, die nur eine Kontaktangabe ist. Leer lassen, wenn sich diese Person nicht per E-Mail anmeldet.",
+    "loginEmailNone": "Keine Login-Adresse",
+    "loginEmailRow": "E-Mail-Login: {email}",
+    "errorLoginEmailInvalid": "Das ist keine gültige E-Mail-Adresse.",
+    "errorLoginEmailClaimed": "Diese Adresse ist bereits einer anderen Person zugeordnet.",
+    "loginEmailSaved": "Login-Adresse gespeichert: {email}.",
+    "loginEmailCleared": "Login-Adresse entfernt.",
+    "loginEmailNotSaved": "Die Stammdaten wurden gespeichert. Die Login-Adresse wurde NICHT gespeichert – bitte erneut versuchen."
   },
   "locations": {
     "heading": "Objekte",
@@ -1266,7 +1275,20 @@
     "reissueConfirmTitle": "Neuen Zugangscode für {name} erstellen?",
     "reissueConfirmBody": "Der bisherige Code funktioniert ab diesem Moment nicht mehr, auch wenn er bereits weitergegeben wurde. Der neue Code wird nur ein einziges Mal angezeigt.",
     "deactivateConfirmTitle": "{name} deaktivieren?",
-    "deactivateConfirmBody": "Diese Person kann sich danach nicht mehr anmelden, und ein bestehender Zugangscode wird ungültig. Sie kann jederzeit wieder aktiviert werden."
+    "deactivateConfirmBody": "Diese Person kann sich danach nicht mehr anmelden, und ein bestehender Zugangscode wird ungültig. Sie kann jederzeit wieder aktiviert werden.",
+    "fieldLoginEmail": "Login-Adresse (E-Mail-Anmeldung)",
+    "loginEmailHint": "Mit dieser Adresse meldet sich dieser Betreiber per E-Mail an. Optional – Telefonnummer und Anmeldecode funktionieren unabhängig davon.",
+    "loginEmailNone": "Keine Login-Adresse",
+    "loginEmailRow": "E-Mail-Login: {email}",
+    "loginEmailEdit": "Login-Adresse",
+    "loginEmailHeading": "Login-Adresse für {name}",
+    "errorLoginEmailInvalid": "Das ist keine gültige E-Mail-Adresse.",
+    "errorLoginEmailClaimed": "Diese Adresse ist bereits einer anderen Person zugeordnet.",
+    "loginEmailSaved": "Login-Adresse gespeichert: {email}.",
+    "loginEmailSavedPlain": "Betreiber gespeichert.",
+    "loginEmailCleared": "Login-Adresse entfernt.",
+    "loginEmailNotSaved": "Die Login-Adresse wurde NICHT gespeichert – bitte erneut versuchen.",
+    "submitSave": "Speichern"
   },
   "flags": {
     "heading": "Feature-Flags",
@@ -1288,7 +1310,8 @@
     "noticeDisabled": "{name} ist jetzt ausgeschaltet.",
     "noticeFailed": "{name} konnte nicht geändert werden.",
     "noteFunShiftScreen": "Verspielter Schicht-Bildschirm auf den Handys: blauer Akzent, schwarzer Hintergrund, animierte Figuren.",
-    "noteSmsLogin": "SMS-Anmeldung im gemeinsamen Code-Formular, für Mitarbeiter und Betreiber. Anmeldecodes funktionieren unabhängig davon."
+    "noteSmsLogin": "SMS-Anmeldung im gemeinsamen Code-Formular, für Mitarbeiter und Betreiber. Anmeldecodes funktionieren unabhängig davon.",
+    "noteEmailLogin": "E-Mail-Anmeldung, für Mitarbeiter und Betreiber. Benötigt zusätzlich einen am Server konfigurierten E-Mail-Anbieter – SMS und Anmeldecodes funktionieren unabhängig davon."
   },
   "tags": {
     "heading": "Unzugeordnete Tags",

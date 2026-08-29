@@ -380,7 +380,16 @@
     "rateLimitReset": "Reset to default",
     "rateLimitSaved": "Limit saved: {value} requests per 5 minutes.",
     "rateLimitCleared": "Reset. The default applies again ({default}).",
-    "rateLimitSaveFailed": "The setting could not be saved. Please try again."
+    "rateLimitSaveFailed": "The setting could not be saved. Please try again.",
+    "fieldLoginEmail": "Login address (email sign-in)",
+    "loginEmailHint": "This is the address the person signs in to the app with, by email — it is NOT the email above, which is a contact detail only. Leave empty if this person does not sign in by email.",
+    "loginEmailNone": "No login address",
+    "loginEmailRow": "Email login: {email}",
+    "errorLoginEmailInvalid": "That is not a valid email address.",
+    "errorLoginEmailClaimed": "This address is already assigned to someone else.",
+    "loginEmailSaved": "Login address saved: {email}.",
+    "loginEmailCleared": "Login address removed.",
+    "loginEmailNotSaved": "The master data was saved. The login address was NOT saved — please try again."
   },
   "locations": {
     "heading": "Locations",
@@ -1266,7 +1275,20 @@
     "reissueConfirmTitle": "Create a new enrolment code for {name}?",
     "reissueConfirmBody": "The previous code stops working from this moment, even if it has already been passed on. The new code is shown only once.",
     "deactivateConfirmTitle": "Deactivate {name}?",
-    "deactivateConfirmBody": "This person can no longer sign in, and any existing enrolment code becomes invalid. They can be reactivated at any time."
+    "deactivateConfirmBody": "This person can no longer sign in, and any existing enrolment code becomes invalid. They can be reactivated at any time.",
+    "fieldLoginEmail": "Login address (email sign-in)",
+    "loginEmailHint": "This is the address this operator signs in with, by email. Optional — the phone number and the enrolment code keep working either way.",
+    "loginEmailNone": "No login address",
+    "loginEmailRow": "Email login: {email}",
+    "loginEmailEdit": "Login address",
+    "loginEmailHeading": "Login address for {name}",
+    "errorLoginEmailInvalid": "That is not a valid email address.",
+    "errorLoginEmailClaimed": "This address is already assigned to someone else.",
+    "loginEmailSaved": "Login address saved: {email}.",
+    "loginEmailSavedPlain": "Operator saved.",
+    "loginEmailCleared": "Login address removed.",
+    "loginEmailNotSaved": "The login address was NOT saved — please try again.",
+    "submitSave": "Save"
   },
   "flags": {
     "heading": "Feature flags",
@@ -1288,7 +1310,8 @@
     "noticeDisabled": "{name} is now off.",
     "noticeFailed": "{name} could not be changed.",
     "noteFunShiftScreen": "Playful running-shift screen on the phones: blue tint, black background, animated figures.",
-    "noteSmsLogin": "SMS sign-in on the shared code form, for both workers and operators. Enrolment codes work regardless."
+    "noteSmsLogin": "SMS sign-in on the shared code form, for both workers and operators. Enrolment codes work regardless.",
+    "noteEmailLogin": "Email sign-in, for both workers and operators. Needs an email provider configured on the server as well — SMS and enrolment codes work regardless."
   },
   "tags": {
     "heading": "Unassigned tags",

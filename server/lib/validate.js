@@ -81,6 +81,43 @@ export function optionalEmail(value, field = "email") {
   return s;
 }
 
+/**
+ * An email address becoming an IDENTITY (decision-64 §1) — the login address of a worker or
+ * an operator. NOT `optionalEmail` above: that one feeds `workers.email`, the vestigial
+ * Sign-in-with-Apple column decision-50 retired and decision-64 explicitly leaves alone, and
+ * it is OPTIONAL. This one feeds `email_identities.email`, the ONLY place an address is
+ * checked for uniqueness across workers and operators, so it is REQUIRED and it has to
+ * produce one canonical spelling for every equivalent input or the PRIMARY KEY catches
+ * nothing.
+ *
+ * The relationship between the two is exactly `optionalPhone` vs `identityPhone` below, for
+ * exactly the same reason (decision-45 §4, decision-64 §1).
+ *
+ * LOWER-CASED, ALWAYS. Migration 020’s CHECK is the backstop; this is the gate. The local
+ * part of an address is case-SENSITIVE per RFC 5321 and no mail provider anyone here uses
+ * treats it that way — folding is what makes "Anna@Firma.at" and "anna@firma.at" one
+ * identity, and not folding would let the same mailbox claim two rows.
+ * ponytail CEILING: a (theoretical) provider that really does distinguish case cannot be
+ * used here. UPGRADE PATH: none planned — 002 already made the same call for workers.email.
+ *
+ *   1. required — undefined/null/""/whitespace-only   -> 422 required_field
+ *   2. trimmed, lower-cased, max 320 (RFC 5321 practical maximum)
+ *   3. the SAME deliberately-loose shape `optionalEmail` uses — one @, something either
+ *      side, a dot in the domain, no whitespace, no comma       -> 422 invalid_email
+ *
+ * 422 and not 400, matching `identityPhone`: these two are the identity-claim validators and
+ * the routes that call them answer 422 for a shape failure.
+ */
+export function identityEmail(raw, field = "email") {
+  if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+    fail(422, "required_field", field);
+  }
+  if (typeof raw !== "string") fail(422, "invalid_email", field);
+  const s = raw.trim().toLowerCase();
+  if (s.length > EMAIL_MAX || !EMAIL_RE.test(s)) fail(422, "invalid_email", field);
+  return s;
+}
+
 export function id(value, field = "id") {
   const n = typeof value === "string" ? Number(value) : value;
   if (!Number.isSafeInteger(n) || n < 1) fail(400, "invalid_id", field);

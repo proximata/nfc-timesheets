@@ -182,6 +182,33 @@ CREATE TABLE otp_challenges (
 );
 CREATE INDEX otp_challenges_phone_idx ON otp_challenges (phone_e164, created_at DESC);
 CREATE INDEX otp_challenges_expires_idx ON otp_challenges (expires_at);
+-- decision-64 / 020_email_identities.sql, transcribed verbatim. NOTE the CHECK: EXACTLY one
+-- owner, which is where this table deliberately diverges from phone_identities' "at least
+-- one" (020’s header has the reasoning and the upgrade path).
+CREATE TABLE email_identities (
+  email TEXT PRIMARY KEY
+    CHECK (email = lower(email))
+    CHECK (email ~ '^[^\\s@,]+@[^\\s@,.]+(\\.[^\\s@,.]+)+$')
+    CHECK (length(email) <= 320),
+  worker_id BIGINT UNIQUE REFERENCES workers(id) ON DELETE SET NULL,
+  operator_id BIGINT UNIQUE REFERENCES operators(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT email_identities_one_claim
+    CHECK ((worker_id IS NOT NULL) <> (operator_id IS NOT NULL))
+);
+CREATE INDEX email_identities_worker_idx ON email_identities (worker_id) WHERE worker_id IS NOT NULL;
+CREATE INDEX email_identities_operator_idx ON email_identities (operator_id) WHERE operator_id IS NOT NULL;
+CREATE TABLE email_challenges (
+  id BIGSERIAL PRIMARY KEY,
+  email TEXT NOT NULL REFERENCES email_identities(email) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  attempts SMALLINT NOT NULL DEFAULT 0,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX email_challenges_email_idx ON email_challenges (email, created_at DESC);
+CREATE INDEX email_challenges_expires_idx ON email_challenges (expires_at);
 CREATE TABLE operator_sessions (
   token TEXT PRIMARY KEY,
   operator_id BIGINT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
@@ -722,7 +749,9 @@ try {
   ]);
   // The migrations seed these rows; the check seeds them the same way so GET /flags has the
   // same shape here as on the box.
-  await admin.query("INSERT INTO feature_flags (name, enabled) VALUES ('fun_shift_screen', false), ('sms_login', false)");
+  await admin.query(
+    "INSERT INTO feature_flags (name, enabled) VALUES ('fun_shift_screen', false), ('sms_login', false), ('email_login', false)",
+  );
 
   // Inject the fake JWKS before the server can serve a single request.
   const { setKeyFetcherForTest } = await import("./lib/apple.js");
@@ -7470,6 +7499,305 @@ try {
         await admin.query("UPDATE feature_flags SET enabled = false WHERE name = 'sms_login'");
       }
     }
+
+    // ---- email sign-in, THE THIRD DOOR (decision-64, TASK-320) ---------------------
+    //
+    // NO REAL EMAIL IS SENT BY ANY OF THIS, AND NONE CAN BE. Same mechanism as the Twilio
+    // block above and the only test seam lib/email.js has: RESEND_API_BASE pointed at a
+    // local stub, with an obvious fake key that is correctly SHAPED — a malformed value
+    // counts as MISSING (lib/email.js), so a lazy fake would switch the feature OFF and the
+    // suite would pass by testing nothing.
+    //
+    // The stub is also the only way to learn the code: it is a local in the handler, a
+    // SHA-256 in the database, and scrubbed out of telemetry. Reading it off the wire is
+    // exactly what a mailbox does.
+    //
+    // THE INERT-TODAY ASSERTIONS COME FIRST, BEFORE ANY OF THAT IS CONFIGURED, because that
+    // is the state every real box is in and it is the claim the task actually makes.
+    {
+      const mail = { calls: [] };
+      const stub = createHttpServer((req, res) => {
+        let raw = "";
+        req.on("data", (c) => (raw += c));
+        req.on("end", () => {
+          mail.calls.push({ auth: req.headers.authorization, body: JSON.parse(raw || "{}") });
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ id: randomBytes(16).toString("hex") }));
+        });
+      });
+      await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+
+      const RESEND_VARS = ["RESEND_API_KEY", "RESEND_FROM", "RESEND_API_BASE"];
+      const configureResend = () => {
+        process.env.RESEND_API_KEY = `re_${"0123456789abcdefghij"}`;
+        process.env.RESEND_FROM = "noreply@example.test";
+        process.env.RESEND_API_BASE = `http://127.0.0.1:${stub.address().port}`;
+      };
+
+      const lastCode = () => {
+        const text = mail.calls.at(-1)?.body?.text ?? "";
+        const m = text.match(/\b(\d{6})\b/);
+        assert.ok(m, `no 6-digit code in the message text: ${JSON.stringify(text)}`);
+        return m[1];
+      };
+
+      const WORKER_EMAIL = "anna.email@example.test";
+      const OP_EMAIL = "feldleiterin.email@example.test";
+      const DEAD_OP_EMAIL = "ehemalige.email@example.test";
+      const emailRequest = (email, ip) => call("/auth/email/request", { method: "POST", body: { email }, ip });
+      const emailVerify = (email, code, ip) => call("/auth/email/verify", { method: "POST", body: { email, code }, ip });
+      const opEmailRequest = (email, ip) => call("/auth/operator-email/request", { method: "POST", body: { email }, ip });
+      const opEmailVerify = (email, code, ip) =>
+        call("/auth/operator-email/verify", { method: "POST", body: { email, code }, ip });
+
+      try {
+        // ===== 1 · INERT TODAY. No RESEND_* in this process, `email_login` seeded OFF. This
+        // is byte-for-byte the state of every box that exists (decision-64's whole "ships
+        // now, does nothing until provisioned" claim), so it is asserted BEFORE anything is
+        // configured rather than reasoned about afterwards.
+        await test("email is INERT today: capabilities().email is false and all four routes 503", async () => {
+          resetLoginRate();
+          const caps = await call("/auth/capabilities");
+          const body = await caps.json();
+          assert.equal(caps.status, 200);
+          assert.equal(body.email, false, "NO RESEND_API_KEY anywhere and email_login seeded OFF");
+          assert.equal(body.sms, false, "the sms field is untouched by this feature");
+          assert.deepEqual(Object.keys(body).sort(), ["email", "sms"], "one added field, nothing removed");
+
+          for (const [path, payload] of [
+            ["/auth/email/request", { email: WORKER_EMAIL }],
+            ["/auth/email/verify", { email: WORKER_EMAIL, code: "123456" }],
+            ["/auth/operator-email/request", { email: OP_EMAIL }],
+            ["/auth/operator-email/verify", { email: OP_EMAIL, code: "123456" }],
+          ]) {
+            const res = await call(path, { method: "POST", body: payload, ip: "10.11.0.1" });
+            assert.equal(res.status, 503, `${path} must refuse before anything is provisioned`);
+            assert.deepEqual(await res.json(), { error: "email_not_configured" });
+          }
+          assert.equal(mail.calls.length, 0, "NOT ONE message may be attempted");
+          assert.equal(await countOf("SELECT count(*) AS n FROM email_challenges"), 0, "and no challenge is minted");
+        });
+
+        await test("turning the FLAG on alone is not enough — a provider is still required", async () => {
+          // The two gates are independent, and this is the half that proves it: with no
+          // RESEND_* set, an operator flipping the flag must change nothing at all.
+          await admin.query("UPDATE feature_flags SET enabled = true WHERE name = 'email_login'");
+          resetLoginRate();
+          assert.equal((await (await call("/auth/capabilities")).json()).email, false);
+          const res = await call("/auth/email/request", { method: "POST", body: { email: WORKER_EMAIL }, ip: "10.11.0.2" });
+          assert.equal(res.status, 503);
+          await admin.query("UPDATE feature_flags SET enabled = false WHERE name = 'email_login'");
+        });
+
+        // ===== 2 · THE SAME CALLS WITH BOTH GATES OPEN. Without this half, section 1 proved
+        // nothing — an endpoint that always 503s is not a feature behind a flag.
+        configureResend();
+
+        await test("a provider ALONE is not enough either — the flag is a real second gate", async () => {
+          resetLoginRate();
+          assert.equal((await (await call("/auth/capabilities")).json()).email, false, "configured, but not offered");
+          const res = await call("/auth/email/request", { method: "POST", body: { email: WORKER_EMAIL }, ip: "10.11.0.3" });
+          assert.equal(res.status, 503, "the SAME error a missing key gives — byte-identical to section 1");
+          assert.deepEqual(await res.json(), { error: "email_not_configured" });
+        });
+
+        await admin.query("UPDATE feature_flags SET enabled = true WHERE name = 'email_login'");
+
+        const emailOp = await operatorCookieFor("Feldleiterin Mail");
+        const { rows: deadOpRows } = await admin.query(
+          "INSERT INTO operators (name, active) VALUES ('Ehemalige Mailerin', false) RETURNING id",
+        );
+        const deadOpId = Number(deadOpRows[0].id);
+
+        await test("the admin claim routes are the ONLY way an address gets on file", async () => {
+          // decision-64 §6: admin-provisioned, exactly like the login phone number. Nothing
+          // on the public sign-in routes creates an email_identities row.
+          const claimed = await asAdmin(`/admin/workers/${workerId}/email`, {
+            method: "PUT",
+            body: { email: " Anna.Email@Example.TEST " },
+          });
+          const body = await expect(claimed, 200);
+          assert.equal(body.login_email, WORKER_EMAIL, "trimmed and LOWER-CASED, or the login lookup never matches");
+
+          const opClaim = await expect(
+            await asAdmin(`/admin/operators/${emailOp.operatorId}/email`, { method: "PUT", body: { email: OP_EMAIL } }),
+            200,
+          );
+          assert.equal(opClaim.login_email, OP_EMAIL);
+          await expect(
+            await asAdmin(`/admin/operators/${deadOpId}/email`, { method: "PUT", body: { email: DEAD_OP_EMAIL } }),
+            404,
+          );
+          // ...so the deactivated operator gets one by hand, which is the only way to reach
+          // the "deactivated is a lockout, not a label" case below.
+          await admin.query("INSERT INTO email_identities (email, operator_id) VALUES ($1, $2)", [DEAD_OP_EMAIL, deadOpId]);
+
+          // `workers.email` — the vestigial Apple column — IS NOT TOUCHED BY ANY OF THIS
+          // (decision-64's explicit carve-out).
+          const { rows } = await admin.query("SELECT email FROM workers WHERE id = $1", [workerId]);
+          assert.notEqual(rows[0].email, WORKER_EMAIL, "the claim route must never write the old Apple column");
+
+          // A SHAPE failure is 422 and writes nothing.
+          const bad = await asAdmin(`/admin/workers/${workerId}/email`, { method: "PUT", body: { email: "Anna" } });
+          assert.equal(bad.status, 422);
+          assert.equal((await bad.json()).error, "invalid_email");
+        });
+
+        await test("one address, ONE owner — the database decides, and 409 names nobody", async () => {
+          const stolen = await asAdmin(`/admin/operators/${emailOp.operatorId}/email`, {
+            method: "PUT",
+            body: { email: WORKER_EMAIL },
+          });
+          assert.equal(stolen.status, 409, "a worker's address may not be claimed by an operator");
+          const body = await stolen.json();
+          assert.deepEqual(Object.keys(body), ["error"], "anti-enumeration: the 409 names nobody");
+          assert.equal(body.error, "email_claimed");
+
+          // Re-saving the SAME address is a no-op, not a 409.
+          await expect(
+            await asAdmin(`/admin/workers/${workerId}/email`, { method: "PUT", body: { email: WORKER_EMAIL } }),
+            200,
+          );
+          assert.equal(await countOf("SELECT count(*) AS n FROM email_identities WHERE worker_id = $1", [workerId]), 1);
+        });
+
+        await test("a real request+verify round trip mints ts_worker and NOTHING else", async () => {
+          resetLoginRate();
+          const sent = mail.calls.length;
+          const req = await emailRequest(WORKER_EMAIL, "10.11.1.1");
+          assert.equal(req.status, 202, JSON.stringify(await req.clone().json()));
+          assert.deepEqual(await req.json(), { status: "accepted" });
+          assert.equal(mail.calls.length, sent + 1, "exactly one message was attempted");
+
+          const call1 = mail.calls.at(-1);
+          assert.match(call1.auth, /^Bearer re_/, "Bearer auth, per decision-64 §4");
+          assert.deepEqual(call1.body.to, [WORKER_EMAIL]);
+          assert.equal(typeof call1.body.text, "string", "PLAIN TEXT, never an HTML part");
+          assert.equal(call1.body.html, undefined);
+          assert.ok(call1.body.from.includes("<noreply@example.test>"), "the branded From, decision-24");
+
+          // THE CODE IS NEVER WRITTEN DOWN: only its SHA-256 reaches the database.
+          const code = lastCode();
+          const { rows } = await admin.query("SELECT code_hash FROM email_challenges WHERE email = $1", [WORKER_EMAIL]);
+          assert.equal(rows.length, 1);
+          assert.notEqual(rows[0].code_hash, code);
+          assert.equal(rows[0].code_hash, hashToken(code));
+
+          const res = await emailVerify(WORKER_EMAIL, code, "10.11.1.1");
+          const body = await res.json();
+          assert.equal(res.status, 200, JSON.stringify(body));
+          assert.equal(body.worker.id, workerId);
+          const raw = res.headers.getSetCookie?.()[0] ?? res.headers.get("set-cookie");
+          assert.match(raw, /^ts_worker=/, "email is a third DOOR, never a third identity system");
+
+          // SINGLE USE, decided by the database.
+          resetLoginRate();
+          assert.equal((await emailVerify(WORKER_EMAIL, code, "10.11.1.2")).status, 401, "a code is spent when it is used");
+        });
+
+        await test("the operator door mints ts_operator, and the two doors cannot cross", async () => {
+          resetLoginRate();
+          assert.equal((await opEmailRequest(OP_EMAIL, "10.11.1.3")).status, 202);
+          const code = lastCode();
+
+          // A WORKER ROUTE CANNOT REDEEM AN OPERATOR'S CHALLENGE: the row is address-keyed,
+          // but emailVerify's JOIN demands an ACTIVE WORKER for that address.
+          resetLoginRate();
+          assert.equal((await emailVerify(OP_EMAIL, code, "10.11.1.4")).status, 401, "a worker route may not mint here");
+
+          resetLoginRate();
+          // ...and the wrong guess above burned an attempt rather than the challenge, so a
+          // fresh one is requested for the real verify.
+          assert.equal((await opEmailRequest(OP_EMAIL, "10.11.1.5")).status, 202);
+          const res = await opEmailVerify(OP_EMAIL, lastCode(), "10.11.1.5");
+          const body = await res.json();
+          assert.equal(res.status, 200, JSON.stringify(body));
+          assert.equal(body.operator.id, emailOp.operatorId);
+          const raw = res.headers.getSetCookie?.()[0] ?? res.headers.get("set-cookie");
+          assert.match(raw, /^ts_operator=/);
+        });
+
+        await test("decision-51 disclosure: unknown, wrong-role and DEACTIVATED all answer one 404", async () => {
+          const sent = mail.calls.length;
+          // ONE SOURCE ADDRESS EACH: the per-IP limiter is spent before the database is
+          // touched, so three requests from one address would be testing the limiter.
+          for (const [email, ip, why] of [
+            ["niemand@example.test", "10.11.2.1", "an address nobody has ever registered"],
+            [OP_EMAIL, "10.11.2.2", "an OPERATOR's address: this route is not their door"],
+          ]) {
+            resetLoginRate();
+            const res = await emailRequest(email, ip);
+            assert.equal(res.status, 404, why);
+            assert.equal((await res.json()).error, "unknown_email", `${why} — they collapse to ONE answer`);
+          }
+          resetLoginRate();
+          const dead = await opEmailRequest(DEAD_OP_EMAIL, "10.11.2.3");
+          assert.equal(dead.status, 404, "a DEACTIVATED operator — deactivating is a lockout, not a label");
+          assert.equal((await dead.json()).error, "unknown_email");
+          assert.equal(mail.calls.length, sent, "NOT ONE MESSAGE may be sent on any of those paths");
+
+          // SHAPE ONLY on /request, never existence.
+          resetLoginRate();
+          const shape = await emailRequest("Anna", "10.11.2.9");
+          assert.equal(shape.status, 422);
+          assert.equal((await shape.json()).error, "invalid_email");
+
+          // ...and /verify never leaks it at all: a malformed address and a wrong code are
+          // byte-identical, or the shape check becomes a free existence probe.
+          resetLoginRate();
+          const bad = await emailVerify("Anna", "123456", "10.11.2.10");
+          assert.equal(bad.status, 401);
+          assert.deepEqual(await bad.json(), { error: "invalid_code" });
+        });
+
+        await test("the emailotp: bucket is GENUINELY separate from smsotp: and enrol:", async () => {
+          // The same argument decision-45 §6 made for enrolop: and decision-54 §5 for
+          // smsotpop:. RED: change the bucket in emailVerify to `smsotp:${ip}` and the SMS
+          // call below flips from 401 to 429.
+          resetLoginRate();
+          const IP = "10.11.3.1";
+          for (let i = 0; i < 5; i++) {
+            assert.equal((await emailVerify(WORKER_EMAIL, "000000", IP)).status, 401, `guess ${i + 1} is a plain refusal`);
+          }
+          const lockedOut = await emailVerify(WORKER_EMAIL, "000000", IP);
+          assert.equal(lockedOut.status, 429, "five wrong guesses lock the EMAIL bucket");
+
+          const codeDoor = await call("/auth/code", { method: "POST", body: { code: "ZZZZ-ZZZZ" }, ip: IP });
+          assert.equal(codeDoor.status, 401, "THE ENROLMENT-CODE DOOR AT THE SAME ADDRESS IS UNTOUCHED");
+          resetLoginRate();
+        });
+
+        await test("releasing a claim takes its live challenges with it (020 ON DELETE CASCADE)", async () => {
+          resetLoginRate();
+          assert.equal((await emailRequest(WORKER_EMAIL, "10.11.4.1")).status, 202);
+          assert.ok(
+            (await countOf("SELECT count(*) AS n FROM email_challenges WHERE email = $1", [WORKER_EMAIL])) > 0,
+            "a live challenge exists before the release, or the assertion below is vacuous",
+          );
+
+          await expect(await asAdmin(`/admin/workers/${workerId}/email`, { method: "DELETE" }), 200);
+          assert.equal(await countOf("SELECT count(*) AS n FROM email_identities WHERE worker_id = $1", [workerId]), 0);
+          assert.equal(
+            await countOf("SELECT count(*) AS n FROM email_challenges WHERE email = $1", [WORKER_EMAIL]),
+            0,
+            "a code must never outlive the claim it was minted against",
+          );
+          // Idempotent: releasing an unclaimed address is a 200, same as the phone route.
+          await expect(await asAdmin(`/admin/workers/${workerId}/email`, { method: "DELETE" }), 200);
+
+          resetLoginRate();
+          const gone = await emailRequest(WORKER_EMAIL, "10.11.4.2");
+          assert.equal(gone.status, 404, "and the door closes behind it");
+        });
+      } finally {
+        // OFF AGAIN. Nothing after this block may find a configured provider or an open flag
+        // by accident, and the stub must not hold the process open.
+        for (const k of RESEND_VARS) delete process.env[k];
+        await new Promise((r) => stub.close(r));
+        await admin.query("UPDATE feature_flags SET enabled = false WHERE name = 'email_login'");
+        await admin.query("DELETE FROM email_identities");
+      }
+    }
   }
 
 
@@ -7614,10 +7942,12 @@ try {
       const body = await res.json();
       assert.equal(body.fun_shift_screen, false, "the seeded flag is OFF — OFF is today's screen");
       assert.equal(body.sms_login, false, "seeded OFF (migration 016) — SMS stays hidden until turned on");
+      assert.equal(body.email_login, false, "seeded OFF (migration 021, decision-64) — the email door is inert");
       // No metadata on the wire: an admin's email must not reach every handset.
-      assert.deepEqual(Object.keys(body).sort(), ["fun_shift_screen", "sms_login"]);
+      assert.deepEqual(Object.keys(body).sort(), ["email_login", "fun_shift_screen", "sms_login"]);
       assert.equal(typeof body.fun_shift_screen, "boolean");
       assert.equal(typeof body.sms_login, "boolean");
+      assert.equal(typeof body.email_login, "boolean");
     });
 
     await test("GET /flags is a worker route: no app key and no session are both refused", async () => {
@@ -7631,6 +7961,7 @@ try {
       assert.deepEqual(
         (await list.json()).flags.map((f) => [f.name, f.enabled]),
         [
+          ["email_login", false],
           ["fun_shift_screen", false],
           ["sms_login", false],
         ],
@@ -7669,7 +8000,7 @@ try {
       });
       assert.equal(res.status, 404);
       assert.equal((await res.json()).error, "unknown_flag");
-      assert.equal(await countOf("SELECT count(*) AS n FROM feature_flags"), 2, "a 404 must not create a row either");
+      assert.equal(await countOf("SELECT count(*) AS n FROM feature_flags"), 3, "a 404 must not create a row either");
     });
 
     await test("a missing or non-boolean `enabled` is a 400, not a coerced truth", async () => {
@@ -7683,7 +8014,7 @@ try {
         assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(body)}`);
         assert.equal((await res.json()).error, "invalid_field");
       }
-      assert.equal(await countOf("SELECT count(*) AS n FROM feature_flags WHERE enabled"), 0, "both flags still OFF");
+      assert.equal(await countOf("SELECT count(*) AS n FROM feature_flags WHERE enabled"), 0, "all three flags still OFF");
     });
 
     await test("the flags session is refused on EVERY other admin route, exactly as anonymous is", async () => {
@@ -7714,7 +8045,7 @@ try {
       assert.equal((await call("/admin/data", { key: null, cookie: fullCookie })).status, 200);
       const list = await call("/admin/flags", { key: null, cookie: fullCookie });
       assert.equal(list.status, 200);
-      assert.equal((await list.json()).flags.length, 2);
+      assert.equal((await list.json()).flags.length, 3);
       const patched = await call("/admin/flags/fun_shift_screen", {
         method: "PATCH",
         key: null,

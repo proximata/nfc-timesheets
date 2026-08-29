@@ -12,6 +12,7 @@ import { HttpError, readJson, sendJson } from "./lib/http.js";
 import { recordPhoneHeartbeat } from "./lib/phones.js";
 import { redactUrl } from "./lib/scrub.js";
 import { logAscConfig } from "./lib/appstoreconnect.js";
+import { logEmailConfig } from "./lib/email.js";
 import { logSmsConfig } from "./lib/sms.js";
 import { adminRoutes } from "./routes/admin.js";
 import { appRoutes } from "./routes/app.js";
@@ -375,6 +376,10 @@ if (isMain) {
     // absent — never a value, never a prefix, never a length — so "why did the button say
     // it is not set up" is answerable from journalctl instead of from a guess.
     logSmsConfig();
+    // decision-64, and the SAME sentence applies word for word: RESEND_* is not in
+    // REQUIRED_ENV and never will be. Today this line reads "email: not configured" on every
+    // box, which is the intended state.
+    logEmailConfig();
     logAscConfig();
   });
 
