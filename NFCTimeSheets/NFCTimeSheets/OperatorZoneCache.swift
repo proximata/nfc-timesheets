@@ -32,6 +32,13 @@ enum OperatorZoneCache {
         UserDefaults.standard.set(data, forKey: key)
     }
 
+    /// Drop the snapshot (decision-62, first launch after a build change). Safe at any
+    /// moment: this is a copy of a server answer and VerifyZoneScreen always resolves
+    /// through the live server anyway - see this file's header.
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
     /// The last cached worklist, or empty if never fetched.
     static func read() -> [WireOperatorZone] {
         guard let data = UserDefaults.standard.data(forKey: key),

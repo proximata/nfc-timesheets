@@ -125,9 +125,14 @@ struct SignInView: View {
             Form {
                 Section {
                     VStack(spacing: 12) {
-                        Image(systemName: "wave.3.right")
-                            .font(.system(size: 44))
-                            .foregroundStyle(.tint)
+                        // THE REAL COMPANY MARK, not a generic radio-waves glyph. It is
+                        // achromatic by nature (docs/brand/DESIGN.md measured the source
+                        // pixels) - there is no colour version to reach for, and none is
+                        // invented here.
+                        Image("BrandMark")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 72)
                             .accessibilityHidden(true)
                         Text("NFC TimeSheets")
                             .font(.title.bold())
@@ -230,6 +235,12 @@ struct LogView: View {
     @State private var showManualStart = false
     @State private var manualPick: String?
     @State private var confirmingManualStart = false
+    /// The foreground scan (TapScanner.swift). One instance for the life of the view, and
+    /// `scanError` is the calm sentence for a card that could not be read or is not ours -
+    /// never a crash, never a silent no-op.
+    @State private var scanner = TapScanner()
+    @State private var scanError: String?
+    @State private var scanning = false
 
     private var open: [Shift] { shifts.filter(\.isOpen) }
     private var recent: [Shift] { Array(shifts.filter { !$0.isOpen }.prefix(5)) }
@@ -280,25 +291,30 @@ struct LogView: View {
                                 onResolve: { showResolver = true },
                                 notice: switchNotice,
                                 onDismissNotice: { switchNotice = nil },
-                                onManualStop: manualStop)
+                                onManualStop: manualStop,
+                                onScan: scan)
                 } else {
                     idleList
                 }
             }
             .navigationTitle(running == nil ? "TimeSheet" : "Shift running")
             .refreshable { await refresh() }
-            // There is no in-app scan button. Clocking in happens by holding the phone to
-            // the tag while the app is closed: iOS reads the tag itself and opens the
-            // universal link, which lands in `inbox` via onOpenURL. That path needs no
-            // CoreNFC entitlement and no reader session.
+            // THE IN-APP SCAN IS BACK, and on NFCTagReaderSession, not the retired
+            // NFCNDEFReaderSession: `NDEF` in com.apple.developer.nfc.readersession.formats
+            // is App Store error 90778, `TAG` is what this app already has, and that is what
+            // TapScanner uses. It exists because the background tap opens a universal link
+            // and iOS shows a system transition for it even when the app is already open in
+            // the worker's hand - confusing exactly where it should be calmest.
             //
-            // The button that used to live here drove NFCNDEFReaderSession. Building against
-            // the iOS 26 SDK, `NDEF` is no longer permitted in
-            // com.apple.developer.nfc.readersession.formats (App Store error 90778) - it now
-            // demands `TAG`, i.e. NFCTagReaderSession. Rather than port a scanner that was
-            // always meant to be deleted once background tap worked, it is gone.
-            // Ceiling: if background tap proves unreliable on real hardware, the fallback is
-            // NFCTagReaderSession + `TAG` in the entitlement, NOT the old NDEF session.
+            // It adds NO clock-in logic: a resolved tag goes to `inbox.accept`, the same
+            // mailbox onOpenURL/onContinueUserActivity post into, and comes back out through
+            // the onChange below into the one handleTap.
+            .alert("Couldn't read that tag",
+                   isPresented: Binding(get: { scanError != nil }, set: { if !$0 { scanError = nil } })) {
+                Button("OK") { scanError = nil }
+            } message: {
+                Text(scanError ?? "")
+            }
             .onChange(of: inbox.pendingLocationId) { _, id in
                 guard id != nil, let tapped = inbox.take() else { return }
                 handleTap(tapped)
@@ -344,7 +360,7 @@ struct LogView: View {
                 ForEach(recent) { ShiftRow(shift: $0, name: siteName($0.locationId)) }
             }
             Section {
-                VStack(spacing: 6) {
+                VStack(spacing: 12) {
                     Image(systemName: "wave.3.right")
                         .font(.title2)
                         .foregroundStyle(.tint)
@@ -353,20 +369,30 @@ struct LogView: View {
                         .font(.callout)
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
+                        .accessibilityElement(children: .combine)
+                    // THE ONE FILLED BUTTON on this screen: the primary action. Everything
+                    // else in this list is secondary or corrective and is plain/bordered.
+                    Button(action: scan) {
+                        Label("Scan a tag", systemImage: "wave.3.right")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
-                .accessibilityElement(children: .combine)
             }
             // decision-56 §4. CLEARLY SECONDARY: a plain row under the tap instruction, not
             // a prominent button beside it - the tag stays the normal way in, and this is the
             // answer to a broken card, an unreachable one, or a phone whose NFC is dead.
             // Flagged, never silent; the footer says so before it is pressed, not after.
             Section {
+                // Corrective, so BORDERED and never filled (2026-08-29 UX audit).
                 Button("Start without a tag") {
                     manualPick = nil
                     showManualStart = true
                 }
+                .buttonStyle(.bordered)
             } footer: {
                 Text("Tag missing or unreachable? Pick the building instead. The office sees this as a manual entry.")
                     .font(.footnote)
@@ -491,6 +517,29 @@ struct LogView: View {
         }
     }
     #endif
+
+    /// The foreground scan. Resolves a card in-app and posts it to the SAME TapInbox the
+    /// background universal link posts into - so every open/close decision still happens in
+    /// exactly one place, `handleTap`, reached through the `.onChange` above.
+    ///
+    /// Every non-resolving outcome ends in a sentence or in silence, never in a no-op the
+    /// worker cannot explain: a cancelled sheet says nothing (they cancelled it), anything
+    /// else says why.
+    private func scan() {
+        guard !scanning else { return }
+        scanning = true
+        Task {
+            defer { scanning = false }
+            switch await scanner.scan() {
+            case .resolved(let locationId):
+                inbox.accept(locationId)
+            case .unrecognised:
+                scanError = String(localized: "This card isn't one of ours. Ask your admin to check it.")
+            case .failed(let message):
+                scanError = message
+            }
+        }
+    }
 
     private func refresh() async {
         await refreshRoster(context: context)
@@ -847,7 +896,10 @@ struct SettingsView: View {
                         .font(.footnote)
                 }
                 Section {
+                    // Destructive, so BORDERED and never filled or borderless (2026-08-29
+                    // UX audit): a plain text row reads like a label until it is pressed.
                     Button("Sign out", role: .destructive) { Task { await session.signOut() } }
+                        .buttonStyle(.bordered)
                         .disabled(session.busy)
                 } footer: {
                     Text("Shifts already sent stay on the server. Anything still waiting to send will be blocked until you sign back in.")

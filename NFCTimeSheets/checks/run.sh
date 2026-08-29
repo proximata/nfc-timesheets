@@ -49,6 +49,9 @@ run materials-check     "$SRC/Branding.swift" "$SRC/TagLink.swift" "$SRC/API.swi
 run shift-signal-check  "$SRC/ShiftSignal.swift"
 # decision-57: OFF must stay OFF. See the check's header for why the default is the feature.
 run flags-check         "$SRC/FeatureFlags.swift"
+# decision-62: the cache-generation marker. Fires once per build change, never on a fresh
+# install, never twice - see the check's header for the two silent failures it pins.
+run app-update-check    "$SRC/AppUpdate.swift"
 # decision-49: the byte encoder and the overwrite guard, safety-critical - wrong bytes
 # ruin a physical card mounted to a building. See each check's own header for the exact
 # TASK-220 regression it reproduces before going green.

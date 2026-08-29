@@ -32,15 +32,20 @@ struct ShiftScreen: View {
     /// decision-56: end this shift NOW, without a tag. The confirmation lives here; the
     /// caller only ever hears about a decision the worker already confirmed.
     let onManualStop: () -> Void
+    /// The FOREGROUND scan (TapScanner.swift): close this shift by holding the card to the
+    /// phone while the app is open, instead of backgrounding it so iOS can open the link.
+    /// It resolves a tag and posts it to TapInbox - the same mailbox the background tap
+    /// uses - so this button opens no shift logic of its own.
+    let onScan: () -> Void
 
     @Environment(ShiftSignalCenter.self) private var signals
     @Environment(\.openURL) private var openURL
     @State private var confirmingStop = false
 
-    /// decision-57, OFF by default and OFF whenever the server has never answered: with
-    /// the flag off every line below behaves exactly as it did before this flag existed.
+    /// decision-60: the flag no longer decides the COLOUR - blue is the colour, flag or no
+    /// flag. What it still decides is whether that blue is animated (the gradient below).
     /// Read straight out of the cache rather than passed in, so the call site (and every
-    /// preview) keeps the old, unflagged screen for free.
+    /// preview) keeps the plain screen for free.
     @AppStorage(FeatureFlags.defaultsKey(FeatureFlags.funShiftScreen))
     private var funTheme = false
 
@@ -57,12 +62,13 @@ struct ShiftScreen: View {
         TimelineView(.periodic(from: running.startTime, by: 60)) { context in
             let overdue = ShiftSignal.phase(of: running, now: context.date) == .overdue
             // Colour is the SECOND signal, never the only one - the state is spelled out
-            // in words directly under the clock. Green while it is fine, red once it is not.
+            // in words directly under the clock, so this screen still reads in greyscale.
             //
-            // decision-57: with fun_shift_screen ON the "fine" colour becomes blue. RED IS
-            // NOT FLAGGED and never will be - the one thing that must never mean "fine" is
-            // the only colour on this screen that carries a consequence.
-            let tint: Color = overdue ? .red : (funTheme ? .blue : .green)
+            // decision-60: GREEN IS RETIRED. "Running" is a named blue token from
+            // Assets.xcassets (never a raw .blue literal, never conditional on
+            // fun_shift_screen). RED for overdue is untouched and is still the only colour
+            // on this screen that carries a consequence.
+            let tint: Color = overdue ? .red : Self.running
 
             // ScrollView, not a fixed stack: at 200% Dynamic Type this content is far
             // taller than the screen, and a locked screen that clips its own instructions
@@ -72,6 +78,7 @@ struct ShiftScreen: View {
                     header(overdue: overdue, tint: tint)
                     clock(overdue: overdue, now: context.date)
                     instruction(tint: tint)
+                    scanButton
                     stopButton
                     if let notice { noticeCard(notice) }
                     if unresolvedCount > 0 { resolverCard }
@@ -94,21 +101,23 @@ struct ShiftScreen: View {
 
     // MARK: - Background
 
-    /// Flag OFF: the wash this screen has always had. Flag ON: TRUE BLACK plus a procedural
-    /// animation (decision-57 §3).
+    /// The one blue this screen means "running" with, and the same family as AccentColor
+    /// (decision-60 §1, and the missing-accent gap the 2026-08-29 UX audit filed as B5).
+    /// A NAMED asset, so there is exactly one place to change it.
+    private static let running = Color("ShiftRunning")
+
+    /// Flag OFF: a flat wash of the running blue - the shape this screen has always had,
+    /// only never green again. Flag ON: the same blue, animated dark-to-light
+    /// (decision-60 §3).
     ///
     /// It is a BACKGROUND and stays one. Everything that says what state the shift is in -
     /// the header words, the clock card, "Running", the resolver - is drawn on top of it in
-    /// its own opaque card, so the figures can never sit between the worker and the words.
-    /// Their opacity is deliberately low for the same reason.
+    /// its own opaque card, so nothing here can sit between the worker and the words.
     @ViewBuilder
     private func background(tint: Color) -> some View {
         if funTheme {
-            ZStack {
-                Color.black
-                WorkerSilhouettes(tint: tint)
-                    .accessibilityHidden(true)     // decoration; VoiceOver reads the words
-            }
+            BlueDrift(tint: tint)
+                .accessibilityHidden(true)     // decoration; VoiceOver reads the words
         } else {
             tint.opacity(0.14)
         }
@@ -203,6 +212,18 @@ struct ShiftScreen: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// The in-app way to present the same card, for a phone that is already open in the
+    /// worker's hand (TapScanner.swift). THE ONE FILLED BUTTON ON THIS SCREEN: everything
+    /// else here is corrective and is bordered.
+    private var scanButton: some View {
+        Button(action: onScan) {
+            Label("Scan a tag", systemImage: "wave.3.right")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+    }
+
     /// SECONDARY, and below the tap instruction on purpose: the tag is still the normal way
     /// out. `.bordered` + a confirmation dialog, never a single destructive tap - decision-56
     /// §4 requires the confirmation on both new paths, and the dialog NAMES the building so
@@ -238,8 +259,10 @@ struct ShiftScreen: View {
     private var resolverCard: some View {
         card(icon: "exclamationmark.triangle.fill", tint: .orange) {
             Text("\(unresolvedCount) unfinished shift(s) need a finish time before they can be paid.")
+            // BORDERED, not filled: a corrective action, and the filled one on this screen
+            // is already spoken for by the scan button (2026-08-29 UX audit).
             Button("Confirm finish times", action: onResolve)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
         }
     }
 
@@ -281,50 +304,46 @@ struct ShiftScreen: View {
     }
 }
 
-/// decision-57 §3: the procedural half of the fun theme. SwiftUI `Canvas` + `TimelineView`,
-/// both already in the dependency tree - NO new asset pipeline, no Lottie/Rive, no bundled
-/// image or video. Four silhouettes walk along the bottom of the screen sweeping.
+/// decision-60 §3: the procedural half of the fun theme, and it REPLACES decision-57's
+/// walking silhouettes rather than layering on top of them - four figures marching under a
+/// drifting gradient was two competing focal points on a screen whose whole job is one
+/// ticking clock. SwiftUI `Canvas` + `TimelineView` only, exactly as before: NO new asset
+/// pipeline, no Lottie/Rive, no bundled image or video.
 ///
-/// It draws ONLY in the lower band of the screen and only at low opacity, because the clock
-/// and the state words live above it in opaque cards. Nothing here is ever the signal; the
-/// screen must read identically with this view deleted.
-private struct WorkerSilhouettes: View {
+/// A slow dark-to-light blue wash, plus three orbs drifting across it. Nothing here is ever
+/// the signal - the words above it are - so the screen must still read with this view
+/// deleted, and the orbs stay at low opacity behind opaque cards. The phases come from
+/// FunShiftAnimation, which is arithmetic and check-covered without a simulator.
+private struct BlueDrift: View {
     let tint: Color
 
     var body: some View {
         TimelineView(.animation) { context in
             let t = context.date.timeIntervalSinceReferenceDate
+            // 0...1 and back, once per cycle - the dark-to-light breath.
+            let breath = (FunShiftAnimation.sweepSwing(figure: 0, at: t, period: 18) + 1) / 2
             Canvas { ctx, size in
-                let unit = min(size.width, size.height) * 0.09      // one figure's head-ish
-                let ground = size.height * 0.88
+                let dark = tint.opacity(0.55)
+                let light = tint.opacity(0.10)
+                ctx.fill(
+                    Path(CGRect(origin: .zero, size: size)),
+                    with: .linearGradient(
+                        Gradient(colors: breath < 0.5 ? [dark, light] : [light, dark]),
+                        startPoint: .zero,
+                        endPoint: CGPoint(x: size.width * breath, y: size.height))
+                )
                 ctx.opacity = 0.22
-                for figure in 0..<FunShiftAnimation.figureCount {
-                    let phase = FunShiftAnimation.walkPhase(figure: figure, at: t)
-                    // Off the left edge by a whole figure, so one walks IN rather than
-                    // popping into existence at x = 0.
-                    let x = phase * (size.width + unit * 3) - unit * 1.5
-                    let y = ground - unit * Double(figure % 2) * 0.6  // a shallow two-row crowd
-                    draw(&ctx, at: CGPoint(x: x, y: y), unit: unit,
-                         swing: FunShiftAnimation.sweepSwing(figure: figure, at: t))
+                for orb in 0..<FunShiftAnimation.figureCount {
+                    let phase = FunShiftAnimation.walkPhase(figure: orb, at: t, cycle: 26)
+                    let r = min(size.width, size.height) * (0.18 + 0.05 * Double(orb % 2))
+                    let x = phase * (size.width + r * 4) - r * 2
+                    let y = size.height * (0.25 + 0.5 * (FunShiftAnimation.sweepSwing(figure: orb, at: t, period: 11) + 1) / 2)
+                    ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)),
+                             with: .color(tint))
                 }
             }
-            .drawingGroup()     // one offscreen pass, not four layers composited per frame
+            .blur(radius: 40)      // orbs, not discs - the edges must never read as content
+            .drawingGroup()        // one offscreen pass, not four layers composited per frame
         }
-    }
-
-    /// Head + body + the mop handle. Deliberately crude - see FunShiftAnimation's ceiling.
-    private func draw(_ ctx: inout GraphicsContext, at origin: CGPoint, unit: Double, swing: Double) {
-        let head = Path(ellipseIn: CGRect(x: origin.x - unit * 0.25, y: origin.y - unit * 2.2,
-                                          width: unit * 0.5, height: unit * 0.5))
-        let body = Path(roundedRect: CGRect(x: origin.x - unit * 0.28, y: origin.y - unit * 1.7,
-                                            width: unit * 0.56, height: unit * 1.7),
-                        cornerRadius: unit * 0.22)
-        ctx.fill(head, with: .color(tint))
-        ctx.fill(body, with: .color(tint))
-
-        var mop = Path()
-        mop.move(to: CGPoint(x: origin.x + unit * 0.2, y: origin.y - unit * 1.2))
-        mop.addLine(to: CGPoint(x: origin.x + unit * (0.9 + swing * 0.35), y: origin.y))
-        ctx.stroke(mop, with: .color(tint), lineWidth: unit * 0.12)
     }
 }

@@ -200,7 +200,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Zugangscode"
+            "value" : "Anmeldecode"
           }
         }
       }
@@ -493,6 +493,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Von dieser Karte konnte kein Link oder bekanntes Tag gelesen werden."
+          }
+        }
+      }
+    },
+    "Couldn't read that tag" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tag konnte nicht gelesen werden"
           }
         }
       }
@@ -1146,6 +1156,16 @@
         }
       }
     },
+    "OK" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        }
+      }
+    },
     "Open Settings" : {
       "localizations" : {
         "de" : {
@@ -1161,7 +1181,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Operator"
+            "value" : "Betreiber"
           }
         }
       }
@@ -1171,7 +1191,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Zugangscode"
+            "value" : "Anmeldecode"
           }
         }
       }
@@ -1432,7 +1452,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SMS-Anmeldung ist auf diesem Server nicht eingerichtet. Bitte den Zugangscode verwenden."
+            "value" : "SMS-Anmeldung ist auf diesem Server nicht eingerichtet. Bitte den Anmeldecode verwenden."
           }
         }
       }
@@ -1463,6 +1483,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Karte scannen und die App sagt, was sie ist. Es wird nichts geschrieben und keine Schicht geöffnet."
+          }
+        }
+      }
+    },
+    "Scan a tag" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tag scannen"
           }
         }
       }
@@ -1638,7 +1668,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Als Operator anmelden, um Karten zu schreiben und zu prüfen. Dabei wird nie eine Schicht geöffnet."
+            "value" : "Als Betreiber anmelden, um Karten zu schreiben und zu prüfen. Dabei wird nie eine Schicht geöffnet."
           }
         }
       }
@@ -1668,7 +1698,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mit Zugangscode anmelden"
+            "value" : "Mit Anmeldecode anmelden"
           }
         }
       }
@@ -1678,7 +1708,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mit Code anmelden"
+            "value" : "Anmelden"
           }
         }
       }
@@ -1979,7 +2009,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Das sieht nicht nach einem gültigen Zugangscode aus."
+            "value" : "Das sieht nicht nach einem gültigen Anmeldecode aus."
           }
         }
       }
@@ -2230,6 +2260,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Diese Karte gehört nicht zu uns."
+          }
+        }
+      }
+    },
+    "This card isn't one of ours. Ask your admin to check it." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Karte gehört nicht zu diesem System. Bitte die Verwaltung prüfen lassen."
           }
         }
       }

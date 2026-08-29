@@ -139,6 +139,7 @@ struct NFCTimeSheetsApp: App {
                 // rows that are about to disappear.
                 .task {
                     purgeLegacyIdentityDefaults()
+                    invalidateCachesIfUpdated(context: container.mainContext)
                     await DataMigrations.runPending(context: container.mainContext)
                     await session.restore()
                     #if DEBUG
@@ -183,4 +184,22 @@ struct NFCTimeSheetsApp: App {
         }
         .modelContainer(container)
     }
+}
+
+/// decision-62. First launch after CFBundleVersion changes: drop the CACHED SERVER READS
+/// and nothing else, then let the screens' existing fetches fill them again.
+///
+/// Runs BEFORE session.restore(), so LogView's `.task { await refresh() }` - the same call
+/// pull-to-refresh makes - is what repopulates the roster; no new fetch was added for this.
+/// The unresolved-shift list needs no line here: it is fetched on every refresh and never
+/// cached to disk. `Shift` rows are the OFFLINE WRITE QUEUE and are deliberately absent -
+/// see AppUpdate.swift's header for the full never-touched list.
+@MainActor
+private func invalidateCachesIfUpdated(context: ModelContext) {
+    let build = AppUpdate.currentBuild()
+    guard AppUpdate.didChangeBuild(current: build) else { return }
+    for site in (try? context.fetch(FetchDescriptor<Site>())) ?? [] { context.delete(site) }
+    try? context.save()
+    OperatorZoneCache.clear()
+    Telemetry.log("cached reads invalidated after update", .info, ["ts.app.build": build])
 }

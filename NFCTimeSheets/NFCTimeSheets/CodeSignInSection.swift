@@ -99,9 +99,21 @@ struct CodeSignInSection: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+                    // Bordered: a step towards the primary action, not the primary action.
                     Button("Send code") { requestOtp() }
+                        .buttonStyle(.bordered)
                         .disabled(busy || phone.isEmpty)
                 }
+            }
+
+            // ABOVE the field, as an intro sentence, matching Android's structure - a
+            // caption under the box reads as an error's neighbour and is skipped by exactly
+            // the person who needed it (2026-08-29 UX audit). Only outside SMS mode; the
+            // OTP case already says where the code was sent, above.
+            if !otpMode {
+                Text("The one-time code your administration gave you.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             TextField(otpMode ? "SMS code" : "Access code", text: $code)
@@ -123,21 +135,27 @@ struct CodeSignInSection: View {
                 Text(codeErrorMessage)
                     .font(.footnote)
                     .foregroundStyle(.red)
-            } else if !otpMode {
-                Text("The one-time code your administration gave you.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
 
-            Button(otpMode ? "Confirm" : "Sign in with code") { submit() }
-                .disabled(busy || !submittable)
+            // THE PRIMARY ACTION, and the only filled button on this screen: full-width and
+            // accent-tinted, not a grey list row indistinguishable from the field above it.
+            Button { submit() } label: {
+                Text(otpMode ? "Confirm" : "Sign in with code")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(busy || !submittable)
+            .listRowBackground(Color.clear)
 
             if otpMode {
+                // Corrective: bordered, never filled - the filled one is the submit above.
                 Button("Use a different number") {
                     sentTo = nil
                     code = ""
                     codeErrorMessage = nil
                 }
+                .buttonStyle(.bordered)
                 .disabled(busy)
             }
         } header: {

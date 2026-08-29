@@ -47,11 +47,15 @@ enum FeatureFlags {
 ///
 /// ponytail CEILING (decision-57 §3): these are simple moving shapes, not illustrated
 /// characters. UPGRADE PATH is swapping in real sprite/Lottie assets behind the SAME flag.
+///
+/// decision-60 §3 repointed the SHAPES at drifting blue orbs and a breathing gradient - the
+/// walking silhouettes are gone - but the arithmetic is unchanged and is still the only part
+/// of the effect a check can see without a simulator.
 enum FunShiftAnimation {
-    /// How many figures walk across the screen. Small on purpose: this is a background.
+    /// How many moving elements cross the screen. Small on purpose: this is a background.
     static let figureCount = 4
 
-    /// Horizontal position of one figure at time `t` seconds, in 0..<1 of the width.
+    /// Horizontal position of one element at time `t` seconds, in 0..<1 of the width.
     /// Each figure is offset by an equal share of the cycle so they never bunch up, and the
     /// walk WRAPS rather than bouncing, so there is no visible turn-around beat.
     static func walkPhase(figure: Int, at t: Double, cycle: Double = 14) -> Double {
