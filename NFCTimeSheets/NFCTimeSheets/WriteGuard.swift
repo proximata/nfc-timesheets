@@ -122,6 +122,22 @@ enum WriteGuard {
         return .occupied(onTag: onTag, offered: offered.flatMap(TagLink.normalizedUUID) ?? "", token: token(onTag))
     }
 
+    /// What the write actually DESTROYED, for the screen.
+    ///
+    /// A card already carrying the id being offered is this operation's OWN earlier
+    /// attempt - the retry path in [decide], reached after a write that verified fine but
+    /// whose report to the office failed, and which the operator repaired by presenting the
+    /// same card again. Reporting that as "this card held one of our own ids before: <the
+    /// id you just wrote>" is a false collision: it names the card as somebody's mounted
+    /// door when it is in fact the card in the operator's hand, one attempt ago. Nothing of
+    /// ours was lost, so nothing is claimed.
+    static func replacedForReport(existing: Existing, offered: String) -> Existing {
+        guard case .ours(let onTag) = existing, TagLink.normalizedUUID(offered) == onTag else {
+            return existing
+        }
+        return .blank
+    }
+
     /// The six characters the operator must type to destroy `locationId`.
     ///
     /// The LAST six of the uuid, not the first: the first characters of two ids are what a

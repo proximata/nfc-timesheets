@@ -54,6 +54,9 @@ run flags-check         "$SRC/FeatureFlags.swift"
 # TASK-220 regression it reproduces before going green.
 run ndef-tag-check      "$SRC/Branding.swift" "$SRC/TagLink.swift" "$SRC/NdefTag.swift"
 run write-guard-check   "$SRC/Branding.swift" "$SRC/TagLink.swift" "$SRC/NdefTag.swift" "$SRC/WriteGuard.swift"
+# The write screen's step machine: exactly one panel, and a SECOND card in the same session
+# starts clean. See the check's header for the three-panels-at-once bug it reproduces.
+run write-tag-step-check "$SRC/WriteTagStep.swift"
 
 # Reads Localizable.xcstrings off disk rather than being cat-ed together with source.
 if swift checks/localisation-check.swift; then :; else failed=1; fi
@@ -62,6 +65,10 @@ if swift checks/localisation-check.swift; then :; else failed=1; fi
 # that no sign-out clears. Reads the sources off disk - see the check's own header for why
 # it cannot be cat-ed together with them.
 if swift checks/operator-gate-check.swift; then :; else failed=1; fi
+
+# decision-59: `sms_login` off must remove the SMS door from BOTH iOS sign-in paths, and
+# the capability read must fail CLOSED. Reads the sources off disk, same reason as above.
+if swift checks/sms-gate-check.swift; then :; else failed=1; fi
 
 # decision-49: reads NFCTimeSheets.entitlements off disk — never writes it (owner-only file).
 # Catches NDEF sneaking back into the array (App Store 90778) whether Xcode, a human or an

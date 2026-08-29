@@ -66,53 +66,20 @@ struct WriteTagScreen: View {
         }
     }
 
+    /// EXACTLY ONE of these renders at a time (WriteTagStep). They used to be three
+    /// independent `if`s, which is how a second card in one session ended up showing the
+    /// mint plan, a write result and a stale report failure all at once.
     @ViewBuilder
     private var writeSections: some View {
         Group {
-            Section {
-                Text("This never opens a shift. A fresh id is minted on this phone before anything is written.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                // THE ACTUAL LINK, not just its id - this is what a phone reads back when it
-                // taps the card, and the only thing on this screen an operator can visually
-                // recognise as "a working tag" versus "some text".
-                LabeledContent("Will write", value: pendingUri)
-                    .font(.system(.footnote, design: .monospaced))
-                LabeledContent("Card id", value: pendingId)
-                    .font(.system(.footnote, design: .monospaced))
-            }
-
-            Section {
-                Text(statusText)
-                    .accessibilityLabel(statusText)
-                if let occupied = occupiedOutcome, confirmedFor != occupied.onTag {
-                    TextField("Last six characters", text: $confirmText)
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                    Button("Overwrite") {
-                        confirmedFor = occupied.onTag
-                        confirmText = ""
-                    }
-                    .disabled(!WriteGuard.confirms(locationId: occupied.onTag, typed: confirmText))
-                }
-                Button("Write") { Task { await write() } }
-                    .disabled(busy)
-            }
-
-            if case .written(let locationId, _, _, _, _) = outcome, report != .sent {
-                Section {
-                    Text(reportText)
-                        .font(.footnote)
-                    Button("Tell the office") { Task { await sendReport(locationId) } }
-                        .disabled(busy)
-                }
-            }
-
+            switch step {
+            case .plan: planSection
+            case .result: resultSection
             // ONLY after the office knows about the card. Resolving a tag the server has
             // never heard of is a guaranteed 404, so this step cannot come earlier - and a
-            // failed report is not a dead end, because the retry button above is still up.
-            if report == .sent, reportedId != nil {
-                zoneSection
+            // failed report is not a dead end, because it keeps the screen on `.result`,
+            // where the retry button lives.
+            case .zone: zoneSection
             }
 
             #if DEBUG
@@ -148,6 +115,7 @@ struct WriteTagScreen: View {
     /// shipping code talking to OperatorFlowAPI's mocked half.
     private func simulateWrite(_ flow: OperatorMockFlow) async {
         OperatorMocks.arm(flow)
+        resetForNewWrite()
         busy = true
         let id = OperatorTagMint.mintId()
         outcome = OperatorMocks.writtenOutcome(id: id)
@@ -161,8 +129,62 @@ struct WriteTagScreen: View {
     #endif
 
     @ViewBuilder
+    private var planSection: some View {
+        Section {
+            Text("This never opens a shift. A fresh id is minted on this phone before anything is written.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            // THE ACTUAL LINK, not just its id - this is what a phone reads back when it
+            // taps the card, and the only thing on this screen an operator can visually
+            // recognise as "a working tag" versus "some text".
+            LabeledContent("Will write", value: pendingUri)
+                .font(.system(.footnote, design: .monospaced))
+            LabeledContent("Card id", value: pendingId)
+                .font(.system(.footnote, design: .monospaced))
+            if busy {
+                Text(statusText)
+                    .accessibilityLabel(statusText)
+            }
+            Button("Write") { Task { await write() } }
+                .disabled(busy)
+        }
+    }
+
+    /// One write attempt's ending, and everything the operator can do about it: confirm an
+    /// overwrite, write again, or retry the report. One section, because they are one step.
+    @ViewBuilder
+    private var resultSection: some View {
+        Section {
+            Text(statusText)
+                .accessibilityLabel(statusText)
+            if let occupied = occupiedOutcome, confirmedFor != occupied.onTag {
+                TextField("Last six characters", text: $confirmText)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                Button("Overwrite") {
+                    confirmedFor = occupied.onTag
+                    confirmText = ""
+                }
+                .disabled(!WriteGuard.confirms(locationId: occupied.onTag, typed: confirmText))
+            }
+            if case .written(let locationId, _, _, _, _) = outcome {
+                Text(reportText)
+                    .font(.footnote)
+                if report == .failed {
+                    Button("Tell the office") { Task { await sendReport(locationId) } }
+                        .disabled(busy)
+                }
+            }
+            Button("Write") { Task { await write() } }
+                .disabled(busy)
+        }
+    }
+
+    @ViewBuilder
     private var zoneSection: some View {
         Section("Make this card a zone") {
+            LabeledContent("Card id", value: reportedId ?? "")
+                .font(.system(.footnote, design: .monospaced))
             Text(zoneText)
                 .font(.footnote)
                 .accessibilityLabel(zoneText)
@@ -184,6 +206,12 @@ struct WriteTagScreen: View {
         }
     }
 
+    /// DERIVED, never stored - see WriteTagStep.swift.
+    private var step: WriteTagStep {
+        .current(hasOutcome: outcome != nil, reportSent: report == .sent,
+                 hasReportedId: reportedId != nil)
+    }
+
     private var occupiedOutcome: (onTag: String, offered: String, token: String)? {
         guard case .refusedOccupied(let onTag, let offered, let token) = outcome else { return nil }
         return (onTag, offered, token)
@@ -201,6 +229,7 @@ struct WriteTagScreen: View {
     /// stays here is this screen's own state machine around it: the spent overwrite
     /// confirmation, the re-mint, the report's retry.
     private func write() async {
+        resetForNewWrite()
         busy = true
         defer { busy = false }
         let result = await OperatorTagMint.writeAndReport(
@@ -221,6 +250,19 @@ struct WriteTagScreen: View {
             return
         }
         await reportLanded(result.id)
+    }
+
+    /// THE SECOND CARD OF A SESSION STARTS CLEAN. Without this, card 2's attempt inherited
+    /// card 1's landed report, its reported id and its open zone step, and the view showed
+    /// all of it at once. Everything here describes ONE card; nothing here is the mint.
+    private func resetForNewWrite() {
+        outcome = nil
+        report = .idle
+        reportedId = nil
+        zone = .idle
+        locations = []
+        pickedLocationId = nil
+        zoneName = ""
     }
 
     private func sendReport(_ locationId: String) async {

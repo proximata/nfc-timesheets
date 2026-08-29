@@ -82,6 +82,20 @@ if case .occupied = WriteGuard.decide(existing: ours, offered: otherId, confirme
     check(false, "confirming the WRONG id (e.g. the one being offered) never authorises anything")
 }
 
+// --- replacedForReport: a card must never be reported as colliding WITH ITSELF ----------
+// The retry path above leaves a card holding the id we are about to write again. Saying
+// "this card held one of our own ids before: <the id you just wrote>" names the operator's
+// own previous attempt as somebody's mounted door.
+check(WriteGuard.replacedForReport(existing: ours, offered: ourId) == .blank,
+      "a card already holding the id being written destroyed nothing of ours")
+check(WriteGuard.replacedForReport(existing: ours, offered: ourId.uppercased()) == .blank,
+      "the same id in a different case is still the same id")
+check(WriteGuard.replacedForReport(existing: ours, offered: otherId) == ours,
+      "a DIFFERENT id of ours on the card is a real overwrite and is still reported")
+check(WriteGuard.replacedForReport(existing: .blank, offered: ourId) == .blank, "blank stays blank")
+check(WriteGuard.replacedForReport(existing: .foreign(summary: "x"), offered: ourId) == .foreign(summary: "x"),
+      "foreign content is still reported - the operator destroyed something")
+
 // --- token / confirms: the six-character override ---------------------------------------
 check(WriteGuard.token(ourId) == String(ourId.suffix(6)).lowercased(), "token is the last six characters, lowercased")
 check(WriteGuard.token(ourId).count == 6, "the token is exactly six characters")

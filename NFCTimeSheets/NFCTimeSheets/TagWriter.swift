@@ -273,7 +273,11 @@ final class TagWriter: NSObject, NFCTagReaderSessionDelegate {
 
         session.alertMessage = String(localized: "Written and checked.")
         session.invalidate()
-        finish(.written(locationId: locationId, uri: uri, bytes: bytes.count, capacity: capacity, replaced: existing))
+        // NOT `existing` raw: a card that already held THIS id is our own previous attempt
+        // at this same card, not a mounted door being destroyed. See
+        // WriteGuard.replacedForReport.
+        finish(.written(locationId: locationId, uri: uri, bytes: bytes.count, capacity: capacity,
+                        replaced: WriteGuard.replacedForReport(existing: existing, offered: locationId)))
     }
 
     // MARK: - mapping CoreNFC's tag/error shapes onto ours
