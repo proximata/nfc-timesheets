@@ -68,6 +68,9 @@ const SHIFT_FIELDS = [
   // client derives anything from. A build that predates them ignores both.
   "manual_start",
   "manual_close",
+  // TASK-316: the worker's own one-line reason for a manual half. NULL on every tapped
+  // shift and on a manual one where they said nothing. Additive; older builds ignore it.
+  "manual_note",
   "client_uuid",
 ];
 const SHIFT_COLS = SHIFT_FIELDS.join(", ");
@@ -162,7 +165,7 @@ async function roster({ session }) {
 }
 
 /**
- * POST /shifts/open {client_uuid, location_uuid, start_time, manual?}
+ * POST /shifts/open {client_uuid, location_uuid, start_time, manual?, note?}
  * -> creates an OPEN shift (end_time NULL) FOR THE SIGNED-IN WORKER.
  *
  * `worker_id` is not in that list and is not read even if a client sends one. It used
@@ -204,6 +207,11 @@ async function openShift({ body, session }) {
   // succeed, same 422/409 codes, same resolver. If this flag ever starts skipping a check,
   // it has become the second mechanism the flag exists to make visible.
   const manual = v.bool(body.manual, "manual");
+  // TASK-316. ONLY read when `manual` is set: on a tapped open the physical tap is already
+  // the authoritative fact, so a note explaining the absence of one is meaningless, and
+  // storing it would put unexplained free text on rows an auditor reads as tap-confirmed.
+  // Ignored, not refused — a client that sends both is confused, not hostile.
+  const note = manual ? v.manualNote(body.note) : null;
 
   // No conflict TARGET on purpose. Two unique indexes can fire here — client_uuid and
   // shifts_one_open_per_worker_idx — and a plain retry trips BOTH. Naming one arbiter
@@ -213,11 +221,11 @@ async function openShift({ body, session }) {
   let inserted;
   try {
     inserted = await one(
-      `INSERT INTO shifts (worker_id, location_id, start_zone_id, start_time, client_uuid, manual_start)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO shifts (worker_id, location_id, start_zone_id, start_time, client_uuid, manual_start, manual_note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT DO NOTHING
        RETURNING ${SHIFT_COLS}`,
-      [workerId, place.location_id, place.zone_id, start, clientUuid, manual],
+      [workerId, place.location_id, place.zone_id, start, clientUuid, manual, note],
     );
   } catch (err) {
     if (!CONFLICT_CODES.has(err?.code)) throw err;
@@ -264,7 +272,7 @@ async function openShift({ body, session }) {
 }
 
 /**
- * POST /shifts/close {client_uuid, end_time, auto_closed?, manual?} -> fills in end_time.
+ * POST /shifts/close {client_uuid, end_time, auto_closed?, manual?, note?} -> fills in end_time.
  *
  * NO duration ceiling here. The old 422 shift_too_long rejected exactly the case the
  * safety net was built for — the worker who forgets to tap out — and left them unable
@@ -297,6 +305,8 @@ async function closeShift({ body, session }) {
   // confirmed, by the person who worked it). `auto_closed` stays untouched — that is the
   // machine's "nobody confirmed this", which is precisely what did just happen here.
   const manual = v.bool(body.manual, "manual");
+  // TASK-316, same rule as the open half: only a manual close may carry a note.
+  const note = manual ? v.manualNote(body.note) : null;
   const endPlace =
     body.location_uuid === undefined || body.location_uuid === null || body.location_uuid === ""
       ? null
@@ -340,9 +350,14 @@ async function closeShift({ body, session }) {
     `UPDATE shifts SET end_time = $2, auto_closed = auto_closed OR $3,
             end_zone_id = COALESCE($5::uuid, end_zone_id),
             manual_close = manual_close OR $6,
+            manual_note = COALESCE($7, manual_note),
             corrected_at = CASE WHEN $6 THEN now() ELSE corrected_at END
       WHERE client_uuid = $1 AND worker_id = $4 AND end_time IS NULL RETURNING ${SHIFT_COLS}`,
-    [clientUuid, end, autoClosed, session.workerId, endPlace?.zone_id ?? null, manual],
+    // COALESCE, so a retry that omits the note does not erase the one that landed. A close
+    // note DOES overwrite an open note — ponytail, CEILING: one column (migration 019) and
+    // both halves manual is rare; the later, more complete sentence wins. UPGRADE PATH if
+    // that ever loses something real: a second column, not string concatenation here.
+    [clientUuid, end, autoClosed, session.workerId, endPlace?.zone_id ?? null, manual, note],
   );
   if (updated) {
     recordShift("shift close", {

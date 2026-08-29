@@ -713,6 +713,7 @@
     "originManual": "Entered by hand",
     "manualStart": "Started by hand",
     "manualClose": "Ended by hand",
+    "manualNote": "Reason: {note}",
     "endMissing": "No end yet",
     "durationRunning": "Still running",
     "correct": "Correct",

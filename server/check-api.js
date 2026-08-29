@@ -268,6 +268,10 @@ CREATE TABLE shifts (
   -- row that already exists was a tap, and "we don't know" is not a state either may hold.
   manual_start BOOLEAN NOT NULL DEFAULT false,
   manual_close BOOLEAN NOT NULL DEFAULT false,
+  -- 019 (TASK-316): the worker's optional one-line reason for a manual half. NULLable, and
+  -- the routes reject an oversized note with 422 before this CHECK can ever fire.
+  manual_note TEXT CONSTRAINT shifts_manual_note_len
+    CHECK (manual_note IS NULL OR char_length(manual_note) <= 255),
   client_uuid TEXT UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -1868,6 +1872,54 @@ try {
     assert.equal((await res.json()).error, "invalid_field");
   });
 
+  // ---- the manual note (TASK-316) --------------------------------------------------
+  await test("a manual open stores the note; a manual close overwrites it; a tap close keeps it", async () => {
+    const opened = await asWorker("/shifts/open", {
+      method: "POST",
+      body: {
+        ...openBody,
+        client_uuid: uuid(88),
+        start_time: new Date(Date.now() - 600_000).toISOString(),
+        manual: true,
+        note: "  Karte kaputt  ",
+      },
+    });
+    assert.equal(opened.status, 201);
+    assert.equal((await opened.json()).shift.manual_note, "Karte kaputt", "trimmed, and stored");
+
+    // A close that omits `note` must not erase what the open half said.
+    const closed = await asWorker("/shifts/close", {
+      method: "POST",
+      body: { client_uuid: uuid(88), end_time: new Date().toISOString() },
+    });
+    assert.equal(closed.status, 200);
+    assert.equal((await closed.json()).shift.manual_note, "Karte kaputt", "a later call never erases it");
+  });
+
+  await test("a note on a TAPPED open is ignored, never stored - the tap is the fact (TASK-316)", async () => {
+    const res = await asWorker("/shifts/open", {
+      method: "POST",
+      body: { ...openBody, client_uuid: uuid(89), note: "ignore me" },
+    });
+    assert.equal(res.status, 201, "ignored, not refused");
+    assert.equal((await res.json()).shift.manual_note, null);
+    await asWorker("/shifts/close", {
+      method: "POST",
+      body: { client_uuid: uuid(89), end_time: new Date().toISOString() },
+    });
+  });
+
+  await test("an oversized note is a clean 422, never a database CHECK violation (TASK-316)", async () => {
+    const before = await countShifts();
+    const res = await asWorker("/shifts/open", {
+      method: "POST",
+      body: { ...openBody, client_uuid: uuid(95), manual: true, note: "x".repeat(256) },
+    });
+    assert.equal(res.status, 422, "*** 500 here means the DB CHECK is what rejected it ***");
+    assert.equal((await res.json()).error, "note_too_long");
+    assert.equal(await countShifts(), before, "a refused open leaves no row");
+  });
+
   // ---- validation ------------------------------------------------------------------
   await test("unknown location uuid is rejected", async () => {
     const res = await asWorker("/shifts/open", {
@@ -2060,6 +2112,8 @@ try {
     "location_slug", // display and log lines only, never back into a tag URI (decision-21)
     // decision-56, ADDED not renamed: which half of this shift had no tag tapped for it.
     "manual_close",
+    // TASK-316, ADDED not renamed: the reason the worker typed for a manual half, or null.
+    "manual_note",
     "manual_start",
     "start_time", //    the ticking clock, AND the locally computed start+8h flip
     "start_zone_id",

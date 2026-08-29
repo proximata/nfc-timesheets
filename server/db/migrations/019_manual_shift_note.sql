@@ -1,0 +1,35 @@
+-- 019_manual_shift_note.sql — a manual start or close may say WHY, in the worker's words.
+--
+-- TASK-316, on top of decision-56's manual_start/manual_close. Those two flags record THAT
+-- a half of the shift happened without a tap; they cannot record why — broken card, dead
+-- phone NFC, forgot to tap — and the office has been reading the flag and then phoning to
+-- ask. This column is that answer, written once, at the moment the worker knows it.
+--
+-- OPTIONAL, NULLABLE, and never required by any route. A worker who cannot reach a tag is
+-- already having a bad shift; refusing the clock-in until they also type a sentence would
+-- turn a recovery path into a second obstacle. NULL means "said nothing", which is a real
+-- and expected answer, not missing data.
+--
+-- ONE COLUMN AND NOT TWO, unlike 014's deliberate split. 014 split because a start and an
+-- end are two independent FACTS the office must not have to guess between. A note is not a
+-- fact about a half, it is one sentence from one person about one shift, and the half it
+-- came from is already pinned by manual_start/manual_close. Two note columns would be two
+-- mostly-NULL columns and a UI that has to decide which one to show first.
+--
+-- FREE TEXT, NO ENUM. The reasons are open-ended and this codebase already takes short
+-- free text this way (material_requests.body). A preset list would be wrong on its first
+-- unforeseen reason and would need a migration to add one.
+--
+-- 255 IS A CAP, NOT A SIZE. TEXT + CHECK rather than VARCHAR(255): same bound, but the
+-- limit is a stated rule that shows up in \d and can be relaxed without a type change.
+-- It exists so an unauthenticated-shaped payload cannot park kilobytes per shift; the
+-- routes validate the same bound first and answer 422, so reaching this CHECK is a bug.
+--
+-- NO BACKFILL and no index. Purely additive; a NULLable TEXT is metadata-only on PG 16.
+-- Nobody searches shifts by note text, and a note is read on a row already on screen.
+--
+-- NO BEGIN/COMMIT — migrate.js already runs each file with `psql -1`.
+-- 001-013 are APPLIED ON THE LIVE BOX and are not editable (db/README.md).
+ALTER TABLE shifts
+  ADD COLUMN manual_note TEXT,
+  ADD CONSTRAINT shifts_manual_note_len CHECK (manual_note IS NULL OR char_length(manual_note) <= 255);

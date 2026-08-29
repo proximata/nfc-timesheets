@@ -713,6 +713,7 @@
     "originManual": "Manuell erfasst",
     "manualStart": "Start manuell erfasst",
     "manualClose": "Ende manuell erfasst",
+    "manualNote": "Grund: {note}",
     "endMissing": "Noch kein Ende",
     "durationRunning": "Läuft noch",
     "correct": "Korrigieren",

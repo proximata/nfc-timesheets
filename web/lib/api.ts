@@ -928,6 +928,11 @@ export type Shift = {
    */
   manual_start: boolean
   manual_close: boolean
+  /**
+   * TASK-316: the worker's own short reason for a manual half ("card broken"). Only ever
+   * set on a manual open/close; NULL on every tapped shift and whenever they said nothing.
+   */
+  manual_note: string | null
   created_at: string
 }
 

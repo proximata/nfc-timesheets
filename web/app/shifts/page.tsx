@@ -1140,6 +1140,15 @@ export default function ShiftsPage() {
                               {end === 'start' ? t('manualStart') : t('manualClose')}
                             </span>
                           ))}
+                          {/* TASK-316: the worker's own reason, right under the marker it
+                              explains. Absent on a tapped shift and on a manual one where
+                              they said nothing — an empty line would read as "no reason
+                              given" when the truthful reading is "nothing was asked". */}
+                          {shift.manual_note === null ? null : (
+                            <span className="shift-manual-end shift-state-note">
+                              {t('manualNote', { note: shift.manual_note })}
+                            </span>
+                          )}
                         </td>
                         <td className="cell-actions">
                           <button

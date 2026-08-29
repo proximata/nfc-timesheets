@@ -629,6 +629,25 @@ export function requireVerifiedPlace(place) {
   return place;
 }
 
+/**
+ * The optional note on a MANUAL shift open/close (TASK-316). Free text, capped.
+ *
+ * 422 and not 400 on an oversized note, matching the other "the payload is well-formed but
+ * we will not store it" refusals on these routes: the phone can shorten and retry. Absent,
+ * null, empty and whitespace-only all collapse to NULL — "said nothing" has one spelling in
+ * the column. The DB CHECK in migration 019 is the same bound and must never be what
+ * rejects: a 23514 here would surface as a 500.
+ */
+export const MANUAL_NOTE_MAX = 255;
+export function manualNote(value, field = "note") {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") fail(400, "invalid_field", field);
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.length > MANUAL_NOTE_MAX) fail(422, "note_too_long", field);
+  return trimmed;
+}
+
 export async function activeWorkerById(value) {
   const row = await one("SELECT id, name FROM workers WHERE id = $1 AND active", [id(value, "worker_id")]);
   if (!row) fail(422, "unknown_worker");
