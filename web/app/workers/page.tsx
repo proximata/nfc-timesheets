@@ -16,11 +16,14 @@ import {
   ApiError,
   clearSetting,
   clearWorkerLoginPhone,
+  type FeatureFlag,
   type FreshEnrolmentCode,
+  fetchFlags,
   fetchSmsStatus,
   fetchWorkerSnapshot,
   issueEnrolmentCode,
   revokeEnrolmentCode,
+  SMS_LOGIN_FLAG,
   SMS_OTP_REQUESTS_DEFAULT,
   SMS_OTP_REQUESTS_KEY,
   SMS_OTP_REQUESTS_MAX,
@@ -204,6 +207,19 @@ export default function WorkersPage() {
    * whether Twilio is configured on the box that happens to be serving it today.
    */
   const [smsInfo, setSmsInfo] = useState<SmsStatus | null>(null)
+  /**
+   * The `sms_login` feature flag (decision-59 §3). A SECOND, ORTHOGONAL gate to the one
+   * above: `sms-status` reports whether Twilio is configured on this box, this reports
+   * whether the operator has switched the SMS door on at all. Either being false disables
+   * the button, and they are kept apart because they need DIFFERENT sentences — "not set
+   * up" sends a director to whoever owns the credentials, which is the wrong errand when
+   * the real answer is a toggle on /flags/.
+   *
+   * Starts false and FAILS CLOSED, the same posture as `smsInfo === null`: sending by SMS
+   * with the flag off answers 503 at the route, so a guessed-open button is a control that
+   * breaks the moment it is pressed.
+   */
+  const [smsLogin, setSmsLogin] = useState(false)
   /** Result of the last write, announced in the page's permanent live region. */
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   /** Ticks so an expiry that has passed stops being reported as a live code. */
@@ -244,7 +260,7 @@ export default function WorkersPage() {
   const load = useCallback(
     async (signal?: AbortSignal) => {
       try {
-        const [snap, sms] = await Promise.all([
+        const [snap, sms, flags] = await Promise.all([
           fetchWorkerSnapshot(signal),
           // FAILS CLOSED. An old server, a proxy hiccup, offline — none of it may stop the
           // worker list from loading, and none of it may be mistaken for "configured": the
@@ -253,9 +269,18 @@ export default function WorkersPage() {
             if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
             return { configured: false, missing: [], sender_kind: null } as SmsStatus
           }),
+          // decision-59 §3. Fetched BESIDE sms-status rather than folded into it: the two
+          // answer different questions, and /admin/flags is a route both admin roles
+          // already reach (the scoped 'flags' account exists for it). Fails closed to an
+          // empty list, which reads as the flag being off.
+          fetchFlags(signal).catch((cause) => {
+            if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+            return [] as FeatureFlag[]
+          }),
         ])
         setSnapshot(snap)
         setSmsInfo(sms)
+        setSmsLogin(flags.some((flag) => flag.name === SMS_LOGIN_FLAG && flag.enabled))
         setRateLimitDraft(snap.settings[SMS_OTP_REQUESTS_KEY] ?? '')
         setLoadError(null)
       } catch (cause) {
@@ -644,7 +669,7 @@ export default function WorkersPage() {
    * screen).
    */
   function smsButtonDisabled(worker: Worker, sms: SmsStatus | null): boolean {
-    return sms === null || !sms.configured || worker.phone_e164 === null
+    return sms === null || !sms.configured || !smsLogin || worker.phone_e164 === null
   }
 
   /**
@@ -658,6 +683,12 @@ export default function WorkersPage() {
    */
   function smsCellNote(worker: Worker, sms: SmsStatus | null): string | null {
     if (sms === null) return null
+    // The FLAG first, and Twilio second, when both are off: the flag is the deliberate
+    // state someone chose in this panel and can undo in it (decision-59's controlled
+    // testing window), so it is the honest first answer to "why is this greyed out".
+    // Saying „nicht eingerichtet" here would send a director chasing credentials that are
+    // very likely already fine.
+    if (!smsLogin) return t('smsLoginOff')
     if (!sms.configured) return t('smsNotConfigured')
     if (worker.phone_e164 === null) return t('smsNoPhone')
     if (worker.sms_last_status === 'sent') {

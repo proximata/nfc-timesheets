@@ -506,6 +506,15 @@ export type FeatureFlag = {
   updated_by: string | null
 }
 
+/**
+ * The one flag name read outside /flags/ (decision-59 §3): /workers/ and /operators/ gate
+ * their "send code by SMS" button on it as well as on Twilio being configured. Named here
+ * rather than typed twice, because a typo in either page fails SILENTLY — `some()` finds
+ * no row, the flag reads off, and the button is permanently greyed with a sentence about a
+ * toggle nobody can find. Must match server/db/migrations/016_sms_login_flag.sql.
+ */
+export const SMS_LOGIN_FLAG = 'sms_login'
+
 export function fetchFlags(signal?: AbortSignal): Promise<FeatureFlag[]> {
   return apiFetch<{ flags: FeatureFlag[] }>('/admin/flags', { signal }).then((data) => data.flags)
 }

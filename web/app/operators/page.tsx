@@ -13,13 +13,16 @@ import { PageHeader } from '@/components/PageHeader'
 import {
   ApiError,
   deactivateOperator,
+  type FeatureFlag,
   type FreshOperatorCode,
+  fetchFlags,
   fetchOperators,
   fetchSmsStatus,
   issueOperatorEnrolmentCode,
   type Operator,
   reactivateOperator,
   revokeOperatorEnrolmentCode,
+  SMS_LOGIN_FLAG,
   type SmsStatus,
   saveOperator,
   sendOperatorEnrolmentCodeBySms,
@@ -97,6 +100,13 @@ export default function OperatorsPage() {
    * disabled until it is — never guessed from the static bundle.
    */
   const [smsInfo, setSmsInfo] = useState<SmsStatus | null>(null)
+  /**
+   * The `sms_login` flag (decision-59 §3), a second gate orthogonal to the one above:
+   * that one says whether Twilio is configured on this box, this says whether the SMS door
+   * is switched on at all. Starts false and fails closed — with the flag off the send
+   * route answers 503, so an optimistic button would break on press.
+   */
+  const [smsLogin, setSmsLogin] = useState(false)
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
@@ -125,7 +135,7 @@ export default function OperatorsPage() {
   const load = useCallback(
     async (signal?: AbortSignal) => {
       try {
-        const [ops, sms] = await Promise.all([
+        const [ops, sms, flags] = await Promise.all([
           fetchOperators(signal),
           // FAILS CLOSED, exactly like /workers/: an old server, a proxy hiccup or offline
           // never render as "configured" — the button ends up disabled with the same
@@ -134,9 +144,16 @@ export default function OperatorsPage() {
             if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
             return { configured: false, missing: [], sender_kind: null } as SmsStatus
           }),
+          // decision-59 §3, identical to /workers/: the `sms_login` flag is a SECOND gate
+          // beside Twilio's, and an empty list on any failure reads as the flag being off.
+          fetchFlags(signal).catch((cause) => {
+            if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+            return [] as FeatureFlag[]
+          }),
         ])
         setOperators(ops)
         setSmsInfo(sms)
+        setSmsLogin(flags.some((flag) => flag.name === SMS_LOGIN_FLAG && flag.enabled))
         setLoadError(null)
       } catch (cause) {
         if (cause instanceof DOMException && cause.name === 'AbortError') return
@@ -392,9 +409,22 @@ export default function OperatorsPage() {
   const phonePreview = draft === null ? null : normaliseIdentityPhone(draft.phone)
 
   /** decision-48's picker, applied to operators: disabled with the reason in words beside
-      it — never hidden — exactly like /workers/'s smsButtonDisabled. */
+      it — never hidden — exactly like /workers/'s smsButtonDisabled. Two gates, not one
+      (decision-59 §3): Twilio configured AND the `sms_login` flag on. The operator's own
+      /auth/operator-sms/* routes are gated by that same flag server-side, so a button that
+      ignored it would 503 on press. */
   function smsButtonDisabled(operator: Operator, sms: SmsStatus | null): boolean {
-    return sms === null || !sms.configured || operator.phone_e164 === null
+    return sms === null || !sms.configured || !smsLogin || operator.phone_e164 === null
+  }
+
+  /** Why it is greyed out, in words. The FLAG is named before Twilio when both are off:
+      it is the deliberate state someone chose in this panel and can undo on /flags/,
+      whereas „nicht eingerichtet" sends a director chasing credentials for no reason. */
+  function smsDisabledNote(sms: SmsStatus | null): string | null {
+    if (sms === null) return null
+    if (!smsLogin) return t('smsLoginOff')
+    if (!sms.configured) return t('smsNotConfigured')
+    return null
   }
 
   return (
@@ -549,8 +579,8 @@ export default function OperatorsPage() {
                         </button>
                       ) : null}
                     </div>
-                    {operator.active && smsInfo !== null && !smsInfo.configured ? (
-                      <p className="cell-muted">{t('smsNotConfigured')}</p>
+                    {operator.active && smsDisabledNote(smsInfo) !== null ? (
+                      <p className="cell-muted">{smsDisabledNote(smsInfo)}</p>
                     ) : null}
                   </td>
                   <td className="cell-actions">
