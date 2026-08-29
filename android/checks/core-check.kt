@@ -17,6 +17,7 @@
 package io.github.qwadratic.nfctimesheets.checks
 
 import io.github.qwadratic.nfctimesheets.core.ApiFailure
+import io.github.qwadratic.nfctimesheets.core.AppVersionGate
 import io.github.qwadratic.nfctimesheets.core.CloseShiftRequest
 import io.github.qwadratic.nfctimesheets.core.EnrolmentCode
 import io.github.qwadratic.nfctimesheets.core.EnrolmentRequest
@@ -106,6 +107,7 @@ fun main() {
     theBackgroundPush()
     theBrandPalette()
     featureFlags()
+    updateInvalidatesReadsOnly()
 
     if (failed) exitProcess(1)
     println("core-check: OK")
@@ -153,6 +155,73 @@ private fun featureFlags() {
         "and the flag DEFAULTS TO OFF at the composable itself — decision-60 changed the two " +
             "baseline colours, not the flag's OFF-by-default posture",
     )
+}
+
+// ---------------------------------------------------------------------------------
+// 19. AN UPDATE INVALIDATES CACHED READS, NEVER THE WRITE QUEUE (decision-62).
+//
+//     The owner asked for "delete local app data and refetch it from server" on first run
+//     after an update, over a real bug: this app's operator gate served a cached worklist
+//     that outlived a server-side DB wipe. Implemented literally, that request destroys
+//     state that is NOT re-derivable — a shift tapped in a basement and not yet POSTed, a
+//     tag report written offline, the session cookie — on every single release.
+//
+//     Two halves, and both are checked here. The DECISION is a pure function, so its three
+//     cases can be driven off-device. The BLAST RADIUS is a source read, because the one
+//     thing that must never regress is a list of stores the invalidation is not allowed to
+//     touch, and that is a property of one function in one file.
+//
+//     SHOW IT RED: add `store.clear()` (or the cookie jar, or pendingTagReport) to
+//     TimeSheetsApplication.onCreate's invalidation branch.
+// ---------------------------------------------------------------------------------
+private fun updateInvalidatesReadsOnly() {
+    check(
+        AppVersionGate.invalidatesCaches(lastSeen = 41, current = 42),
+        "a version bump invalidates cached reads",
+    )
+    check(
+        !AppVersionGate.invalidatesCaches(lastSeen = 42, current = 42),
+        "an ordinary relaunch on the SAME build invalidates nothing — this runs on every start",
+    )
+    check(
+        !AppVersionGate.invalidatesCaches(lastSeen = null, current = 42),
+        "a FRESH INSTALL is not an update: nothing is cached, and on the launch that ships " +
+            "this mechanism every phone reads null",
+    )
+    check(
+        AppVersionGate.invalidatesCaches(lastSeen = 43, current = 42),
+        "a DOWNGRADE invalidates too — a rolled-back build reads a cache written by code " +
+            "that is not it, exactly like an upgrade does",
+    )
+
+    // THE BLAST RADIUS. decision-62 §2 names what a version bump may never touch, and the
+    // reason is that none of it can be re-derived from the server: a queued shift is unpaid
+    // work nobody else has a copy of, and the cookie is the difference between opening the
+    // app and needing a fresh enrolment code from the office.
+    val application = File("app/src/main/kotlin/io/github/qwadratic/nfctimesheets/TimeSheetsApplication.kt")
+        .readText()
+    val at = application.indexOf("override fun onCreate()")
+    check(at >= 0, "TimeSheetsApplication overrides onCreate — that is where the gate runs")
+    val body = strippedOfComments(application.substring(maxOf(at, 0)))
+    check(
+        body.contains("CacheVersion(this).bumpAndCheck(BuildConfig.VERSION_CODE)"),
+        "…and it asks the gate with THIS build's versionCode (decision-62 §1)",
+    )
+    check(
+        body.contains("operatorZones.clear()"),
+        "…and drops the cached operator worklist, the one cached READ not already re-fetched " +
+            "on every launch",
+    )
+    for (forbidden in listOf(
+        "cookies", "operatorCookies", "store", "materials", "pendingTagReport", "workers",
+    )) {
+        check(
+            !body.contains("$forbidden.clear()") && !body.contains("$forbidden.wipe()"),
+            "…and NEVER touches `$forbidden` (decision-62 §2: the session and the pending " +
+                "WRITE queue are not re-derivable, and a blanket wipe on every release " +
+                "silently destroys work a cleaner has already done)",
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------------

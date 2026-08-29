@@ -6,6 +6,7 @@ import io.github.qwadratic.nfctimesheets.core.TagLink
 import io.github.qwadratic.nfctimesheets.nfc.OperatorZoneCache
 import io.github.qwadratic.nfctimesheets.nfc.PendingTagReport
 import io.github.qwadratic.nfctimesheets.nfc.TagWriter
+import io.github.qwadratic.nfctimesheets.data.CacheVersion
 import io.github.qwadratic.nfctimesheets.data.FlagCache
 import io.github.qwadratic.nfctimesheets.data.MaterialStore
 import io.github.qwadratic.nfctimesheets.data.MaterialSync
@@ -27,6 +28,50 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * below is a framework type.
  */
 class TimeSheetsApplication : Application() {
+
+    /**
+     * AN UPDATE INVALIDATES CACHED SERVER READS, AND NOTHING ELSE (decision-62).
+     *
+     * The bug this closes is real and was hit twice: this app's operator gate served a
+     * cached worklist that outlived a server-side DB wipe, and iOS had the same shape with
+     * a stale flag (TASK-276). The owner asked for "delete local app data and refetch";
+     * what is implemented is the narrower, standard thing, because a blanket wipe would
+     * take the un-syncable state with it — a queued shift tapped in a basement, a tag
+     * report written offline, a queued material request, and the session cookie, which
+     * cannot be re-derived and whose loss costs a fresh enrolment code from the office.
+     *
+     * WHAT IS DROPPED HERE: the cached operator worklist, and only it. It is the one cached
+     * READ in this app that is not already re-fetched on every launch — VerifyZoneActivity
+     * shows it as an offline pre-fill and then always re-fetches, so an operator who is
+     * ONLINE never notices this line ran, and one who is offline on the first open after an
+     * update sees an empty picker instead of a list that may describe zones the server no
+     * longer has. `clear()` is the same call net/OperatorSession makes on a 401, and the
+     * refill is the same GET /operator/zones the screen already makes.
+     *
+     * WHAT IS ALREADY TRUE AND SO IS NOT REPEATED HERE: the roster snapshot
+     * (GET /roster) and the flag map (GET /flags) are re-fetched unconditionally on EVERY
+     * launch, by TimeSheetViewModel.restoreSession -> refresh(), which is the same call
+     * pull-to-refresh makes. A version bump therefore cannot show a stale one, and
+     * DELETING them here would be strictly worse: the refetch swallows network failure by
+     * design, so a phone that updates and is then opened in a basement would lose the
+     * building names and the zone/serial map it needs to resolve a card, in exchange for
+     * nothing. decision-62's own title is refetch beats reset.
+     *
+     * WHAT IS DELIBERATELY NOT TOUCHED: `cookies`, `operatorCookies`, `store` (the shift
+     * table is this phone's own WRITE log, not a cached read), `materials`,
+     * `pendingTagReport`, and the SQLite schema — which keeps using its ordinary versioned
+     * migration path, as decision-62 §2 requires.
+     *
+     * Constructing `operatorZones` here does defeat its `by lazy` on a cleaner's phone,
+     * but only on the ONE launch after an update, and only to open a SharedPreferences
+     * file and remove a key.
+     */
+    override fun onCreate() {
+        super.onCreate()
+        if (CacheVersion(this).bumpAndCheck(BuildConfig.VERSION_CODE)) {
+            operatorZones.clear()
+        }
+    }
 
     /**
      * Parses tag URIs against THIS build's host, and ONLY this build's host — no legacy
