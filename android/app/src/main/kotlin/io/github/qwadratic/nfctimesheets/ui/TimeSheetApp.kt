@@ -1272,10 +1272,18 @@ private fun ShiftRunningScreen(
         // worker reaches for when their card will not read looked disabled. Both are now
         // ShiftBrand values computed against ShiftBrand.Container (8.6:1 and 13.2:1), and
         // against FunShift.Lift, the lightest the flag-ON animation ever gets (4.6:1).
+        //
+        // …EXCEPT on the ONE state whose field is not ShiftBrand's dark blue: overdue with
+        // the flag OFF paints `container` from errorContainer, which in the light scheme is
+        // #F0F1F3 — nearly white. Hardcoding the dark-field pair there re-created the very
+        // bug this override fixed, worse: border 1.61:1, label 1.05:1, i.e. an invisible
+        // button. Both now follow the `container` actually in effect via `onContainer`
+        // (light 5.7:1, dark 10.8:1); only the non-overdue field keeps the tuned Outline.
+        val stopBorder = if (overdue && !funTheme) onContainer else ShiftBrand.Outline
         OutlinedButton(
             onClick = onStop,
-            border = BorderStroke(1.dp, ShiftBrand.Outline),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = ShiftBrand.OnContainer),
+            border = BorderStroke(1.dp, stopBorder),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = onContainer),
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 48.dp),
@@ -1306,8 +1314,8 @@ private fun ShiftRunningScreen(
             // one sits on the same overridden field and had the same invisible border.
             OutlinedButton(
                 onClick = { openIntent(Intent(context, ScanActivity::class.java)) },
-                border = BorderStroke(1.dp, ShiftBrand.Outline),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = ShiftBrand.OnContainer),
+                border = BorderStroke(1.dp, stopBorder),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = onContainer),
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp),
