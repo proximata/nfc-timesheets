@@ -1,9 +1,10 @@
 ---
 id: TASK-309
 title: 'iOS Write a tag: the zone step is a dead end - no way to write a second card'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-29 11:20'
+updated_date: '2026-08-29 12:29'
 labels:
   - bug
   - ios
@@ -64,3 +65,46 @@ ACCEPTANCE.
 - [ ] #3 the new string exists in Localizable.xcstrings in both de and en
 - [ ] #4 two cards written in one uninterrupted screen session, verified on a simulator without relying on the DEBUG mock buttons
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+VERIFIED INDEPENDENTLY by review-gate-2, re-derived from source and command output, not from the fixing agent's report.
+
+FIX: 08e4e5e. WriteTagScreen.swift:216, inside zoneSection's Section but OUTSIDE the zone-state
+switch, so it renders in all six sub-states (.idle/.loading/.picking/.submitting/.created/.failed):
+    Button("Write another card") { resetForNewWrite() }
+        .disabled(busy)
+Not in any #if DEBUG. Reuses resetForNewWrite() - the same call write() makes first - rather
+than duplicating the reset. de: 'Weitere Karte schreiben', same commit.
+
+PROOF THE CHECK IS NON-VACUOUS - five mutations run by this gate, all red:
+  button deleted                     -> FAIL 'THIS IS THE REGRESSION', exit 1
+  button moved inside #if DEBUG      -> FAIL (the mock cannot satisfy a rule)
+  resetForNewWrite drops reportedId  -> FAIL 'or the button is decoration'
+  action swapped to dismiss()        -> FAIL
+  a 4th WriteTagStep case            -> 'switch must be exhaustive', COMPILE error
+  de translation removed             -> localisation-check FAIL (271/272)
+
+PROOF THE UI ACTUALLY MOVES - WriteTagRestartUITests re-run here, real simulator
+(iPhone 17, iOS 26.5, 23F77), against checks/write-tag-uitest-stub.mjs + demo/tls-front.mjs
+on ports 8095/8446:
+  HEAD                    ** TEST SUCCEEDED **  30.102s
+  button removed, in an isolated git worktree at 08e4e5e:
+                          ** TEST FAILED **     exit 65
+                          WriteTagRestartUITests.swift:75: XCTAssertTrue failed -
+                          THE BUG: card 1 is done and the zone step is the whole screen
+Stub log confirms the walk crossed the REAL gate over the network: GET /auth/capabilities,
+GET /auth/session, POST /auth/operator-code. The one DEBUG tap is card 1's radio fixture; card 2
+is driven by the shipping Write button.
+
+SUITES: NFCTimeSheets/checks/run.sh OK (16 checks), android/checks/run.sh exit 0 (7 checks),
+web pnpm verify exit 0, node ops/check-branding.mjs OK with zero TODO lines.
+Entitlements + project.pbxproj byte-identical to origin/main; NFC formats still exactly [TAG];
+IPHONEOS_DEPLOYMENT_TARGET 18.0 at 6 sites, unchanged. First-pass fixes untouched: zero diff
+1d1c935..HEAD for WriteGuard.swift, TagWriter.swift, WriteTagStep.swift, OperatorMockFlows.swift.
+
+RESIDUAL, filed as TASK-314 and NOT blocking: the tightened check still passes over a button
+nested in a never-true condition. The shipped button is unconditional, so today's screen is
+correct; the gate for the next edit is not.
+<!-- SECTION:NOTES:END -->

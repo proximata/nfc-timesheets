@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-29 11:20'
+updated_date: '2026-08-29 12:30'
 labels:
   - ops
   - git
@@ -56,3 +57,23 @@ with 'git commit -o <path>' and never a broad add.
 - [ ] #1 the range is either made bisectable before push, or the non-bisectable range is recorded so nobody debugs a false red
 - [ ] #2 the next multi-agent run uses one worktree per track, or per-path commits
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+review-gate-2 re-derived the evidence and CONFIRMS it, unchanged by 08e4e5e:
+  git show 1d1c935:NFCTimeSheets/checks/run.sh -> line 71 calls checks/sms-gate-check.swift
+  sms-gate-check.swift MISSING at 1d1c935, 75fd766, 79056ba; PRESENT from b1385b5
+So 3 of the 8 commits in origin/main..HEAD fail NFCTimeSheets/checks/run.sh on a missing file.
+
+08e4e5e adds NO new bisect breakage: its 5 files are all new-or-additive and it does not touch
+either run.sh. Android side re-checked too - every .kt path android/checks/run.sh names at
+75fd766 exists at 75fd766, so the android/checks/run.sh + android/.gitignore double-touch
+(75fd766 + 79056ba) really is clean, as this task already said.
+
+DECISION FORCED BY THE PUSH: this gate returns PASS, so the range ships as-is and option (b)
+(rebase so the sms-gate line lands with the file it calls) expires at that moment. AC #1 is
+therefore satisfied by option (a) - recorded here: origin/main..HEAD is NOT bisectable for
+NFCTimeSheets/checks/run.sh between 1d1c935 and b1385b5. A red there is the missing file, not
+the code. Re-scope this task to the PREVENTION half (AC #2, ops/WORKTREES.md enforcement).
+<!-- SECTION:NOTES:END -->
