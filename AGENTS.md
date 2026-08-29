@@ -100,6 +100,21 @@ Both gaps are now closed the same way — as a CHECK, not a paragraph:
 absent; `check-branding.mjs`'s TODO line for TASK-188 already existed and just needed a workflow
 that actually runs it and repeats what it says.
 
+### Verification swarm: one agent per FEATURE, not per platform
+
+For any workflow that ships user-facing behavior, the Verify phase runs one dedicated agent
+per FEATURE (not one per platform) covering every platform that feature touches (iOS,
+Android, web) and every user type (worker, operator, admin) it applies to, in one pass. For
+each screen the feature touches, the agent first enumerates every possible action and its
+expected outcome BOTH database-side and UI-side (a tap, its server effect, and its rendered
+result) - positive and negative paths alike - then drives that matrix for real, using each
+platform's existing emulator/simulator plus its existing DEBUG-only mock/card-simulation
+mechanism, never by reading source and asserting it "should work". This costs more than one
+verify-agent-per-platform but catches exactly the class of bug a source read misses: TASK-309
+was a state-machine dead end that passed every existing check because the check called a
+code-level transition no real UI control could ever reach - only a real driven walk of the
+screen caught it.
+
 Decision checklist (keep updated as decisions are added):
 
 - No Docker (decision-1)
