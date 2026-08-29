@@ -355,15 +355,21 @@ export function clearLoginFailures(ip) {
 //
 // So this counts ATTEMPTS — not failures, and regardless of who is asking — in a fixed
 // one-minute window, and is the hard bound on how fast the shared space can be walked.
-// 30/min is roughly three orders of magnitude above real use: about twenty workers enrol
-// once each, ever. A legitimate worker cannot reach it; a flood hits it in two seconds.
+//
+// 5/min, DOWN FROM 30 (decision-63 §5). The shared space is now 100_000 values, not 2^40,
+// so this ceiling is no longer a comfortable margin over an unreachable number — it is
+// half of the arithmetic that keeps a 5-digit code viable at all (the other half is the
+// 15-minute CODE_TTL_MS; 5 * 15 = 75 guesses per code lifetime, lib/enrolment.js). Still
+// far above real use — about twenty workers enrol once each, ever, and one person typing
+// their own code cannot reach 5 attempts in a minute — but raising it back is a change to
+// that arithmetic, not a tuning knob.
 //
 // ponytail: fixed window, in memory, per process — same ceiling and the same upgrade
 //   path as the per-IP limiter above. A window boundary allows a 2x burst across two
 //   adjacent windows (60 guesses in one second), which changes the figures in
 //   lib/enrolment.js by one bit and nothing else. A token bucket would smooth it and is
 //   not worth the code.
-const GLOBAL_LIMIT = 30;
+const GLOBAL_LIMIT = 5;
 const GLOBAL_WINDOW_MS = 60_000;
 let globalWindowStart = 0;
 let globalCount = 0;
@@ -384,7 +390,7 @@ export function checkGlobalEnrolmentRate() {
 
 // ---- SMS ceilings (decision-48) ---------------------------------------------------
 // SEPARATE FROM checkGlobalEnrolmentRate ON PURPOSE, and this is load-bearing rather than
-// tidiness: that counter is sized against a SHARED 40-bit search space (lib/enrolment.js's
+// tidiness: that counter is sized against a SHARED ~17-bit search space (lib/enrolment.js's
 // own arithmetic). These are sized against a TELEPHONE BILL and against one phone's
 // patience. Sharing them would silently re-tune the enrolment arithmetic, and a stranger
 // guessing OTPs must never be able to lock a worker out of typing an enrolment code.

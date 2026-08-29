@@ -708,7 +708,7 @@ try {
   delete process.env.ADMIN_PIN; // decision-20: must not be required any more
   process.env.PORT = "0";
 
-  const { hashPassword, resetLoginRate } = await import("./lib/auth.js");
+  const { hashPassword, resetLoginRate, resetGlobalEnrolmentRate } = await import("./lib/auth.js");
   await admin.query("INSERT INTO admins (email, password_hash) VALUES ($1, $2)", [
     ADMIN_EMAIL,
     await hashPassword(ADMIN_PASSWORD),
@@ -1343,6 +1343,14 @@ try {
     const revokeCode = (workerId) =>
       call(`/admin/workers/${workerId}/enrolment-code`, { method: "DELETE", key: null, cookie: adminCookie });
     const redeem = (code, ip) => call("/auth/code", { method: "POST", body: { code }, ip });
+    // The GLOBAL ceiling is 5/min since decision-63, which is FEWER attempts than several
+    // cases below deliberately spend. Those cases are about the PER-IP bucket, or about the
+    // database deciding a race; letting the shared ceiling answer first would hide what they
+    // test. The one case that IS about the ceiling calls plain `redeem`.
+    const redeemPerIp = (code, ip) => {
+      resetGlobalEnrolmentRate();
+      return redeem(code, ip);
+    };
 
     const freshCode = async (workerId = enrolWorkerId) => {
       const res = await issueCode(workerId);
@@ -1362,18 +1370,19 @@ try {
         )
       ).rows[0];
 
-    // Crockford base32 minus I, L, O, U — the misread pairs, plus the letter that spells
-    // things nobody wants to read down a phone line.
-    const CODE_SHAPE = /^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
+    // decision-63: five digits, no dash, no letters — so there is no misread pair left to
+    // design around. A letter or a hyphen appearing here again is a regression, not a
+    // cosmetic difference: the redone arithmetic in lib/enrolment.js assumes 10^5.
+    const CODE_SHAPE = /^[0-9]{5}$/;
 
-    await test("an issued code has an unambiguous alphabet, an expiry, and an audit trail", async () => {
+    await test("an issued code is five digits, with an expiry and an audit trail (decision-63)", async () => {
       const before = Date.now();
       const res = await issueCode(enrolWorkerId);
       assert.equal(res.status, 201);
       const body = await res.json();
       minted.push(body.code, body.code.replace("-", ""));
 
-      assert.match(body.code, CODE_SHAPE, `0/O and 1/I/L are a support-call generator: ${body.code}`);
+      assert.match(body.code, CODE_SHAPE, `digits only, no grouping (decision-63): ${body.code}`);
       assert.equal(body.worker.id, enrolWorkerId);
 
       // AGAINST THE CONSTANT, not against a second copy of the number. This assertion read
@@ -1382,9 +1391,11 @@ try {
       // green suite went red for a reason that was not a defect. Importing CODE_TTL_MS
       // alone would make it vacuous, so the CONSTANT ITSELF is bounded too: anything
       // outside minutes-to-a-fortnight is a typo, whatever both sides agree on.
+      // The UPPER bound is now 60 minutes, not a fortnight: at 10^5 values a long-lived
+      // code is the one failure this design cannot absorb (lib/enrolment.js's own maths).
       const ttl = new Date(body.expires_at).getTime() - before;
       assert.ok(
-        CODE_TTL_MS >= 10 * 60_000 && CODE_TTL_MS <= 14 * 24 * 3_600_000,
+        CODE_TTL_MS >= 5 * 60_000 && CODE_TTL_MS <= 60 * 60_000,
         `CODE_TTL_MS is ${CODE_TTL_MS}ms — a code that lives that long is a decision, not an edit`,
       );
       assert.ok(
@@ -1510,9 +1521,9 @@ try {
       const outcomes = {};
 
       // unknown: correctly shaped, never issued
-      outcomes.unknown = await redeem("ZZZZ-ZZZZ", "10.5.2.1");
+      outcomes.unknown = await redeemPerIp("99998", "10.5.2.1");
       // malformed: not even the right shape
-      outcomes.malformed = await redeem("nope!!", "10.5.2.2");
+      outcomes.malformed = await redeemPerIp("nope!!", "10.5.2.2");
       // missing: no field at all
       outcomes.missing = await call("/auth/code", { method: "POST", body: {}, ip: "10.5.2.3" });
 
@@ -1522,22 +1533,22 @@ try {
         "UPDATE workers SET enrolment_code_expires_at = now() - interval '1 minute' WHERE id = $1",
         [enrolWorkerId],
       );
-      outcomes.expired = await redeem(expired, "10.5.2.4");
+      outcomes.expired = await redeemPerIp(expired, "10.5.2.4");
 
       // already redeemed
       const spent = await freshCode();
-      assert.equal((await redeem(spent, "10.5.2.5")).status, 200);
-      outcomes.redeemed = await redeem(spent, "10.5.2.6");
+      assert.equal((await redeemPerIp(spent, "10.5.2.5")).status, 200);
+      outcomes.redeemed = await redeemPerIp(spent, "10.5.2.6");
 
       // revoked by the admin
       const revoked = await freshCode();
       await revokeCode(enrolWorkerId);
-      outcomes.revoked = await redeem(revoked, "10.5.2.7");
+      outcomes.revoked = await redeemPerIp(revoked, "10.5.2.7");
 
       // live code, worker deactivated underneath it
       const orphaned = await freshCode();
       await admin.query("UPDATE workers SET active = false WHERE id = $1", [enrolWorkerId]);
-      outcomes.inactive = await redeem(orphaned, "10.5.2.8");
+      outcomes.inactive = await redeemPerIp(orphaned, "10.5.2.8");
       await admin.query("UPDATE workers SET active = true WHERE id = $1", [enrolWorkerId]);
 
       const seen = [];
@@ -1558,17 +1569,17 @@ try {
       resetLoginRate();
       const ip = "10.5.3.1";
       const codes = [];
-      for (let i = 0; i < 7; i++) codes.push((await redeem("ZZZZ-ZZZY", ip)).status);
+      for (let i = 0; i < 7; i++) codes.push((await redeemPerIp("99997", ip)).status);
       assert.ok(codes.slice(0, 5).every((c) => c === 401), `first 5 should be 401, got ${codes}`);
       assert.ok(codes.includes(429), `an unthrottled code endpoint is a guessing oracle, got ${codes}`);
 
       // The lockout must apply to a GOOD code too, or it is not a lockout.
       const good = await freshCode();
-      const locked = await redeem(good, ip);
+      const locked = await redeemPerIp(good, ip);
       assert.equal(locked.status, 429);
       assert.ok(Number(locked.headers.get("retry-after")) > 0, "429 must say when to come back");
       // ...and must not spill onto an unrelated caller.
-      assert.equal((await redeem(good, "10.5.3.2")).status, 200);
+      assert.equal((await redeemPerIp(good, "10.5.3.2")).status, 200);
       resetLoginRate();
     });
 
@@ -1578,14 +1589,15 @@ try {
       // one worker's. This is the bound that makes the arithmetic in lib/enrolment.js hold.
       resetLoginRate();
       const statuses = [];
-      for (let i = 0; i < 40; i++) statuses.push((await redeem("ZZZZ-ZZZX", `10.5.4.${i}`)).status);
+      for (let i = 0; i < 40; i++) statuses.push((await redeem("99999", `10.5.4.${i}`)).status);
       const firstThrottled = statuses.indexOf(429);
       assert.ok(firstThrottled >= 0, `40 guesses from 40 addresses must be throttled, got ${statuses}`);
+      // 5/min since decision-63 §5: half the arithmetic that keeps a 10^5 keyspace viable.
       assert.ok(
-        firstThrottled <= 30,
-        `the global ceiling must bite by the 31st attempt, first 429 at ${firstThrottled}`,
+        firstThrottled <= 5,
+        `the global ceiling must bite by the 6th attempt, first 429 at ${firstThrottled}`,
       );
-      assert.equal((await (await redeem("ZZZZ-ZZZX", "10.5.4.99")).json()).error, "too_many_attempts");
+      assert.equal((await (await redeem("99999", "10.5.4.99")).json()).error, "too_many_attempts");
       resetLoginRate();
     });
 
@@ -1595,14 +1607,15 @@ try {
       const before = await sessionRows();
 
       // Distinct addresses so the per-IP limiter cannot be what makes this pass - the
-      // database has to be what decides it.
+      // database has to be what decides it. FIVE racers and not eight: the global ceiling is
+      // 5/min (decision-63), and a 429 in this set would prove nothing about the race.
       const results = await Promise.all(
-        Array.from({ length: 8 }, (_, i) => redeem(code, `10.5.5.${i}`)),
+        Array.from({ length: 5 }, (_, i) => redeem(code, `10.5.5.${i}`)),
       );
       const won = results.filter((r) => r.status === 200);
       const lost = results.filter((r) => r.status === 401);
       assert.equal(won.length, 1, `exactly one racer may win, got ${results.map((r) => r.status)}`);
-      assert.equal(lost.length, 7, `the rest must lose with 401, got ${results.map((r) => r.status)}`);
+      assert.equal(lost.length, 4, `the rest must lose with 401, got ${results.map((r) => r.status)}`);
       assert.equal(await sessionRows(), before + 1, "a race must not mint two sessions");
       assert.equal((await codeRowState()).has_code, false);
     });
@@ -5631,6 +5644,12 @@ try {
     const revokeOperatorCode = (id) => asAdmin(`/admin/operators/${id}/enrolment-code`, { method: "DELETE" });
     const deleteOperator = (id) => asAdmin(`/admin/operators/${id}`, { method: "DELETE" });
     const redeemOperator = (code, ip) => call("/auth/operator-code", { method: "POST", body: { code }, ip });
+    // Same reason as `redeemPerIp` above: the shared 5/min ceiling (decision-63) is smaller
+    // than what a per-IP-bucket case has to spend, and must not be what answers.
+    const redeemOperatorPerIp = (code, ip) => {
+      resetGlobalEnrolmentRate();
+      return redeemOperator(code, ip);
+    };
 
     /** Full lifecycle: create an operator with a phone, issue a code, return both. */
     const freshOperator = async (name, phone) => {
@@ -5717,12 +5736,13 @@ try {
     await test("operator code guesses spend their OWN per-IP bucket, not the worker one", async () => {
       resetLoginRate();
       const ip = "10.6.2.1";
-      for (let i = 0; i < 5; i++) await redeemOperator("ZZZZ-ZZZY", ip);
-      const locked = await redeemOperator("ZZZZ-ZZZY", ip);
+      for (let i = 0; i < 5; i++) await redeemOperatorPerIp("99997", ip);
+      const locked = await redeemOperatorPerIp("99997", ip);
       assert.equal(locked.status, 429, "the operator bucket must lock out after repeated failures, same as the worker one");
       // ...and must not spill onto /auth/code from the SAME address.
+      resetGlobalEnrolmentRate();
       assert.equal(
-        (await call("/auth/code", { method: "POST", body: { code: "ZZZZ-ZZZY" }, ip })).status,
+        (await call("/auth/code", { method: "POST", body: { code: "99997" }, ip })).status,
         401,
         "a locked-out operator bucket must not lock out the worker endpoint from the same IP (own bucket: enrolop:, not enrol:)",
       );
@@ -5732,12 +5752,12 @@ try {
     await test("operator and worker enrolment codes spend ONE shared global ceiling", async () => {
       resetLoginRate();
       const statuses = [];
-      for (let i = 0; i < 20; i++) statuses.push((await redeemOperator("ZZZZ-ZZZX", `10.6.3.${i}`)).status);
-      for (let i = 20; i < 40; i++) statuses.push((await call("/auth/code", { method: "POST", body: { code: "ZZZZ-ZZZX" }, ip: `10.6.3.${i}` })).status);
+      for (let i = 0; i < 20; i++) statuses.push((await redeemOperator("99999", `10.6.3.${i}`)).status);
+      for (let i = 20; i < 40; i++) statuses.push((await call("/auth/code", { method: "POST", body: { code: "99999" }, ip: `10.6.3.${i}` })).status);
       assert.ok(statuses.includes(429), `40 guesses split across both endpoints must be throttled, got ${statuses}`);
       assert.ok(
-        statuses.indexOf(429) <= 30,
-        `the GLOBAL ceiling (shared across worker + operator codes) must bite by the 31st attempt total, first 429 at ${statuses.indexOf(429)}`,
+        statuses.indexOf(429) <= 5,
+        `the GLOBAL ceiling (shared across worker + operator codes) must bite by the 6th attempt total, first 429 at ${statuses.indexOf(429)}`,
       );
       resetLoginRate();
     });
@@ -5871,7 +5891,7 @@ try {
       const created = await expectOp(await createOperator("Feldleiter Code", "0664 900 50 01"), 201);
       const issued = await expectOp(await issueOperatorCode(created.operator.id), 201);
       assert.equal(issued.operator.id, created.operator.id);
-      assert.match(issued.code, /^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}-[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}$/);
+      assert.match(issued.code, /^[0-9]{5}$/, "same five-digit shape as the worker route (decision-63)");
 
       // The plaintext is shown exactly once — GET /admin/data can never hand it back.
       const raw = await (await asAdmin("/admin/data")).text();

@@ -251,7 +251,7 @@ const VIENNA_TIME = new Intl.DateTimeFormat("de-AT", {
   hour12: false,
 });
 
-/** "27.08." — de-AT renders "27.08.2026"; the year is noise on a 5-day credential. */
+/** "27.08." — de-AT renders "27.08.2026"; the year is noise on a same-day credential. */
 export function viennaDay(at) {
   return VIENNA_DAY.format(at).replace(/\.?$/, ".");
 }
@@ -262,8 +262,9 @@ export function viennaTime(at) {
 }
 
 /**
- * The enrolment-code message. `display` is the hyphenated form the admin reads aloud
- * ("K7QF-3MZ2"), so the SMS and the screen say the same thing character for character.
+ * The enrolment-code message. `display` is what the admin reads aloud — five digits, no
+ * grouping since decision-63, i.e. now the same string as `code`. The field name stays so
+ * the SMS and the screen are still, by construction, the same characters.
  */
 export function renderEnrolmentSms({ name, display, expiresAt }) {
   return (
@@ -301,13 +302,15 @@ export function renderOtpSms({ name, code, ttlMinutes }) {
 //
 // and every one of those days the victim's handset rings with ten texts they did not ask
 // for, so the attack is LOUD as well as slow — unlike an enrolment code, which can be
-// attacked silently for five days. If the length, the TTL, the attempt cap or either rate
-// limit changes, REDO THIS BLOCK.
+// attacked silently for its whole lifetime (now 15 minutes, decision-63, down from five
+// days). If the length, the TTL, the attempt cap or either rate limit changes, REDO THIS
+// BLOCK.
 //
 // TEN MINUTES, not five and not an hour. Five is the textbook number and is wrong for this
 // user: a cleaner is in a basement, Austrian carrier delivery is usually seconds but not
 // always, and an OTP that expires in flight costs a second SMS — the exact failure that
-// made decision-26 raise its own TTL from 60 minutes to 5 days after a real incident. An
+// made decision-26 raise its own TTL from 60 minutes to 5 days after a real incident (that
+// enrolment TTL is 15 minutes again since decision-63; this OTP one is untouched). An
 // hour is wrong the other way: the code sits readable on a lock screen on a table. The
 // arithmetic above is bounded by ATTEMPTS, not by time, so the TTL does not move it.
 export const OTP_TTL_MS = 10 * 60_000;
