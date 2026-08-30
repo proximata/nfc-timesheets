@@ -54,6 +54,21 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      # server/check-api.js and server/check-sms-flag.mjs both need a REAL Postgres - and
+      # both SKIP (exit 0) when there is none, which on a runner would mean a green deploy
+      # that proved nothing. Hence a service container AND the explicit SKIP-is-a-failure
+      # grep in the checks step below. 16 matches the box.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -74,6 +89,33 @@ jobs:
         # bare CI checkout. Same command deploy.sh runs at step 2; running it once more there
         # is a no-op.
         run: (cd server && pnpm install --prod --frozen-lockfile)
+
+      - name: server checks
+        # THE GATE: check-api.js and check-sms-flag.mjs were runnable-by-hand only, so nothing
+        # but a human's memory stopped a red check reaching the box real workers clock in
+        # against. Both create and drop their own throwaway schema/database in the service
+        # container and never touch production. BEFORE the deploy step, on purpose.
+        working-directory: server
+        env:
+          # check-api.js reads DATABASE_URL; check-sms-flag.mjs shells out to
+          # createdb/dropdb/psql/pg_isready with `postgres:///<db>` URLs, which need PG*.
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          for check in check-api.js check-sms-flag.mjs; do
+            echo "=== $check ==="
+            node "$check" 2>&1 | tee "/tmp/$check.log"
+            # A skip exits 0. On a laptop that is a courtesy; here it is the failure mode
+            # this whole step exists to remove.
+            if grep -q 'SKIP' "/tmp/$check.log"; then
+              echo "$check SKIPPED - it must actually RUN in CI" >&2
+              exit 1
+            fi
+          done
 
       - name: ssh key + pinned host key
         env:

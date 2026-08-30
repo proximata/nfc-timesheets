@@ -70,6 +70,31 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Install kotlinc
+        # android/checks/run.sh needs a standalone kotlinc + the kotlinx-coroutines jar that
+        # ships in its lib/ (operator-401-check drives suspending net/Api.kt). The runner has
+        # no Android Studio to borrow one from, and there is no apt/brew kotlin on
+        # ubuntu-latest worth waiting for - `snap install kotlin --classic` is minutes; the
+        # official release zip is seconds. Version tracks gradle/libs.versions.toml's
+        # `kotlin`, so CI compiles the checks with the same compiler the app is built with.
+        env:
+          KOTLIN_VERSION: "2.3.21"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/kotlin.zip \
+            "https://github.com/JetBrains/kotlin/releases/download/v$KOTLIN_VERSION/kotlin-compiler-$KOTLIN_VERSION.zip"
+          unzip -q /tmp/kotlin.zip -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/kotlinc/bin" >> "$GITHUB_PATH"
+
+      - name: JVM checks
+        # THE GATE (TASK-322/second half): these were runnable-by-hand only, so nothing but a
+        # human's memory stopped a red check shipping to Play. run.sh runs every check even
+        # when an earlier one fails and exits non-zero if any did, so this step's exit code is
+        # the whole suite's verdict, and the log shows all of it. Deliberately BEFORE
+        # bundleRelease: a red check should not cost a Gradle build.
+        working-directory: android
+        run: ./checks/run.sh
+
       - name: Decode upload keystore
         env:
           TS_KEYSTORE_BASE64: ${{ secrets.TS_KEYSTORE_BASE64 }}
