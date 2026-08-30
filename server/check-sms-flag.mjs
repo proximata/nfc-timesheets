@@ -335,7 +335,7 @@ try {
     resetLoginRate();
     const issued = await asAdmin(`/admin/workers/${workerId}/enrolment-code`, { method: "POST" });
     assert.equal(issued.status, 201, `the code button must be untouched by an SMS outage: ${JSON.stringify(issued.body)}`);
-    assert.match(issued.body.code, /^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+    assert.match(issued.body.code, /^[0-9]{5}$/); // decision-63: five digits, no dash, no letters
     assert.ok(issued.body.expires_at);
 
     const redeemed = await call("/auth/code", { method: "POST", body: { code: issued.body.code } });
@@ -478,7 +478,7 @@ try {
       stub.calls.length = 0;
       const res = await asAdmin(`/admin/workers/${workerId}/enrolment-code/sms`, { method: "POST" });
       assert.equal(res.status, 200, `a failed SEND is a 200 — a 4xx would let the panel swallow the code`);
-      assert.match(res.body.code, /^[0-9A-Z]{4}-[0-9A-Z]{4}$/, "THE FALLBACK: the code is in the body");
+      assert.match(res.body.code, /^[0-9]{5}$/, "THE FALLBACK: the code is in the body, five digits (decision-63)");
       assert.ok(res.body.expires_at);
       assert.equal(res.body.delivery.status, "failed");
       assert.match(res.body.delivery.reason, expected, `reason was ${res.body.delivery.reason}`);

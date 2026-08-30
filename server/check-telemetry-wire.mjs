@@ -40,15 +40,30 @@ const SECRETS = {
   identityToken: "eyJraWQiOiJXNldjT0tCIn0.eyJzdWIiOiIwMDEyMzQifQ.SIGNATURE",
   email: "ivan.kotelnikov@example.test",
   portalToken: "Zm9vYmFyTElWRUNSRURFTlRJQUxfNDNjaGFyc19hYWFh",
-  enrolmentCode: "K7QF-3MZ2", // decision-26: redeeming one mints a worker session
   // decision-48. A telephone number is personal data under any reading, and the Twilio
   // secret is a credential that can send messages on the operator's bill. Both travel on
   // the SMS routes: the number in a request BODY, the secret in an Authorization header
   // this process builds itself.
   workerPhone: "+436649001234",
   twilioSecret: "wire-check-twilio-secret-abcdefgh",
-  twilioApiKeySid: "SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  // MUST BE A REAL-SHAPED API KEY SID. lib/sms.js shape-checks every TWILIO_* var and treats
+  // a malformed one as MISSING, so a fixture of literal x's meant sendSms() returned
+  // `not_configured` without ever building a request — and the failure-event case below then
+  // failed for a reason that had nothing to do with scrubbing (TASK-328).
+  twilioApiKeySid: "SK0123456789abcdef0123456789abcdef",
 };
+
+// The account SID lives OUTSIDE `SECRETS` on purpose: it is not a credential (it is a public
+// account identifier and appears in the URL path), and lib/sms.js requires `AC` + 32 hex or it
+// declares the box unconfigured.
+const TWILIO_ACCOUNT_SID = "ACabcdef0123456789abcdef0123456789";
+
+// decision-26/decision-63: redeeming one mints a worker session, and since decision-63 it is
+// FIVE DIGITS. Deliberately NOT in `SECRETS`: that map is asserted as a substring over the
+// whole serialised payload, and a 5-digit string collides with a timestamp often enough to
+// make such a case flaky rather than true. The body it rides in is asserted absent instead —
+// scrubEvent deletes `request.data` outright — which is the actual guarantee.
+const ENROLMENT_CODE = "97531";
 
 const IOS_TRACE_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const IOS_SPAN_ID = "bbbbbbbbbbbbbbbb";
@@ -131,7 +146,7 @@ await fetch(`${base}/auth/code`, {
     "sentry-trace": `${IOS_TRACE_ID}-${IOS_SPAN_ID}-1`,
     baggage: `sentry-trace_id=${IOS_TRACE_ID},sentry-public_key=abc123,sentry-sample_rate=1`,
   },
-  body: JSON.stringify({ code: SECRETS.enrolmentCode }),
+  body: JSON.stringify({ code: ENROLMENT_CODE }),
 });
 
 // An SMS sign-in request. The phone number is in the BODY, which is where the SDK's
@@ -158,14 +173,15 @@ await fetch(`${base}/auth/sms/request`, {
   const deadBase = `http://127.0.0.1:${dead.address().port}`;
   await new Promise((r) => dead.close(r));
 
-  process.env.TWILIO_ACCOUNT_SID = "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+  process.env.TWILIO_ACCOUNT_SID = TWILIO_ACCOUNT_SID;
   process.env.TWILIO_SID = SECRETS.twilioApiKeySid;
   process.env.TWILIO_SECRET = SECRETS.twilioSecret;
   process.env.TWILIO_FROM = "+43720123456";
   process.env.TWILIO_API_BASE = deadBase;
 
   const { sendSms } = await import("./lib/sms.js");
-  const result = await sendSms(SECRETS.workerPhone, `Ihr Zugangscode lautet ${SECRETS.enrolmentCode}.`);
+  const result = await sendSms(SECRETS.workerPhone, `Ihr Zugangscode lautet ${ENROLMENT_CODE}.`);
+  assert.notEqual(result.reason, "not_configured", "the fixtures must satisfy lib/sms.js's shape checks, or nothing is sent");
   assert.equal(result.status, "failed", "the send must fail against a dead port");
   for (const k of ["TWILIO_ACCOUNT_SID", "TWILIO_SID", "TWILIO_SECRET", "TWILIO_FROM", "TWILIO_API_BASE"]) delete process.env[k];
 }
@@ -193,6 +209,16 @@ t("the SDK produced payloads at all (an empty check passes for the wrong reason)
 t("nothing forbidden survives on the wire, in ANY field the SDK invented", () => {
   for (const [name, value] of Object.entries(SECRETS)) {
     assert.ok(!serialised.includes(value), `${name} reached the transport: ${serialised}`);
+  }
+});
+
+t("no request BODY rides along on any payload - the enrolment code's own guarantee", () => {
+  // The 5-digit code is posted in a JSON body, which is exactly where the SDK's
+  // requestDataIntegration looks. scrubEvent deletes `request.data` outright, so the check is
+  // that the field is GONE on every payload — not that five particular digits are absent,
+  // which a timestamp can satisfy by accident.
+  for (const event of wire) {
+    assert.ok(!("data" in (event.request ?? {})), `${event.transaction ?? event.type} carried a request body`);
   }
 });
 

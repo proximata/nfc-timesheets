@@ -1497,16 +1497,31 @@ try {
       assert.ok(row.enrolment_code_redeemed_at, "and record when it was used");
     });
 
-    await test("whatever a tired cleaner types is normalised - O/0 and I/L/1, case, spaces", async () => {
+    // decision-63 (TASK-328): this case USED to derive its input from the freshly minted
+    // code by aliasing 0->o and 1->l, which was correct while the alphabet had letters to
+    // alias. With a digits-only alphabet that step produces a string normaliseCode() must
+    // REJECT, and it only produced one when the random code happened to contain a 0 or a 1 —
+    // i.e. the case failed ~65% of runs and passed the rest. Both halves are now driven with
+    // LITERAL, unambiguous fixtures, so neither depends on what the generator rolled.
+    await test("separators a tired cleaner types are stripped - spaces and hyphens (decision-63)", async () => {
       resetLoginRate();
       const code = await freshCode();
-      const typed = code
-        .toLowerCase()
-        .replace(/0/g, "o")
-        .replace(/1/g, "l")
-        .replace("-", " - ");
-      const res = await redeem(typed, "10.5.1.2");
+      // "12 3-45" for a code of 12345: every separator habit at once, nothing else changed.
+      const typed = `${code.slice(0, 2)} ${code.slice(2, 3)}-${code.slice(3)}`;
+      const res = await redeemPerIp(typed, "10.5.1.2");
       assert.equal(res.status, 200, `"${typed}" must be accepted, got ${res.status}`);
+    });
+
+    await test("a LETTER is no longer aliased to a digit - the O/I/L step is gone (decision-63)", async () => {
+      resetLoginRate();
+      await freshCode(); // a live code exists; the point is that this input never reaches it
+      // Literal, not derived: "oi" would once have become "01", and a 5-char string with two
+      // letters must now simply fail the shape test and answer the one 401 every failure gets.
+      for (const typed of ["oi234", "1234o", "l2345"]) {
+        const res = await redeemPerIp(typed, "10.5.1.21");
+        assert.equal(res.status, 401, `"${typed}" must not be aliased into a digit, got ${res.status}`);
+      }
+      resetLoginRate();
     });
 
     await test("a code is SINGLE USE - the second attempt fails and mints nothing", async () => {
