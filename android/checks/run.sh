@@ -121,18 +121,26 @@ check_raw_tag_io() {
 # it runnable on a laptop — and is also why none of it could see that the background push
 # was dead on every device for want of one <uses-permission> line (TASK-225). This last
 # check reads the manifest against the scheduler's own source. See checks/manifest-check.sh.
-check_manifest() { sh checks/manifest-check.sh; }
+# Direct execution, not `sh checks/…`: these three scripts declare `#!/usr/bin/env bash`
+# and use `set -o pipefail`, a bashism. Wrapping them in `sh` overrides that shebang and
+# hands them to whatever `sh` actually is - on this Mac, close enough to bash to tolerate
+# `pipefail` by accident; on the Ubuntu CI runner this workflow was just wired into,
+# `/bin/sh` is dash, which does not know that option at all ("Illegal option -o pipefail"),
+# so play-release.yml's very first real run of this gate failed on shell portability before
+# it ever reached the checks' own assertions. Running them directly lets the kernel honour
+# the shebang everywhere, which is what should have been happening all along.
+check_manifest() { checks/manifest-check.sh; }
 
 # THE TEST SCAN CANNOT OPEN A SHIFT (decision-47). nfc/VerifyZoneActivity.kt imports
 # android.nfc, so it cannot be compiled into the JVM checks above; this proves the one
 # property that matters about it — no path to the clock-in intent, the tap inbox or the
 # worker-session client — by reading its source the same way manifest-check.sh reads the
 # manifest. See checks/verify-no-shift-check.sh.
-check_verify_no_shift() { sh checks/verify-no-shift-check.sh; }
+check_verify_no_shift() { checks/verify-no-shift-check.sh; }
 
 # THE READER IS DISARMED MID-RECOVERY (TASK-301). Same reason this is a source check and not
 # a JVM one: readerWanted() imports android.nfc and the state it guards needs a real card.
-check_reader_armed() { sh checks/reader-armed-check.sh; }
+check_reader_armed() { checks/reader-armed-check.sh; }
 
 # THE OPERATOR SESSION DIES AND THE PHONE FINDS OUT (TASK-401). The only check here that
 # makes a real network request: it starts an HTTPS server on loopback, points BuildConfig at
