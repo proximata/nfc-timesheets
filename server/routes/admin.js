@@ -1015,23 +1015,23 @@ async function putWorkerEmail({ params, body }) {
   // REFUSE BEFORE RELEASING, verbatim putWorkerPhone's reasoning: the worker's own previous
   // claim has to go before the new one can be inserted (`worker_id` is UNIQUE — one person,
   // one login address), and releasing first would mean a refused claim left the worker with
-  // no address at all. Any row held by ANYBODY else refuses — including one held by an
-  // OPERATOR, which is where this diverges from putWorkerPhone's adopt-the-other-half branch:
-  // 020’s `email_identities_one_claim` CHECK makes a two-role row unrepresentable
-  // (decision-64 §1 says exactly one). That ceiling is written down in 020’s header.
-  const held = await one("SELECT worker_id, operator_id FROM email_identities WHERE email = $1", [email]);
-  if (held && (held.operator_id !== null || Number(held.worker_id) !== workerId)) fail(409, "email_claimed");
+  // no address at all. A row an OPERATOR holds does NOT refuse (TASK-331): 020's CHECK is
+  // 007's "at least one", so one mailbox can hold both doors for one human — only a row held
+  // by a DIFFERENT WORKER is a claim to refuse.
+  const held = await one("SELECT worker_id FROM email_identities WHERE email = $1", [email]);
+  if (held && held.worker_id !== null && Number(held.worker_id) !== workerId) fail(409, "email_claimed");
 
   await releaseWorkerEmail(workerId, email);
 
   try {
-    // `worker_id = $2` on the conflict branch keeps re-saving the SAME address idempotent
-    // instead of answering 409 for a no-op; it cannot STEAL one, because a row held by
-    // anyone else has a different (non-NULL) worker_id or an operator_id and matches nothing.
+    // The WHERE on the conflict branch is what makes this safe, exactly as in putWorkerPhone:
+    // `worker_id IS NULL` lets a row an OPERATOR already holds ADOPT its worker half, while
+    // a row another WORKER holds has a non-NULL worker_id, matches nothing and comes back as
+    // 0 rows. `OR worker_id = $2` keeps re-saving the same address idempotent.
     const claimed = await one(
       `INSERT INTO email_identities (email, worker_id) VALUES ($1, $2)
          ON CONFLICT (email) DO UPDATE SET worker_id = $2
-            WHERE email_identities.worker_id = $2
+            WHERE email_identities.worker_id IS NULL OR email_identities.worker_id = $2
        RETURNING email`,
       [email, workerId],
     );
@@ -1057,21 +1057,32 @@ async function deleteWorkerEmail({ params }) {
 }
 
 /**
- * ONE STATEMENT, not `releaseWorkerPhone`'s two, and the difference is a constraint rather
- * than a preference. 007's phone row may be half-owned by an operator, so nulling the worker
- * half is sometimes right and sometimes raises 23514 — hence two statements there. 020’s
- * `email_identities_one_claim` CHECK admits EXACTLY ONE owner, so a worker's row is never
- * also an operator's and a plain DELETE is always correct. A row owned by nobody is
- * unrepresentable either way, so there is no litter to sweep (decision-45's named cleanup).
+ * TWO STATEMENTS, `releaseWorkerPhone`'s, and for its reason (TASK-331 harmonised 020's CHECK
+ * with 007's):
  *
- * The live challenges go with it: `email_challenges.email` is ON DELETE CASCADE (020), so a
- * code minted against a released claim cannot outlive it.
+ *   email_identities_claims CHECK (worker_id IS NOT NULL OR operator_id IS NOT NULL)   -- 020
+ *
+ * A row that claims NOBODY is unrepresentable, so nulling the worker on a worker-only row
+ * raises 23514 and the director's „E-Mail entfernen" button would answer 500. The release is
+ * therefore a DELETE for a worker-only row and a NULL only where an OPERATOR still holds the
+ * other half — one human, one mailbox, two roles.
+ *
+ * The live challenges go with a DELETEd row: `email_challenges.email` is ON DELETE CASCADE
+ * (020), so a code minted against a released claim cannot outlive it. On the NULL branch the
+ * row survives because the operator's door is still open, which is correct — the address has
+ * not been released, only one of its two claims.
  */
 async function releaseWorkerEmail(workerId, keepEmail) {
-  await query(`DELETE FROM email_identities WHERE worker_id = $1 AND ($2::text IS NULL OR email <> $2)`, [
-    workerId,
-    keepEmail,
-  ]);
+  await query(
+    `DELETE FROM email_identities
+      WHERE worker_id = $1 AND operator_id IS NULL AND ($2::text IS NULL OR email <> $2)`,
+    [workerId, keepEmail],
+  );
+  await query(
+    `UPDATE email_identities SET worker_id = NULL
+      WHERE worker_id = $1 AND operator_id IS NOT NULL AND ($2::text IS NULL OR email <> $2)`,
+    [workerId, keepEmail],
+  );
 }
 
 async function releaseWorkerPhone(workerId, keepPhone) {
@@ -1230,8 +1241,10 @@ async function putOperatorEmail({ params, body }) {
   const operator = await one("SELECT id FROM operators WHERE id = $1 AND active", [operatorId]);
   if (!operator) fail(404, "unknown_operator");
 
-  const held = await one("SELECT worker_id, operator_id FROM email_identities WHERE email = $1", [email]);
-  if (held && (held.worker_id !== null || Number(held.operator_id) !== operatorId)) fail(409, "email_claimed");
+  // Only a row a DIFFERENT OPERATOR holds refuses; a row a WORKER holds is adopted below
+  // (TASK-331 — the mirror of putWorkerPhone/putWorkerEmail).
+  const held = await one("SELECT operator_id FROM email_identities WHERE email = $1", [email]);
+  if (held && held.operator_id !== null && Number(held.operator_id) !== operatorId) fail(409, "email_claimed");
 
   await releaseOperatorEmail(operatorId, email);
 
@@ -1239,7 +1252,7 @@ async function putOperatorEmail({ params, body }) {
     const claimed = await one(
       `INSERT INTO email_identities (email, operator_id) VALUES ($1, $2)
          ON CONFLICT (email) DO UPDATE SET operator_id = $2
-            WHERE email_identities.operator_id = $2
+            WHERE email_identities.operator_id IS NULL OR email_identities.operator_id = $2
        RETURNING email`,
       [email, operatorId],
     );
@@ -1258,12 +1271,18 @@ async function deleteOperatorEmail({ params }) {
   return { status: 200, body: { operator: { id: operatorId }, login_email: null } };
 }
 
-/** One statement, for the reason releaseWorkerEmail gives: 020 admits exactly one owner. */
+/** Two statements, for the reason releaseWorkerEmail gives: 020 admits BOTH claims on one row. */
 async function releaseOperatorEmail(operatorId, keepEmail) {
-  await query(`DELETE FROM email_identities WHERE operator_id = $1 AND ($2::text IS NULL OR email <> $2)`, [
-    operatorId,
-    keepEmail,
-  ]);
+  await query(
+    `DELETE FROM email_identities
+      WHERE operator_id = $1 AND worker_id IS NULL AND ($2::text IS NULL OR email <> $2)`,
+    [operatorId, keepEmail],
+  );
+  await query(
+    `UPDATE email_identities SET operator_id = NULL
+      WHERE operator_id = $1 AND worker_id IS NOT NULL AND ($2::text IS NULL OR email <> $2)`,
+    [operatorId, keepEmail],
+  );
 }
 
 async function reactivateOperator({ params }) {

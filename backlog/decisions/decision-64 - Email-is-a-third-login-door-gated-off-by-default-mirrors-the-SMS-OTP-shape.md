@@ -15,7 +15,7 @@ login doors - this decision adds a THIRD, the same way decision-50 itself requir
 decision rather than a silent addition.
 
 Phone-based login is NOT a bare column on `workers`/`operators` - decision-45 built a separate
-`phone_identities` registry (one phone number, claimable by exactly one worker OR operator)
+`phone_identities` registry (one phone number, one row, claimable by a worker AND/OR an operator)
 plus `otp_challenges` (the live-code table, FK'd to that registry) specifically because a
 phone number can move between people and needs claim/release semantics. Email has the exact
 same shape of problem, so this decision mirrors that architecture rather than bolting email
@@ -29,8 +29,27 @@ does for Twilio.
 
 ## Decision
 
+> **AMENDED IN PLACE, TASK-331 (owner decision).** §1 first said "a CHECK that exactly one is
+> set", and migration 020 shipped it that way, faithfully and with the divergence written down.
+> That made email STRICTER than phone for no stated reason: `phone_identities` (007) is "at
+> least one", deliberately, so one human on one number can hold both the worker and the
+> operator door - the owner-cleans-a-building case. Under exactly-one, the same person needed
+> two mailboxes to hold two doors but only one telephone. The owner's answer was HARMONISE, and
+> because nothing had shipped anywhere (no box has this table; the migration was unpushed) the
+> correction is an edit to migration 020 and to this record, not a new migration stacked on top
+> of a constraint that never existed in production.
+>
+> Consequences of the amendment, all of them mirroring what 007/`putWorkerPhone` already do:
+> the claim routes gain the ON CONFLICT adopt-the-other-half branch (a row an OPERATOR holds is
+> adopted by a worker claim rather than refused with 409); release becomes two statements
+> (DELETE a single-role row, NULL one half of a dual-role row) so it can never violate the
+> CHECK; and for a dual-claim address the two doors are interchangeable for that one human,
+> because the challenge is address-keyed - stated here so it is a decision and not a surprise.
+> UNCHANGED: an address claimed by a DIFFERENT person is still refused with a 409 that names
+> nobody, and releasing a claim still CASCADEs its `email_challenges` away.
+
 1. New tables mirroring the phone shape exactly: `email_identities` (email TEXT PRIMARY KEY,
-   nullable `worker_id`/`operator_id` FKs with a CHECK that exactly one is set, claimed_at) and
+   nullable `worker_id`/`operator_id` FKs with a CHECK that AT LEAST ONE is set, claimed_at) and
    `email_challenges` (FK to `email_identities.email`, code_hash, expires_at, attempts,
    consumed_at, created_at - the same shape as `otp_challenges`). The implementing agent reads
    migrations 002, 007, 009, 011, 012 in full and mirrors their claim/release/expiry mechanics

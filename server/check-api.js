@@ -182,9 +182,9 @@ CREATE TABLE otp_challenges (
 );
 CREATE INDEX otp_challenges_phone_idx ON otp_challenges (phone_e164, created_at DESC);
 CREATE INDEX otp_challenges_expires_idx ON otp_challenges (expires_at);
--- decision-64 / 020_email_identities.sql, transcribed verbatim. NOTE the CHECK: EXACTLY one
--- owner, which is where this table deliberately diverges from phone_identities' "at least
--- one" (020’s header has the reasoning and the upgrade path).
+-- decision-64 / 020_email_identities.sql, transcribed verbatim. The CHECK is 007's, verbatim
+-- too: AT LEAST ONE owner, so one address may hold both a worker and an operator claim
+-- (TASK-331 harmonised what shipped as exactly-one; no box ever had the stricter version).
 CREATE TABLE email_identities (
   email TEXT PRIMARY KEY
     CHECK (email = lower(email))
@@ -193,8 +193,8 @@ CREATE TABLE email_identities (
   worker_id BIGINT UNIQUE REFERENCES workers(id) ON DELETE SET NULL,
   operator_id BIGINT UNIQUE REFERENCES operators(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT email_identities_one_claim
-    CHECK ((worker_id IS NOT NULL) <> (operator_id IS NOT NULL))
+  CONSTRAINT email_identities_claims
+    CHECK (worker_id IS NOT NULL OR operator_id IS NOT NULL)
 );
 CREATE INDEX email_identities_worker_idx ON email_identities (worker_id) WHERE worker_id IS NOT NULL;
 CREATE INDEX email_identities_operator_idx ON email_identities (operator_id) WHERE operator_id IS NOT NULL;
@@ -7706,15 +7706,27 @@ try {
           assert.equal((await bad.json()).error, "invalid_email");
         });
 
-        await test("one address, ONE owner — the database decides, and 409 names nobody", async () => {
-          const stolen = await asAdmin(`/admin/operators/${emailOp.operatorId}/email`, {
+        await test("one address, ONE owner OF EACH KIND — the database decides, and 409 names nobody", async () => {
+          // TASK-331 changed WHICH claim is refused, not THAT one is: 020's CHECK is now 007's
+          // at-least-one, so the refusal is per ROLE. A SECOND WORKER may not take a worker's
+          // address — that is a different person, and it is the case the owner cares about.
+          const { rows: rivalRows } = await admin.query(
+            "INSERT INTO workers (name, hourly_rate_cents) VALUES ('Rivalin Mail', 1400) RETURNING id",
+          );
+          const rivalId = Number(rivalRows[0].id);
+          const stolen = await asAdmin(`/admin/workers/${rivalId}/email`, {
             method: "PUT",
             body: { email: WORKER_EMAIL },
           });
-          assert.equal(stolen.status, 409, "a worker's address may not be claimed by an operator");
+          assert.equal(stolen.status, 409, "a worker's address may not be claimed by another worker");
           const body = await stolen.json();
           assert.deepEqual(Object.keys(body), ["error"], "anti-enumeration: the 409 names nobody");
           assert.equal(body.error, "email_claimed");
+          assert.equal(
+            await countOf("SELECT count(*) AS n FROM email_identities WHERE worker_id = $1", [rivalId]),
+            0,
+            "a refused claim must write nothing",
+          );
 
           // Re-saving the SAME address is a no-op, not a 409.
           await expect(
@@ -7722,6 +7734,66 @@ try {
             200,
           );
           assert.equal(await countOf("SELECT count(*) AS n FROM email_identities WHERE worker_id = $1", [workerId]), 1);
+        });
+
+        await test("ONE address can hold BOTH doors - the owner-cleans-a-building case (TASK-331)", async () => {
+          // 007 §3's case, now representable for email too: one human who cleans AND supervises
+          // has one mailbox, not two. Driven against the real database, both directions of
+          // adoption, and the release of one half must leave the other standing.
+          const BOTH_EMAIL = "chefin.putzt.mit@example.test";
+          const { rows: dualRows } = await admin.query(
+            "INSERT INTO workers (name, hourly_rate_cents) VALUES ('Chefin Putzt Mit', 1400) RETURNING id",
+          );
+          const dualWorkerId = Number(dualRows[0].id);
+          const dualOp = await operatorCookieFor("Chefin Putzt Mit (Leitung)");
+
+          await expect(
+            await asAdmin(`/admin/workers/${dualWorkerId}/email`, { method: "PUT", body: { email: BOTH_EMAIL } }),
+            200,
+          );
+          // THE ADOPTION: the operator claim lands on the SAME row instead of 409.
+          await expect(
+            await asAdmin(`/admin/operators/${dualOp.operatorId}/email`, { method: "PUT", body: { email: BOTH_EMAIL } }),
+            200,
+          );
+          const { rows: both } = await admin.query(
+            "SELECT worker_id, operator_id FROM email_identities WHERE email = $1",
+            [BOTH_EMAIL],
+          );
+          assert.equal(both.length, 1, "one address is still ONE row");
+          assert.equal(Number(both[0].worker_id), dualWorkerId);
+          assert.equal(Number(both[0].operator_id), dualOp.operatorId);
+
+          // ...and BOTH doors actually open for it — the point of the row, not just its shape.
+          resetLoginRate();
+          assert.equal((await emailRequest(BOTH_EMAIL, "10.11.5.1")).status, 202, "the worker door");
+          resetLoginRate();
+          assert.equal((await opEmailRequest(BOTH_EMAIL, "10.11.5.2")).status, 202, "the operator door");
+
+          // RELEASING ONE ROLE LEAVES THE OTHER INTACT. A plain DELETE here would take the
+          // operator's door with it; a plain `SET worker_id = NULL` on a single-role row would
+          // violate the CHECK — which is why the release is two statements, exactly
+          // releaseWorkerPhone's.
+          await expect(await asAdmin(`/admin/workers/${dualWorkerId}/email`, { method: "DELETE" }), 200);
+          const { rows: after } = await admin.query(
+            "SELECT worker_id, operator_id FROM email_identities WHERE email = $1",
+            [BOTH_EMAIL],
+          );
+          assert.equal(after.length, 1, "the row must survive: the operator still holds it");
+          assert.equal(after[0].worker_id, null);
+          assert.equal(Number(after[0].operator_id), dualOp.operatorId);
+          resetLoginRate();
+          assert.equal((await opEmailRequest(BOTH_EMAIL, "10.11.5.3")).status, 202, "the operator door still opens");
+          resetLoginRate();
+          assert.equal((await emailRequest(BOTH_EMAIL, "10.11.5.4")).status, 404, "...and the worker's is closed");
+
+          // Releasing the LAST role deletes the row, litter and all.
+          await expect(await asAdmin(`/admin/operators/${dualOp.operatorId}/email`, { method: "DELETE" }), 200);
+          assert.equal(
+            await countOf("SELECT count(*) AS n FROM email_identities WHERE email = $1", [BOTH_EMAIL]),
+            0,
+            "a row owned by nobody is unrepresentable, so the last release DELETEs it",
+          );
         });
 
         await test("a real request+verify round trip mints ts_worker and NOTHING else", async () => {

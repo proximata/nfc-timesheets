@@ -24,23 +24,19 @@
 -- get to invent an identity any more than it gets to invent a wage.
 
 -- ===========================================================================
--- email_identities — one address, one row, exactly one owner.
+-- email_identities — one address, one row, at least one owner.
 --
 -- Same idiom as phone_identities (007): the uniqueness is the DATABASE'S, not the API's, so
 -- a second conflicting INSERT hits this PRIMARY KEY inside the SAME transaction that would
 -- have created the second claim and the whole transaction rolls back.
 --
--- ONE DELIBERATE DIVERGENCE FROM 007, AND IT IS WRITTEN DOWN BECAUSE IT IS A CEILING:
--- phone_identities' CHECK is "at least one owner", so ONE row can carry BOTH a worker and
--- an operator claim — the owner-cleans-a-building case (007 §3, one human, one number, two
--- capabilities). decision-64 §1 specifies EXACTLY ONE for email, so that case is NOT
--- representable here: a person who is both a worker and an operator needs two addresses (or
--- two plus-tags on one mailbox) to hold both doors.
--- ponytail: following the decision as written rather than silently "improving" it.
--- CEILING: one human with one mailbox cannot hold both roles' email doors.
--- UPGRADE PATH: relax this CHECK to phone_identities' "at least one" and make
--- putWorkerEmail/putOperatorEmail adopt the other half the way putWorkerPhone already does
--- — a one-line CHECK change plus an ON CONFLICT branch, and its own decision record.
+-- THE CHECK MATCHES 007's EXACTLY: at least one owner, so ONE row may carry BOTH a worker
+-- and an operator claim — the owner-cleans-a-building case (007 §3, one human, one address,
+-- two capabilities). decision-64 §1 first said EXACTLY ONE, this file shipped it that way,
+-- and TASK-331 put the asymmetry to the owner: the answer was harmonise, and decision-64 is
+-- amended in place (nothing had shipped anywhere — no box has this table). There is now NO
+-- divergence between the two identity registries to remember: same CHECK, same claim shape,
+-- same two-statement release.
 --
 -- LOWERCASE IS AN INVARIANT, not a convention — the same rule 002 states for workers.email
 -- and for the same reason: the login route lower-cases before it looks the address up, so a
@@ -55,12 +51,13 @@
 -- people actually have; this catches the realistic admin typo and nothing more.
 --
 -- ON DELETE SET NULL, not CASCADE, verbatim from 007: deleting a workers or operators row
--- must not silently free an address for reuse. Under this table's stricter CHECK a row that
--- decays to all-NULL is unrepresentable, so the release path is a DELETE (see
--- routes/admin.js releaseWorkerEmail) and the ON DELETE SET NULL branch is reachable only by
--- a HARD delete of a person, which this system does not do (it soft-deletes with
--- active = false). Kept anyway, because matching 007 costs nothing and diverging invites a
--- reader to assume the two tables behave differently in ways they do not.
+-- must not silently free an address for reuse, and must not delete the OTHER half of a
+-- linked identity. A row that decays to both-NULL is caught by the CHECK on the next write
+-- and is a bug to investigate, not a state to leave standing — the same routine cleanup 007
+-- names (`DELETE FROM email_identities WHERE worker_id IS NULL AND operator_id IS NULL`).
+-- The RELEASE path never creates that litter: it is two statements, exactly
+-- releaseWorkerPhone's (routes/admin.js) — DELETE the row a single role owns, NULL the one
+-- half of a row the other role still holds.
 -- ===========================================================================
 CREATE TABLE email_identities (
   email       TEXT PRIMARY KEY
@@ -70,9 +67,10 @@ CREATE TABLE email_identities (
   worker_id   BIGINT UNIQUE REFERENCES workers(id)   ON DELETE SET NULL,
   operator_id BIGINT UNIQUE REFERENCES operators(id) ON DELETE SET NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  -- EXACTLY ONE (decision-64 §1). See the divergence note above.
-  CONSTRAINT email_identities_one_claim
-    CHECK ((worker_id IS NOT NULL) <> (operator_id IS NOT NULL))
+  -- AT LEAST ONE — 007's phone_identities_claims, transcribed. A row owned by nobody is
+  -- unrepresentable; a row owned by both is the point, not a bug.
+  CONSTRAINT email_identities_claims
+    CHECK (worker_id IS NOT NULL OR operator_id IS NOT NULL)
 );
 
 -- "which person owns this address" — the ONLY read this table exists to answer, and the

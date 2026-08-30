@@ -1022,8 +1022,11 @@ async function emailVerify({ body, ip }) {
  * A WORKER'S LIVE CHALLENGE CANNOT BE REDEEMED HERE and vice versa: the challenge row is
  * address-keyed, but the JOIN below demands an ACTIVE OPERATOR for that address, so a code
  * mailed to a worker-only address fails this route with the same opaque 401 a wrong guess
- * gets. Under 020’s `email_identities_one_claim` CHECK an address that is BOTH is not even
- * representable.
+ * gets. AN ADDRESS THAT IS BOTH IS NOW REPRESENTABLE (TASK-331 relaxed 020's CHECK to 007's
+ * at-least-one), and for such an address the two doors are deliberately interchangeable: the
+ * challenge is address-keyed, so one code opens whichever door that ONE HUMAN asks for. That
+ * is the owner-cleans-a-building case, not a privilege crossing — both sessions belong to the
+ * same person, and a role they do not hold still has no row to join.
  */
 async function operatorEmailVerify({ body, ip }) {
   if (!emailConfigured() || !(await emailLoginEnabled())) fail(503, "email_not_configured");
