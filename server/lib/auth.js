@@ -458,7 +458,7 @@ export function checkGlobalEnrolmentRate() {
 
 // ---- SMS ceilings (decision-48) ---------------------------------------------------
 // SEPARATE FROM checkGlobalEnrolmentRate ON PURPOSE, and this is load-bearing rather than
-// tidiness: that counter is sized against a SHARED ~17-bit search space (lib/enrolment.js's
+// tidiness: that counter is sized against a SHARED 100_000-value search space (lib/enrolment.js's
 // own arithmetic). These are sized against a TELEPHONE BILL and against one phone's
 // patience. Sharing them would silently re-tune the enrolment arithmetic, and a stranger
 // guessing OTPs must never be able to lock a worker out of typing an enrolment code.

@@ -30,24 +30,33 @@
 //   search space          10^5                      = 100_000
 //   live codes at once    ~20 workers; ceiling       = 50 (pathological: everyone at once)
 //
-//   per-IP limit          5 failures, then 30s doubling to a 15 min cap (lib/auth.js)
-//                         => long-run <= ~4 guesses / 15 min / IP  = ~384 / day / IP
-//                         UNCHANGED — it already does real work against one attacker.
-//   global ceiling        5 attempts / minute, ALL callers (lib/auth.js), down from 30.
-//                         (the per-IP limit does nothing against IP rotation, and rotation
-//                          is cheap; the global ceiling is what bounds the shared space.)
+//   per-IP limit          3 failures, then 30s doubling to a 15 min cap (lib/auth.js,
+//                         ENROL_FAIL_LIMIT). THE PRIMARY DEFENCE against one attacker
+//                         (decision-63 §5 as amended by TASK-330): a 3-guess burst, then
+//                         <= ~4 guesses / 15 min / IP.
+//   global ceiling        15 attempts / minute, ALL callers (lib/auth.js). A BACKSTOP,
+//                         not the primary throttle: per-IP limiting cannot bound an
+//                         attacker who rotates addresses, and nothing else can. At 15,
+//                         saturating it takes >= 5 DISTINCT addresses every window, so no
+//                         single address can spend the shared budget on everyone else's
+//                         behalf — which is exactly what 5/min allowed it to do.
 //
-//   guesses in ONE code's 15-minute lifetime, at the ceiling: 5 * 15 = 75
-//   p(a hit against ONE live code)        75 / 100_000        = 7.5e-4  (~1 in 1_333)
-//   p(a hit, 50 codes live the whole 15m) 75 * 50 / 100_000   = 3.75e-2 (~1 in 27)
+//   SINGLE ATTACKER (one address), per code lifetime: 3 + ~4 = ~7 guesses
+//     p(a hit against ONE live code)      7 / 100_000         = 7e-5    (~1 in 14_000)
+//
+//   DISTRIBUTED ATTACKER, at the ceiling: 15 * 15 = 225 guesses per code lifetime
+//   p(a hit against ONE live code)        225 / 100_000       = 2.25e-3 (~1 in 444)
+//   p(a hit, 50 codes live the whole 15m) 225 * 50 / 100_000  = 0.1125  (~1 in 9)
 //
 // THAT IS OPENLY WEAKER than the 8-character design's ~1-in-12M, and it is accepted as
 // such, not overlooked: the 50-simultaneous-codes case is the same anomaly this file
-// always called it, and real use (1-3 live codes at ~20 workers) sits at 7.5e-4 to 2.3e-3.
+// always called it, real use (1-3 live codes at ~20 workers) sits at 2.25e-3 to 6.75e-3,
+// and the distributed figures need five or more coordinated addresses sustained for a full
+// code lifetime — which trips the ceiling and fires an alert on the first window.
 //
-// THE TTL IS LOAD-BEARING, NOT A DETAIL. At the old 5-day TTL a 5/min ceiling still buys
-// 36_000 guesses — a third of the entire keyspace — and at the old 30/min ceiling it buys
-// 216_000, i.e. MORE THAN THE WHOLE SPACE: a hit would be arithmetically guaranteed. A
+// THE TTL IS LOAD-BEARING, NOT A DETAIL. At the retired 5-day TTL even a 5/min ceiling
+// buys 36_000 guesses — a third of the entire keyspace — and today's 15/min buys 108_000,
+// i.e. MORE THAN THE WHOLE SPACE: a hit would be arithmetically guaranteed. A
 // 100_000-value space cannot survive a multi-day window at any rate limit worth having,
 // which is why CODE_TTL_MS is 15 minutes below and why lengthening it is not a free knob.
 //
@@ -67,7 +76,7 @@ const CODE_RE = /^[0-9]{5}$/;
 // enough, so the code must now be read out and used almost immediately, or reissued.
 //
 // Single-use redemption, hashed storage, byte-identical failures and one-click revoke are
-// unchanged — the length, the TTL and the global ceiling are what moved.
+// unchanged — the length, the TTL and both limiters are what moved.
 //
 // Making this configurable is TASK-45 and is deliberately NOT done here: an env knob is one
 // more thing that can be wrong on one machine, and nobody has yet needed a second value.

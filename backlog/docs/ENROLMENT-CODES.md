@@ -88,7 +88,7 @@ more thing to go wrong for no benefit.
 2. Find the person. In the **Zugangscode** column press **Zugangscode erstellen**.
 3. A panel appears at the top of the screen with a code like:
 
-   > **K7QF-3MZ2**
+   > **97531**
 
 4. **Write it down or press "Zugangscode kopieren" now.** This is the only time it is ever
    shown. It cannot be looked up afterwards — not by you, not by anyone, not from the
@@ -105,22 +105,20 @@ Creating codes is free — do it as often as you like.
 
 ### The code is easy to read down a bad line, on purpose
 
-- It never contains the letters **I**, **L**, **O** or **U**.
-- If the worker mishears "oh" and types **O**, the app reads it as **0** anyway. Same for
-  **I** or **l** becoming **1**.
-- Upper case, lower case, with the dash, without the dash, with a space — all accepted.
+It is **five digits and nothing else** — no letters, no dash (decision-63). There is nothing
+left to mishear as a letter, so the old "O becomes 0" handling is gone with the letters.
 
-So the usual telephone misunderstandings are already handled. Letters that sound alike in
-German — **B/P/D** — are not, so it is still worth saying "B wie Berta". If it goes wrong, a
-new code costs one click.
+- Spaces and dashes typed out of habit are still ignored: "12 3-45" is accepted.
+- Anything containing a letter is simply wrong now, and is refused like any wrong code.
 
-### The code expires after one hour
+### The code expires after 15 minutes
 
-Long enough to phone someone, let them install the app and get through it. Short enough that
-a code written on a scrap of paper and forgotten is not a permanent key to your system.
+This is SHORT, and deliberately so: five digits are only safe because the window is small
+(decision-63). **Read the code out while you are already on the phone with the person, with
+the app open in front of them.** Do not create it in the morning for an afternoon call.
 
-If the hour runs out, the column says **"Am … abgelaufen, nicht verwendet"** and you simply
-create a new one.
+If the 15 minutes run out, the column says **"Am … abgelaufen, nicht verwendet"** and you
+simply create a new one — one click, as often as you like.
 
 ---
 
@@ -197,11 +195,21 @@ person.
 
 No, and this was sized deliberately rather than hoped for.
 
-A code is one of about **1.1 trillion** possibilities. The server allows the whole world only
-30 attempts per minute in total — so during the hour a code is alive, roughly 1,800 guesses
-are possible against it. The chance of any of them landing is about **one in twelve million**,
-and that assumes someone is attacking continuously and that fifty codes are live at once,
-which never happens in practice.
+A code is **five digits — one of 100,000 possibilities**, and it is **alive for 15 minutes**,
+not a day and not a week. Those two numbers were chosen together (decision-63): the short code
+is only safe because the window is short.
+
+One computer guessing gets **three tries**, then has to wait — 30 seconds, then a minute, then
+longer, up to a quarter of an hour. Over one code's whole 15-minute life that is about seven
+guesses, so the chance of landing one is roughly **one in fourteen thousand**.
+
+Someone attacking from many computers at once is capped differently: the server answers at
+most **15 code attempts a minute in total, from everybody combined**, so 225 guesses over a
+code's life — about **one in 444**, or one in nine in the never-actually-happens case where
+fifty codes are live for the full fifteen minutes. That is weaker than the old eight-character
+code was, and it is a trade the owner made knowingly in exchange for five digits that can be
+read out over the phone. If that ceiling is ever reached, the server raises an alert by
+itself — it is not a number normal use can come near.
 
 The code is never written into any log or error report anywhere. I generated eighteen real
 codes, drove them through a real server, and searched every line it produced: none of them
@@ -225,7 +233,7 @@ Honestly, and in rough order of how much it will cost you:
    and when, and when it was used, but not which phone or which person typed it. If a code
    reaches the wrong hands, deactivating the worker is the remedy — the panel will not
    identify the culprit for you.
-6. **You cannot set how long a code lasts.** It is one hour for everyone.
+6. **You cannot set how long a code lasts.** It is 15 minutes for everyone (decision-63).
 7. **Codes cannot be created in bulk.** One worker at a time, one button each. With twenty
    staff this is fine; it would not be at two hundred.
 8. **iPhone users cannot use a code instead of Apple**, even if the Apple route is annoying

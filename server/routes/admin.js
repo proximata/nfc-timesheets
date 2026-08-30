@@ -748,10 +748,12 @@ async function issueEnrolmentCode({ params, session }) {
  * is a slightly different credential from the one it falls back from.
  *
  * The response bytes of POST /admin/workers/:id/enrolment-code are unchanged by the
- * extraction: same 201, same three fields, same display form, same 5-day CODE_TTL_MS.
+ * extraction: same 201, same three fields, same display form, same 15-minute CODE_TTL_MS
+ * (decision-63; it was 5 days before that).
  *
- * workers.enrolment_code_hash is UNIQUE so a code can never name two workers. A collision
- * is ~1 in 2^40 per issue; retrying is two lines and removes the case where the director's
+ * workers.enrolment_code_hash is UNIQUE so a code can never name two workers. A collision is
+ * ~1 in 100_000 per issue against ONE live code, and likelier the more are live (decision-63
+ * shrank the space from 2^40); retrying is two lines and removes the case where the director's
  * button answers 500 for a reason nobody could ever reproduce.
  */
 async function mintEnrolmentCode(workerId, adminId) {
@@ -1302,7 +1304,7 @@ async function issueOperatorEnrolmentCode({ params, session }) {
 async function mintOperatorEnrolmentCode(operatorId, adminId) {
   const expiresAt = new Date(Date.now() + CODE_TTL_MS);
   // enrolment_code_hash is UNIQUE, same collision handling as the worker route: retry
-  // rather than let a ~1-in-2^40 event surface as an unreproducible 500.
+  // rather than let a collision in a 100_000-value space surface as an unreproducible 500.
   for (let attempt = 0; attempt < 3; attempt++) {
     const { code, display } = newEnrolmentCode();
     try {

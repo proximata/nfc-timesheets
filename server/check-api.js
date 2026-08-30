@@ -1342,8 +1342,10 @@ try {
   });
 
   // ---- enrolment codes (decision-26) ----------------------------------------------
-  // A code is a low-entropy bearer credential spoken over the phone. Everything below is
-  // a property that makes 40 bits safe; none of them is optional.
+  // A code is a low-entropy bearer credential spoken over the phone. Since decision-63 it is
+  // FIVE DIGITS — a 100_000-value space, not 2^40 — so everything below (single use, a
+  // 15-minute TTL, byte-identical failures, both limiters) is what makes it safe at all;
+  // none of them is optional and the margin no longer has slack to absorb losing one.
   {
     const { rows: enrolSeed } = await admin.query(
       "INSERT INTO workers (name, hourly_rate_cents) VALUES ('Enrol Worker', 1400) RETURNING id",

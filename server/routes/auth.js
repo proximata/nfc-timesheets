@@ -208,7 +208,7 @@ async function codeAuth({ body, ip }) {
   checkLoginRate(bucket);
   checkGlobalEnrolmentRate();
 
-  const code = normaliseCode(body.code); // folds case, strips separators, aliases O/I/L
+  const code = normaliseCode(body.code); // strips separators; nothing left to alias (decision-63)
   const presented = code === null ? null : hashToken(code);
 
   // Indexed lookup on the hash. This finds a CANDIDATE; it does not authorise anything.
@@ -484,7 +484,7 @@ async function smsRequest({ body, ip }) {
   // hiding whether a number was on file, and decision-51 has the owner waiving that.
   await checkSmsRequestRate(ip);
   // THE BILL, process-wide. Own counter, never the enrolment ceiling: that one is sized
-  // against a shared 40-bit search space, this one against a telephone bill. NOT retuned
+  // against a shared 100_000-value search space, this one against a telephone bill. NOT retuned
   // or reordered by decision-51 — an unregistered number still spends one unit of this,
   // named as a cost in that record.
   checkGlobalSmsSpend();
