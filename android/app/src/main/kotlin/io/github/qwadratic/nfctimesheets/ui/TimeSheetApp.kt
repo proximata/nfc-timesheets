@@ -498,8 +498,8 @@ private fun RevealSection(label: @Composable () -> Unit, content: @Composable ()
 // ONE submit button, used by the worker's sign-in screen AND by the operator gate above.
 //
 // TWO CREDENTIALS, ONE FIELD, AND THE FIELD DOES NOT ASK WHICH. A live SMS challenge
-// (`sentTo != null`) makes it a 6-digit OTP field; otherwise it is the 8-character
-// Crockford enrolment code. That is a LAYOUT unification and nothing more: the two remain
+// (`sentTo != null`) makes it a 6-digit OTP field; otherwise it is the 5-digit
+// enrolment code (decision-63). That is a LAYOUT unification and nothing more: the two remain
 // genuinely different credentials with two different security arguments on the server
 // (lib/enrolment.js's and lib/sms.js's arithmetic blocks are untouched), and every refusal
 // keeps the sentence it always had — decision-26's "no reason is ever given" for the
@@ -630,8 +630,8 @@ private fun CodeSignInSection(
         // only, capped at 6 — an OTP has no alphabet to alias (decision-48 §6: copied off a
         // notification, never spoken aloud). Otherwise: capped at the same length the server
         // will even look at and accepted exactly as typed, because EnrolmentCode.normalise()
-        // sorts out case, spaces and hyphens on submit and rewriting the text under the
-        // cursor is how input fields fight their user.
+        // strips spaces and hyphens on submit and rewriting the text under the cursor is how
+        // input fields fight their user — a paste of "1-2345" must survive being pasted.
         onValueChange = {
             typed = if (otpMode) it.filter(Char::isDigit).take(OTP_LENGTH) else it.take(EnrolmentCode.MAX_INPUT)
             codeFailure = null
@@ -662,16 +662,15 @@ private fun CodeSignInSection(
             KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Go)
         } else {
             KeyboardOptions(
-                // Upper case because that is how the code was written down and read out,
-                // so what is on screen matches what is on the admin's screen. It is only
-                // cosmetic -- normalise() folds case anyway, so the shift key cannot cost
-                // anyone an attempt.
-                capitalization = KeyboardCapitalization.Characters,
-                // The one thing that MUST be off. Autocorrect on an 8-character non-word
-                // will happily replace it with a German noun mid-typing, and the worker
-                // would have no idea why a correct code keeps failing.
+                // Autocorrect MUST be off even on a number pad: some IMEs still offer
+                // suggestions, and a swapped digit is an attempt burnt against a limiter
+                // that allows five.
                 autoCorrectEnabled = false,
-                keyboardType = KeyboardType.Text,
+                // NUMERIC since decision-63: the code is five digits, so the letter keyboard
+                // was three taps of friction and a source of typos. Not NumberPassword --
+                // the worker must be able to read back what they typed against what was
+                // said to them on the phone.
+                keyboardType = KeyboardType.Number,
                 imeAction = ImeAction.Go,
             )
         },

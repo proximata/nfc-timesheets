@@ -191,7 +191,7 @@ check(manualClose
 // decision-50 - Sign in with Apple is retired from this app. server/routes/auth.js keeps
 // the route (deprecated in words, not deleted), but nothing on iOS encodes its body any
 // more, so there is nothing left here to pin.
-check(json(CodeRequest(code: "K7QF3MZ2")) == #"{"code":"K7QF3MZ2"}"#,
+check(json(CodeRequest(code: "73142")) == #"{"code":"73142"}"#,
       "POST /auth/code body")
 check(json(PhoneRequest(phone: "+436641234567")) == #"{"phone":"+436641234567"}"#,
       "POST /auth/sms/request body")

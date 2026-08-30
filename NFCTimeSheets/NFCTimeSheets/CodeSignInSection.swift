@@ -13,9 +13,9 @@
 //  THE ONE FIELD ACCEPTS EITHER SHAPE WITHOUT ASKING WHICH, and `sentTo` is the whole
 //  switch: while an SMS challenge is live it is a 6-digit OTP field with
 //  .textContentType(.oneTimeCode) so iOS offers the code straight off the lock screen
-//  (decision-54 §6); otherwise it is the 8-character Crockford-base32 enrolment code, where
+//  (decision-54 §6); otherwise it is the 5-digit enrolment code (decision-63), where
 //  .oneTimeCode would be a lie - nothing ever sent that string in an SMS - and would suppress
-//  the paste/autocapitalisation behaviour an admin-issued code actually needs.
+//  the paste behaviour an admin-issued code actually needs.
 //
 //  The ROLE parameter changes two things and nothing else: which three calls are made, and
 //  which copy a failure maps to. It is deliberately NOT a session type - this view owns no
@@ -111,22 +111,24 @@ struct CodeSignInSection: View {
             // the person who needed it (2026-08-29 UX audit). Only outside SMS mode; the
             // OTP case already says where the code was sent, above.
             if !otpMode {
-                Text("The one-time code your administration gave you.")
+                Text("The 5-digit one-time code your administration gave you.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
             TextField(otpMode ? "SMS code" : "Access code", text: $code)
-                .keyboardType(otpMode ? .numberPad : .default)
+                // NUMBER PAD in BOTH modes since decision-63: the enrolment code is five
+                // digits too, so the letter keyboard was friction and a source of typos.
+                .keyboardType(.numberPad)
                 // nil, not .oneTimeCode, outside SMS mode - see the header.
                 .textContentType(otpMode ? UITextContentType.oneTimeCode : nil)
-                .textInputAutocapitalization(otpMode ? .never : .characters)
+                .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .onChange(of: code) { _, new in
-                    // Digits only, capped at 6 - an OTP has no alphabet to alias, so there
-                    // is nothing here for an EnrolmentCode-style normaliser to do. The
+                    // Digits only, capped at 6 - an OTP has no alphabet to alias. The
                     // enrolment code is left exactly as typed and normalised on submit,
-                    // because normalising under the cursor eats the hyphen people type.
+                    // because normalising under the cursor eats the hyphen people type
+                    // (a pasted "1-2345" must survive being pasted).
                     if otpMode { code = String(new.filter(\.isNumber).prefix(6)) }
                     codeErrorMessage = nil
                 }

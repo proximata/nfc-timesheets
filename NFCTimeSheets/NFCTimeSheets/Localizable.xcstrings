@@ -2094,12 +2094,12 @@
         }
       }
     },
-    "The one-time code your administration gave you." : {
+    "The 5-digit one-time code your administration gave you." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Der Einmalcode, den Sie von Ihrer Verwaltung erhalten haben."
+            "value" : "Der 5-stellige Einmalcode, den Sie von Ihrer Verwaltung erhalten haben."
           }
         }
       }

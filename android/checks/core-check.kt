@@ -554,8 +554,8 @@ private fun wireBytes() {
 
     // POST /auth/code. ONE field. decision-22 again: the code is the whole claim, and
     // who it belongs to was decided by the admin who issued it, not by this phone.
-    val enrol = EnrolmentRequest("K7QF3MZ2").toJson()
-    check(enrol == """{"code":"K7QF3MZ2"}""", "POST /auth/code body: $enrol")
+    val enrol = EnrolmentRequest("73142").toJson()
+    check(enrol == """{"code":"73142"}""", "POST /auth/code body: $enrol")
     check(!enrol.contains("worker"), "no worker identity may ride in an enrolment body")
 
     // Our own writer, so its escaping is ours to get wrong.
@@ -1241,66 +1241,58 @@ private fun zones() {
 //
 //    This is the ONE piece of the Android sign-in that can be got wrong in pure logic
 //    rather than on a device, and getting it wrong is expensive in a specific way: the
-//    code is a 40-bit shared secret behind a HARD rate limiter, so a normalisation bug
-//    does not produce a retry, it produces a lockout and a second phone call.
+//    code is a 100_000-value shared secret behind a HARD rate limiter, so a normalisation
+//    bug does not produce a retry, it produces a lockout and a second phone call.
 // ---------------------------------------------------------------------------------
-private const val CODE = "K7QF3MZ2"
+private const val CODE = "73142"
 
 private fun enrolmentCode() {
     check(EnrolmentCode.normalise(CODE) == CODE, "a canonical code survives untouched")
 
     // What a tired cleaner actually types, at a door, on a phone keyboard.
     val forgiven = listOf(
-        "k7qf3mz2" to "lower case",
-        "K7QF-3MZ2" to "the hyphen the admin panel displays",
-        "  K7QF 3MZ2  " to "spaces, including leading and trailing",
-        "k7qf 3mz2" to "both at once",
-        "K7QF\u00a03MZ2" to "a non-breaking space pasted out of a chat app",
-        "K7QF\u20113MZ2" to "a non-breaking hyphen, same source",
-        "K7QF_3MZ2" to "underscore",
-        "K7QF.3MZ2" to "full stop",
-        "K7QF\n3MZ2" to "a newline from a paste",
+        "73-142" to "a hyphen typed out of habit",
+        "  73 142  " to "spaces, including leading and trailing",
+        "73\u00a0142" to "a non-breaking space pasted out of a chat app",
+        "73\u2011142" to "a non-breaking hyphen, same source",
+        "73_142" to "underscore",
+        "73.142" to "full stop",
+        "73\n142" to "a newline from a paste",
     )
     for ((typed, why) in forgiven) {
         check(EnrolmentCode.normalise(typed) == CODE, "must forgive ($why): [$typed]")
     }
 
-    // The aliased letters. These are not merely absent from the alphabet, they are
-    // mapped IN, so hearing "oh" and typing O costs nothing.
-    check(EnrolmentCode.normalise("O7QF3MZ2") == "07QF3MZ2", "O becomes zero")
-    check(EnrolmentCode.normalise("o7qf3mz2") == "07QF3MZ2", "lower o becomes zero")
-    check(EnrolmentCode.normalise("I7QF3MZ2") == "17QF3MZ2", "I becomes one")
-    check(EnrolmentCode.normalise("l7qf3mz2") == "17QF3MZ2", "lower L becomes one")
-    check(EnrolmentCode.normalise("L7QF3MZI") == "17QF3MZ1", "both aliases in one code")
+    // NO LETTER ALIASING ANY MORE (decision-63). The alphabet is digits, so O and I are
+    // not codes with a typo, they are not codes at all -- and silently turning them into
+    // 0 and 1 would now MANUFACTURE a wrong guess out of a mistyped one.
+    check(EnrolmentCode.normalise("O3142") == null, "O is no longer aliased to zero")
+    check(EnrolmentCode.normalise("I3142") == null, "I is no longer aliased to one")
+    check(EnrolmentCode.normalise("l3142") == null, "lower L is no longer aliased to one")
 
     // Refused, silently and identically. Every one of these would otherwise be a wasted
     // attempt against a limiter that allows five.
     val refused = listOf(
         "" to "nothing typed",
-        "K7QF3MZ" to "one short",
-        "K7QF3MZ22" to "one long",
-        "--------" to "eight separators is zero characters, not eight",
-        "K7QF3MZ!" to "punctuation is stripped, leaving seven",
-        "K7QF3MZ\u00fc" to "a German umlaut is not in any alphabet here",
-        "K".repeat(EnrolmentCode.MAX_INPUT + 1) to "longer than the server will even look at",
+        "7314" to "one short",
+        "731422" to "one long",
+        "-----" to "five separators is zero digits, not five",
+        "7314!" to "punctuation is stripped, leaving four",
+        "7314\u00fc" to "a German umlaut is not a digit",
+        "7314A" to "a letter is stripped, leaving four -- letters are gone from the alphabet",
+        "\u0663\u0663\u0663\u0663\u0663" to "Arabic-Indic digits are not [0-9], exactly as the server's strip has it",
+        "7".repeat(EnrolmentCode.MAX_INPUT + 1) to "longer than the server will even look at",
     )
     for ((typed, why) in refused) {
         check(EnrolmentCode.normalise(typed) == null, "must refuse ($why): [$typed]")
     }
 
-    // U is excluded from the alphabet and is NOT aliased anywhere, so it can only ever
-    // be a mistyping -- it must fail, not silently become something else.
-    check(EnrolmentCode.normalise("U7QF3MZ2") == null, "U is not in the alphabet and is not aliased")
-
     // 64 raw characters that reduce to a valid code is still fine: the cap is on input
     // length, exactly as the server applies it, not on the number of real characters.
     check(
-        EnrolmentCode.normalise("K7QF3MZ2" + " ".repeat(EnrolmentCode.MAX_INPUT - 8)) == CODE,
+        EnrolmentCode.normalise(CODE + " ".repeat(EnrolmentCode.MAX_INPUT - CODE.length)) == CODE,
         "separators may fill the input up to the cap",
     )
-
-    check(EnrolmentCode.grouped(CODE) == "K7QF-3MZ2", "grouped for reading aloud")
-    check(EnrolmentCode.normalise(EnrolmentCode.grouped(CODE)) == CODE, "grouped form round-trips")
 }
 
 // ---------------------------------------------------------------------------------
@@ -1320,10 +1312,7 @@ private fun enrolmentAgainstServer() {
     // The alphabet, the length and the input cap, lifted out of the server literally.
     val alphabet = Regex("""const ALPHABET = "([^"]+)"""").find(js)?.groupValues?.get(1)
     check(alphabet != null, "server ALPHABET literal still parses")
-    check(alphabet?.length == 32, "the alphabet is 32 characters, i.e. exactly 5 bits")
-    for (excluded in listOf('I', 'L', 'O', 'U')) {
-        check(alphabet?.contains(excluded) == false, "'$excluded' must not be in the alphabet")
-    }
+    check(alphabet == "0123456789", "the alphabet is the ten digits and nothing else (decision-63)")
 
     val length = Regex("""const CODE_CHARS = (\d+)""").find(js)?.groupValues?.get(1)?.toInt()
     check(length == EnrolmentCode.LENGTH, "code length: server $length vs client ${EnrolmentCode.LENGTH}")
@@ -1480,6 +1469,16 @@ private fun smsSignIn() {
     check(
         form.contains("it.take(EnrolmentCode.MAX_INPUT)"),
         "outside OTP mode the field is capped at the server's own MAX_INPUT and otherwise accepted as typed",
+    )
+    // decision-63: five DIGITS, so the enrolment field asks for the number pad too. A
+    // letter keyboard here is three taps of friction and a source of typos.
+    check(
+        form.contains("keyboardType = KeyboardType.Number,"),
+        "outside OTP mode the enrolment field asks for a numeric keyboard",
+    )
+    check(
+        !form.contains("capitalization = KeyboardCapitalization.Characters"),
+        "no upper-case hint on a digits-only code",
     )
     check(
         form.contains("it.filter(Char::isDigit).take(OTP_LENGTH)"),

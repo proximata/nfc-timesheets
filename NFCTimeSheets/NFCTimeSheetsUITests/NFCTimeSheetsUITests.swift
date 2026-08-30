@@ -91,7 +91,7 @@ final class NFCTimeSheetsUITests: XCTestCase {
         let codeField = app.textFields["Access code"]
         XCTAssertTrue(codeField.waitForExistence(timeout: 5))
         codeField.tap()
-        codeField.typeText("ZZZZ-9999")
+        codeField.typeText("99999")
 
         let submit = app.buttons["Sign in with code"]
         XCTAssertTrue(submit.waitForExistence(timeout: 3))

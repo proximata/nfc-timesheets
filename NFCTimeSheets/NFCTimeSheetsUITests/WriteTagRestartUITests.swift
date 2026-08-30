@@ -115,9 +115,9 @@ final class WriteTagRestartUITests: XCTestCase {
                       "the operator gate is showing the enrolment-code form (is the stub "
                       + "server up, and was the app built with TS_API_HOST pointed at it?)")
         code.tap()
-        // 8 characters from EnrolmentCode's alphabet, or `submittable` is false and the
-        // button never fires. The stub accepts any code; the SHAPE still has to be real.
-        code.typeText("TESTC0DE")
+        // 5 digits (decision-63), or `submittable` is false and the button never fires.
+        // The stub accepts any code; the SHAPE still has to be real.
+        code.typeText("73142")
         app.buttons["Sign in with code"].tap()
 
         let writeTag = app.buttons["Write a tag"]

@@ -9,8 +9,8 @@
 //  the server cannot do from Vienna:
 //
 //    1. It does not spend one of the operator's few rate-limited attempts on a string
-//       that could not possibly be a code. The limiter is LOAD-BEARING on a 40-bit secret
-//       (5 failures, then 30s doubling to 15 min), so a fat-fingered paste must not push
+//       that could not possibly be a code. The limiter is LOAD-BEARING on a 100_000-value
+//       space (5 failures, then 30s doubling to 15 min), so a fat-fingered paste must not push
 //       a tired operator into a lockout at a door.
 //    2. It lets the button stay disabled until the input is plausibly a code, which is
 //       the only feedback that may safely be given — see OperatorSession.signIn.
@@ -22,26 +22,26 @@
 //  Foundation-only on purpose, same discipline as TagLink.swift and MigrationCore.swift:
 //  it must compile and be exercised outside Xcode by a runnable check.
 //
-//  THE ALPHABET is Crockford base32 — 0123456789ABCDEFGHJKMNPQRSTVWXYZ, no I, L, O, U.
-//  The excluded letters are not merely absent, they are ALIASED on the way in: an
-//  operator who hears "oh" and types O gets 0, and I or l gets 1. Case is folded and
-//  anything that is not a letter or a digit is dropped, because people type the hyphen,
-//  and spaces, and sometimes a non-breaking space out of a chat app.
+//  THE ALPHABET IS DIGITS ONLY — 0123456789, five of them, no dash (decision-63,
+//  TASK-319). It used to be 8 characters of Crockford base32 with O->0 and I,L->1 aliased
+//  on the way in; with no letters left there is nothing to alias, so THAT STEP IS GONE.
+//  Anything that is not a digit is dropped, because people type the hyphen, and spaces,
+//  and sometimes a non-breaking space out of a chat app.
 //
 
 import Foundation
 
 enum EnrolmentCode {
-    /// Canonical length. 32^8 = 2^40; the arithmetic is in server/lib/enrolment.js.
-    static let length = 8
+    /// Canonical length. 10^5 = 100_000; the arithmetic is in server/lib/enrolment.js.
+    static let length = 5
 
     /// Longest input worth looking at, matching the server's cap. Applied to the RAW
     /// string, before separators are stripped, exactly as the server does it.
     static let maxInput = 64
 
-    private static let canonicalPattern = try! NSRegularExpression(pattern: "^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{8}$")
+    private static let canonicalPattern = try! NSRegularExpression(pattern: "^[0-9]{5}$")
 
-    /// Whatever was typed -> the canonical 8-character code, or nil.
+    /// Whatever was typed -> the canonical 5-digit code, or nil.
     ///
     /// nil is the only failure signal, and the caller must treat it exactly like a
     /// server rejection — no distinction between "too short" and "bad character",
@@ -49,29 +49,18 @@ enum EnrolmentCode {
     /// revoked into one byte-identical 401 (decision-45): any distinction confirms
     /// something about a live code.
     ///
-    /// `uppercased()` is Unicode-default-case, not locale-sensitive, matching JS
-    /// `toUpperCase()` on the server — the Kotlin port calls out the same trap with
-    /// Turkish `İ` and picks `uppercase()` for the same reason.
+    /// No case folding and no aliasing: the alphabet has no letters left for either to
+    /// touch, and the server's own normaliseCode() is now exactly this one strip. ASCII
+    /// digits only — `isNumber` alone would also accept Arabic-Indic digits, which the
+    /// server's `[^0-9]` strip would delete instead.
     static func normalise(_ input: String) -> String? {
         guard input.count <= maxInput else { return nil }
         var canonical = ""
         canonical.reserveCapacity(input.count)
-        for ch in input.uppercased() {
-            guard ch.isASCII, ch.isLetter || ch.isNumber else { continue }
-            switch ch {
-            case "O": canonical.append("0")
-            case "I", "L": canonical.append("1")
-            default: canonical.append(ch)
-            }
+        for ch in input where ch.isASCII && ch.isNumber {
+            canonical.append(ch)
         }
         let range = NSRange(canonical.startIndex..., in: canonical)
         return canonicalPattern.firstMatch(in: canonical, range: range) != nil ? canonical : nil
-    }
-
-    /// `K7QF-3MZ2`. Purely cosmetic — `normalise` strips the hyphen straight back off.
-    static func grouped(_ code: String) -> String {
-        guard code.count == length else { return code }
-        let mid = code.index(code.startIndex, offsetBy: 4)
-        return "\(code[..<mid])-\(code[mid...])"
     }
 }

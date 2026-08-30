@@ -13,8 +13,8 @@
 
     <string name="signin_code_intro">Enter the sign-in code your admin gave you.</string>
     <string name="signin_code_label">Sign-in code</string>
-    <string name="signin_code_hint">8 characters. Upper or lower case, spaces and dashes all fine.</string>
-    <string name="signin_code_help">The code lasts an hour and works once. If it stops working, ask your admin for a new one — it is one click for them.</string>
+    <string name="signin_code_hint">5 digits. Spaces and dashes are fine.</string>
+    <string name="signin_code_help">The code lasts 15 minutes and works once. If it stops working, ask your admin for a new one — it is one click for them.</string>
     <string name="signin_more_info">More information</string>
     <string name="signin_submit">Sign in</string>
     <string name="signin_submitting">Signing in …</string>

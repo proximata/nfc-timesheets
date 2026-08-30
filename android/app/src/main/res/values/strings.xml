@@ -26,8 +26,8 @@
          bewusst nicht, und diese Texte dürfen es auch nicht. -->
     <string name="signin_code_intro">Geben Sie den Anmeldecode ein, den Sie von Ihrer Verwaltung bekommen haben.</string>
     <string name="signin_code_label">Anmeldecode</string>
-    <string name="signin_code_hint">8 Zeichen. Groß- und Kleinschreibung, Leerzeichen und Bindestriche sind egal.</string>
-    <string name="signin_code_help">Der Code gilt eine Stunde und kann nur einmal verwendet werden. Wenn er nicht mehr geht, fordern Sie bei Ihrer Verwaltung einen neuen an – das dauert einen Klick.</string>
+    <string name="signin_code_hint">5 Ziffern. Leerzeichen und Bindestriche sind egal.</string>
+    <string name="signin_code_help">Der Code gilt 15 Minuten und kann nur einmal verwendet werden. Wenn er nicht mehr geht, fordern Sie bei Ihrer Verwaltung einen neuen an – das dauert einen Klick.</string>
     <!-- Disclosure trigger for signin_code_help + nfc_first_run_note (TASK-267): a
          one-way reveal, tapped by someone who wants the extra sentences, not shown by
          default. -->

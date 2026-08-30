@@ -60,6 +60,10 @@ run write-guard-check   "$SRC/Branding.swift" "$SRC/TagLink.swift" "$SRC/NdefTag
 # The write screen's step machine: exactly one panel, and a SECOND card in the same session
 # starts clean. See the check's header for the three-panels-at-once bug it reproduces.
 run write-tag-step-check "$SRC/WriteTagStep.swift"
+# TASK-321/decision-63: five digits, no dash, no letter aliasing - and the same shape the
+# SERVER mints, read out of server/lib/enrolment.js rather than copied. Android's
+# core-check.kt has the twin of this; the two must never disagree.
+run enrolment-code-check "$SRC/EnrolmentCode.swift"
 
 # Reads Localizable.xcstrings off disk rather than being cat-ed together with source.
 if swift checks/localisation-check.swift; then :; else failed=1; fi

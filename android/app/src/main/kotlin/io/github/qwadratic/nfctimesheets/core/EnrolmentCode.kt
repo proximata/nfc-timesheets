@@ -9,7 +9,7 @@ package io.github.qwadratic.nfctimesheets.core
  * cannot do from Vienna:
  *
  *   1. It does not spend one of the worker's few rate-limited attempts on a string that
- *      could not possibly be a code. The limiter is LOAD-BEARING on a 40-bit secret
+ *      could not possibly be a code. The limiter is LOAD-BEARING on a 100_000-value space
  *      (5 failures, then 30s doubling to 15 min), so a fat-fingered paste must not push
  *      a tired cleaner into a lockout at a door.
  *   2. It lets the button be disabled until the input is plausibly a code, which is the
@@ -26,16 +26,16 @@ package io.github.qwadratic.nfctimesheets.core
  * identical 401: any distinction confirms something about a live code. The UI shows one
  * message, always.
  *
- * THE ALPHABET is Crockford base32 — `0123456789ABCDEFGHJKMNPQRSTVWXYZ`, no I, L, O, U.
- * The excluded letters are not merely absent, they are ALIASED on the way in: a worker
- * who hears "oh" and types O gets 0, and I or l gets 1. Case is folded and anything that
- * is not a letter or a digit is dropped, because people type the hyphen, and spaces, and
- * sometimes a non-breaking space out of a chat app.
+ * THE ALPHABET IS DIGITS ONLY — `0123456789`, five of them, no dash (decision-63,
+ * TASK-319). It used to be 8 characters of Crockford base32 with O->0 and I,L->1 aliased
+ * on the way in; with no letters left there is nothing to alias, so THAT STEP IS GONE.
+ * Anything that is not a digit is dropped, because people type the hyphen, and spaces,
+ * and sometimes a non-breaking space out of a chat app.
  */
 object EnrolmentCode {
 
-    /** Canonical length. 32^8 = 2^40; the arithmetic is in server/lib/enrolment.js. */
-    const val LENGTH = 8
+    /** Canonical length. 10^5 = 100_000; the arithmetic is in server/lib/enrolment.js. */
+    const val LENGTH = 5
 
     /**
      * Longest input worth looking at, matching the server's cap. Applied to the RAW
@@ -43,36 +43,22 @@ object EnrolmentCode {
      */
     const val MAX_INPUT = 64
 
-    private val CANONICAL = Regex("^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{$LENGTH}$")
-    private val NOT_ALNUM = Regex("[^0-9A-Z]")
+    private val CANONICAL = Regex("^[0-9]{$LENGTH}$")
+    private val NOT_DIGIT = Regex("[^0-9]")
 
     /**
-     * Whatever was typed -> the canonical 8-character code, or null.
+     * Whatever was typed -> the canonical 5-digit code, or null.
      *
      * null is the only failure signal, and the caller must treat it exactly like a
      * server rejection.
      *
-     * `uppercase()` and NOT `toUpperCase()`: the deprecated form uses the DEFAULT locale,
-     * and on a Turkish phone that maps `i` to a dotted `İ`, which the strip below then
-     * deletes — a correct code silently mangled on one worker's handset and nobody else's.
-     * `uppercase()` is Locale.ROOT, which is what JS `toUpperCase()` does on the server.
+     * No case folding and no aliasing: the alphabet has no letters left for either to
+     * touch, and the server's own normaliseCode() is now exactly this one strip. Non-digits
+     * are STRIPPED, not rejected, so a pasted "1-2345" or "12 345" still works.
      */
     fun normalise(input: String): String? {
         if (input.length > MAX_INPUT) return null
-        val canonical = input
-            .uppercase()
-            .replace(NOT_ALNUM, "")
-            .replace("O", "0")
-            .replace("I", "1")
-            .replace("L", "1")
+        val canonical = input.replace(NOT_DIGIT, "")
         return if (CANONICAL.matches(canonical)) canonical else null
     }
-
-    /**
-     * `K7QF-3MZ2`. The grouping the admin panel shows and reads out, so what is on the
-     * worker's screen looks like what was said down the phone. Purely cosmetic:
-     * [normalise] strips the hyphen straight back off.
-     */
-    fun grouped(code: String): String =
-        if (code.length == LENGTH) "${code.take(4)}-${code.drop(4)}" else code
 }
