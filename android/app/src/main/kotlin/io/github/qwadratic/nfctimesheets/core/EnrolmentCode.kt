@@ -10,7 +10,7 @@ package io.github.qwadratic.nfctimesheets.core
  *
  *   1. It does not spend one of the worker's few rate-limited attempts on a string that
  *      could not possibly be a code. The limiter is LOAD-BEARING on a 100_000-value space
- *      (5 failures, then 30s doubling to 15 min), so a fat-fingered paste must not push
+ *      (3 failures, then 30s doubling to 15 min - decision-63), so a fat-fingered paste must not push
  *      a tired cleaner into a lockout at a door.
  *   2. It lets the button be disabled until the input is plausibly a code, which is the
  *      only feedback the worker may safely be given — see below.

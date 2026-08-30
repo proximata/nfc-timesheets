@@ -148,7 +148,7 @@ fun TimeSheetApp(
 // -------------------------------------------------------------------------------------
 // Signed out. ONE FIELD, and nothing else (decision-26).
 //
-// The worker has just been read an 8-character code down the phone by the admin, who
+// The worker has just been read a 5-digit code down the phone by the admin, who
 // issued it for them by name. They type it once, ever. So this screen has no account
 // creation, no provider buttons, no password, no "forgot" link and no second field --
 // every one of those would be a thing to get wrong while standing in a stairwell.
@@ -664,7 +664,7 @@ private fun CodeSignInSection(
             KeyboardOptions(
                 // Autocorrect MUST be off even on a number pad: some IMEs still offer
                 // suggestions, and a swapped digit is an attempt burnt against a limiter
-                // that allows five.
+                // that allows three (decision-63).
                 autoCorrectEnabled = false,
                 // NUMERIC since decision-63: the code is five digits, so the letter keyboard
                 // was three taps of friction and a source of typos. Not NumberPassword --
