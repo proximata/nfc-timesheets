@@ -1609,12 +1609,16 @@ try {
       assert.equal([...shapes][0], '401:{"error":"invalid_code"}');
     });
 
+    // PER-IP IS THE PRIMARY DEFENCE since TASK-330, so its threshold is 3 consecutive
+    // failures (ENROL_FAIL_LIMIT), not the 5 a password login gets: the enrolment space is
+    // shared and, since decision-63, only 100_000 wide.
     await test("redemption is rate limited per IP - a shared secret needs a hard floor", async () => {
       resetLoginRate();
       const ip = "10.5.3.1";
       const codes = [];
       for (let i = 0; i < 7; i++) codes.push((await redeemPerIp("99997", ip)).status);
-      assert.ok(codes.slice(0, 5).every((c) => c === 401), `first 5 should be 401, got ${codes}`);
+      assert.ok(codes.slice(0, 3).every((c) => c === 401), `first 3 should be 401, got ${codes}`);
+      assert.equal(codes[3], 429, `the 4th attempt must be locked out, got ${codes}`);
       assert.ok(codes.includes(429), `an unthrottled code endpoint is a guessing oracle, got ${codes}`);
 
       // The lockout must apply to a GOOD code too, or it is not a lockout.
@@ -1631,17 +1635,59 @@ try {
       // The per-IP limiter does nothing against IP rotation, and every live code in the
       // system is a valid answer to a guess - so an attacker walks one shared space, not
       // one worker's. This is the bound that makes the arithmetic in lib/enrolment.js hold.
+      //
+      // 15/min since TASK-330, re-derived from 5 (see lib/auth.js): the per-IP limiter is now
+      // the primary defence against ONE address, so this ceiling only has to stop a MANY-
+      // address attacker, and at 5 it was cheap enough for one script to hold the enrolment
+      // door shut for everybody.
       resetLoginRate();
       const statuses = [];
       for (let i = 0; i < 40; i++) statuses.push((await redeem("99999", `10.5.4.${i}`)).status);
       const firstThrottled = statuses.indexOf(429);
       assert.ok(firstThrottled >= 0, `40 guesses from 40 addresses must be throttled, got ${statuses}`);
-      // 5/min since decision-63 §5: half the arithmetic that keeps a 10^5 keyspace viable.
       assert.ok(
-        firstThrottled <= 5,
-        `the global ceiling must bite by the 6th attempt, first 429 at ${firstThrottled}`,
+        firstThrottled <= 15,
+        `the global ceiling must bite by the 16th attempt, first 429 at ${firstThrottled}`,
       );
       assert.equal((await (await redeem("99999", "10.5.4.99")).json()).error, "too_many_attempts");
+      resetLoginRate();
+    });
+
+    // THE TWO-ACTOR CASE (TASK-330). The bug this pins was not a wrong number, it was a wrong
+    // ORDER: checkGlobalEnrolmentRate() ran BEFORE checkLoginRate(), fail() throws, so a
+    // flooder was refused by the SHARED ceiling without ever charging its own bucket — one
+    // address could hold the enrolment door shut for every worker and operator, for free and
+    // for ever. Reading the source cannot tell you that; two actors driving the real server
+    // can. NOTE the deliberate absence of resetGlobalEnrolmentRate() inside the flood: the
+    // whole point is that the shared budget SURVIVES it.
+    await test("one flooding address locks ITSELF out and cannot lock anybody else out", async () => {
+      resetLoginRate();
+      const flooder = "10.5.9.1";
+      const bystander = "10.5.9.2";
+
+      // 12 junk guesses from one address, well past both ENROL_FAIL_LIMIT and the old 5/min
+      // global ceiling. The first three are 401 (charged to its own bucket); everything after
+      // is its OWN 429, not the shared one.
+      const flood = [];
+      for (let i = 0; i < 12; i++) flood.push((await redeem("99996", flooder)).status);
+      assert.deepEqual(flood.slice(0, 3), [401, 401, 401], `first three must be charged failures, got ${flood}`);
+      assert.ok(flood.slice(3).every((s) => s === 429), `the flooder must stay locked out, got ${flood}`);
+
+      // ...and it is STILL 429 on retry, including with a real code: the lockout is the
+      // address's, not the guess's.
+      const good = await freshCode();
+      const retry = await redeem(good, flooder);
+      assert.equal(retry.status, 429, "the flooder must remain locked out on retry");
+      assert.ok(Number(retry.headers.get("retry-after")) > 0, "429 must say when to come back");
+
+      // THE POINT: a DIFFERENT address, typing a CORRECT code during the flood, still gets in.
+      const legit = await redeem(good, bystander);
+      assert.equal(
+        legit.status,
+        200,
+        `a second address must still enrol while one flooder is locked out, got ${legit.status}`,
+      );
+      assert.ok(cookieFrom(legit), "...with a real session cookie");
       resetLoginRate();
     });
 
@@ -5800,8 +5846,8 @@ try {
       for (let i = 20; i < 40; i++) statuses.push((await call("/auth/code", { method: "POST", body: { code: "99999" }, ip: `10.6.3.${i}` })).status);
       assert.ok(statuses.includes(429), `40 guesses split across both endpoints must be throttled, got ${statuses}`);
       assert.ok(
-        statuses.indexOf(429) <= 5,
-        `the GLOBAL ceiling (shared across worker + operator codes) must bite by the 6th attempt total, first 429 at ${statuses.indexOf(429)}`,
+        statuses.indexOf(429) <= 15,
+        `the GLOBAL ceiling (shared across worker + operator codes) must bite by the 16th attempt total, first 429 at ${statuses.indexOf(429)}`,
       );
       resetLoginRate();
     });

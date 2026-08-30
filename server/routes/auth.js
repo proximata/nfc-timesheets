@@ -33,6 +33,7 @@
 // is a response to the person who just authenticated as that address, not a log line.
 import { verifyIdentityToken } from "../lib/apple.js";
 import {
+  ENROL_FAIL_LIMIT,
   OPERATOR_SESSION_COOKIE,
   WORKER_SESSION_COOKIE,
   checkEmailRequestRate,
@@ -190,14 +191,22 @@ async function resolveWorker({ sub, email }) {
  * function as a local and reaches the database only as a SHA-256.
  */
 async function codeAuth({ body, ip }) {
-  // Global ceiling FIRST and unconditionally: the search space is shared across every
-  // worker holding a live code, so an attacker rotating IPs is attacking all of them at
-  // once and the per-IP bucket would never notice (lib/enrolment.js has the arithmetic).
-  checkGlobalEnrolmentRate();
+  // PER-IP FIRST, GLOBAL SECOND (TASK-330). The order used to be the other way round, with a
+  // comment arguing that the shared search space made the global ceiling the more important
+  // one. The confidentiality half of that was right; the AVAILABILITY half was the bug. fail()
+  // throws, so a request refused by the global ceiling never reached checkLoginRate and never
+  // charged its own bucket: one address posting junk at the ceiling rate held the shared
+  // budget at zero for every legitimate worker AND operator, indefinitely, for free.
+  //
+  // Charging the caller's OWN bucket first means a flooder locks itself out (3 failures, then
+  // the doubling backoff) and stops spending anyone else's budget, and the ceiling is left to
+  // do the one job per-IP limiting genuinely cannot: bound a MANY-ADDRESS attacker.
+  //
   // Own bucket, so a stranger guessing codes cannot lock the director out of
   // /admin/login from a shared office address — same idiom as routes/portal.js.
   const bucket = `enrol:${ip}`;
   checkLoginRate(bucket);
+  checkGlobalEnrolmentRate();
 
   const code = normaliseCode(body.code); // folds case, strips separators, aliases O/I/L
   const presented = code === null ? null : hashToken(code);
@@ -219,7 +228,7 @@ async function codeAuth({ body, ip }) {
   // the same as a real candidate and neither can compare equal by accident.
   const matched = safeEqual(row?.stored ?? DECOY_STORED, presented ?? DECOY_PRESENTED);
   if (!matched || row === null || row.live !== true || row.active !== true) {
-    recordLoginFailure(bucket);
+    recordLoginFailure(bucket, ENROL_FAIL_LIMIT); // TASK-330: 3, not 5 — shared 100_000-value space
     fail(401, "invalid_code");
   }
 
@@ -244,7 +253,7 @@ async function codeAuth({ body, ip }) {
     [row.id, presented],
   );
   if (!claimed) {
-    recordLoginFailure(bucket);
+    recordLoginFailure(bucket, ENROL_FAIL_LIMIT); // TASK-330: 3, not 5 — shared 100_000-value space
     fail(401, "invalid_code"); // lost the race, or revoked underneath us. Same answer.
   }
 
@@ -355,14 +364,16 @@ async function emailLoginEnabled() {
  * `checkGlobalEnrolmentRate()` is the SAME shared module-level counter POST /auth/code
  * already spends against — the search space (every live code, worker or operator) is one
  * space, so the ceiling has to be one ceiling (lib/enrolment.js's own arithmetic; see
- * decision-45's server-side plan for why the existing 30/min headroom still holds).
+ * decision-45's server-side plan; the ceiling itself is 15/min since TASK-330).
  * The per-IP bucket is OWN (`enrolop:`, not `enrol:`), so a stranger guessing operator
  * codes cannot lock out a worker enrolling from the same office address, or vice versa.
+ *
+ * SAME ORDER AS codeAuth, and for the same reason: per-IP first, global second (TASK-330).
  */
 async function operatorCodeAuth({ body, ip }) {
-  checkGlobalEnrolmentRate();
   const bucket = `enrolop:${ip}`;
   checkLoginRate(bucket);
+  checkGlobalEnrolmentRate();
 
   const code = normaliseCode(body.code);
   const presented = code === null ? null : hashToken(code);
@@ -380,7 +391,7 @@ async function operatorCodeAuth({ body, ip }) {
 
   const matched = safeEqual(row?.stored ?? DECOY_STORED, presented ?? DECOY_PRESENTED);
   if (!matched || row === null || row.live !== true || row.active !== true) {
-    recordLoginFailure(bucket);
+    recordLoginFailure(bucket, ENROL_FAIL_LIMIT); // TASK-330: 3, not 5 — shared 100_000-value space
     fail(401, "invalid_code");
   }
 
@@ -397,7 +408,7 @@ async function operatorCodeAuth({ body, ip }) {
     [row.id, presented],
   );
   if (!claimed) {
-    recordLoginFailure(bucket);
+    recordLoginFailure(bucket, ENROL_FAIL_LIMIT); // TASK-330: 3, not 5 — shared 100_000-value space
     fail(401, "invalid_code");
   }
 

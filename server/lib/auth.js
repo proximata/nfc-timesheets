@@ -23,6 +23,7 @@
 // Callers must keep it that way — `console.log(session)` would defeat all of it.
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
+import * as Sentry from "@sentry/node";
 import { one, query } from "./db.js";
 import { fail } from "./http.js";
 
@@ -313,6 +314,28 @@ export async function requireOperatorSession(headers) {
 //   one systemd unit. UPGRADE PATH: a `login_attempts` table keyed on (ip, email) with
 //   the same three functions — the call sites below do not change.
 const FAIL_LIMIT = 5;
+
+// TIGHTER, FOR ENROLMENT-CODE VERIFICATION ONLY (TASK-330, decision-63 amended).
+//
+// WHY THIS ROUTE AND NOT /admin/login: a password guess is one account's business, so 5
+// tries before the backoff bites is a fair allowance for a human who forgot which of two
+// passwords they used. An enrolment-code guess is EVERYONE's business — the space is
+// shared, and since decision-63 it is 100_000 values, not 2^40. Per-IP is now the PRIMARY
+// defence against a single-source attacker (the global ceiling below is a backstop against
+// a DISTRIBUTED one), so it has to bite sooner.
+//
+// 3, NOT 1 OR 2: a worker reading five digits off a WhatsApp message can fumble one, and a
+// second fumble on the retry is a real, observed shape of human. The third consecutive
+// failure is where "tired" stops being the likelier explanation. Cost of being wrong is
+// small and self-clearing: 30s, and clearLoginFailures wipes the bucket on the first
+// success.
+//
+// SAME EXPONENTIAL SHAPE, deliberately not a new mechanism: 3 failures -> 30s -> 60s -> …
+// -> 15 min cap. Long run that bounds ONE address to ~4 guesses per 15 minutes, i.e. below
+// one code's whole lifetime — which is the figure lib/enrolment.js's arithmetic now leans
+// on for the single-attacker case.
+export const ENROL_FAIL_LIMIT = 3;
+
 const BASE_LOCK_MS = 30_000;
 const MAX_LOCK_MS = 15 * 60_000;
 const MAX_TRACKED_IPS = 10_000; // memory bound: an IP-rotating flood cannot grow this forever
@@ -327,7 +350,13 @@ export function checkLoginRate(ip) {
   fail(429, "too_many_attempts", undefined, { "retry-after": String(retryAfter) });
 }
 
-export function recordLoginFailure(ip) {
+/**
+ * Charge one failure to a bucket. `failLimit` is how many CONSECUTIVE failures are allowed
+ * before the exponential lockout starts — FAIL_LIMIT (5) for passwords, ENROL_FAIL_LIMIT (3)
+ * for enrolment-code verification. The backoff shape is the same either way; only the point
+ * at which it starts moves.
+ */
+export function recordLoginFailure(ip, failLimit = FAIL_LIMIT) {
   if (attempts.size >= MAX_TRACKED_IPS) {
     for (const [key, rec] of attempts) if (rec.until <= Date.now()) attempts.delete(key);
     // Still full => every entry is an active lockout. Dropping the oldest would hand a
@@ -336,8 +365,8 @@ export function recordLoginFailure(ip) {
   }
   const rec = attempts.get(ip) ?? { fails: 0, until: 0 };
   rec.fails += 1;
-  if (rec.fails >= FAIL_LIMIT) {
-    rec.until = Date.now() + Math.min(BASE_LOCK_MS * 2 ** (rec.fails - FAIL_LIMIT), MAX_LOCK_MS);
+  if (rec.fails >= failLimit) {
+    rec.until = Date.now() + Math.min(BASE_LOCK_MS * 2 ** (rec.fails - failLimit), MAX_LOCK_MS);
   }
   attempts.set(ip, rec);
 }
@@ -356,33 +385,72 @@ export function clearLoginFailures(ip) {
 // So this counts ATTEMPTS — not failures, and regardless of who is asking — in a fixed
 // one-minute window, and is the hard bound on how fast the shared space can be walked.
 //
-// 5/min, DOWN FROM 30 (decision-63 §5). The shared space is now 100_000 values, not 2^40,
-// so this ceiling is no longer a comfortable margin over an unreachable number — it is
-// half of the arithmetic that keeps a 5-digit code viable at all (the other half is the
-// 15-minute CODE_TTL_MS; 5 * 15 = 75 guesses per code lifetime, lib/enrolment.js). Still
-// far above real use — about twenty workers enrol once each, ever, and one person typing
-// their own code cannot reach 5 attempts in a minute — but raising it back is a change to
-// that arithmetic, not a tuning knob.
+// A BACKSTOP AGAINST A DISTRIBUTED ATTACKER, NOT THE PRIMARY THROTTLE (TASK-330,
+// decision-63 §5 amended). It was briefly 5/min, which made a TOTAL enrolment lockout cost
+// one script and five requests a minute: the callers spent this ceiling BEFORE the per-IP
+// bucket, so the flooder was refused without ever accruing a penalty of its own, while every
+// legitimate worker AND operator got the same 429. The ordering is fixed at the call sites
+// (checkLoginRate first, routes/auth.js), the per-IP limiter is tightened to
+// ENROL_FAIL_LIMIT above, and this number is re-derived rather than restored:
+//
+//   per-IP, after the fix   3 failures then 30s doubling to 15 min
+//                           => one address BURSTS 3 guesses, then ~4 guesses / 15 min
+//   so saturating 15/min    needs >= 5 DISTINCT addresses, sustained, every window.
+//                           One address cannot do it, which is the whole point.
+//   guesses per 15-min code lifetime, at the ceiling  15 * 15 = 225
+//   p(hit vs ONE live code)        225 / 100_000       = 2.25e-3 (~1 in 444)
+//   p(hit, 50 codes live, all 15m) 225 * 50 / 100_000  = 0.1125  (~1 in 9)
+//
+// Same ORDER OF MAGNITUDE as decision-63's original 7.5e-4 / 1-in-27 target (within ~3x),
+// and reached only by an attacker who is genuinely distributed AND sustains it for a full
+// code lifetime — which now also fires an alert on the very first window it trips. The
+// availability side got strictly better in exchange: the cheap single-source lockout is
+// gone.
+//
+// Far above real use, which is what "never binds legitimately" means here: about twenty
+// workers enrol once each, ever; the busiest real minute anyone has described is a handful
+// of people enrolled together, and one person typing their own code cannot reach 3.
 //
 // ponytail: fixed window, in memory, per process — same ceiling and the same upgrade
 //   path as the per-IP limiter above. A window boundary allows a 2x burst across two
 //   adjacent windows (60 guesses in one second), which changes the figures in
 //   lib/enrolment.js by one bit and nothing else. A token bucket would smooth it and is
 //   not worth the code.
-const GLOBAL_LIMIT = 5;
+const GLOBAL_LIMIT = 15;
 const GLOBAL_WINDOW_MS = 60_000;
 let globalWindowStart = 0;
 let globalCount = 0;
+let globalAlerted = false;
 
-/** Throws 429 once the whole process has spent its per-minute enrolment budget. */
+/**
+ * Throws 429 once the whole process has spent its per-minute enrolment budget.
+ *
+ * CALL IT AFTER checkLoginRate(bucket), never before: a caller already locked out on its own
+ * bucket must be refused without spending anyone else's budget. That ordering is what stops
+ * one address closing the enrolment door for everybody (TASK-330).
+ *
+ * TRIPPING THIS IS AN INCIDENT, not a tuning observation. With the per-IP limiter bounding a
+ * single address to a 3-guess burst, reaching 15 in one minute means five or more distinct
+ * addresses are guessing codes at once — which is not a confused worker under any reading. It
+ * alerts on the FIRST trip of each window (never once per refused request: a flood would then
+ * be a Sentry bill), with no code, no IP and no worker in the event.
+ */
 export function checkGlobalEnrolmentRate() {
   const now = Date.now();
   if (now - globalWindowStart >= GLOBAL_WINDOW_MS) {
     globalWindowStart = now;
     globalCount = 0;
+    globalAlerted = false;
   }
   globalCount += 1;
   if (globalCount > GLOBAL_LIMIT) {
+    if (!globalAlerted) {
+      globalAlerted = true;
+      Sentry.captureMessage("global enrolment ceiling tripped", {
+        level: "warning",
+        tags: { "ts.enrolment.ceiling": String(GLOBAL_LIMIT) },
+      });
+    }
     const retryAfter = Math.ceil((globalWindowStart + GLOBAL_WINDOW_MS - now) / 1000);
     fail(429, "too_many_attempts", undefined, { "retry-after": String(Math.max(1, retryAfter)) });
   }
@@ -539,6 +607,7 @@ export async function checkEmailRequestRate(ip) {
 export function resetGlobalEnrolmentRate() {
   globalWindowStart = 0;
   globalCount = 0;
+  globalAlerted = false;
 }
 
 /** Test seam only — check-api.js resets between cases. */
@@ -546,5 +615,6 @@ export function resetLoginRate() {
   attempts.clear();
   globalWindowStart = 0;
   globalCount = 0;
+  globalAlerted = false;
   rolling.clear();
 }
