@@ -12,20 +12,21 @@ status: accepted
 > walkthrough gains a second half — a zone is a clock-in target only after an operator has
 > test-scanned its card in the field (`zones.verified_at`).
 >
-> **§2's building branch is UNCHANGED and the HOIV card is grandfathered BY NAME.** It carries a
-> BUILDING uuid, it keeps resolving for ever, it is not legacy and it is not deprecated. The
-> verification gate is a ZONE-only concept and no query path connects it to a building tap.
+> **2026-08-30 UPDATE (decision-69): the title's "never unresolvable" no longer covers a
+> building's own uuid.** §2's building branch originally kept ONE physical card — HOIV's —
+> grandfathered by name, resolving for ever regardless of any zone's state. The owner has
+> since confirmed that card was never actually deployed in the field, so decision-69 deletes
+> `activePlace`'s building branch outright: no building, grandfathered or not, resolves a
+> clock-in tap on its own uuid any more, only a zone does. What survives byte for byte is
+> this record's actual subject — `zone_state` stays PRESENTATION ONLY, an unzoned building
+> still shows as active and grey rather than vanishing from the map/P&L/portal, and its area
+> is still derived. "Unresolvable" now describes only that presentation guarantee, not a
+> building-level tap, which no longer exists to be resolvable at all.
 
 **ACCEPTED 2026-08-19 by the owner.** Implemented by `006_zones_revenue_rates.sql` §3.
 
 decision-37 now carries `status: superseded` and a banner at the top of its own file naming
 the four contradictions, so a reader who opens it first is not misled.
-
-§3 — the one with teeth — is proved against the REAL production row, not against a fixture:
-`ops/check-hoiv-survives-006.mjs` restores the production dump into a scratch database, applies
-006, and asserts that HOIV (active, 0 zones, its pin intact) still answers 201 to
-`POST /shifts/open` and reports `zone_state = 'unzoned'` with `active = true`. Its RED case is
-seeded: adding `AND EXISTS (SELECT 1 FROM zones …)` to the resolver turns it red.
 
 ## **SUPERSEDES decision-37** (accepted 2026-08-18, IA-PLAN §9.1)
 
@@ -125,9 +126,11 @@ zone_state         DERIVED, PRESENTATION ONLY.
                    It NEVER touches tap resolution, payroll, the P&L or the portal.
 ```
 
-Pinned by a check whose RED case is seeded: an active building with zero zones (exactly HOIV's
-shape) must answer 201 to `POST /shifts/open`; adding `AND EXISTS (SELECT 1 FROM zones …)` to
-the resolver must turn it red.
+As originally written, this was pinned by a check proving a building's own uuid still resolved
+regardless of its zone count. decision-69 later deleted that resolution path outright — no
+building uuid resolves a tap any more, zoned or not — so what remains pinned is narrower and
+stronger: `zone_state` must never gate anything BUT presentation. See `server/check-api.js`'s
+"zone_state is a GREY PIN, and locations.active is the tag" case.
 
 **4 · A shift attaches to the BUILDING.** `shifts.location_id` keeps its meaning and stays
 `NOT NULL`. `start_zone_id` / `end_zone_id` are nullable **tap facts**, never a cost split —

@@ -727,6 +727,18 @@ try {
   const WORKER_SUB = "apple-sub-check-worker";
   const OTHER_SUB = "apple-sub-other-worker";
   const locationUuid = seedLocation[0].id;
+  // decision-69: a building never resolves a clock-in tap on its own uuid any more — only
+  // zones do, unconditionally. Most of this file's shift-open fixtures only need SOME
+  // place that resolves and do not care whether it is a building or a zone, so a single
+  // always-verified zone under the shared fixture building — created once, here, before
+  // this file's own `newZoneRow`/`verifyZoneRow` helpers exist yet — replaces bare
+  // `locationUuid` at every one of those call sites. The two tests that are actually ABOUT
+  // building-vs-zone resolution name their own fixture explicitly and do not use this one.
+  const { rows: seedZone } = await admin.query(
+    "INSERT INTO zones (location_id, name, verified_at) VALUES ($1, 'Checkzone', now()) RETURNING id",
+    [locationUuid],
+  );
+  const zoneUuid = seedZone[0].id;
 
   // Point the server's pool at the throwaway schema before it is imported.
   const sep = BASE_URL.includes("?") ? "&" : "?";
@@ -1769,7 +1781,7 @@ try {
   // ---- clock-in / clock-out (decision-19) -----------------------------------------
   const openBody = {
     client_uuid: uuid(1),
-    location_uuid: locationUuid,
+    location_uuid: zoneUuid,
     start_time: new Date(Date.now() - 3 * 3600_000).toISOString(),
   };
 
@@ -1916,7 +1928,7 @@ try {
       method: "POST",
       body: {
         client_uuid: uuid(85),
-        location_uuid: locationUuid,
+        location_uuid: zoneUuid,
         start_time: new Date(Date.now() - 3600_000).toISOString(),
         manual: true,
       },
@@ -2208,8 +2220,8 @@ try {
     "end_time",
     // decision-43, ADDED not renamed: the two tap facts and the door's name. Both clients
     // in the field ignore unknown JSON keys, so adding is safe where removing never is.
-    // NULL here means "a building-level tag was tapped" - which is what the card on the
-    // wall at HOIV does, and will keep doing for ever.
+    // NULL here means "no zone was named for this half" - a manual open/close (decision-56)
+    // taps no card at all; a real tap always names a zone now (decision-69).
     "end_zone_id",
     "id",
     "location_id", //   "is the next tap the same building, or a switch?"
@@ -2227,7 +2239,7 @@ try {
   ];
 
   const lockStart = new Date(Date.now() - 3600_000).toISOString();
-  const lockOpen = { client_uuid: uuid(20), location_uuid: locationUuid, start_time: lockStart };
+  const lockOpen = { client_uuid: uuid(20), location_uuid: zoneUuid, start_time: lockStart };
 
   await test("GET /shifts/open carries everything a reinstalled phone needs to re-arm the signal", async () => {
     assert.equal((await asWorker("/shifts/open", { method: "POST", body: lockOpen })).status, 201);
@@ -2259,7 +2271,7 @@ try {
   });
 
   await test("two workers clocked in at once each see ONLY their own running shift", async () => {
-    const theirs = { client_uuid: uuid(21), location_uuid: locationUuid, start_time: lockStart };
+    const theirs = { client_uuid: uuid(21), location_uuid: zoneUuid, start_time: lockStart };
     assert.equal((await asOther("/shifts/open", { method: "POST", body: theirs })).status, 201);
 
     const mine = (await (await asWorker("/shifts/open")).json()).shift;
@@ -2318,7 +2330,7 @@ try {
 
     const opened = await asWorker("/shifts/open", {
       method: "POST",
-      body: { client_uuid: legacy, location_uuid: locationUuid, start_time: start },
+      body: { client_uuid: legacy, location_uuid: zoneUuid, start_time: start },
     });
     assert.equal(opened.status, 201);
     const closed = await asWorker("/shifts/close", { method: "POST", body: { client_uuid: legacy, end_time: end } });
@@ -2330,7 +2342,7 @@ try {
     // first, which is not a sequence anyone can guarantee on TestFlight.
     const forward = await asWorker("/shifts/open", {
       method: "POST",
-      body: { client_uuid: uuid(23), location_uuid: locationUuid, start_time: start, signal_armed: true },
+      body: { client_uuid: uuid(23), location_uuid: zoneUuid, start_time: start, signal_armed: true },
     });
     assert.equal(forward.status, 201, "an unknown extra field is ignored, never a 400");
     await asWorker("/shifts/close", { method: "POST", body: { client_uuid: uuid(23), end_time: end } });
@@ -4617,8 +4629,8 @@ try {
       const grey = await newLocation("greyhaus", "Grauhaus");
       // A period around NOW, not October 2025: `reportableLocations` returns a building
       // that is active OR was worked in the period, so a DEACTIVATED building only stays
-      // visible through a period that contains its shift. The tap below is that shift, and
-      // it is deliberately not deleted until the last assertion has read it.
+      // visible through a period that contains its shift. The zone tap further down is that
+      // shift, and it is deliberately not deleted until the last assertion has read it.
       const now = Date.now();
       const period = window({
         from: new Date(now - 86_400_000).toISOString(),
@@ -4641,25 +4653,28 @@ try {
       }
       assert.equal(inPl(await pl(VIENNA_OCT_2025)).area_unknown_reason, "no_zones");
 
-      // AND THE TAG STILL RESOLVES WHILE IT IS GREY. This is the line that must never be
-      // deleted for tidiness: it is the difference between a grey pin and a dead building.
+      // AND THE BUILDING'S OWN UUID DOES NOT RESOLVE WHILE IT IS GREY, same as any other
+      // building (decision-69: no building ever taps, zoned or not, grandfathered or not).
       const tap = await asWorker("/shifts/open", {
         method: "POST",
         body: { client_uuid: uuid(66), location_uuid: grey, start_time: new Date().toISOString() },
       });
-      assert.equal(tap.status, 201, "an UNZONED building is grey on the map and fully tappable at the wall");
-      await expect(
-        await asWorker("/shifts/close", {
-          method: "POST",
-          body: { client_uuid: uuid(66), end_time: new Date(Date.now() + 60_000).toISOString() },
-        }),
-        200,
-      );
+      assert.equal(tap.status, 422, "grey is a PRESENTATION word; it must not make a building's own uuid tappable");
+      assert.equal((await tap.json()).error, "unknown_location");
 
-      // One zone flips the presentation and changes nothing else.
-      await newZoneRow({ location_id: grey, name: "Eingang" });
+      // One zone flips the presentation and changes nothing else. A real tap through it is
+      // what keeps `grey` visible in the period query below once it is deactivated.
+      const greyZone = (await newZoneRow({ location_id: grey, name: "Eingang" })).zone;
+      await verifyZoneRow(greyZone.id);
       assert.equal((await analyticsOf()).zone_state, "zoned");
       assert.equal((await analyticsOf()).active, true);
+      await expect(
+        await asWorker("/shifts/open", {
+          method: "POST",
+          body: { client_uuid: uuid(66), location_uuid: greyZone.id, start_time: new Date().toISOString() },
+        }),
+        201,
+      );
 
       // A DEACTIVATED building with zones is the opposite corner, and proves the two are
       // genuinely independent rather than two names for one thing.
@@ -5153,16 +5168,15 @@ try {
     // each one red is named beside it, and each was run red before this landed.
     // ===================================================================================
 
-    await test("PIN 1: an UNZONED building's own uuid still resolves — the card on the wall", async () => {
-      // *** THE MOST EXPENSIVE FAILURE IN THIS BATCH. ***
-      // A blank NTAG card was written in July and mounted at the only live building. It
-      // carries a BUILDING uuid, and that building has ZERO zones. "A building with no
-      // zones is inactive" is a PRESENTATION rule about a grey pin on the map; wired into
-      // resolution it 422s that card on the day migration 006 lands, and NO SITE VISIT
-      // FIXES IT — the tag cannot be rewritten from Vienna.
+    await test("PIN 1: a building's own uuid NEVER resolves a tap — only a zone does (decision-69)", async () => {
+      // decision-47 used to grandfather exactly one physical card by name (HOIV's), on the
+      // ground that it could not be rewritten from Vienna. The owner confirmed that card was
+      // never actually deployed in the field, so decision-69 deletes the exception outright
+      // rather than narrowing it: `activePlace()` no longer has a building branch at all, and
+      // an unzoned building's raw uuid is now exactly as unresolvable as a stranger's tag.
       //
-      // RED: add `AND EXISTS (SELECT 1 FROM zones z WHERE z.location_id = l.id AND z.active)`
-      // to the building branch of activePlace() -> this answers 422 unknown_location.
+      // RED: put the deleted `UNION ALL … WHERE l.id = $1 AND l.active` branch back into
+      // activePlace() -> this answers 201 again instead of 422.
       const wallHouse = await newLocation("pin-unzoned", "Wandkarte Haus");
       assert.equal(
         await countOf("SELECT count(*) AS n FROM zones WHERE location_id = $1", [wallHouse]),
@@ -5170,23 +5184,21 @@ try {
         "the fixture must have NO zones, or the pin proves nothing",
       );
 
-      const opened = await expect(
-        await asWorker("/shifts/open", {
-          method: "POST",
-          body: { client_uuid: uuid(60), location_uuid: wallHouse, start_time: new Date().toISOString() },
-        }),
-        201,
+      const res = await asWorker("/shifts/open", {
+        method: "POST",
+        body: { client_uuid: uuid(60), location_uuid: wallHouse, start_time: new Date().toISOString() },
+      });
+      assert.equal(res.status, 422, "a building uuid must never open a shift, zoned or not");
+      assert.equal(
+        (await res.json()).error,
+        "unknown_location",
+        "THE CODE MUST NOT CHANGE: the APK in the field maps exactly this string",
       );
-      assert.equal(opened.shift.location_id, wallHouse, "a building uuid resolves to THE BUILDING, for ever");
-      assert.equal(opened.shift.start_zone_id, null, "and to no zone — never 'the first zone', which fabricates a tap");
-      await expect(
-        await asWorker("/shifts/close", {
-          method: "POST",
-          body: { client_uuid: uuid(60), end_time: new Date(Date.now() + 60_000).toISOString() },
-        }),
-        200,
+      assert.equal(
+        await countOf("SELECT count(*) AS n FROM shifts WHERE client_uuid = $1", [uuid(60)]),
+        0,
+        "a refused building tap must not leave a row",
       );
-      await admin.query("DELETE FROM shifts WHERE client_uuid = $1", [uuid(60)]);
     });
 
     await test("a zone uuid resolves to (its building, itself); deactivating either kills it", async () => {
@@ -5253,12 +5265,13 @@ try {
 
     await test("the SHIPPED APK's clock-in shape still opens a shift, byte for byte", async () => {
       // AN OLD APK IN A POCKET MUST NOT START FAILING THE MOMENT THIS DEPLOYS. The build in
-      // the field posts exactly these three keys, with a BUILDING uuid in `location_uuid`,
-      // and never sends `location_uuid` on close. Nothing below is new syntax.
-      const oldShape = { client_uuid: uuid(64), location_uuid: locationUuid, start_time: new Date().toISOString() };
+      // the field posts exactly these three keys off a tag — a ZONE uuid in `location_uuid`
+      // since decision-69 (no shipped card has ever carried a building uuid) — and never
+      // sends `location_uuid` on close. Nothing below is new syntax.
+      const oldShape = { client_uuid: uuid(64), location_uuid: zoneUuid, start_time: new Date().toISOString() };
       const opened = await expect(await asWorker("/shifts/open", { method: "POST", body: oldShape }), 201);
-      assert.equal(opened.shift.location_id, locationUuid);
-      assert.equal(opened.shift.start_zone_id, null);
+      assert.equal(opened.shift.location_id, locationUuid, "a shift stays BUILDING-level regardless of which zone was tapped");
+      assert.equal(opened.shift.start_zone_id, zoneUuid);
       // The close the old build sends: client_uuid + end_time, and nothing else.
       const closed = await expect(
         await asWorker("/shifts/close", {
@@ -5286,16 +5299,21 @@ try {
     await test("a close naming a DIFFERENT building is refused, not silently recorded", async () => {
       const houseA = await newLocation("close-a", "Close Haus A");
       const houseB = await newLocation("close-b", "Close Haus B");
+      // decision-69: a tap always names a zone now, so both ends of this test need one.
+      const zoneA = (await newZoneRow({ location_id: houseA, name: "Zone A" })).zone;
+      await verifyZoneRow(zoneA.id);
+      const zoneB = (await newZoneRow({ location_id: houseB, name: "Zone B" })).zone;
+      await verifyZoneRow(zoneB.id);
       await expect(
         await asWorker("/shifts/open", {
           method: "POST",
-          body: { client_uuid: uuid(65), location_uuid: houseA, start_time: new Date().toISOString() },
+          body: { client_uuid: uuid(65), location_uuid: zoneA.id, start_time: new Date().toISOString() },
         }),
         201,
       );
       const wrong = await asWorker("/shifts/close", {
         method: "POST",
-        body: { client_uuid: uuid(65), location_uuid: houseB, end_time: new Date(Date.now() + 60_000).toISOString() },
+        body: { client_uuid: uuid(65), location_uuid: zoneB.id, end_time: new Date(Date.now() + 60_000).toISOString() },
       });
       // Recording it would put an end time from one building's door onto another
       // building's shift. The app's own rule is that a different building CLOSES this one
@@ -5712,7 +5730,11 @@ try {
       const validateSrc = readFileSync(new URL("./lib/validate.js", import.meta.url), "utf8");
       const activePlaceSql = validateSrc.slice(validateSrc.indexOf("const rows = await all("));
       const whereClauses = activePlaceSql.slice(0, activePlaceSql.indexOf("[placeId]")).match(/WHERE[^\n]*/g) ?? [];
-      assert.equal(whereClauses.length, 3, "activePlace must still have exactly three branches");
+      assert.equal(
+        whereClauses.length,
+        2,
+        "activePlace must have exactly two branches (zone, tag_alias) — decision-69 deleted the building branch",
+      );
       for (const clause of whereClauses) {
         assert.ok(!clause.includes("verified"), `a verification predicate reached the RESOLVER: ${clause}`);
       }
@@ -6042,7 +6064,7 @@ try {
       const withBody = await call("/shifts/open", {
         method: "POST",
         cookie,
-        body: { worker_id: workerId, client_uuid: uuid(90), location_uuid: locationUuid, start_time: new Date().toISOString() },
+        body: { worker_id: workerId, client_uuid: uuid(90), location_uuid: zoneUuid, start_time: new Date().toISOString() },
       });
       assert.equal(withBody.status, 401, "naming a real worker id in the body must not let an operator session through");
       assert.equal(await countShifts(), shiftsBefore, "neither refusal may have created a shift");
@@ -6516,11 +6538,11 @@ try {
       assert.equal((await wrongDoor.json()).error, "zone_mismatch");
       await stillNull("a card from the door next to it must not verify this one");
 
-      // A BUILDING uuid resolves fine and is STILL a mismatch: a building tap has no zone,
-      // so `place.zone_id` is a literal NULL and can never equal a zone id.
+      // A BUILDING uuid never resolves at all any more (decision-69), so it never even
+      // reaches the zone_mismatch comparison — it 422s the same way a stranger's tag would.
       const buildingCard = await verifyA(house.location.id);
       assert.equal(buildingCard.status, 422);
-      assert.equal((await buildingCard.json()).error, "zone_mismatch");
+      assert.equal((await buildingCard.json()).error, "unknown_location");
       await stillNull("a BUILDING-level card must never be able to verify a zone");
 
       // A card the office has not resolved yet, and a card that is not ours at all, keep
@@ -7076,7 +7098,7 @@ try {
       assert.equal(loose.zone.location_name, null);
 
       const building = await expect(await classify(house), 200);
-      assert.deepEqual(building, { kind: "building" }, "a grandfathered building card is named, not called a stranger");
+      assert.deepEqual(building, { kind: "building" }, "a building's own uuid is named, not called a stranger");
 
       const retired = await expect(await classify(deadZone.id), 200);
       assert.deepEqual(retired, { kind: "retired" });

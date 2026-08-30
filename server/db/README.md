@@ -168,9 +168,9 @@ so it can never reach production by accident.
   DEFAULT 0` silently paid every worker nothing. It is **never cleared** by any route —
   reactivating a deactivated zone must not make a working door untappable. The gate itself
   lives in `POST /shifts/open` (`v.requireVerifiedPlace`) and **nowhere else**: a clock-OUT
-  is never gated (INCIDENT 1), and the BUILDING branch of `activePlace` does not read the
-  `zones` table at all, so the card on the wall at HOIV cannot be reached by any value of
-  this column — proved, with two seeded mutants, by `ops/check-hoiv-survives-006.mjs`.
+  is never gated (INCIDENT 1). decision-69 later deleted `activePlace`'s BUILDING branch
+  outright — a building never resolves a tap at all any more, so this column governs every
+  clock-in target there is, without exception.
 - `material_requests` is the worker's own words plus an explicit lifecycle
   (`submitted -> approved -> ordered -> arrived`, with `rejected` reachable from the first
   two; `arrived` and `rejected` are terminal). `ordered_at` **pins the period a cost belongs
@@ -287,7 +287,6 @@ node server/db/check-prod-restore.mjs /tmp/nfc.sql.gz   # the SCHEMA: 006->007->
 sh   server/db/check-prod-restore-mutants.sh /tmp/nfc.sql.gz # its negative case, 3 mutants
 node server/db/check-field-wire.mjs   /tmp/nfc.sql.gz   # the WIRE: what the phone in Vienna sends
 sh   server/db/check-field-wire-mutants.sh /tmp/nfc.sql.gz   # and the negative case, 8 mutants
-node ops/check-hoiv-survives-006.mjs  /tmp/nfc.sql.gz   # HOIV: unzoned, grey, and still TAPPABLE (3 mutants)
 node ops/check-delete-worker.mjs      /tmp/nfc.sql.gz   # the leftover-worker deletion, if one is pending
 
 # 007's half. Both take the same dump and both refuse to touch production.

@@ -37,28 +37,26 @@ import io.github.qwadratic.nfctimesheets.core.Zones
  * session on every clock-in. Nothing here is a new trust assumption. It must never become
  * one: do not let a serial authenticate anything.
  *
- * NOT DELETED THIS PHASE. decision-44 names this file's deletion condition precisely: only
- * once a zone in the database actually carries this serial AND that has been verified on the
- * wire (`GET /roster` -> that serial -> that zone -> HOIV), never against a design document
- * alone. Production has zero zone rows today (migration 006 unapplied), so the gate has not
- * fired — deleting this table now would strand the only tag mounted in the field with no
- * site-visit fix. `nfc/ScanActivity.kt` now tries the roster-cached zone table FIRST
+ * NOT DELETED THIS PHASE, even though it is currently EMPTY. decision-44 names this file's
+ * deletion condition precisely: only once a zone in the database actually carries an adopted
+ * serial AND that has been verified on the wire, never against a design document alone.
+ * `nfc/ScanActivity.kt` now tries the roster-cached zone table FIRST
  * (`core/Zones.zonePlaceIdForSerial`) and falls back to [BY_SERIAL] only when the roster has
  * no answer, exactly as decision-37's retained consequence requires: "KnownTags.BY_SERIAL
  * stays as a compiled last-resort fallback... with roster-supplied serials taking priority."
+ *
+ * The table's one entry — a HOIV building serial, mapped to that BUILDING's own uuid — was
+ * removed alongside decision-47's HOIV grandfather clause (decision-69): the owner confirmed
+ * that physical card was never actually deployed in the field, so nothing is stranded by
+ * emptying the table, and the entry could never have resolved a real tap again anyway —
+ * `activePlace` no longer has a building branch at all, so a BUILDING uuid 422s regardless of
+ * which route named it. A future adopted tag is added here the same way: serial -> the UUID
+ * of whatever it should resolve to, which from now on must always be a ZONE, never a building.
  */
 object KnownTags {
 
-    /**
-     * Serial (uppercase hex, colon-separated, as printed by any reader) -> location UUID.
-     *
-     * 04:A1:A8:52:AE:5C:80 is the Mifare Ultralight EV1 already mounted at HOIV,
-     * Arsenalstraße 11 (slug `hoiv-arsenalstrasse-11`). Verified against production on
-     * 2026-08-11; the location row is active.
-     */
-    private val BY_SERIAL: Map<String, String> = mapOf(
-        "04:A1:A8:52:AE:5C:80" to "c3c37d4a-ca0a-42c5-b248-9704b9907ec7",
-    )
+    /** Serial (uppercase hex, colon-separated, as printed by any reader) -> location UUID. */
+    private val BY_SERIAL: Map<String, String> = mapOf()
 
     /**
      * Location UUID for a tag serial, or null when the serial is unknown — which is the

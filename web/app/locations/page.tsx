@@ -34,7 +34,6 @@ import {
   hundredthsToPlainArea,
   parseAreaToHundredths,
   sumArea,
-  tagResolves,
   wireAreaToHundredths,
   zoneStateOf,
 } from '@/lib/area'
@@ -81,19 +80,6 @@ import { tagUri } from '@/lib/tag'
 /** Off-nav (decision-39) — same treatment as OPERATORS_PATH on /workers/. */
 const TAGS_PATH = '/tags/'
 const OPERATORS_PATH = '/operators/'
-
-/**
- * decision-47's ONE grandfathered building-level tap. The physical card mounted on the wall
- * at HOIV carries this building's own uuid and keeps resolving no matter what any zone under
- * it says (server/lib/validate.js `activePlace`, "LINE 1 IS THE HOIV GRANDFATHER" — the
- * building branch never reads `zones` at all). `resolve-building` is deleted, so no OTHER
- * building will ever get a second one: every building created from now on is tag-free, and
- * "none of its zones is verified yet" really does mean nothing can be tapped there. Which
- * building that one exception is cannot be derived from a row — it is a fact about which
- * physical card exists in the world — so it is pinned by id, exactly like the WALL_TAG_UUID
- * constant every `ops/check-hoiv-survives-006*` script already carries. Never a second entry.
- */
-const HOIV_BUILDING_ID = 'c3c37d4a-ca0a-42c5-b248-9704b9907ec7'
 
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/
 /** Shape check only, mirroring v.optionalEmail(). */
@@ -1710,11 +1696,10 @@ export default function LocationsPage() {
                           {/*
                             VERIFICATION (decision-47 §7). A SECOND, independent fact about
                             the same zones: whether an operator has test-scanned the card in
-                            the field yet. It says nothing about the building's own tag
-                            above — that is `tagResolves`, in the Status column, and the two
-                            words stay apart (decision-43 §3) — and it is never merged into
-                            the reassurance branch above, which only ever fires when this
-                            building has NO zone at all.
+                            the field yet. It says nothing about the building's own Status
+                            cell above (decision-43 §3's two words stay apart) — and it is
+                            never merged into the reassurance branch above, which only ever
+                            fires when this building has NO zone at all.
                           */}
                           <span className="shift-state-note num">
                             {t('zonesVerifiedCount', {
@@ -1728,17 +1713,12 @@ export default function LocationsPage() {
                             </span>
                           ) : null}
                           {/*
-                            HOIV IS GRANDFATHERED BY NAME, NOT DERIVED (decision-47). Its
-                            building uuid is the one physical card that already keeps
-                            working no matter what any zone under it says
-                            (server/lib/validate.js `activePlace`, "LINE 1 IS THE HOIV
-                            GRANDFATHER"). Every OTHER building was created tag-free after
-                            resolve-building was deleted, so for any other building "no
-                            zone here is verified yet" really does mean nothing can be
-                            tapped — which physical card is the one exception cannot be read
-                            off a row, so it is pinned by id (HOIV_BUILDING_ID above).
+                            EVERY building, uniformly (decision-69). No building ever
+                            grants a clock-in tap on its own uuid any more, grandfathered
+                            or not, so "none of its zones is verified yet" means the same
+                            thing here that it means everywhere else: nothing can be tapped.
                           */}
-                          {zonesVerified === 0 && location.id !== HOIV_BUILDING_ID ? (
+                          {zonesVerified === 0 ? (
                             <span className="state-word is-unres">
                               <span aria-hidden="true">▲</span> {t('zonesNoneVerified')}
                             </span>
@@ -1746,41 +1726,12 @@ export default function LocationsPage() {
                         </>
                       )}
                       {/*
-                        THE BUILDING TAG IS NOW A COLLAPSED, READ-ONLY DISCLOSURE
-                        (decision-43 §7). Tag writing moved onto the zone, but this string
-                        cannot be hidden: the card on the HOIV wall carries a BUILDING uuid,
-                        and without this the director cannot see what it says or re-write it
-                        if it is lost. Collapsed and never the primary control, so no new
-                        building-level tags get minted out of habit.
-
-                        Inside, the URI is shown IN FULL and never elided. A URI shortened
-                        for layout is a URI somebody retypes wrongly onto a tag, and the fix
-                        for that costs a site visit.
+                        THERE IS NO BUILDING-LEVEL TAG ANY MORE (decision-69). A building
+                        never carries a tag payload; only a zone does. The collapsed
+                        read-only disclosure this cell used to show — a legacy building URI
+                        for the one grandfathered card — is gone along with the exception it
+                        existed for.
                       */}
-                      <details className="tag-disclosure">
-                        <summary>{t('tagLegacySummary')}</summary>
-                        <p className="field-hint">{t('tagLegacyHint')}</p>
-                        <code className="code-block">{tagUri(location.id)}</code>
-                        <button
-                          type="button"
-                          className="btn btn-quiet"
-                          onClick={() =>
-                            copy(
-                              tagUri(location.id),
-                              t('copied', { name: location.name }),
-                              t('copyFailed', { name: location.name }),
-                            )
-                          }
-                        >
-                          {t('copyTag')}
-                          <span className="visually-hidden">
-                            {t('forLocation', { name: location.name })}
-                          </span>
-                        </button>
-                        <p className="tag-uuid">
-                          {t('uuidLabel')} <code className="code-inline">{location.id}</code>
-                        </p>
-                      </details>
                     </td>
                     <td>{shareCell(location, contact)}</td>
                     {/*
@@ -1788,14 +1739,15 @@ export default function LocationsPage() {
                       reader.
 
                       TWO WORDS, KEPT APART PERMANENTLY (decision-43 §3), and this cell now
-                      holds exactly ONE of them. `tagResolves` answers the OPERATIONAL
-                      question and its parameter type cannot see a zone count, so it cannot
-                      be quietly multiplied by one. The zone state is PRESENTATION, it lives
-                      in the Zonen column, and it is deliberately NOT repeated here: a
-                      presentational note stacked under the operational word is read as a
-                      qualifier on it, which is the merge this split exists to prevent.
+                      holds exactly ONE of them: `location.active`. There is no building-
+                      level tap left for this word to describe (decision-69 retired the last
+                      one), so it now reads simply as the administrative on/off switch. The
+                      zone state is PRESENTATION, it lives in the Zonen column, and it is
+                      deliberately NOT repeated here: a presentational note stacked under the
+                      operational word is read as a qualifier on it, which is the merge this
+                      split exists to prevent.
                     */}
-                    <td>{tagResolves(location) ? t('statusActive') : t('statusInactive')}</td>
+                    <td>{location.active ? t('statusActive') : t('statusInactive')}</td>
                     <td className="cell-actions">
                       <button
                         type="button"

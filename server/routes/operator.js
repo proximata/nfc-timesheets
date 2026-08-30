@@ -135,9 +135,10 @@ async function listZones() {
  *
  *   200 verified            {zone, already_verified}
  *   404 unknown_zone        :id is not an ACTIVE zone of an ACTIVE building
- *   422 zone_mismatch       the card resolved to another zone, or to a BUILDING
+ *   422 zone_mismatch       the card resolved to another zone
  *   422 tag_unbound         the card was reported but no admin has resolved it yet
- *   422 unknown_location    the card is not ours, or its zone/building is inactive
+ *   422 unknown_location    the card is not ours, its zone is inactive, or it is a BUILDING's
+ *                           own uuid — a building never resolves a tap at all (decision-69)
  *
  * The last two are `activePlace`'s own codes, raised by `activePlace` itself and deliberately
  * not renamed: the operator's phone should say the same thing about a card as a cleaner's
@@ -160,9 +161,9 @@ async function verifyZone({ params, body, session }) {
   );
   if (!target) fail(404, "unknown_zone");
 
+  // A BUILDING's own uuid never gets this far: decision-69 deleted `activePlace`'s building
+  // branch outright, so it 422s `unknown_location` here exactly like a stranger's tag would.
   const place = await v.activePlace(body.place_uuid, "place_uuid");
-  // `place.zone_id` is NULL for a BUILDING uuid, so a building card can never verify a zone:
-  // null is not the zone id, and the comparison says so without a special case.
   if (place.zone_id !== zoneId) fail(422, "zone_mismatch");
 
   const stamped = await one(
@@ -427,10 +428,12 @@ async function getZone({ params }) {
  *                          into the existing zone page (decision-54 §7: bound shows the
  *                          building card, unbound shows the building picker). No new UI
  *                          concept, only a new way to arrive at the one that exists.
- *   {kind: "building"}     an ACTIVE building — the grandfathered HOIV-style building card
- *                          (decision-47). There is no building-level operator screen and none
- *                          is added here; this is told apart from "unknown" ONLY so the phone
- *                          can say "that is a building card, not a zone".
+ *   {kind: "building"}     an ACTIVE building's own uuid. It grants NO clock-in privilege —
+ *                          decision-69 deleted the one grandfathered exception outright, so
+ *                          a building never resolves a tap at all any more — but it is told
+ *                          apart from "unknown" so the phone can say "that is a building
+ *                          card, not a zone" rather than "never heard of this". There is no
+ *                          building-level operator screen and none is added here.
  *   {kind: "retired"}      an INACTIVE zone — precisely what a reassignment (§3 below) leaves
  *                          behind. An honest answer for a card that very much used to be
  *                          ours beats "not ours".
@@ -467,10 +470,9 @@ async function classifyTag({ params }) {
   );
   if (zone) return { status: 200, body: { kind: "zone", zone } };
 
-  // `active` and nothing else decides whether a BUILDING card means something — the same
-  // rule `activePlace`'s load-bearing second branch states, and for the same reason: the
-  // card physically on the wall at HOIV carries a building uuid and that building has zero
-  // zones. No zone predicate belongs here either.
+  // This is a pure identification, not a resolution: `activePlace` no longer has a building
+  // branch at all (decision-69), so this id can never open a shift. `active` alone still
+  // decides whether it is worth NAMING as a building rather than lumping it into "unknown".
   if (await one("SELECT 1 AS hit FROM locations WHERE id = $1 AND active", [tagId])) {
     return { status: 200, body: { kind: "building" } };
   }

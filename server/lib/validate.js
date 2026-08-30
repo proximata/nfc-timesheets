@@ -534,31 +534,21 @@ export async function activeLocation(value, field = "location_uuid") {
 /**
  * THE TAP PATH. Resolve one untrusted UUID off a tag to the PLACE it names (decision-43).
  *
- * The `l` in `/t?l=<uuid>` means "the id of the place that was tapped", and the id space is
- * shared between buildings and zones:
+ * The `l` in `/t?l=<uuid>` means "the id of the place that was tapped". A building never
+ * resolves on its own uuid — only a zone does, unconditionally, project-wide (decision-69):
  *
  *   an ACTIVE zone of an ACTIVE building  -> { location_id, zone_id }
- *   an ACTIVE building                    -> { location_id, zone_id: null }
- *   neither                               -> 422 unknown_location
+ *   anything else                         -> 422 unknown_location
  *
- * *** THE SECOND LINE IS LOAD-BEARING AND MUST NOT ACQUIRE A ZONE PREDICATE. ***
- * The card physically on the wall at HOIV carries a BUILDING uuid, and that building has
- * zero zones. "A building with no zones is inactive" is a PRESENTATION rule about a grey
- * pin on the map; implemented here it would 422 that card on the day migration 006 lands,
- * and no site visit could fix it — the tag cannot be rewritten from Vienna. `locations.active`
- * ALONE decides whether a building tag resolves, zoned or not, for ever.
+ * decision-47's original design kept one building branch alive, grandfathered by name for
+ * the one physical card mounted at HOIV — on the ground that it could not be rewritten from
+ * Vienna. decision-69 deletes that branch outright rather than narrowing it: the owner
+ * confirmed the card was never actually deployed in the field, so the exception protected
+ * nothing and there is no migration cost to retiring it. `zone_id` returned from this
+ * function is therefore NEVER null — every row it can produce carries a real zone.
  *
- * decision-47 RE-STATES THAT PROHIBITION AND ADDS NOTHING TO IT. Verification (010) is a
- * ZONE-only concept, and this function is deliberately NOT where it is enforced: a predicate
- * here would collapse "nobody has proved this card yet" into `unknown_location` — telling a
- * cleaner the building was removed — and would make the verify route itself unable to resolve
- * the zone it is about to prove. The gate is `requireVerifiedPlace` below, called by
- * POST /shifts/open and by nothing else. The building branch keeps emitting NULL LITERALS for
- * both zone columns, so no value of `zones.verified_at`, for any row, in any state, can change
- * what a BUILDING uuid answers.
- *
- * A building UUID never resolves to "the first zone" or "a default zone" either: that
- * fabricates a tap location and silently changes meaning the day a second zone is added.
+ * A UUID never resolves to "the first zone" or "a default zone" either: that fabricates a
+ * tap location and silently changes meaning the day a second zone is added.
  *
  * THE ERROR CODE STAYS `unknown_location`. The APK in the field maps exactly that string to
  * a translated message; any NEW code renders as "unknown status from a newer server".
@@ -569,27 +559,19 @@ export async function activeLocation(value, field = "location_uuid") {
  */
 export async function activePlace(value, field = "location_uuid") {
   const placeId = uuid(value, field);
-  // ONE round trip over every table an id can name. UNION ALL and not UNION: an id cannot
+  // ONE round trip over both tables an id can name. UNION ALL and not UNION: an id cannot
   // be more than one of these, and making the impossible case collapse silently is exactly
   // what the length check below exists to prevent.
   //
-  // THE FOURTH BRANCH is new (server/db/migrations/008_reported_tags.sql): a tag_aliases
-  // row is how an ALREADY-EXISTING zone adopts a second physical tag without re-keying its
-  // own id (see that migration's own comment for why re-keying was rejected). Purely
-  // additive — the first three branches, and every id that only ever matched one of them,
-  // are unchanged.
+  // THE SECOND BRANCH is from server/db/migrations/008_reported_tags.sql: a tag_aliases row
+  // is how an ALREADY-EXISTING zone adopts a second physical tag without re-keying its own
+  // id (see that migration's own comment for why re-keying was rejected).
   //
-  // `zone_verified_at` (010, decision-47) is the ONE added selected expression. Every WHERE
-  // clause below is byte for byte what it was: this function still RESOLVES an unverified
-  // zone, and reports what it found. Deciding what to do about it is the caller's, and only
-  // POST /shifts/open decides anything.
+  // `zone_verified_at` (010, decision-47) is a selected expression, not a filter: this
+  // function still RESOLVES an unverified zone, and reports what it found. Deciding what to
+  // do about it is the caller's, and only POST /shifts/open decides anything.
   const rows = await all(
-    `SELECT l.id AS location_id, NULL::uuid AS zone_id, l.slug, l.name, NULL::text AS zone_name,
-            NULL::timestamptz AS zone_verified_at
-       FROM locations l
-      WHERE l.id = $1 AND l.active
-     UNION ALL
-     SELECT z.location_id, z.id AS zone_id, l.slug, l.name, z.name AS zone_name,
+    `SELECT z.location_id, z.id AS zone_id, l.slug, l.name, z.name AS zone_name,
             z.verified_at AS zone_verified_at
        FROM zones z
        JOIN locations l ON l.id = z.location_id
@@ -637,13 +619,12 @@ export async function activePlace(value, field = "location_uuid") {
  * refused BY NAME and no shift row is created — an admin typing a zone name at a desk has
  * proved nothing about a physical card on a physical wall.
  *
- * *** LINE 1 IS THE HOIV GRANDFATHER, AND IT IS UNCONDITIONAL. ***
- * A BUILDING tap has no zone. `activePlace`'s building branch emits `NULL::uuid AS zone_id`
- * as an SQL LITERAL, never a join result, so `place.zone_id === null` is decided by the
- * SHAPE of the query and not by the contents of any row. The card mounted at HOIV therefore
- * cannot be reached by this function at all: it returns before `zone_verified_at` is read,
- * for every value that column could ever hold. Deleting this line 422s a card nobody in
- * Vienna can rewrite — which is exactly the RED case ops/check-hoiv-survives-006.mjs seeds.
+ * UNCONDITIONAL ON EVERY PLACE `activePlace` CAN RETURN. decision-47's original design had
+ * one early-return line here for a building tap, because `activePlace` still had a building
+ * branch that emitted a literal NULL `zone_id`. decision-69 deleted that branch outright:
+ * `activePlace` cannot return a null `zone_id` any more, so there is nothing left for an
+ * early return to catch, and none exists. Every place this function sees carries a real
+ * zone, verified or not.
  *
  * NOT APPLIED ON CLOSE, EVER. A worker who is clocked in must always be able to clock out
  * (INCIDENT 1, the worst failure this system has had). A tap on an unverified zone of the
@@ -661,7 +642,6 @@ export async function activePlace(value, field = "location_uuid") {
  * row for ever and lose hours somebody actually worked.
  */
 export function requireVerifiedPlace(place) {
-  if (place.zone_id === null) return place; // BUILDING TAP. No zone exists, so no gate can apply.
   if (place.zone_verified_at === null) fail(422, "zone_unverified");
   return place;
 }

@@ -14,8 +14,9 @@ it.
 Amends decision-43 (zones), decision-45 (operator identity), decision-47 (zone
 verification), and extends decision-48/decision-51 (SMS onboarding) to operators. Nothing
 in those records that this one does not name is touched: the tagHost/apiHost split, the
-HOIV building grandfather, the verify-before-clock-in gate, and the SMS-is-a-second-channel
-rule for workers all stand exactly as written.
+verify-before-clock-in gate, and the SMS-is-a-second-channel rule for workers all stand
+exactly as written. (decision-47's HOIV building grandfather was later retired outright by
+decision-69, unrelated to this record.)
 
 ## Context
 

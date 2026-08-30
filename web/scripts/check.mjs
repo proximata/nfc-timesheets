@@ -1777,44 +1777,44 @@ check('lib/area.ts: a building area is summed as integers and never invented', (
   assert.equal(isDivisibleArea(sumArea([])), false, 'there is no area, and it is not 0')
 })
 
-check('lib/area.ts: the tag question cannot even SEE a zone count (decision-43 §3)', () => {
-  // THE PIN, AND IT IS A TYPE. `tagResolves` decides whether a building's tag starts a
-  // shift; `zoneStateOf` decides whether its pin is grey. They are separate functions and
-  // the first one's parameter has no zone field, so wiring a zone count into it is a change
-  // somebody has to make deliberately, in lib/area.ts, under the comment saying it kills the
-  // card on the HOIV wall.
-  //
-  // EXACTLY HOIV'S SHAPE: active, and zero zones. This is the case that must clock a worker
-  // in on the day 006 lands.
-  assert.equal(tagResolves({ active: true }), true)
+check('lib/area.ts: zoneStateOf is presentation-only and takes no active flag at all', () => {
+  // decision-69 deleted `tagResolves`: a building's own uuid never starts a shift any more,
+  // active or not, so there is no operational question left for a function like it to
+  // answer. `zoneStateOf` is the one survivor, and its signature is the proof that it stays
+  // presentation-only — it cannot even SEE `active`, so wiring operational meaning into it
+  // is a change somebody has to make deliberately, under a comment explaining why not to.
   assert.equal(zoneStateOf(0), 'unzoned')
-  // The same object carrying a zone count, which the function must ignore completely.
-  assert.equal(tagResolves({ active: true, zones: 0, zone_state: 'unzoned' }), true)
-  assert.equal(tagResolves({ active: true, zones: 0, area: null }), true)
-  // ...and the operational word still works in the direction it IS for.
-  assert.equal(tagResolves({ active: false }), false)
-  assert.equal(tagResolves({ active: false, zones: 9 }), false)
   assert.equal(zoneStateOf(1), 'zoned')
+  assert.equal(
+    typeof tagResolves,
+    'undefined',
+    'the grandfather function must not come back under any name',
+  )
 })
 
-check('/locations/: an unzoned building is a PRESENTATION state, never an operational one', () => {
-  // THE LANDMINE (decision-43 §3). Read operationally, "a building with no zones is
-  // inactive" kills the card on the HOIV wall on the day 006 lands: that card carries a
-  // BUILDING uuid, HOIV has no zones, and no site visit can fix a 422. So the two words are
-  // kept apart permanently — `locations.active` decides whether a tag resolves, `zone_state`
-  // decides whether a pin is grey — and this asserts the panel never crosses them.
+check('/locations/: no building resolves a tap on its own uuid, zoned or not (decision-69)', () => {
   const page = sources.find((f) => f.path === 'app/locations/page.tsx')
   assert.ok(page, 'app/locations/page.tsx must exist')
 
-  // 1. The screen asks the operational question through `tagResolves`, whose parameter type
-  //    cannot see zones. Reading `location.active` inline in the status cell would work
-  //    today and would be one edit away from `&& zones.length > 0`.
+  // 1. The Status cell asks `location.active` directly — there is no other question left to
+  //    ask, now that no uuid resolves a building tap at all. `zoneStateOf` is a SEPARATE,
+  //    presentation-only word (decision-43 §3) and must stay visibly apart from it.
   assert.match(
     page.text,
-    /tagResolves\(location\)/,
-    'the status cell must ask tagResolves(), not read `active` inline',
+    /location\.active \? t\('statusActive'\) : t\('statusInactive'\)/,
+    'the status cell',
   )
   assert.match(page.text, /zoneStateOf\(/, 'the grey state must be the OTHER word')
+  assert.doesNotMatch(
+    page.text,
+    /\bHOIV_BUILDING_ID\b/,
+    'the grandfather pin must not come back under any name',
+  )
+  assert.doesNotMatch(
+    page.text,
+    /\btagResolves\(/,
+    'the grandfather function must not come back under any name',
+  )
   // 2. And no `saveLocation` call may mention a zone AT ALL. Not just in `active`: a zone
   //    count reaching this route in any field is the same merge wearing a different name.
   //    `saveZone` is untouched by this — a zone's own `active` is a zone's own business.
@@ -1825,20 +1825,28 @@ check('/locations/: an unzoned building is a PRESENTATION state, never an operat
   const crossings = buildingSaves.filter((call) => /zone/i.test(call))
   assert.deepEqual(crossings, [], 'a zone must never reach the building route')
 
-  // 2. The screen has to SAY the tag still works, or grey is the only signal a director
-  //    gets — and grey looks like broken.
+  // 3. THE SCREEN MUST NO LONGER CLAIM A BUILDING'S OWN TAG WORKS, in either language, on
+  //    either surface that used to say so (decision-69 retired the one exception this
+  //    claim was ever true of). Grey no longer means "still tappable, just unmeasured" — it
+  //    means the same thing an unverified zone means: nothing here answers a tap yet.
   for (const locale of LOCALES) {
     const flat = dictionaries[locale]
     for (const key of ['locations.zonesNoneStillWorks', 'locations.zonesEmpty']) {
       assert.ok(flat[key], `${locale}: ${key} must exist`)
     }
-    assert.match(
-      flat['locations.zonesEmpty'],
-      locale === 'de' ? /Schicht/ : /shift/i,
-      `${locale}: the empty zone list must say the building's own tag still starts a shift`,
+    const claim = locale === 'de' ? /Schicht/ : /shift/i
+    assert.doesNotMatch(
+      flat['locations.zonesNoneStillWorks'],
+      claim,
+      `${locale}: an unzoned building must not be told its own tag starts a shift`,
     )
-    // 3. The one warning a director must still discover here and not at the wall: a
-    //    second tag deployed ahead of the zone-aware app.
+    assert.doesNotMatch(
+      flat['locations.zonesEmpty'],
+      claim,
+      `${locale}: the empty zone list must not claim the building's own tag still starts a shift`,
+    )
+    // The one warning a director must still discover here and not at the wall: a second tag
+    // deployed ahead of the zone-aware app.
     assert.ok(flat['locations.zonesSecondTagWarning'], `${locale}: the deployment order`)
     // decision-47: a test scan no longer opens a shift (POST /operator/zones/:id/verify
     // runs on an operator session no shift route accepts), so the warning that it did is
@@ -1847,41 +1855,6 @@ check('/locations/: an unzoned building is a PRESENTATION state, never an operat
     assert.ok(
       !('locations.zonesTestTapWarning' in flat),
       `${locale}: zonesTestTapWarning must be DELETED, not left behind unread`,
-    )
-  }
-
-  // 3b. THE REASSURANCE IS ONLY TRUE OF AN ACTIVE BUILDING, and the row branches on it.
-  //
-  //     „der Tag dieses Objekts startet trotzdem eine Schicht" printed on a building that
-  //     has been stood down is a false promise about a wall: its tag resolves nothing, and a
-  //     worker sent to it taps and gets a web page. The branch is one ternary and it is
-  //     asserted HERE rather than in the browser for a stated reason — nfc_demo seeds no
-  //     inactive building, and the two ways to make one during a probe both cost more than
-  //     they prove. Deactivating through the UI ALSO revokes the client's live portal link,
-  //     which reactivating does not hand back, so a probe that tidied up after itself would
-  //     still leave the fixture changed. Seeding a seventh building moves every figure on
-  //     /pl/, /payroll/ and the map for one ternary.
-  //
-  //     So: the branch is pinned as source, and the copy is pinned as copy. Delete the
-  //     ternary and the first assertion fails; move the promise into the other string and
-  //     the second one does. Neither is a rendered proof, and this comment is the ceiling.
-  assert.match(
-    page.text,
-    /location\.active \? t\('zonesNoneStillWorks'\) : t\('statusUnzoned'\)/,
-    'a stood-down building must NOT be told its tag still starts a shift',
-  )
-  for (const locale of LOCALES) {
-    const flat = dictionaries[locale]
-    const claim = locale === 'de' ? /Schicht/ : /shift/i
-    assert.match(
-      flat['locations.zonesNoneStillWorks'],
-      claim,
-      `${locale}: the active branch says the tag still works`,
-    )
-    assert.doesNotMatch(
-      flat['locations.statusUnzoned'],
-      claim,
-      `${locale}: the branch shown on a stood-down building must promise nothing about a tag`,
     )
   }
 
@@ -1933,20 +1906,17 @@ check('/locations/: an unverified zone is named, never merely coloured (decision
   assert.match(page.text, /t\('zonesAwaitingScan'/, 'the awaiting-scan sentence')
   assert.match(page.text, /t\('zonesNoneVerified'\)/, "the building's own dead-end sentence")
 
-  // 3. HOIV IS GRANDFATHERED BY NAME, NOT DERIVED. The one physical building-level card
-  //    that already works regardless of any zone's verification state cannot be read off a
-  //    row (every OTHER building was created tag-free, decision-47 §2), so it is pinned by
-  //    id — the SAME uuid every ops/check-hoiv-survives-006* script already pins, and the
-  //    "none verified" sentence must be gated on it.
+  // 3. NO GRANDFATHER EXCEPTION SURVIVES (decision-69). The dead-end sentence must fire for
+  //    EVERY building with zero verified zones, uniformly — not gated on any pinned id.
   assert.match(
     page.text,
-    /HOIV_BUILDING_ID = 'c3c37d4a-ca0a-42c5-b248-9704b9907ec7'/,
-    'the grandfather pin must be the real HOIV building uuid, byte for byte',
+    /zonesVerified === 0 \? \(/,
+    "the building's own dead-end sentence must be unconditional on the zone count alone",
   )
-  assert.match(
+  assert.doesNotMatch(
     page.text,
-    /zonesVerified === 0 && location\.id !== HOIV_BUILDING_ID/,
-    "the building's own dead-end sentence must never speak about HOIV",
+    /HOIV_BUILDING_ID/,
+    'the grandfather pin must not come back under any name',
   )
 
   // 4. THE OLD WARNING DOES NOT SURVIVE UNDER A DIFFERENT NAME. Nothing on this screen may

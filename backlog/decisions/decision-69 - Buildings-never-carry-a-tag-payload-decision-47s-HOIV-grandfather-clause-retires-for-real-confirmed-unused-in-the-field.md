@@ -6,6 +6,19 @@ title: >-
 date: '2026-08-30 04:57'
 status: accepted
 ---
+**IMPLEMENTED 2026-08-30.** `activePlace()`'s building branch is deleted (down to two UNION
+arms: zone, tag_alias); `requireVerifiedPlace`'s building early-return is deleted with it,
+since a place it sees can no longer carry a null `zone_id`. The web admin's building-level
+tag disclosure (`tagLegacySummary`/`tagLegacyHint`) and the `HOIV_BUILDING_ID` pin are
+deleted from `web/app/locations/page.tsx`; `web/lib/area.ts`'s `tagResolves` is deleted.
+Android's `KnownTags.BY_SERIAL` — the one compiled entry mapping HOIV's adopted-tag serial
+to its BUILDING uuid — is emptied, since the owner's confirmation that the card was never
+deployed applies to it too. `ops/check-hoiv-survives-006.mjs` and
+`ops/check-hoiv-wire-unchanged.mjs`, whose entire purpose was proving the deleted behaviour,
+are deleted rather than inverted. decision-47's own grandfather-clause section is struck
+(see that record); this decision itself is kept, not deleted, as the citation target for
+every site above and the historical record of why the change was safe.
+
 ## Context
 
 decision-47 retired minting NEW building-level tags but kept exactly one exception: the

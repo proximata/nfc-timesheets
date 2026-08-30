@@ -3,9 +3,10 @@ id: TASK-251
 title: >-
   activePlace() and the locations UI both resolve/expose a building-level tag
   for EVERY building, not just the HOIV grandfather
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-24 14:31'
+updated_date: '2026-08-30 06:18'
 labels:
   - security
   - tap-path
@@ -36,3 +37,9 @@ Fix, scoped narrowly (touches the tap-resolution core, treat with care):
 
 Not yet fixed. Flagged live during UAT, not from a report.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Closed by decision-69, not by this task's own narrower fix plan. The owner confirmed the one physical HOIV card this task's fix would have preserved was never actually deployed in the field, so decision-69 skipped narrowing activePlace()'s building UNION arm and deleted it outright: no building resolves a clock-in tap on its own uuid any more, zoned or not, grandfathered or not - only zones do, project-wide. server/lib/validate.js's activePlace/requireVerifiedPlace, web/app/locations/page.tsx's HOIV_BUILDING_ID pin and Building-tag disclosure, web/lib/area.ts's tagResolves, and Android's KnownTags.kt compiled fallback entry are all removed. This closes the gap this task described completely rather than partially (no OTHER building's raw uuid resolves either, which the originally-planned narrower fix would still have left true).
+<!-- SECTION:NOTES:END -->

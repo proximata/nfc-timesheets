@@ -221,12 +221,11 @@ expect 200 GET "/admin/locations/$LOCATION_ID/contracts" --jar "$ADMIN_JAR"
 expect 400 GET /admin/analytics --jar "$ADMIN_JAR"
 
 # decision-43: an unzoned building is GREY, never gone. Read off the LIVE analytics payload,
-# not off a fixture — this is the exact claim ops/check-hoiv-survives-006.mjs makes against a
-# restored dump, re-asked of the real box now that 006 has actually applied to it.
+# not off a fixture, against whichever building this box's own data actually holds.
 req GET "/admin/analytics?$RANGE" --jar "$ADMIN_JAR" >/dev/null
 ZSTATE=$(jget buildings.0.zone_state); ZACTIVE=$(jget buildings.0.active)
-[ "$ZSTATE" = "unzoned" ] && ok "HOIV zone_state=unzoned" || bad "HOIV zone_state='$ZSTATE' (want unzoned)"
-[ "$ZACTIVE" = "true" ]   && ok "HOIV still active on /admin/analytics" || bad "HOIV active='$ZACTIVE' (want true)"
+[ "$ZSTATE" = "unzoned" ] && ok "the one building: zone_state=unzoned" || bad "zone_state='$ZSTATE' (want unzoned)"
+[ "$ZACTIVE" = "true" ]   && ok "the one building: still active on /admin/analytics" || bad "active='$ZACTIVE' (want true)"
 
 # =========================================================================================
 section "3 · the operator half: create, enrol, report a tag (all four were 404 an hour ago)"

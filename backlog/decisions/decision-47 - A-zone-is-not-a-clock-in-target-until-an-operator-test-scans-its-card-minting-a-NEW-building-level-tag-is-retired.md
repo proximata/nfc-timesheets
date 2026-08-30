@@ -24,28 +24,26 @@ Everything else in decision-43 is untouched: `zone_state` stays presentation-onl
 stays building-level, the area stays derived, the portal payload is unchanged, and §9's
 "zero backfill, zero invented rows" is re-affirmed rather than weakened.
 
-## ⚠ THE HOIV TAP IS GRANDFATHERED BY NAME AND IS NOT DEPRECATED
-
-> The card physically mounted on the wall at **HOIV** carries
-> `https://timesheets.exe.xyz/t?l=c3c37d4a-ca0a-42c5-b248-9704b9907ec7` — a **BUILDING**
-> uuid. **It keeps resolving, unchanged, for ever.** It is not legacy, it is not
-> deprecated, it is not on a migration path, and nothing in this record or in any future
-> record may make a cleaner's tap on it fail. It cannot be rewritten from Vienna; a change
-> that breaks it costs the client's only building a site revisit.
-
-What is retired is **minting a NEW one**. The distinction is the whole record:
+## What is retired is minting a NEW building-level tap
 
 ```
-EXISTING building-level tap    HOIV, one card, on a real wall     KEEPS WORKING, FOR EVER
 NEW building-level tap         POST /admin/tags/:id/resolve-building   DELETED
 ```
 
+> **2026-08-30 UPDATE (decision-69):** this record originally kept ONE exception alive —
+> a single physical card, grandfathered by name, that would keep resolving as a direct
+> building-level tap for ever because it was believed to be mounted on a real wall and
+> unreachable from Vienna. The owner has since confirmed that card was never actually
+> deployed in the field. decision-69 therefore deletes the exception outright rather than
+> narrowing it: **no building, grandfathered or not, resolves a clock-in tap on its own uuid
+> any more.** Everything below in this record that described that one exception has been
+> removed rather than left to describe something that no longer exists; everything else in
+> this record — the zone-only verification gate, `zones.verified_at`, the retirement of
+> `resolve-building`, the operator test-scan mechanism — stands exactly as written.
+
 Structurally, not as an assertion: the verification gate is a **ZONE-only** concept. It
-reads `zones.verified_at`. A building tap never reads the `zones` table at all — the
-building branch of `activePlace` selects `NULL::uuid AS zone_id` as a **literal**, and the
-gate's first statement returns unconditionally when `zone_id === null`. There is no query
-path from `zones.verified_at` to a building tap's answer. Proof and its seeded RED case:
-`ZONE-VERIFICATION.md` §5.
+reads `zones.verified_at`, applied by `POST /shifts/open`'s `requireVerifiedPlace` and by
+nothing else — a clock-OUT is never gated (INCIDENT 1).
 
 Relates to decision-5 (the id is in the URI), decision-10 (auto-close + resolution),
 decision-15 (tags are unlocked; a tag is not a credential), decision-19 (the server is
@@ -54,7 +52,8 @@ authoritative for open shifts), decision-21 (the UUID, never the slug), decision
 is required — untouched), decision-42 (revenue stays on the building — untouched),
 decision-44 (`zones.tag_serial`; **its pin "no route accepts a serial as input" survives
 this record byte for byte** — Decision 5), decision-45 (operator identity; the operator
-role is reused, not extended). **Supersedes nothing.**
+role is reused, not extended), decision-69 (deletes this record's one grandfather exception
+outright). **Supersedes nothing.**
 
 ## Context
 
@@ -283,9 +282,9 @@ tag_deployed_at NULL, verified_at NULL          -> no card has ever been written
 ```
 
 A building with zones but **none** verified gains its own derived sentence, because it has no
-tappable surface at all unless it also has a grandfathered building card. `zone_state` itself is
-NOT touched: it stays derived from `active` alone (decision-43 §3), so the map, the P&L, payroll
-and the portal see exactly what they see today.
+tappable surface at all — a building's own uuid never had one either (decision-69). `zone_state`
+itself is NOT touched: it stays derived from `active` alone (decision-43 §3), so the map, the
+P&L, payroll and the portal see exactly what they see today.
 
 ## Consequences
 
@@ -313,8 +312,7 @@ a zone at a building where anyone is working.**
   today non-retryable, so a tap on a card the office has not yet resolved strands a queued shift
   for ever, exactly as described above. Same shape, same payroll cost, filed as its own task.
 - `ops/prove-live.sh` loses its resolve-building assertions and gains a verify step; every seed
-  and fixture that expects a tappable zone must stamp `verified_at`; `ops/check-hoiv-survives-006.mjs`
-  gains a sibling that asserts HOIV still answers 201 with an UNVERIFIED zone present.
+  and fixture that expects a tappable zone must stamp `verified_at`.
 - **Accepted loss:** a zone cannot be verified from a desk at all, ever. A building whose only
   operator has left the country has no path to a live zone but a visit. That is the point of the
   record and it is not a bug to be worked around later.

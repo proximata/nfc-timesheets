@@ -360,7 +360,8 @@ sealed interface WireTagClassification {
     /** An ACTIVE zone, bound or not. The bound/unbound fork is [WireOperatorZone.isBound]. */
     data class Zone(val zone: WireOperatorZone) : WireTagClassification
 
-    /** The grandfathered building card (decision-47). There is no operator screen for it. */
+    /** An ACTIVE building's own uuid. Grants no clock-in privilege (decision-69); there is
+     *  no operator screen for it. */
     data object Building : WireTagClassification
 
     /** An INACTIVE zone — what a reassignment leaves on the old card. */

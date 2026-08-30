@@ -1542,8 +1542,9 @@ class VerifyZoneActivity : ComponentActivity() {
      * THE SHARED SHAPE WITH [ScanActivity], AND WHERE IT ENDS. Resolve a tag reading to a
      * place id exactly as ScanActivity's onTag does — a real URI first, then a roster/
      * worklist serial match, never the compiled [KnownTags] fallback (this screen only ever
-     * proves a ZONE, and KnownTags names only the grandfathered HOIV BUILDING tap, which
-     * this screen has no business touching). Then: nothing that launches an intent at all.
+     * proves a ZONE, and any future [KnownTags] entry is this screen's business only once
+     * it names a zone — never a building, which no longer resolves at all, decision-69).
+     * Then: nothing that launches an intent at all.
      * A POST to `/operator/zones/:id/verify` over the operator session, and nothing else.
      */
     private fun handleRead(techs: List<String>, uid: String, uriString: String?) {

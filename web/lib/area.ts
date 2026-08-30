@@ -20,36 +20,21 @@
 /**
  * THE TWO WORDS THAT MUST NEVER MERGE (decision-43 §3).
  *
- * It already went wrong once in the other direction: the VM was renamed and a tag on a wall
- * died. This is the same class of mistake aimed at the database. Read operationally, the
- * owner's rule "a building with no zones is inactive" kills the card on the HOIV wall on the
- * day migration 006 lands — that card carries a BUILDING uuid, HOIV has zero zones, and a
- * 422 at the wall cannot be fixed without a site visit.
- *
- *   locations.active   OPERATIONAL. A building's tag resolves IF AND ONLY IF this is true.
+ *   locations.active   OPERATIONAL. Whether the building is switched on at all.
  *   zone_state         PRESENTATION. A grey pin and a named next action. It never touches
  *                      tap resolution, payroll, the P&L or the client portal.
  *
- * They are two functions rather than one branch on purpose, and `tagResolves` takes an
- * object that HAS NO ZONE FIELD AT ALL: the split is enforced by the signature, so wiring a
- * zone count into it is a change somebody has to make deliberately, in this file, under the
- * comment explaining why it kills a card on a wall.
+ * A building's own uuid never resolves a tap any more, active or not — only a zone does
+ * (decision-69, which retired decision-43's one grandfathered exception outright once the
+ * owner confirmed that physical card was never actually deployed). `zoneStateOf` stays a
+ * pure presentation function of a zone COUNT for exactly that reason: it answers "how does
+ * the map draw this pin", never "can this uuid open a shift".
  */
 export type ZoneState = 'zoned' | 'unzoned'
 
 /** PRESENTATION ONLY. Never `active`, never a filter, never a reason to refuse anything. */
 export function zoneStateOf(liveZones: number): ZoneState {
   return liveZones > 0 ? 'zoned' : 'unzoned'
-}
-
-/**
- * Does tapping this building's own tag start a shift? `active`, and NOTHING ELSE.
- *
- * The parameter type is the pin. It cannot see a zone count, so it cannot be quietly
- * multiplied by one.
- */
-export function tagResolves(building: { active: boolean }): boolean {
-  return building.active
 }
 
 /**
