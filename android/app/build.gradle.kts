@@ -31,6 +31,15 @@ fun brand(key: String): String = branding.getProperty(key)?.trim().orEmpty().ifE
     throw GradleException("branding.properties is missing '$key' — see android/README.md")
 }
 
+/**
+ * Same source, but ABSENT OR BLANK IS A VALID ANSWER: "" — never a thrown build failure.
+ * For fields whose whole point is to be optional, like decision-70's Sentry DSN: a rebrand
+ * or a fork that has never heard of this app's Sentry project must still build, exactly as
+ * decision-23 already requires of the server (no SENTRY_DSN is a SUPPORTED state, not a
+ * missing one). [brand] stays strict for everything that is not optional by design.
+ */
+fun brandOptional(key: String): String = branding.getProperty(key)?.trim().orEmpty()
+
 
 // Resolution order: keystore.properties (gitignored) -> environment -> debug signing.
 val keystore = props(rootProject.file("keystore.properties"))
@@ -88,6 +97,11 @@ android {
         // hosts in an autoVerify filter and a dead legacy host would un-verify the live one.
         // NOT a secret — see branding.properties. It proves "our app", never "this person".
         buildConfigField("String", "APP_KEY", "\"${brand("ts.appKey")}\"")
+        // decision-70 (amends decision-23). Empty is a SUPPORTED state — Telemetry.kt never
+        // calls SentryAndroid.init() at all when this is blank, exactly like the server
+        // with no SENTRY_DSN. Not a secret (see branding.properties): a DSN is a public,
+        // client-embeddable identifier, the same trust tier as APP_KEY above.
+        buildConfigField("String", "SENTRY_DSN", "\"${brandOptional("ts.sentryDsnAndroid")}\"")
     }
 
     signingConfigs {
@@ -156,6 +170,9 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    // decision-70. Plain SDK only — no io.sentry.android.gradle plugin, see
+    // gradle/libs.versions.toml's header for why.
+    implementation(libs.sentry.android)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.material3)

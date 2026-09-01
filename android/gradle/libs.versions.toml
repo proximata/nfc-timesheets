@@ -13,8 +13,14 @@
 #     "every POST 400s" bug would have been caught).
 #   - Room / KSP — the queue is a few hundred rows a year; SQLiteOpenHelper is platform
 #     and needs no annotation processor. See data/ShiftStore.kt for the ceiling.
-#   - Sentry — telemetry is scoped to API + iOS (decision-23). A third SDK is a decision.
 #   - Play Services / FCM — decision-10 is satisfied by a local notification.
+#
+# Sentry (io.sentry:sentry-android) was exactly this kind of deliberately-absent entry
+# until decision-70 (amends decision-23): the plain SDK only, no io.sentry.android.gradle
+# plugin — that plugin wants a Sentry auth token at BUILD time to upload ProGuard mappings
+# and would be a new required secret in play-release.yml for a diagnostic-only feature.
+# Ceiling: Android release stack traces in Sentry are NOT deobfuscated. Upgrade path: add
+# the plugin (and its CI secret) the day that actually blocks diagnosing something.
 
 [versions]
 agp = "9.2.1"
@@ -24,6 +30,7 @@ activityCompose = "1.12.4"
 lifecycle = "2.10.0"
 composeBom = "2026.05.01"
 coroutines = "1.10.2"
+sentryAndroid = "8.53.0"
 
 [libraries]
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
@@ -36,6 +43,7 @@ androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
 androidx-compose-ui = { module = "androidx.compose.ui:ui" }
 androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+sentry-android = { module = "io.sentry:sentry-android", version.ref = "sentryAndroid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

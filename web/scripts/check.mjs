@@ -1563,6 +1563,10 @@ const { ORACLE_CASES, oracleFailures, parseCsv, readsAsDe } = await import(
 const { decimalComma, msToHours, toCsv } = await import(
   pathToFileURL(join(ROOT, 'lib/payroll.ts')).href
 )
+const { scrubEvent, scrubBreadcrumb, redactUrl } = await import(
+  pathToFileURL(join(ROOT, 'lib/scrub.ts')).href
+)
+
 const { centsToPlainEuros } = await import(pathToFileURL(join(ROOT, 'lib/money.ts')).href)
 
 check(
@@ -2028,6 +2032,76 @@ check('a worker rate is REQUIRED on the form, and the state it replaced is gone'
     assert.ok(flat['payroll.csvNote'], `${locale}: the CSV note column stays`)
     assert.ok(flat['payroll.csvTotalExcluded'], `${locale}: ...and so does its total row`)
   }
+})
+
+// --- telemetry redaction (decision-70) ---------------------------------------------------
+
+check('lib/scrub.ts: the denylist is a MIRROR of the server, not a second opinion', () => {
+  // decision-70 makes the four scrub files (server, iOS, Android, web) mirrors that grow
+  // together. Only the two JS-family ones can be compared mechanically, so they are. A key
+  // added to the server and forgotten here fails the web build until it is added here too.
+  const serverSrc = readFileSync(join(ROOT, '..', 'server/lib/scrub.js'), 'utf8')
+  const webSrc = readFileSync(join(ROOT, 'lib/scrub.ts'), 'utf8')
+
+  const literal = (src, name) => {
+    const m = src.match(new RegExp(`const ${name}\\s*=\\s*(/.*?/[a-z]*)`, 's'))
+    assert.ok(m, `${name} must exist and be a regex literal`)
+    return m[1]
+  }
+
+  for (const name of ['SECRET_KEY_RE', 'URL_KEY_RE', 'QUERY_KEY_RE', 'PORTAL_TOKEN_RE']) {
+    assert.equal(
+      literal(webSrc, name),
+      literal(serverSrc, name),
+      `${name} has drifted from server/lib/scrub.js — mirrors, per decision-70`,
+    )
+  }
+})
+
+check('lib/scrub.ts: a credential cannot leave, and a diagnosable code still can', () => {
+  const event = {
+    request: {
+      url: 'https://x/portal/SECRETTOKEN?token=SHOULDNOTAPPEAR',
+      cookies: { ts_session: 'live-session' },
+      query_string: 'email=ivan@example.com',
+      headers: { 'X-App-Key': 'tsk_buildsecret', Cookie: 'ts_worker=abc' },
+    },
+    user: { id: '117', username: 'ivan', ip_address: '1.2.3.4' },
+    // The anchored ^code$ design: the enrolment code goes, the HTTP status stays.
+    contexts: { response: { status_code: 422 }, err: { name: 'unknown_location' } },
+    extra: { code: '12345', hourly_rate_cents: 1500 },
+  }
+  scrubEvent(event)
+
+  const wire = JSON.stringify(event)
+  for (const secret of [
+    'SECRETTOKEN',
+    'SHOULDNOTAPPEAR',
+    'live-session',
+    'tsk_buildsecret',
+    'ivan@example.com',
+    '12345',
+  ]) {
+    assert.ok(!wire.includes(secret), `a credential reached the wire: ${secret}`)
+  }
+
+  assert.equal(event.contexts.response.status_code, 422, 'status_code must SURVIVE')
+  assert.equal(event.contexts.err.name, 'unknown_location', 'the error NAME must SURVIVE')
+
+  // MEASURED, and narrower than server/lib/scrub.js's comment claims. That comment says
+  // anchoring `^code$` spares `err.code`; it does not — the walk sees leaf key names, and
+  // that leaf is bare `code`, so it is deleted like any enrolment code. What anchoring
+  // actually rescues is `status_code` and `error`. Asserted rather than fixed, because the
+  // four scrub files are mirrors (decision-70): changing the behaviour here alone is the
+  // one thing this check exists to prevent. Widening it is a server-side decision.
+  assert.equal(scrubEvent({ err: { code: 'x' } }).err.code, undefined, 'err.code is scrubbed')
+  assert.equal(event.user.id, '117', 'the worker id is the one identifier we keep')
+  assert.ok(!('username' in event.user), 'a name is not an id')
+
+  // A portal crumb is dropped whole: without the token it says nothing a transaction does
+  // not already say.
+  assert.equal(scrubBreadcrumb({ data: { url: 'https://x/portal/TOKEN' } }), null)
+  assert.equal(redactUrl('https://x/shifts?worker=117'), 'https://x/shifts')
 })
 
 // --- report -----------------------------------------------------------------------------

@@ -129,8 +129,17 @@ if [ -z "$MAPS_KEY" ] && [ "${ALLOW_NO_MAP_KEY:-}" != "1" ]; then
   echo "       re-run with ALLOW_NO_MAP_KEY=1 if that is genuinely what you want." >&2
   exit 1
 fi
+# The admin panel's Sentry DSN (decision-70). Unlike the map key this WARNS rather than
+# refusing: telemetry is diagnostic-only and fail-soft by contract, so a blank DSN ships a
+# panel that works and simply reports nothing. Refusing here would make an unrelated vault
+# problem block a payroll fix, which is the wrong trade for a nice-to-have.
+SENTRY_DSN_WEB="${NEXT_PUBLIC_SENTRY_DSN:-$(psst get SENTRY_DSN_WEB 2>/dev/null || true)}"
+if [ -z "$SENTRY_DSN_WEB" ]; then
+  echo "WARN: no SENTRY_DSN_WEB (env or psst) - the panel ships with telemetry OFF." >&2
+fi
 (cd web && pnpm install --frozen-lockfile \
-  && NEXT_PUBLIC_DEFAULT_LOCALE=de NEXT_PUBLIC_GOOGLE_MAPS_KEY="$MAPS_KEY" pnpm verify)
+  && NEXT_PUBLIC_DEFAULT_LOCALE=de NEXT_PUBLIC_GOOGLE_MAPS_KEY="$MAPS_KEY" \
+     NEXT_PUBLIC_SENTRY_DSN="$SENTRY_DSN_WEB" pnpm verify)
 
 echo "==> 2/8 install server runtime deps (pg + @sentry/node, both pure JS — safe to ship from macOS)"
 (cd server && pnpm install --prod --frozen-lockfile)

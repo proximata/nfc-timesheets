@@ -28,6 +28,7 @@ import io.github.qwadratic.nfctimesheets.core.MaterialQueue
 import io.github.qwadratic.nfctimesheets.core.MaterialStatus
 import io.github.qwadratic.nfctimesheets.core.QueuedMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.OpenShiftRequest
+import io.github.qwadratic.nfctimesheets.core.Scrub
 import io.github.qwadratic.nfctimesheets.core.PendingWork
 import io.github.qwadratic.nfctimesheets.core.ReassignBuildingRequest
 import io.github.qwadratic.nfctimesheets.core.ResolveShiftRequest
@@ -108,6 +109,7 @@ fun main() {
     theBrandPalette()
     featureFlags()
     updateInvalidatesReadsOnly()
+    scrub()
 
     if (failed) exitProcess(1)
     println("core-check: OK")
@@ -119,6 +121,27 @@ fun main() {
 //     value or a server too old to have the route must all leave the phone on the OFF
 //     path, which is bit-for-bit the screen that shipped.
 // ---------------------------------------------------------------------------------
+/**
+ * A smoke check, not a mutation-tested suite (decision-70 names that gap explicitly).
+ * Enough to catch an obviously broken denylist or a redaction that stopped firing.
+ */
+private fun scrub() {
+    for (key in listOf("Cookie", "X-App-Key", "Authorization", "identityToken", "password_hash", "apple_sub")) {
+        check(Scrub.isSensitiveKey(key), "'$key' must be a sensitive key")
+    }
+    for (key in listOf("location_id", "zone_name", "status", "http.response.status_code")) {
+        check(!Scrub.isSensitiveKey(key), "'$key' must NOT be treated as sensitive")
+    }
+    check(
+        Scrub.value("cookie=${"a".repeat(64)}") == "cookie=${Scrub.REDACTED}",
+        "a 64-char lowercase-hex value must be redacted wherever it appears",
+    )
+    check(Scrub.value("tsk_abc123") == Scrub.REDACTED, "an app key value must be redacted")
+    check(Scrub.value("Haupteingang") == "Haupteingang", "an ordinary value must survive unchanged")
+    check(Scrub.url("https://x/t?l=abc-123") == "https://x/t", "a query string must never survive")
+    check(Scrub.url("https://x/roster") == "https://x/roster", "a url with no query is unchanged")
+}
+
 private fun featureFlags() {
     val on = Wire.flags(JSONObject("""{"fun_shift_screen":true,"other":false}"""))
     check(on["fun_shift_screen"] == true, "GET /flags decodes a true flag")

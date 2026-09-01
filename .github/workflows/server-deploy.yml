@@ -31,6 +31,11 @@ name: Deploy (API + admin)
 #                           same passwordless-sudo account ops/deploy.sh already assumes.
 #   WEB_MAPS_KEY            NEXT_PUBLIC_GOOGLE_MAPS_KEY. deploy.sh reads this env var before
 #                           falling back to `psst get`, which doesn't exist on a runner.
+#   WEB_SENTRY_DSN          NEXT_PUBLIC_SENTRY_DSN (decision-70), same reason. OPTIONAL:
+#                           unset just ships the panel with telemetry off, and deploy.sh
+#                           warns rather than failing. A DSN is not a credential - it is a
+#                           public ingest endpoint baked into every client bundle - but it
+#                           lives in a secret so the ingest URL is not trivially scraped.
 #
 # ops/deploy-known-hosts is schimmer-glanz.exe.xyz's real SSH host key (public, safe to
 # commit - captured once via ssh-keyscan) and is pinned here instead of
@@ -130,4 +135,5 @@ jobs:
       - name: deploy
         env:
           NEXT_PUBLIC_GOOGLE_MAPS_KEY: ${{ secrets.WEB_MAPS_KEY }}
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.WEB_SENTRY_DSN }}
         run: ./ops/deploy.sh

@@ -35,6 +35,8 @@ function buildIdFromGit() {
   }
 }
 
+const buildId = buildIdFromGit()
+
 /**
  * decision-16: the admin panel is a static export served by the Node API process on the
  * exe.dev VM. Not Vercel, not Cloudflare Pages. So: no server runtime, no image optimizer,
@@ -44,7 +46,10 @@ function buildIdFromGit() {
  */
 const nextConfig = {
   output: 'export',
-  generateBuildId: buildIdFromGit,
+  generateBuildId: () => buildId,
+  // Same value, handed to the browser so a Sentry event names the tree it came from
+  // (decision-70). It is already public — it is in every /_next/static/<buildId>/ path.
+  env: { NEXT_PUBLIC_BUILD_ID: buildId ?? '' },
   // Emits out/shifts/index.html instead of out/shifts.html, so a dumb static file server
   // can resolve routes by directory without a rewrite table.
   trailingSlash: true,

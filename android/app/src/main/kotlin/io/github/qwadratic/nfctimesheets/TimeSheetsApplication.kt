@@ -68,6 +68,11 @@ class TimeSheetsApplication : Application() {
      */
     override fun onCreate() {
         super.onCreate()
+        // decision-70 (amends decision-23). First line, same reason instrument.mjs loads
+        // before server.js: telemetry has to be live before anything else in this process
+        // can be diagnosed by it. BuildConfig.SENTRY_DSN blank is a supported, common state
+        // (see Telemetry.kt) — this call is then a no-op, not a partial start.
+        Telemetry.start(this, BuildConfig.SENTRY_DSN)
         if (CacheVersion(this).bumpAndCheck(BuildConfig.VERSION_CODE)) {
             operatorZones.clear()
         }

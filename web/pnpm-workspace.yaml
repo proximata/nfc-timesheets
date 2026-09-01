@@ -10,5 +10,10 @@ packages:
 # the image optimizer a static export never invokes (next.config.mjs sets images.unoptimized).
 allowBuilds:
   '@parcel/watcher': false
+  # decision-70. Its postinstall only fetches the binary used for sourcemap UPLOAD, which
+  # this project deliberately does not do (see sentry.*.config.ts — no authToken, same
+  # reasoning as Android's plain-SDK-no-gradle-plugin choice: no new required CI secret for
+  # a diagnostic-only feature). The SDK's runtime error/log capture needs none of this.
+  '@sentry/cli': false
   '@swc/core': false
   sharp: false
