@@ -15,7 +15,7 @@
 	     Read in Telemetry.swift. This file is already wired via INFOPLIST_FILE, so
 	     adding this key needs no project.pbxproj edit. -->
 	<key>SentryDSN</key>
-	<string></string>
+	<string>https://7c9b3bc3ac1636ce0c6bfdd355730d34@o4509453370589184.ingest.de.sentry.io/4511998462132304</string>
 
 	<!-- Universal-link host for the NFC tag URI, i.e. the operator's identity (see
 	     ops/branding.json). Filled by Xcode from TS_TAG_HOST in NFCTimeSheets/Branding.xcconfig.

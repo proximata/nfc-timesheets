@@ -37,11 +37,28 @@ API and iOS, verbatim:**
    sensitive enough to redact on one platform is redacted on all four. Every event passes
    through the mirrored `beforeSend`/`beforeSendTransaction`/`beforeBreadcrumb` hooks
    before it leaves the process.
-3. **DSNs are not secrets** (they are public, client-embeddable identifiers by Sentry's
-   own design — the actual credential is the auth token used to create them, never
-   committed anywhere) and live in `branding.properties`
-   (`ts.sentryDsnAndroid`) and a `NEXT_PUBLIC_SENTRY_DSN` build-time env var for web,
-   exactly the same trust tier as `ts.appKey`.
+3. **DSNs are WRITE-ONLY endpoints, committed with eyes open — not "not secrets".**
+   A DSN cannot read anything out of Sentry; the readable credential is the auth token,
+   which is never committed. So the exposure is not data loss, it is **quota abuse**:
+   anyone holding it can post junk events until the free tier is exhausted, which blinds
+   exactly the telemetry this decision adds.
+
+   `ts.sentryDsnAndroid` and the iOS `Info.plist` key are committed anyway, and
+   `proximata/nfc-timesheets` is a **PUBLIC** repo. That is a deliberate trade, not an
+   oversight: both values ship inside the distributed APK/IPA regardless, so committing
+   them lowers the attacker's cost from "unpack a binary" to "read a file" rather than
+   creating the exposure. Accepted while pre-production, where a DSN can be rotated
+   freely (Sentry → project → Settings → Client Keys → new key, revoke old; then update
+   the one line here and ship a build). **Revisit before real payroll data is live** — at
+   that point the cheap fix is the one web already uses: inject at build time from a CI
+   secret and keep the checked-in value blank.
+
+   Web is already injected rather than committed (`NEXT_PUBLIC_SENTRY_DSN`, from the
+   `WEB_SENTRY_DSN` repo secret), because a static export has a build step to inject at.
+
+   **This is NOT the same trust tier as `ts.appKey`.** That key is a real shared secret
+   sent as `X-App-Key`; its presence in this same public file is a pre-existing exposure
+   this decision neither creates nor blesses.
 
 **Logging is verbose for the pilot, not sampled down.** Android and web both enable the
 SDK's structured-logs feature (parity with the server's `enableLogs: true`); tracing
