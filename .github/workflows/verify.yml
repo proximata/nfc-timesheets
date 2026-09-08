@@ -1,0 +1,168 @@
+name: Verify
+
+# Build/check gate for branches and PRs that does NOT ship anything - no signing, no Play
+# upload, no server deploy, no committed version bump. play-release.yml and
+# server-deploy.yml only run on push to main (and are the ones allowed to write/deploy);
+# this is the read-only counterpart that runs on every other branch and PR so a build
+# break surfaces before it ever reaches main, on a fork with no repo secrets included.
+#
+# Reuses the exact check steps those two workflows already run pre-deploy (android JVM
+# checks, server checks against a real throwaway Postgres) plus web/'s own `pnpm verify`,
+# and adds an actual compile (assembleDebug / next build) so "verify" also means "it
+# builds", not just "the checks pass".
+#
+# iOS ships through Xcode Cloud, not GitHub Actions (see NFCTimeSheets/ci_scripts - that
+# pipeline already runs NFCTimeSheets/checks/run.sh via ci_pre_xcodebuild.sh and is
+# unaffected by this file). The ios job below is this workflow's read-only equivalent for a
+# PR/branch: same Swift checks, plus an unsigned simulator-SDK build for the app target
+# only (no shared .xcscheme is committed, so -target rather than -scheme; no signing team
+# is available on a PR/fork runner either way).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches-ignore: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install kotlinc
+        # Same as play-release.yml: android/checks/run.sh needs a standalone kotlinc, and
+        # the runner has no Android Studio to borrow one from. Version tracks
+        # gradle/libs.versions.toml's `kotlin`.
+        env:
+          KOTLIN_VERSION: "2.3.21"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/kotlin.zip \
+            "https://github.com/JetBrains/kotlin/releases/download/v$KOTLIN_VERSION/kotlin-compiler-$KOTLIN_VERSION.zip"
+          unzip -q /tmp/kotlin.zip -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/kotlinc/bin" >> "$GITHUB_PATH"
+
+      - name: JVM checks
+        working-directory: android
+        run: ./checks/run.sh
+
+      - name: Build debug APK
+        # No upload keystore on a PR/fork runner - assembleDebug needs none (unlike
+        # bundleRelease in play-release.yml, which falls back to debug signing anyway).
+        # This is the actual "does it compile" gate; checks/run.sh only covers what it
+        # was written to cover.
+        working-directory: android
+        run: ./gradlew :app:assembleDebug
+
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # Same as server-deploy.yml: check-api.js and check-sms-flag.mjs both need a real
+      # Postgres and SKIP (exit 0) without one, which would make this job green without
+      # proving anything.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: enable corepack
+        run: corepack enable
+
+      - name: install deps
+        working-directory: server
+        run: pnpm install --prod --frozen-lockfile
+
+      - name: server checks
+        working-directory: server
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          for check in check-api.js check-sms-flag.mjs; do
+            echo "=== $check ==="
+            node "$check" 2>&1 | tee "/tmp/$check.log"
+            if grep -q 'SKIP' "/tmp/$check.log"; then
+              echo "$check SKIPPED - it must actually RUN in CI" >&2
+              exit 1
+            fi
+          done
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: enable corepack
+        run: corepack enable
+
+      - name: install deps
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: verify (check + lint + typecheck + build)
+        # web/package.json's own `verify` script - no Google Maps key needed, see README:
+        # this is the type/lint gate and deliberately builds keyless.
+        working-directory: web
+        run: pnpm verify
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift checks
+        # Same suite ci_pre_xcodebuild.sh runs on Xcode Cloud (TagLink, TapInbox,
+        # MigrationCore, Scrub, Materials, ShiftSignal, the NDEF encoder/overwrite guard,
+        # the SMS gate, the entitlement format check). Needs only `swift`, which macos-15
+        # ships with Xcode.
+        working-directory: NFCTimeSheets
+        run: ./checks/run.sh
+
+      - name: Build (simulator SDK, unsigned)
+        # No shared xcscheme is committed (only xcuserdata), so -target rather than
+        # -scheme. CODE_SIGNING_ALLOWED=NO: no team/profile exists on a PR/fork runner, and
+        # this is a compile check, not an archive - iphonesimulator needs no signing anyway.
+        working-directory: NFCTimeSheets
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project NFCTimeSheets.xcodeproj \
+            -target NFCTimeSheets \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
