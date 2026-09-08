@@ -83,6 +83,23 @@
         android:theme="@style/Theme.TimeSheets">
 
         <!--
+          THE BUILD 29 LAUNCH CRASH. sentry-android ships its own SentryInitProvider /
+          SentryPerformanceProvider, which auto-initialises the SDK from manifest meta-data
+          THROUGH A ContentProvider — a component the platform constructs before
+          Application.attachBaseContext/onCreate ever runs. Telemetry.kt's `try { ... }
+          catch (_: Throwable)` around SentryAndroid.init() only guards OUR manual call from
+          TimeSheetsApplication.onCreate(); it cannot guard this provider, because the
+          provider's own init already ran and can already have crashed the process before
+          that line is ever reached. decision-70 chose manual init on purpose (DSN gated on
+          BuildConfig.SENTRY_DSN, not a static manifest value) but never turned the
+          auto-init path off, so this app carried BOTH: the unguarded auto-init AND the
+          guarded manual one. Disabling auto-init here is the SDK's own documented fix for
+          exactly this pattern (manual init in code) and removes the one Sentry entry point
+          that Telemetry.kt's fail-soft contract cannot reach.
+        -->
+        <meta-data android:name="io.sentry.auto-init" android:value="false" />
+
+        <!--
           ONE tap surface. Both dispatch paths converge here, so TapInbox's 3-second
           window can collapse a physical tap that gets delivered twice.
 
