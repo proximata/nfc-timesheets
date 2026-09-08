@@ -141,6 +141,14 @@ jobs:
   ios:
     runs-on: macos-15
     timeout-minutes: 30
+    env:
+      # macos-15's default Xcode (16.4, Swift 6.1.2) segfaults in swift-frontend when
+      # checks/run.sh interprets TapInbox.swift: it's `@Observable` (an Observation macro)
+      # cat-ed into a top-level script and run via `swift file.swift` (interpret mode, not
+      # a normal compile) - a known-flaky combination on newer toolchains. Xcode Cloud's
+      # own ci_pre_xcodebuild.sh runs the same run.sh and has shipped fine, so this pins an
+      # older Xcode already on the runner image rather than touching the shared script.
+      DEVELOPER_DIR: /Applications/Xcode_16.0.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
 
