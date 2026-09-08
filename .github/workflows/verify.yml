@@ -141,14 +141,6 @@ jobs:
   ios:
     runs-on: macos-15
     timeout-minutes: 30
-    env:
-      # macos-15's default Xcode (16.4, Swift 6.1.2) segfaults in swift-frontend when
-      # checks/run.sh interprets TapInbox.swift: it's `@Observable` (an Observation macro)
-      # cat-ed into a top-level script and run via `swift file.swift` (interpret mode, not
-      # a normal compile) - a known-flaky combination on newer toolchains. Xcode Cloud's
-      # own ci_pre_xcodebuild.sh runs the same run.sh and has shipped fine, so this pins an
-      # older Xcode already on the runner image rather than touching the shared script.
-      DEVELOPER_DIR: /Applications/Xcode_16.0.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
 
@@ -157,6 +149,17 @@ jobs:
         # MigrationCore, Scrub, Materials, ShiftSignal, the NDEF encoder/overwrite guard,
         # the SMS gate, the entitlement format check). Needs only `swift`, which macos-15
         # ships with Xcode.
+        #
+        # Pinned to 16.0, NOT the runner's default 16.4: 16.4's swift-frontend (Swift
+        # 6.1.2) segfaults lowering TapInbox.swift's `@Observable` macro when it's
+        # cat-ed into a top-level script and run via `swift file.swift` (interpret mode,
+        # not a normal compile) - a known-flaky combination on newer toolchains. Scoped to
+        # this step only: the build step below needs the runner's DEFAULT Xcode, because
+        # its bundled simulator runtimes only match the default toolchain's SDK build
+        # (mixing 16.0's SDK with the image's 16.4-linked runtimes fails asset compilation
+        # with "No simulator runtime version ... available").
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_16.0.app/Contents/Developer
         working-directory: NFCTimeSheets
         run: ./checks/run.sh
 
