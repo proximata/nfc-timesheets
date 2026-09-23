@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { isPeriod, type Period } from '@/lib/period'
+import { isCalendarRange, isPeriod, type Period } from '@/lib/period'
 
 /**
  * THE URL FILTER CONTRACT — the one place that knows what an admin URL parameter is called
@@ -28,9 +28,10 @@ import { isPeriod, type Period } from '@/lib/period'
  *   client=<id>       the paying company. INTEGER
  *   shift=<id>        one shift row. INTEGER. `/shifts/` opens its correction drawer on it,
  *                     which is what turns „close Marta's open shift" into one click
- *   period=           an id from lib/period.ts, verbatim. Not a date range: a link that
- *                     carried `from=&to=` would freeze a relative period at the moment the
- *                     link was written, and „letzter Monat" means a different month in March
+ *   period=           an id from lib/period.ts, verbatim. Relative ids stay relative when
+ *                     shared; „letzter Monat" means a different month in March.
+ *   start=, end=      inclusive YYYY-MM-DD Vienna calendar dates, present together only when
+ *                     period=custom. API `from`/`to` remain half-open UTC instants.
  *   state=            open | unresolved | manual | noEmail | noTag
  *   status=           open | all | decide | order | deliver     (materials only)
  *   open=<uuid>       opens the edit drawer on /locations/ for that building
@@ -87,6 +88,8 @@ export const FILTER_KEYS = [
   'client',
   'shift',
   'period',
+  'start',
+  'end',
   'state',
   'status',
   'open',
@@ -167,6 +170,9 @@ export type AdminFilters = {
   client: number | null
   shift: number | null
   period: Period | null
+  /** Present together only for period=custom. Inclusive Vienna calendar dates. */
+  start: string | null
+  end: string | null
   state: FilterState | null
   status: FilterStatus | null
   open: string | null
@@ -187,6 +193,8 @@ export const EMPTY_FILTERS: AdminFilters = {
   client: null,
   shift: null,
   period: null,
+  start: null,
+  end: null,
   state: null,
   status: null,
   open: null,
@@ -254,6 +262,10 @@ export function parseFilters(search: string): AdminFilters {
   const location = text('location')
   const open = text('open')
   const period = text('period')
+  const start = text('start')
+  const end = text('end')
+  const validCustom =
+    period === 'custom' && start !== null && end !== null && isCalendarRange(start, end)
   const state = text('state')
   const status = text('status')
   const sort = text('sort')
@@ -264,7 +276,13 @@ export function parseFilters(search: string): AdminFilters {
     worker: toRowId(text('worker')),
     client: toRowId(text('client')),
     shift: toRowId(text('shift')),
-    period: period !== null && isPeriod(period) ? period : null,
+    period: validCustom
+      ? 'custom'
+      : period !== null && period !== 'custom' && isPeriod(period)
+        ? period
+        : null,
+    start: validCustom ? start : null,
+    end: validCustom ? end : null,
     state: state !== null && isFilterState(state) ? state : null,
     status: status !== null && isFilterStatus(status) ? status : null,
     open: toUuid(open),
@@ -288,7 +306,12 @@ export function parseFilters(search: string): AdminFilters {
  */
 export function filterQuery(filters: Partial<AdminFilters>): string {
   const params = new URLSearchParams()
+  const validCustom =
+    filters.period === 'custom' && isCalendarRange(filters.start ?? '', filters.end ?? '')
   for (const key of FILTER_KEYS) {
+    if (key === 'period' && filters.period === 'custom' && !validCustom) continue
+    if ((key === 'start' || key === 'end') && filters.period !== 'custom') continue
+    if ((key === 'start' || key === 'end') && !validCustom) continue
     const value = filters[key]
     if (value === null || value === undefined) continue
     params.set(key, String(value))
@@ -303,6 +326,18 @@ export function filterQuery(filters: Partial<AdminFilters>): string {
  */
 export function filterHref(path: string, filters: Partial<AdminFilters>): string {
   return `${path}${filterQuery(filters)}`
+}
+
+/** Carry a report's exact period through a cross-link; relative presets stay relative. */
+export function periodLink(
+  filters: AdminFilters,
+  period: Period,
+): Pick<AdminFilters, 'period' | 'start' | 'end'> {
+  return {
+    period,
+    start: period === 'custom' ? filters.start : null,
+    end: period === 'custom' ? filters.end : null,
+  }
 }
 
 /** Is any object-scoped filter set? The period is not one: every screen has a period. */
@@ -364,6 +399,10 @@ export function useFilters(): [
   const setFilters = useCallback((patch: Partial<AdminFilters>, mode: HistoryMode) => {
     setFiltersState((current) => {
       const next: AdminFilters = { ...current, ...patch }
+      if (patch.period !== undefined && patch.period !== 'custom') {
+        next.start = null
+        next.end = null
+      }
       // Raw History API, not `router.push`: the pathname never changes here, only the
       // query, and asking the App Router to re-navigate the route it is already on is a
       // remount waiting to happen. This is also what keeps the static export honest — no

@@ -2,6 +2,12 @@ package io.github.qwadratic.nfctimesheets.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
+import androidx.compose.material3.Typography
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -71,7 +77,22 @@ import androidx.compose.ui.graphics.Color
 @Composable
 fun TimeSheetsTheme(content: @Composable () -> Unit) {
     val colors = if (isSystemInDarkTheme()) DarkBrand else LightBrand
-    MaterialTheme(colorScheme = colors, content = content)
+    val base = Typography()
+    MaterialTheme(
+        colorScheme = colors,
+        shapes = Shapes(
+            extraSmall = RoundedCornerShape(8.dp), small = RoundedCornerShape(12.dp),
+            medium = RoundedCornerShape(22.dp), large = RoundedCornerShape(26.dp),
+            extraLarge = RoundedCornerShape(32.dp),
+        ),
+        typography = base.copy(
+            headlineSmall = base.headlineSmall.copy(fontSize = 28.sp, lineHeight = 33.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp),
+            titleLarge = base.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+            titleMedium = base.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+            labelLarge = base.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+        ),
+        content = content,
+    )
 }
 
 /**

@@ -13,7 +13,7 @@
 import { createInterface } from "node:readline";
 import { stdin, stdout } from "node:process";
 import { hashPassword } from "../lib/auth.js";
-import { one, pool } from "../lib/db.js";
+import { one, pool, query, withSystem } from "../lib/db.js";
 
 // Long enough that the scrypt cost plus the login rate limit make online guessing
 // hopeless. A 6-digit PIN, which this replaces, has ~20 bits; this floor is the point.
@@ -80,15 +80,15 @@ async function main() {
 
   const hash = await hashPassword(password);
   const row = await one(
-    `INSERT INTO admins (email, password_hash) VALUES ($1, $2)
+    `INSERT INTO admins (email, password_hash, tenant_id, role) VALUES ($1, $2, $3, $4)
      ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
      RETURNING id, email, created_at`,
-    [email, hash],
+    [email, hash, process.argv.includes('--platform') ? 0 : 1, process.argv.includes('--platform') ? 'superadmin' : 'admin'],
   );
 
   // Existing sessions were issued against the old password. A password reset that
   // leaves them alive is not a reset.
-  const { rowCount } = await pool.query("DELETE FROM sessions WHERE admin_id = $1", [row.id]);
+  const { rowCount } = await query("DELETE FROM sessions WHERE admin_id = $1", [row.id]);
 
   console.log(`create-admin: ${existing ? "updated" : "created"} ${row.email} (id ${row.id})`);
   if (rowCount > 0) console.log(`create-admin: revoked ${rowCount} existing session(s)`);
@@ -97,7 +97,7 @@ async function main() {
 
 let code = 1;
 try {
-  code = await main();
+  code = await withSystem(main);
 } catch (err) {
   // Print the message only. A pg error object can carry the parameter list, which
   // would mean the hash - never the password, but still not something for a terminal.

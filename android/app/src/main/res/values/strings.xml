@@ -108,8 +108,9 @@
          beendete Schicht wird für das Büro sichtbar markiert. -->
     <string name="manual_start_open">Ohne Tag starten</string>
     <string name="manual_start_title">Ohne Tag starten</string>
-    <string name="manual_start_intro">Nur verwenden, wenn der Tag fehlt oder nicht gelesen werden kann. Wählen Sie das Objekt, in dem Sie jetzt arbeiten. Die Schicht wird für das Büro als manueller Start markiert.</string>
-    <string name="manual_start_no_buildings">Es sind noch keine Objekte auf diesem Telefon gespeichert. Bitte zuerst aktualisieren.</string>
+    <string name="manual_start_intro">Nur verwenden, wenn der Tag fehlt oder nicht gelesen werden kann. Wählen Sie die Zone im Objekt, in der Sie jetzt arbeiten. Die Schicht wird für das Büro als manueller Start markiert.</string>
+    <string name="manual_start_no_zones">Es sind keine Zonen verfügbar. Bitte zuerst aktualisieren. Fehlt Ihre Zone weiterhin, melden Sie sich bei der Verwaltung.</string>
+    <string name="manual_place_label">%1$s · %2$s</string>
     <string name="manual_start_confirm">Schicht starten</string>
     <string name="manual_stop_open">Ohne Tag beenden</string>
     <string name="manual_stop_title">Schicht beenden?</string>
@@ -165,7 +166,7 @@
     <string name="pending_last_try">Zuletzt versucht: %1$s</string>
     <string name="pending_never_tried">Noch kein Sendeversuch – dieses Telefon hatte seither kein Internet.</string>
     <!-- %1$s = Datum und Uhrzeit der ältesten noch offenen Schicht -->
-    <string name="pending_oldest">Älteste offene Schicht: %1$s</string>
+    <string name="pending_oldest">Frühester Schichtbeginn: %1$s</string>
     <!-- Terminal: niemand versucht das noch einmal, hier muss ein Mensch ran. Steht in der
          Fehlerfarbe UND sagt es im Text – Farbe ist immer das zweite Signal. -->
     <plurals name="pending_blocked">
@@ -626,4 +627,51 @@
     <string name="notify_pending_title">Noch nicht bestätigt: %1$s</string>
     <string name="notify_pending_body">Die Zeit ist auf dem Telefon gespeichert. Öffnen Sie die App und prüfen Sie den Hinweis.</string>
     <string name="a11y_shift_pending">%1$d Stunden und %2$d Minuten für %3$s auf diesem Telefon erfasst. Noch nicht von der Verwaltung bestätigt.</string>
+    <string name="schedule_title">Meine Einsätze</string>
+    <string name="schedule_explainer">Dies ist nur die Planung. Zum Erfassen Ihrer Arbeitszeit wie gewohnt ein- und ausstempeln.</string>
+    <string name="schedule_loading">Einsätze werden geladen …</string>
+    <string name="schedule_empty">Für die nächsten 31 Tage sind keine Einsätze geplant.</string>
+    <string name="schedule_offline">Einsätze konnten ohne Verbindung nicht geladen werden.</string>
+    <string name="schedule_error">Einsätze konnten nicht geladen werden.</string>
+    <string name="schedule_retry">Erneut versuchen</string>
+    <string name="schedule_refresh">Einsätze aktualisieren</string>
+    <string name="schedule_when">%1$s, %2$s – %3$s, %4$s</string>
+    <string name="schedule_more">Alle kommenden Einsätze</string>
+    <string name="schedule_less">Weniger anzeigen</string>
+    <string name="worker_day_title">Ihr Arbeitstag</string>
+    <string name="worker_start_title">Bereit für die Schicht?</string>
+    <string name="worker_start_manual_title">Bereit für Ihren Einsatz?</string>
+    <string name="worker_start_manual_hint">Wählen Sie Ihren Arbeitsbereich. Ohne NFC wird der Start für das Büro gekennzeichnet.</string>
+    <string name="schedule_same_day">%1$s · %2$s–%3$s</string>
+    <string name="worker_stop_manual_hint">Dieses Telefon hat kein NFC. Sie können die Schicht hier beenden.</string>
+    <string name="worker_schedule_note">Geplant · Arbeitszeit separat erfassen</string>
+
+    <!-- Blue Hour worker presentation -->
+    <string name="worker_active_title">Schicht läuft</string>
+    <string name="worker_elapsed">SEIT BEGINN</string>
+    <string name="worker_saved_locally">Auf diesem Telefon gespeichert · noch nicht bestätigt</string>
+    <string name="delivery_title">Übertragung</string>
+    <string name="delivery_blocked_detail">Die Verwaltung muss diese Einträge prüfen. Sie bleiben auf diesem Telefon gespeichert und werden nicht automatisch erneut gesendet. Bitte nennen Sie der Verwaltung die unten angezeigte Zeit.</string>
+    <string name="delivery_sign_in">Melden Sie sich mit demselben Konto an, damit diese Einträge übertragen werden können.</string>
+    <string name="delivery_not_scheduled">Die automatische Übertragung ist derzeit nicht aktiv. Öffnen Sie die App mit einer Internetverbindung, um die Übertragung erneut zu versuchen.</string>
+    <string name="delivery_automatic">Diese Einträge warten auf die Übertragung. Das Telefon versucht es automatisch erneut, sobald eine Verbindung verfügbar ist.</string>
+    <string name="delivery_no_attempt">Noch kein Übertragungsversuch.</string>
+    <string name="worker_receipt_title">Schicht beendet</string>
+    <plurals name="delivery_blocked_short">
+        <item quantity="one">%d Schicht braucht die Verwaltung</item>
+        <item quantity="other">%d Schichten brauchen die Verwaltung</item>
+    </plurals>
+    <plurals name="delivery_waiting_short">
+        <item quantity="one">%d Schicht noch auf diesem Telefon</item>
+        <item quantity="other">%d Schichten noch auf diesem Telefon</item>
+    </plurals>
+    <string name="worker_receipt_range">%1$s – %2$s</string>
+    <string name="worker_show">Ansehen</string>
+    <string name="worker_hide">Schließen</string>
+    <string name="worker_planned">Nächster geplanter Einsatz</string>
+    <string name="worker_help">Hilfe zur Schicht</string>
+    <string name="worker_receipt_done">Weiter</string>
+    <string name="worker_material_example">Zum Beispiel: 2 Mopps, Glasreiniger</string>
+    <string name="worker_material_no_push">Status hier prüfen. Keine Push-Mitteilungen.</string>
+    <string name="worker_material_details">So erhalten Sie Rückmeldung</string>
 </resources>

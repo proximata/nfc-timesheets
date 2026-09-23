@@ -24,7 +24,7 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import * as Sentry from "@sentry/node";
-import { one, query } from "./db.js";
+import { one, query, withSystem } from "./db.js";
 import { fail } from "./http.js";
 
 const scryptAsync = promisify(scrypt);
@@ -237,20 +237,25 @@ export function readCookie(headers, name = SESSION_COOKIE) {
  * admin routes exist. Only the two /admin/flags routes opt into the wider set.
  */
 export async function requireAdminSession(headers, allowedRoles = ["admin"]) {
+  return withSystem(() => resolveAdminSession(headers, allowedRoles));
+}
+
+async function resolveAdminSession(headers, allowedRoles) {
   const token = readCookie(headers);
   // Shape-check before SQL: a garbage cookie is not worth a round trip.
   if (!token || !TOKEN_RE.test(token)) fail(401, "unauthorized");
 
   const row = await one(
-    `SELECT s.admin_id, s.expires_at, a.email, a.role
+    `SELECT s.admin_id, s.expires_at, a.email, a.role, a.tenant_id
        FROM sessions s
        JOIN admins a ON a.id = s.admin_id
+       JOIN tenants t ON t.id = a.tenant_id AND t.active
       WHERE s.token = $1 AND s.expires_at > now()`,
     [hashToken(token)],
   );
   if (!row) fail(401, "unauthorized");
   if (!allowedRoles.includes(row.role)) fail(401, "unauthorized");
-  return { adminId: row.admin_id, email: row.email, role: row.role, token };
+  return { adminId: row.admin_id, email: row.email, role: row.role, tenantId: row.tenant_id, token };
 }
 
 /**
@@ -264,18 +269,23 @@ export async function requireAdminSession(headers, allowedRoles = ["admin"]) {
  * what is not returned cannot end up in a log line.
  */
 export async function requireWorkerSession(headers) {
+  return withSystem(() => resolveWorkerSession(headers));
+}
+
+async function resolveWorkerSession(headers) {
   const token = readCookie(headers, WORKER_SESSION_COOKIE);
   if (!token || !TOKEN_RE.test(token)) fail(401, "unauthorized");
 
   const row = await one(
-    `SELECT s.worker_id, w.name
+    `SELECT s.worker_id, w.name, w.tenant_id
        FROM worker_sessions s
        JOIN workers w ON w.id = s.worker_id
+       JOIN tenants t ON t.id = w.tenant_id AND t.active
       WHERE s.token = $1 AND s.expires_at > now() AND w.active`,
     [hashToken(token)],
   );
   if (!row) fail(401, "unauthorized");
-  return { workerId: row.worker_id, name: row.name, token };
+  return { workerId: row.worker_id, name: row.name, tenantId: row.tenant_id, token };
 }
 
 /**
@@ -288,18 +298,23 @@ export async function requireWorkerSession(headers) {
  * returned cannot end up in a log line.
  */
 export async function requireOperatorSession(headers) {
+  return withSystem(() => resolveOperatorSession(headers));
+}
+
+async function resolveOperatorSession(headers) {
   const token = readCookie(headers, OPERATOR_SESSION_COOKIE);
   if (!token || !TOKEN_RE.test(token)) fail(401, "unauthorized");
 
   const row = await one(
-    `SELECT s.operator_id, o.name
+    `SELECT s.operator_id, o.name, o.tenant_id
        FROM operator_sessions s
        JOIN operators o ON o.id = s.operator_id
+       JOIN tenants t ON t.id = o.tenant_id AND t.active
       WHERE s.token = $1 AND s.expires_at > now() AND o.active`,
     [hashToken(token)],
   );
   if (!row) fail(401, "unauthorized");
-  return { operatorId: row.operator_id, name: row.name, token };
+  return { operatorId: row.operator_id, name: row.name, tenantId: row.tenant_id, token };
 }
 
 // ---- login rate limit ------------------------------------------------------------
@@ -546,7 +561,7 @@ export function checkGlobalSmsSpend() {
  * security control and must never resolve to unlimited.
  */
 export async function checkSmsRequestRate(ip) {
-  const row = await one("SELECT value FROM app_settings WHERE key = $1", [SMS_OTP_REQUESTS_KEY]);
+  const row = await one("SELECT value FROM app_settings WHERE key = $1 AND tenant_id = 1", [SMS_OTP_REQUESTS_KEY]);
   const n = row ? Number(row.value) : Number.NaN;
   const limit =
     Number.isSafeInteger(n) && n >= SMS_OTP_REQUESTS_MIN && n <= SMS_OTP_REQUESTS_MAX ? n : SMS_OTP_REQUESTS_DEFAULT;
@@ -592,7 +607,7 @@ export function checkGlobalEmailSpend() {
  * this is a security control and must never resolve to unlimited.
  */
 export async function checkEmailRequestRate(ip) {
-  const row = await one("SELECT value FROM app_settings WHERE key = $1", [SMS_OTP_REQUESTS_KEY]);
+  const row = await one("SELECT value FROM app_settings WHERE key = $1 AND tenant_id = 1", [SMS_OTP_REQUESTS_KEY]);
   const n = row ? Number(row.value) : Number.NaN;
   const limit =
     Number.isSafeInteger(n) && n >= SMS_OTP_REQUESTS_MIN && n <= SMS_OTP_REQUESTS_MAX ? n : SMS_OTP_REQUESTS_DEFAULT;

@@ -13,6 +13,7 @@ import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
 import { LoadStatus } from '@/components/LoadStatus'
 import { PageHeader } from '@/components/PageHeader'
+import { PeriodPicker } from '@/components/PeriodPicker'
 import { type BadgeState, StateBadge } from '@/components/StateBadge'
 import {
   ApiError,
@@ -27,13 +28,14 @@ import {
 import {
   type AdminFilters,
   filterHref,
+  periodLink,
   type ShiftSort,
   type SortDir,
   useFilters,
 } from '@/lib/filters'
 import type { ErrorKey } from '@/lib/locale'
 import { loginPathWithReturn } from '@/lib/nav'
-import { isPeriod, PERIODS, type Period, periodContaining, periodRange } from '@/lib/period'
+import { type Period, periodContaining, periodRange } from '@/lib/period'
 import {
   BUSINESS_TIME_ZONE,
   blocksPayroll,
@@ -266,8 +268,6 @@ export default function ShiftsPage() {
 
   const workerFilterId = useId()
   const locationFilterId = useId()
-  const periodFilterId = useId()
-  const periodRangeId = useId()
   const startId = useId()
   const endId = useId()
   const editWorkerId = useId()
@@ -332,7 +332,15 @@ export default function ShiftsPage() {
   const period: Period = filters.period ?? 'last30Days'
   const locationFilter = filters.location ?? LOCATION_ALL
   const workerFilter = filters.worker === null ? WORKER_ALL : String(filters.worker)
-  const range = useMemo(() => periodRange(period, now), [period, now])
+  const range = useMemo(
+    () =>
+      periodRange(
+        period,
+        now,
+        filters.start && filters.end ? { start: filters.start, end: filters.end } : undefined,
+      ),
+    [period, now, filters.start, filters.end],
+  )
 
   /**
    * `?state=` — the condition the link was ABOUT. Payroll says „3 Schichten sind nicht
@@ -672,10 +680,13 @@ export default function ShiftsPage() {
 
   const periodLabel: Record<Period, string> = {
     last30Days: t('periodLast30Days'),
+    thisWeek: t('periodThisWeek'),
+    lastWeek: t('periodLastWeek'),
     thisMonth: t('periodThisMonth'),
     lastMonth: t('periodLastMonth'),
     thisQuarter: t('periodThisQuarter'),
     thisYear: t('periodThisYear'),
+    custom: t('periodCustom'),
     all: t('periodAll'),
   }
 
@@ -993,26 +1004,13 @@ export default function ShiftsPage() {
                 </select>
               </div>
 
-              <div className="field">
-                <label htmlFor={periodFilterId}>{t('filterPeriod')}</label>
-                <select
-                  id={periodFilterId}
-                  value={period}
-                  aria-describedby={periodRangeId}
-                  onChange={(event) => {
-                    if (isPeriod(event.target.value)) setPeriod(event.target.value)
-                  }}
-                >
-                  {PERIODS.map((value) => (
-                    <option key={value} value={value}>
-                      {periodLabel[value]}
-                    </option>
-                  ))}
-                </select>
-                <p className="field-hint" id={periodRangeId}>
-                  {rangeLabel}
-                </p>
-              </div>
+              <PeriodPicker
+                label={t('filterPeriod')}
+                help={rangeLabel}
+                allowAll
+                value={{ period, start: filters.start, end: filters.end }}
+                onChange={(selection) => writeFilters(selection)}
+              />
             </div>
 
             <p className="field-hint">{t('timeZoneHint')}</p>
@@ -1114,7 +1112,12 @@ export default function ShiftsPage() {
                           </Link>
                         </th>
                         <td>
-                          <Link href={filterHref('/', { location: shift.location_id })}>
+                          <Link
+                            href={filterHref('/map/', {
+                              location: shift.location_id,
+                              ...periodLink(filters, period),
+                            })}
+                          >
                             {shift.location_name}
                             <span className="visually-hidden"> {t('openLocation')}</span>
                           </Link>

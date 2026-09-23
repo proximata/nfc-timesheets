@@ -7,8 +7,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as Sentry from "@sentry/node";
 import { requireAdminSession, requireAppKey, requireOperatorSession, requireWorkerSession } from "./lib/auth.js";
-import { pool } from "./lib/db.js";
-import { HttpError, readJson, sendJson } from "./lib/http.js";
+import { pool, query, withSystem, withWorkspace } from "./lib/db.js";
+import { fail, HttpError, readJson, sendJson } from "./lib/http.js";
 import { recordPhoneHeartbeat } from "./lib/phones.js";
 import { redactUrl } from "./lib/scrub.js";
 import { logAscConfig } from "./lib/appstoreconnect.js";
@@ -20,6 +20,9 @@ import { authRoutes } from "./routes/auth.js";
 import { operatorRoutes } from "./routes/operator.js";
 import { portalRoutes } from "./routes/portal.js";
 import { webhookRoutes } from "./routes/webhooks.js";
+import { workspaceRoutes } from "./routes/workspaces.js";
+import { trialRequestRoutes } from "./routes/trial-requests.js";
+import { scheduleRoutes } from "./routes/schedule.js";
 import { wellknown } from "./routes/wellknown.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -77,6 +80,9 @@ const routes = [
   ...portalRoutes,
   ...operatorRoutes,
   ...webhookRoutes,
+  ...workspaceRoutes,
+  ...trialRequestRoutes,
+  ...scheduleRoutes,
 ];
 
 async function health() {
@@ -258,10 +264,15 @@ async function handle(req, res, ctx) {
   if (route.auth === "app" || route.auth === "worker" || route.auth === "operator") requireAppKey(req.headers);
   const session =
     route.auth === "admin" ? await requireAdminSession(req.headers)
-    : route.auth === "flags" ? await requireAdminSession(req.headers, ["admin", "flags"])
+    : route.auth === "platform" ? await requireAdminSession(req.headers, ["superadmin"])
+    : route.auth === "account" ? await requireAdminSession(req.headers, ["admin", "superadmin"])
+    : route.auth === "flags" ? await requireAdminSession(req.headers, ["admin", "flags", "superadmin"])
     : route.auth === "worker" ? await requireWorkerSession(req.headers)
     : route.auth === "operator" ? await requireOperatorSession(req.headers)
     : null;
+  if (route.auth === "flags" && route.method !== "GET" && session.tenantId !== 1 && session.role !== "superadmin") {
+    fail(401, "unauthorized");
+  }
 
   // ID ONLY, and only for workers. Never the name, never the email, never the admin's
   // address — `setUser` writes to the isolation scope, which is forked per request above,
@@ -277,11 +288,11 @@ async function handle(req, res, ctx) {
     //
     // Placed here rather than inside a handler so it covers EVERY worker route — including
     // the ones a phone with a full queue is most likely to be calling, which is all of them.
-    void recordPhoneHeartbeat(session.workerId, req.headers).catch(() => {});
+    void withWorkspace(session.tenantId, () => recordPhoneHeartbeat(session.workerId, req.headers)).catch(() => {});
   }
 
   const body = route.method === "GET" || route.method === "DELETE" ? {} : await readJson(req);
-  const result = await route.handler({
+  const invoke = () => route.handler({
     params,
     query: url.searchParams,
     body,
@@ -289,6 +300,21 @@ async function handle(req, res, ctx) {
     session,
     ip: clientIp(req),
   });
+  // Only explicitly marked credential bootstrap handlers can read across companies
+  // without a session. A newly added public route otherwise has no database scope.
+  const result = session
+    ? await (route.auth === "platform" || (route.auth === "flags" && (session.tenantId === 1 || session.role === "superadmin"))
+      ? withSystem(invoke) : withWorkspace(session.tenantId, invoke))
+    : await (route.bootstrap ? withSystem(invoke) : invoke());
+  // Company provisioning audits atomically in its own statement. Shared account/flag
+  // mutations by a platform administrator also use decision-65's one audit ledger.
+  if (session?.role === "superadmin" && route.auth !== "platform" && route.method !== "GET") {
+    await withSystem(() => query(`INSERT INTO action_log
+      (tenant_id,actor_type,actor_id,origin,action,target_table,target_id)
+      VALUES (0,'admin',$1,'superadmin',$2,$3,$4)`, [session.adminId,
+      `${route.method} ${route.path}`, route.auth === "flags" ? "feature_flags" : "admins",
+      route.auth === "flags" ? params.name : String(session.adminId)]));
+  }
   sendJson(res, result.status, result.body, result.headers);
 }
 

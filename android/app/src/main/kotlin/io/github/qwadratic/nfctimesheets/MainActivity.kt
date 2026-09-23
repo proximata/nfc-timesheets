@@ -1,6 +1,7 @@
 package io.github.qwadratic.nfctimesheets
 
 import android.content.Intent
+import android.content.res.Configuration
 import android.os.Bundle
 import io.github.qwadratic.nfctimesheets.LocalizedActivity
 import androidx.activity.compose.setContent
@@ -31,6 +32,13 @@ class MainActivity : LocalizedActivity() {
     override fun onPause() {
         workerReader.setEnabled(false)
         super.onPause()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // uiMode is handled without recreating this Activity. Refresh system icon contrast
+        // together with Compose's theme, without replaying the original NFC intent.
+        enableEdgeToEdge()
     }
 
     private val app: TimeSheetsApplication get() = application as TimeSheetsApplication

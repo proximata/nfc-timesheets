@@ -109,7 +109,7 @@ export function WorkerPanel({ worker, shifts, truncated, now, onClose }: WorkerP
       },
       {
         key: 'where',
-        href: filterHref('/', { location: firstOpen.location_id }),
+        href: filterHref('/map/', { location: firstOpen.location_id }),
         label: t('panelLinkWhere', { name: firstOpen.location_name }),
       },
     )
@@ -214,7 +214,7 @@ export function WorkerPanel({ worker, shifts, truncated, now, onClose }: WorkerP
                 <th scope="row">{day(shift.start_time)}</th>
                 <td>
                   {/* The building is a link to its own panel, carrying its id. */}
-                  <Link href={filterHref('/', { location: shift.location_id })}>
+                  <Link href={filterHref('/map/', { location: shift.location_id })}>
                     {shift.location_name}
                   </Link>
                 </td>

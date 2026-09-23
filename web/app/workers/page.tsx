@@ -887,47 +887,49 @@ export default function WorkersPage() {
           per-row note above). A small inline form, not a drawer: one number, one bound,
           one fallback — the same `saveSetting`/`clearSetting` pair `/pl/` uses for
           `pl_margin_baseline_bp`, reused here rather than a second settings page. */}
-      <details className="note settings-disclosure">
-        <summary id={rateLimitHeadingId}>{t('rateLimitHeading')}</summary>
-        <form onSubmit={submitRateLimit} noValidate>
-          <Field
-            id={rateLimitId}
-            label={t('fieldRateLimit')}
-            help={t('rateLimitHint', { default: SMS_OTP_REQUESTS_DEFAULT })}
-            error={
-              rateLimitError
-                ? t('errorRateLimitInvalid', {
-                    min: SMS_OTP_REQUESTS_MIN,
-                    max: SMS_OTP_REQUESTS_MAX,
-                  })
-                : undefined
-            }
-          >
-            <input
-              type="number"
-              inputMode="numeric"
-              min={SMS_OTP_REQUESTS_MIN}
-              max={SMS_OTP_REQUESTS_MAX}
-              value={rateLimitDraft}
-              onChange={(event) => setRateLimitDraft(event.target.value)}
-              disabled={busy}
-            />
-          </Field>
-          <p className="form-actions">
-            <button type="submit" className="btn btn-quiet" disabled={busy}>
-              {t('rateLimitSave')}
-            </button>
-            <button
-              type="button"
-              className="btn btn-quiet"
-              onClick={clearRateLimit}
-              disabled={busy}
+      {snapshot?.capabilities?.manage_auth_limits && (
+        <details className="note settings-disclosure">
+          <summary id={rateLimitHeadingId}>{t('rateLimitHeading')}</summary>
+          <form onSubmit={submitRateLimit} noValidate>
+            <Field
+              id={rateLimitId}
+              label={t('fieldRateLimit')}
+              help={t('rateLimitHint', { default: SMS_OTP_REQUESTS_DEFAULT })}
+              error={
+                rateLimitError
+                  ? t('errorRateLimitInvalid', {
+                      min: SMS_OTP_REQUESTS_MIN,
+                      max: SMS_OTP_REQUESTS_MAX,
+                    })
+                  : undefined
+              }
             >
-              {t('rateLimitReset')}
-            </button>
-          </p>
-        </form>
-      </details>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={SMS_OTP_REQUESTS_MIN}
+                max={SMS_OTP_REQUESTS_MAX}
+                value={rateLimitDraft}
+                onChange={(event) => setRateLimitDraft(event.target.value)}
+                disabled={busy}
+              />
+            </Field>
+            <p className="form-actions">
+              <button type="submit" className="btn btn-quiet" disabled={busy}>
+                {t('rateLimitSave')}
+              </button>
+              <button
+                type="button"
+                className="btn btn-quiet"
+                onClick={clearRateLimit}
+                disabled={busy}
+              >
+                {t('rateLimitReset')}
+              </button>
+            </p>
+          </form>
+        </details>
+      )}
 
       {/* The one and only sighting of the code. NOT a dialog (owner, explicitly): the
           director reads it out over the phone while looking at that person's row, and a

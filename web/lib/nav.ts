@@ -114,6 +114,46 @@ export const OFF_NAV_ROUTES: readonly string[] = [
  */
 export const PRIMARY_NAV: readonly NavItem[] = NAV_GROUPS.flatMap((group) => group.items)
 
+export const COMPANY_NAV_GROUPS: readonly NavGroup[] = [
+  {
+    headingKey: 'groupToday',
+    hidden: true,
+    items: [
+      { href: '/workspace/', labelKey: 'dashboard' },
+      { href: '/schedule/', labelKey: 'schedule' },
+      { href: '/workers/', labelKey: 'workers' },
+      { href: '/locations/', labelKey: 'locations' },
+      { href: '/payroll/', labelKey: 'payroll' },
+      { href: '/material-requests/', labelKey: 'materialRequests' },
+    ],
+  },
+  {
+    headingKey: 'groupAccount',
+    hidden: true,
+    pinBottom: true,
+    items: [
+      { href: '/setup/', labelKey: 'setup' },
+      { href: '/account/', labelKey: 'account' },
+    ],
+  },
+]
+export const PLATFORM_NAV_GROUPS: readonly NavGroup[] = [
+  {
+    headingKey: 'groupToday',
+    hidden: true,
+    items: [{ href: '/platform/', labelKey: 'companies' }],
+  },
+  {
+    headingKey: 'groupAccount',
+    hidden: true,
+    pinBottom: true,
+    items: [
+      { href: '/flags/', labelKey: 'flags' },
+      { href: '/account/', labelKey: 'account' },
+    ],
+  },
+]
+
 /**
  * Roadmap stubs: rendered locked and never navigable, so a director can see what is coming
  * without clicking into a 404.

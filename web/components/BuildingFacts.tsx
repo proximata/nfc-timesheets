@@ -20,6 +20,8 @@ const AUTO_CLOSE_MINUTES = 8 * 60
 
 export type BuildingFactsProps = {
   building: Location
+  /** Exact custom range carried from a report into the object panel. */
+  reportPeriod?: { period: 'custom'; start: string; end: string } | null
   /** The whole loaded ledger. Sliced here; never refetched. */
   shifts: readonly Shift[]
   /**
@@ -91,6 +93,7 @@ export type BuildingFactsProps = {
  */
 export function BuildingFacts({
   building,
+  reportPeriod,
   shifts,
   zones = [],
   openMaterials,
@@ -195,8 +198,13 @@ export function BuildingFacts({
   const links: { key: string; href: string; label: string }[] = [
     {
       key: 'shifts',
-      href: filterHref('/shifts/', { location: building.id, period: 'thisMonth' }),
-      label: t('panelLinkShifts'),
+      href: filterHref('/shifts/', {
+        location: building.id,
+        ...(reportPeriod ?? { period: 'thisMonth' }),
+      }),
+      label: reportPeriod
+        ? t('panelLinkShiftsCustom', { start: reportPeriod.start, end: reportPeriod.end })
+        : t('panelLinkShifts'),
     },
   ]
   if (unresolved.length > 0) {
@@ -233,13 +241,23 @@ export function BuildingFacts({
       key: 'payroll',
       // `lastMonth` matches /payroll/'s OWN default. A link that lands in a different
       // period than the screen it points at is the defect this contract exists to remove.
-      href: filterHref('/payroll/', { location: building.id, period: 'lastMonth' }),
-      label: t('panelLinkPayroll'),
+      href: filterHref('/payroll/', {
+        location: building.id,
+        ...(reportPeriod ?? { period: 'lastMonth' }),
+      }),
+      label: reportPeriod
+        ? t('panelLinkPayrollCustom', { start: reportPeriod.start, end: reportPeriod.end })
+        : t('panelLinkPayroll'),
     },
     {
       key: 'pl',
-      href: filterHref('/pl/', { location: building.id, period: 'lastMonth' }),
-      label: t('panelLinkPl'),
+      href: filterHref('/pl/', {
+        location: building.id,
+        ...(reportPeriod ?? { period: 'lastMonth' }),
+      }),
+      label: reportPeriod
+        ? t('panelLinkPlCustom', { start: reportPeriod.start, end: reportPeriod.end })
+        : t('panelLinkPl'),
     },
     {
       key: 'contracts',
@@ -248,7 +266,7 @@ export function BuildingFacts({
     },
     {
       key: 'analytics',
-      href: filterHref('/analytics/', { location: building.id }),
+      href: filterHref('/analytics/', { location: building.id, ...(reportPeriod ?? {}) }),
       label: t('panelLinkAnalytics'),
     },
   )

@@ -2,7 +2,7 @@ package io.github.qwadratic.nfctimesheets.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -14,7 +14,7 @@ import io.github.qwadratic.nfctimesheets.core.ShiftSignal
 /** Decorative navigation icons; the translated label supplies the accessible name. */
 @Composable
 fun WorkerNavIcon(tab: ShiftSignal.Tab) {
-    val color = MaterialTheme.colorScheme.onSurface
+    val color = LocalContentColor.current
     Canvas(Modifier.size(24.dp)) {
         val unit = size.width / 24
         when (tab) {

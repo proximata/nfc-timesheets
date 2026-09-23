@@ -113,6 +113,7 @@ export default function FlagsPage() {
       </p>
 
       <ListPanel title={t('listHeading')}>
+        {flags?.some((flag) => flag.can_edit === false) && <p className="note">{t('readOnly')}</p>}
         {flags === null ? (
           <p role="status">{loadError === null ? t('loading') : tError(loadError)}</p>
         ) : flags.length === 0 ? (
@@ -156,7 +157,7 @@ export default function FlagsPage() {
                         type="button"
                         className={flag.enabled ? 'btn btn-quiet' : 'btn btn-primary'}
                         aria-pressed={flag.enabled}
-                        disabled={busyName !== null}
+                        disabled={busyName !== null || flag.can_edit === false}
                         onClick={() => void toggle(flag)}
                       >
                         {busyName === flag.name

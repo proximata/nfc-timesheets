@@ -4,11 +4,11 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { useEffect, useRef } from 'react'
-import { FUTURE_NAV, NAV_GROUPS } from '@/lib/nav'
+import { COMPANY_NAV_GROUPS, FUTURE_NAV, NAV_GROUPS, PLATFORM_NAV_GROUPS } from '@/lib/nav'
 
 const FUTURE_HINT_ID = 'nav-future-hint'
 
-export function SidebarNav() {
+export function SidebarNav({ role }: { role?: string }) {
   const t = useTranslations('nav')
   const pathname = usePathname()
   const navRef = useRef<HTMLElement>(null)
@@ -33,7 +33,12 @@ export function SidebarNav() {
 
   return (
     <nav className="sidebar" aria-label={t('primaryLabel')} ref={navRef}>
-      {NAV_GROUPS.map((group) => {
+      {(role === 'superadmin'
+        ? PLATFORM_NAV_GROUPS
+        : role === 'admin'
+          ? COMPANY_NAV_GROUPS
+          : NAV_GROUPS
+      ).map((group) => {
         const headingId = `nav-${group.headingKey}`
         const className = group.pinBottom ? 'nav-group nav-group-bottom' : 'nav-group'
         return (

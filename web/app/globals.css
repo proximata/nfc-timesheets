@@ -320,6 +320,77 @@ a {
   flex-wrap: wrap;
 }
 
+.preference-switcher {
+  display: inline-flex;
+  flex: none;
+  gap: 3px;
+  margin: 0;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-sunken);
+}
+.preference-segment {
+  position: relative;
+  cursor: pointer;
+}
+.preference-segment input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.preference-segment > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  min-width: 40px;
+  padding: 6px 11px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  transition:
+    background-color 180ms ease,
+    color 180ms ease,
+    box-shadow 180ms ease;
+}
+.preference-segment input:checked + span {
+  background: var(--text-primary);
+  color: var(--bg-raised);
+  box-shadow: 0 1px 4px #00000020;
+}
+.preference-segment input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.preference-segment:hover input:not(:checked) + span {
+  color: var(--text-primary);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .app-shell,
+  .app-header,
+  .sidebar,
+  .content,
+  .header-tools {
+    transition:
+      background-color 200ms ease,
+      color 200ms ease,
+      border-color 200ms ease;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .preference-segment > span {
+    transition: none;
+  }
+}
+
 .locale-switcher,
 .theme-switcher {
   display: inline-flex;
@@ -1265,6 +1336,27 @@ a {
   margin-bottom: 0;
 }
 
+.period-picker {
+  min-width: min(100%, 13rem);
+}
+
+.period-picker-dates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--s2);
+}
+
+.period-picker-dates label {
+  display: grid;
+  gap: var(--s1);
+  flex: 1 1 9rem;
+}
+
+.period-picker-dates .btn {
+  min-height: 44px;
+}
+
 .roster-filters .field:first-child {
   flex: 1 1 16rem;
 }
@@ -1728,8 +1820,8 @@ a {
      (the actual `scrollingElement`) still reported a taller `scrollHeight` and `scrollTo()`
      still moved the header off-screen. Setting `overflow: hidden` on the real scrolling
      root removes the ambiguity outright — there is no root-level scroll range to have. */
-  html,
-  body {
+  html:has(.app-shell),
+  body:has(.app-shell) {
     overflow: hidden;
   }
 

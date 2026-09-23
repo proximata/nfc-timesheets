@@ -13,6 +13,7 @@ import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
 import { LoadStatus } from '@/components/LoadStatus'
 import { PageHeader } from '@/components/PageHeader'
+import { PeriodPicker } from '@/components/PeriodPicker'
 import {
   ApiError,
   clearSetting,
@@ -28,18 +29,11 @@ import {
   saveRevenueBulk,
   saveSetting,
 } from '@/lib/api'
-import { filterHref, useFilters } from '@/lib/filters'
+import { filterHref, periodLink, useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { centsToPlainEuros, parseEuroToCents } from '@/lib/money'
 import { loginPathWithReturn } from '@/lib/nav'
-import {
-  futureDays,
-  isPartElapsed,
-  isPeriod,
-  PAYROLL_PERIODS,
-  type Period,
-  periodRange,
-} from '@/lib/period'
+import { futureDays, isPartElapsed, type Period, periodRange } from '@/lib/period'
 import {
   bpToPlainPercent,
   bpToRatio,
@@ -115,7 +109,6 @@ export default function PlPage() {
   const locale = useLocale()
   const router = useRouter()
 
-  const periodId = useId()
   const baselineId = useId()
   const revenueAmountId = useId()
   const revenueNoteId = useId()
@@ -168,10 +161,17 @@ export default function PlPage() {
   /** The month that has ENDED is the one a P&L is run for. Same vocabulary as /payroll/. */
   const period: Period =
     filters.period !== null && filters.period !== 'all' ? filters.period : 'lastMonth'
-  const setPeriod = (next: Period) => setFilters({ period: next }, 'replace')
   // Frozen at mount: "this month" must not change meaning halfway through a re-render.
   const [now] = useState(() => new Date())
-  const range = useMemo(() => periodRange(period, now), [period, now])
+  const range = useMemo(
+    () =>
+      periodRange(
+        period,
+        now,
+        filters.start && filters.end ? { start: filters.start, end: filters.end } : undefined,
+      ),
+    [period, now, filters.start, filters.end],
+  )
   /**
    * The period has not finished. It no longer inflates REVENUE — decision-42 deleted the
    * daily accrual, and an unentered month is null rather than a growing fraction — but the
@@ -416,10 +416,13 @@ export default function PlPage() {
 
   const periodLabel: Record<Period, string> = {
     last30Days: t('periodLast30Days'),
+    thisWeek: t('periodThisWeek'),
+    lastWeek: t('periodLastWeek'),
     thisMonth: t('periodThisMonth'),
     lastMonth: t('periodLastMonth'),
     thisQuarter: t('periodThisQuarter'),
     thisYear: t('periodThisYear'),
+    custom: t('periodCustom'),
     all: t('periodAll'),
   }
   const rangeLabel =
@@ -814,24 +817,12 @@ export default function PlPage() {
       )}
 
       <div className="filter-bar">
-        <Field id={periodId} label={t('fieldPeriod')} help={rangeLabel}>
-          <select
-            value={period}
-            onChange={(event) => {
-              const next = event.target.value
-              // `all` is excluded by PAYROLL_PERIODS and by the API: /admin/pl requires both
-              // bounds, because a monthly fee pro-rated over an unbounded period is either
-              // infinitely many days or a month nobody asked for.
-              if (isPeriod(next) && next !== 'all') setPeriod(next)
-            }}
-          >
-            {PAYROLL_PERIODS.map((option) => (
-              <option key={option} value={option}>
-                {periodLabel[option]}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <PeriodPicker
+          label={t('fieldPeriod')}
+          help={rangeLabel}
+          value={{ period, start: filters.start, end: filters.end }}
+          onChange={(selection) => setFilters(selection, 'replace')}
+        />
       </div>
 
       {/* A FAILED LOAD MUST NOT GO ON SAYING "loading". This branch is reached whenever the
@@ -1114,7 +1105,12 @@ export default function PlPage() {
                       paragraph about Handelskai and landed on an unfiltered contract list. */}
                   <ul className="panel-links">
                     <li>
-                      <Link href={filterHref(HOME_PATH, { location: building.location_id })}>
+                      <Link
+                        href={filterHref(HOME_PATH, {
+                          location: building.location_id,
+                          ...periodLink(filters, period),
+                        })}
+                      >
                         {t('flaggedBuildingLink')}
                       </Link>
                     </li>
@@ -1129,7 +1125,7 @@ export default function PlPage() {
                       <Link
                         href={filterHref(SHIFTS_PATH, {
                           location: building.location_id,
-                          period,
+                          ...periodLink(filters, period),
                         })}
                       >
                         {t('flaggedShiftsLink')}
@@ -1212,7 +1208,12 @@ export default function PlPage() {
                     >
                       <th scope="row">
                         {/* The name opens the building's panel, carrying its id. */}
-                        <Link href={filterHref(HOME_PATH, { location: building.location_id })}>
+                        <Link
+                          href={filterHref(HOME_PATH, {
+                            location: building.location_id,
+                            ...periodLink(filters, period),
+                          })}
+                        >
                           {building.name}
                           <span className="visually-hidden"> {t('flaggedBuildingLink')}</span>
                         </Link>

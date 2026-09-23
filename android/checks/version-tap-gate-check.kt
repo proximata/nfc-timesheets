@@ -11,11 +11,11 @@ fun main() {
     check(Regex("R\\.string\\.app_version_line").findAll(app).count() == 2) {
         "the version line must stay visible in signed-out and Settings screens"
     }
-    check(app.contains("VersionTapGate.advance(versionTapCount)")) {
-        "signed-out version row does not drive the five-tap gate"
+    check(app.split("VersionTapGate.advance(versionTapCount)").size - 1 == 2) {
+        "signed-out and signed-in version rows must both drive the five-tap gate"
     }
-    check(app.contains("RowLink(stringResource(R.string.settings_operator_open), onOperator)")) {
-        "signed-in Settings operator row was removed"
+    check(!app.contains("RowLink(stringResource(R.string.settings_operator_open), onOperator)")) {
+        "ordinary worker Settings must not expose a direct operator row"
     }
 
     var tapCount = 0

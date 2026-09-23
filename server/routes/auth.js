@@ -1130,40 +1130,40 @@ export const authRoutes = [
   // defence in depth, so this endpoint is not reachable from a browser or curl.
   // DEPRECATED IN WORDS ONLY (decision-50) — no new build calls this, but TestFlight builds
   // already on workers' phones do, on every launch. Not removed. See appleAuth's docblock.
-  { method: "POST", path: "/auth/apple", auth: "app", handler: appleAuth },
+  { method: "POST", path: "/auth/apple", auth: "app", bootstrap: true, handler: appleAuth },
   // Same coarse app-key gate as /auth/apple, and for the same reason: it is not identity,
   // it just keeps the endpoint off the open web for a browser or a stray curl.
-  { method: "POST", path: "/auth/code", auth: "app", handler: codeAuth },
+  { method: "POST", path: "/auth/code", auth: "app", bootstrap: true, handler: codeAuth },
   { method: "POST", path: "/auth/logout", auth: "worker", handler: logout },
   { method: "GET", path: "/auth/session", auth: "worker", handler: whoami },
   // decision-48 §6.6, this iteration. auth: "app" like /app/version below — no session, so
   // the sign-in screen can ask before it has one. See capabilities() above.
-  { method: "GET", path: "/auth/capabilities", auth: "app", handler: capabilities },
+  { method: "GET", path: "/auth/capabilities", auth: "app", bootstrap: true, handler: capabilities },
   // decision-45 §6/§7. Not `POST /operator/workers` — that route is BLOCKED, see
   // routes/admin.js (§8, TASK-212 AC#5).
-  { method: "POST", path: "/auth/operator-code", auth: "app", handler: operatorCodeAuth },
+  { method: "POST", path: "/auth/operator-code", auth: "app", bootstrap: true, handler: operatorCodeAuth },
   { method: "POST", path: "/auth/operator-logout", auth: "operator", handler: operatorLogout },
   // decision-54 §5. SMS for OPERATORS, which decision-45 §6/§7 named as deferred and this
   // decision un-defers, so the ONE shared code form on both apps means something for both
   // roles. Same coarse app-key gate as every other sign-in door. ADDED BESIDE
   // /auth/operator-code, never instead of it — the code door stays exactly as it is.
-  { method: "POST", path: "/auth/operator-sms/request", auth: "app", handler: operatorSmsRequest },
-  { method: "POST", path: "/auth/operator-sms/verify", auth: "app", handler: operatorSmsVerify },
+  { method: "POST", path: "/auth/operator-sms/request", auth: "app", bootstrap: true, handler: operatorSmsRequest },
+  { method: "POST", path: "/auth/operator-sms/verify", auth: "app", bootstrap: true, handler: operatorSmsVerify },
   // decision-48 §6. Same coarse app-key gate as every other sign-in door, and for the same
   // reason. ADDED BESIDE /auth/code, NEVER INSTEAD OF IT: the line above stays exactly as
   // it is, and no Android build offers this until a server actually answers something other
   // than 503 — a phone that offers "Send me an SMS" against a 503 is the silent pretence
   // the owner forbade.
-  { method: "POST", path: "/auth/sms/request", auth: "app", handler: smsRequest },
-  { method: "POST", path: "/auth/sms/verify", auth: "app", handler: smsVerify },
+  { method: "POST", path: "/auth/sms/request", auth: "app", bootstrap: true, handler: smsRequest },
+  { method: "POST", path: "/auth/sms/verify", auth: "app", bootstrap: true, handler: smsVerify },
   // decision-64 §3. THE THIRD DOOR, added BESIDE the other two and never instead of either:
   // the four lines above and the code lines above them are untouched. Same coarse app-key
   // gate as every other sign-in door. INERT TODAY — no box holds a RESEND_API_KEY and
   // migration 021 seeds `email_login` OFF, so all four answer 503 and
   // GET /auth/capabilities reports `email:false`; no mobile build offers any of this (§7
   // defers the mobile sign-in UI to a follow-up).
-  { method: "POST", path: "/auth/email/request", auth: "app", handler: emailRequest },
-  { method: "POST", path: "/auth/email/verify", auth: "app", handler: emailVerify },
-  { method: "POST", path: "/auth/operator-email/request", auth: "app", handler: operatorEmailRequest },
-  { method: "POST", path: "/auth/operator-email/verify", auth: "app", handler: operatorEmailVerify },
+  { method: "POST", path: "/auth/email/request", auth: "app", bootstrap: true, handler: emailRequest },
+  { method: "POST", path: "/auth/email/verify", auth: "app", bootstrap: true, handler: emailVerify },
+  { method: "POST", path: "/auth/operator-email/request", auth: "app", bootstrap: true, handler: operatorEmailRequest },
+  { method: "POST", path: "/auth/operator-email/verify", auth: "app", bootstrap: true, handler: operatorEmailVerify },
 ];

@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -32,6 +33,8 @@ import io.github.qwadratic.nfctimesheets.R
 import io.github.qwadratic.nfctimesheets.TimeSheetsApplication
 import io.github.qwadratic.nfctimesheets.core.Zones
 import io.github.qwadratic.nfctimesheets.ui.TimeSheetsTheme
+import io.github.qwadratic.nfctimesheets.ui.WorkerCard
+import io.github.qwadratic.nfctimesheets.ui.EntranceMark
 
 /**
  * EXPLICIT SCAN — the fallback for phones where the OS never dispatches the tag on its own.
@@ -82,20 +85,21 @@ class ScanActivity : LocalizedActivity() {
                             text = stringResource(R.string.scan_title),
                             style = MaterialTheme.typography.headlineSmall,
                         )
-                        Text(
-                            text = stringResource(R.string.scan_hint),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        // liveRegion: TalkBack announces each read without the worker having
-                        // to hunt for what changed while holding a phone against a wall.
-                        Text(
-                            text = statusText(status),
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                        )
+                        WorkerCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                                EntranceMark(status == ScanStatus.Unsupported)
+                                Text(text = stringResource(R.string.scan_hint), style = MaterialTheme.typography.bodyLarge)
+                                // Announce each read without requiring a visual search.
+                                Text(
+                                    text = statusText(status),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                                )
+                            }
+                        }
                         Button(
                             onClick = { finish() },
-                            modifier = Modifier.heightIn(min = 48.dp),
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
                         ) { Text(stringResource(R.string.scan_close)) }
                     }
                 }

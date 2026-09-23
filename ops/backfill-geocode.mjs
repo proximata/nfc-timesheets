@@ -48,7 +48,7 @@
  * makes the same argument about the same seam).
  */
 import { pathToFileURL } from "node:url";
-import { all, pool, query } from "../server/lib/db.js";
+import { all, pool, query, withSystem } from "../server/lib/db.js";
 import { geocode } from "../server/lib/geocode.js";
 
 /**
@@ -245,7 +245,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // The catch is the outermost soft failure: an unreachable database, a permission problem,
   // a column that moved. It reports and exits 0 on purpose — this script is called from a
   // deploy whose job is shipping the admin, and a missing map pin may not fail that deploy.
-  backfill(process.argv.slice(2))
+  withSystem(() => backfill(process.argv.slice(2)))
     .catch((err) => {
       console.error(`backfill-geocode: aborted — ${err.message}`);
       console.error("                  No building was left in a worse state than it started in.");

@@ -7,6 +7,7 @@ import { ResponsiveTableLabels } from '@/components/ResponsiveTableLabels'
 import { DEFAULT_LOCALE, htmlLang, MESSAGES } from '@/lib/locale'
 import { THEME_INIT_SCRIPT } from '@/lib/theme'
 import './globals.css'
+import './workspace.css'
 
 // Metadata is emitted once at build time into static HTML, so it can only ever use the
 // build-time default locale. `createTranslator` is next-intl's non-hook API — no request

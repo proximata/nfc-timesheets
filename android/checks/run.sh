@@ -38,6 +38,7 @@ fi
 JAVA_BIN="${JAVA_HOME:+$JAVA_HOME/bin/}java"
 
 JSON_VERSION=20250107
+JSON_SHA256=85d4c1ab192d3117fd02c7fff1ec0fe63ade45cf56def7fe950ef060cf06e99f
 LIB=checks/.lib
 OUT=checks/.out
 JSON_JAR="$LIB/json-$JSON_VERSION.jar"
@@ -45,8 +46,16 @@ JSON_JAR="$LIB/json-$JSON_VERSION.jar"
 mkdir -p "$LIB" "$OUT"
 if [ ! -f "$JSON_JAR" ]; then
   echo "checks: fetching org.json:json:$JSON_VERSION (android.jar's copy is not available off-device)"
-  curl -fsSL -o "$JSON_JAR" \
-    "https://repo1.maven.org/maven2/org/json/json/$JSON_VERSION/json-$JSON_VERSION.jar"
+  # Maven Central's canonical host; repo1 returned 404 on clean CI runners.
+  # Never leave a partial download where the next run would treat it as cached.
+  curl --retry 3 -fsSL -o "$JSON_JAR.tmp" \
+    "https://repo.maven.apache.org/maven2/org/json/json/$JSON_VERSION/json-$JSON_VERSION.jar"
+  mv "$JSON_JAR.tmp" "$JSON_JAR"
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+  printf '%s  %s\n' "$JSON_SHA256" "$JSON_JAR" | sha256sum -c -
+else
+  printf '%s  %s\n' "$JSON_SHA256" "$JSON_JAR" | shasum -a 256 -c -
 fi
 
 # Only the pure core compiles here. Anything under data/, net/, ui/ imports Android and

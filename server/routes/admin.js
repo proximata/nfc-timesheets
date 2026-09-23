@@ -23,7 +23,7 @@ import {
   SMS_OTP_REQUESTS_MIN,
   verifyPassword,
 } from "../lib/auth.js";
-import { all, one, query } from "../lib/db.js";
+import { all, one, query, transaction } from "../lib/db.js";
 import { CODE_TTL_MS, newEnrolmentCode } from "../lib/enrolment.js";
 import { geocode } from "../lib/geocode.js";
 import { fail } from "../lib/http.js";
@@ -239,7 +239,7 @@ async function login({ body, ip }) {
   let admin = null;
   if (email !== "" && email.length <= EMAIL_MAX && password !== "" && password.length <= PASSWORD_MAX) {
     // Stored lower-cased (see 001_init.sql), so this is a plain unique-index hit.
-    admin = await one("SELECT id, email, password_hash FROM admins WHERE email = $1", [email]);
+    admin = await one("SELECT a.id, a.email, a.password_hash, a.role FROM admins a JOIN tenants t ON t.id = a.tenant_id AND t.active WHERE a.email = $1", [email]);
   }
 
   const ok = await verifyPassword(password, admin ? admin.password_hash : await decoy());
@@ -252,7 +252,7 @@ async function login({ body, ip }) {
   const { token, expiresAt } = await createSession(admin.id);
   return {
     status: 200,
-    body: { admin: { id: admin.id, email: admin.email } },
+    body: { admin: { id: admin.id, email: admin.email, role: admin.role } },
     headers: { "set-cookie": sessionCookie(token, expiresAt) },
   };
 }
@@ -265,7 +265,7 @@ async function logout({ session }) {
 
 /** GET /admin/session -> who am I. The admin UI uses it to decide login vs. dashboard. */
 async function whoami({ session }) {
-  return { status: 200, body: { admin: { id: session.adminId, email: session.email } } };
+  return { status: 200, body: { admin: { id: session.adminId, email: session.email, role: session.role, tenant_id: session.tenantId } } };
 }
 
 // Short enough that a small business will actually use it, long enough to be worth the
@@ -341,7 +341,7 @@ async function changePassword({ body, session, ip }) {
  * before they existed, byte for byte — the dashboard, payroll, /workers/ and /locations/ all
  * call this same route and none of them pages. Only `/shifts/` sends them.
  */
-async function adminData({ query }) {
+async function adminData({ query, session }) {
   const rawLimit = query.get("limit");
   const limit = rawLimit === null ? SHIFT_PAGE_DEFAULT : Math.min(v.id(rawLimit, "limit"), SHIFT_PAGE_MAX);
   const offset = v.optionalOffset(query.get("offset"), "offset");
@@ -614,6 +614,7 @@ async function adminData({ query }) {
       material_requests: materialRequests,
       material_request_limit: MATERIAL_REQUEST_PAGE,
       settings: Object.fromEntries(settings.map((s) => [s.key, s.value])),
+      capabilities: { manage_auth_limits: session.tenantId === 1 },
       shift_limit: limit,
       // Echoed so a screen can prove what it is showing rather than assume it.
       shift_range: { from: from === null ? null : from.toISOString(), to: to === null ? null : to.toISOString() },
@@ -673,9 +674,10 @@ async function upsertWorker({ body }) {
   try {
     if (body.id === undefined || body.id === null) {
       const row = await one(
-        `INSERT INTO workers (name, email, phone, hourly_rate_cents, active) VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO workers (name, email, phone, hourly_rate_cents, active, setup_key) VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (tenant_id, setup_key) DO UPDATE SET setup_key = EXCLUDED.setup_key
          RETURNING ${WORKER_COLS}`,
-        [name, email, phone, rate, active],
+        [name, email, phone, rate, active, v.optionalUuid(body.request_id, "request_id")],
       );
       return { status: 201, body: { worker: row } };
     }
@@ -919,47 +921,49 @@ async function sendEnrolmentCodeBySms({ params, session }) {
  *   already takes and decision-22's 403 takes for a claimed email.
  */
 async function putWorkerPhone({ params, body }) {
-  const workerId = v.id(params.id, "id");
-  const phone = v.identityPhone(body.phone, "phone");
+  return transaction(async () => {
+    const workerId = v.id(params.id, "id");
+    const phone = v.identityPhone(body.phone, "phone");
 
-  const worker = await one("SELECT id FROM workers WHERE id = $1 AND active", [workerId]);
-  if (!worker) fail(404, "unknown_worker");
+    const worker = await one("SELECT id FROM workers WHERE id = $1 AND active FOR UPDATE", [workerId]);
+    if (!worker) fail(404, "unknown_worker");
 
-  // REFUSE BEFORE RELEASING. The worker's own previous claim has to go before the new one
-  // can be inserted (phone_identities.worker_id is UNIQUE — one person, one login number),
-  // and releasing first would mean a refused claim left the worker with NO number at all.
-  // So the refusal is decided first, against the row as it stands.
-  const held = await one("SELECT worker_id FROM phone_identities WHERE phone_e164 = $1", [phone]);
-  if (held && held.worker_id !== null && Number(held.worker_id) !== workerId) fail(409, "phone_claimed");
+    // REFUSE BEFORE RELEASING. The worker's own previous claim has to go before the new one
+    // can be inserted (phone_identities.worker_id is UNIQUE — one person, one login number),
+    // and releasing first would mean a refused claim left the worker with NO number at all.
+    // So the refusal is decided first, against the row as it stands.
+    const held = await one("SELECT worker_id FROM phone_identities WHERE phone_e164 = $1", [phone]);
+    if (held && held.worker_id !== null && Number(held.worker_id) !== workerId) fail(409, "phone_claimed");
 
-  // Release the worker's PREVIOUS number, if any. Without this, changing a number would
-  // leave the old one claimed for ever and an OTP sent to it would still resolve to this
-  // worker.
-  await releaseWorkerPhone(workerId, phone);
+    // Release the worker's PREVIOUS number, if any. Without this, changing a number would
+    // leave the old one claimed for ever and an OTP sent to it would still resolve to this
+    // worker.
+    await releaseWorkerPhone(workerId, phone);
 
-  try {
-    // The WHERE on the conflict branch is what makes this safe. `worker_id IS NULL` lets a
-    // row an OPERATOR already holds ADOPT its worker half — one human, one telephone, two
-    // roles, which is precisely what 007's table is for — while making it impossible to
-    // STEAL a number from another worker: that row has a non-NULL worker_id, the UPDATE
-    // matches nothing and 0 rows come back. `OR worker_id = $2` keeps re-saving the same
-    // number idempotent instead of answering 409 for a no-op.
-    const claimed = await one(
-      `INSERT INTO phone_identities (phone_e164, worker_id) VALUES ($1, $2)
-         ON CONFLICT (phone_e164) DO UPDATE SET worker_id = $2
-            WHERE phone_identities.worker_id IS NULL OR phone_identities.worker_id = $2
-       RETURNING phone_e164`,
-      [phone, workerId],
-    );
-    if (!claimed) fail(409, "phone_claimed"); // lost a race between the SELECT and here
+    try {
+      // The WHERE on the conflict branch is what makes this safe. `worker_id IS NULL` lets a
+      // row an OPERATOR already holds ADOPT its worker half — one human, one telephone, two
+      // roles, which is precisely what 007's table is for — while making it impossible to
+      // STEAL a number from another worker: that row has a non-NULL worker_id, the UPDATE
+      // matches nothing and 0 rows come back. `OR worker_id = $2` keeps re-saving the same
+      // number idempotent instead of answering 409 for a no-op.
+      const claimed = await one(
+        `INSERT INTO phone_identities (phone_e164, worker_id) VALUES ($1, $2)
+           ON CONFLICT (phone_e164) DO UPDATE SET worker_id = $2
+              WHERE phone_identities.worker_id IS NULL OR phone_identities.worker_id = $2
+         RETURNING phone_e164`,
+        [phone, workerId],
+      );
+      if (!claimed) fail(409, "phone_claimed"); // lost a race between the SELECT and here
 
-    return { status: 200, body: { worker: { id: workerId }, phone_e164: phone } };
-  } catch (err) {
-    // The database, not this function, is the thing that makes the collision impossible
-    // (decision-45 §2). Same opaque answer, naming nobody.
-    if (err?.code === "23505") fail(409, "phone_claimed");
-    throw err;
-  }
+      return { status: 200, body: { worker: { id: workerId }, phone_e164: phone } };
+    } catch (err) {
+      // The database, not this function, is the thing that makes the collision impossible
+      // (decision-45 §2). Same opaque answer, naming nobody.
+      if (err?.code === "23505" || (err?.code === "42501" && err.message?.includes("row-level security"))) fail(409, "phone_claimed");
+      throw err;
+    }
+  });
 }
 
 /**
@@ -1010,44 +1014,46 @@ async function deleteWorkerPhone({ params }) {
  *   createOperator already take.
  */
 async function putWorkerEmail({ params, body }) {
-  const workerId = v.id(params.id, "id");
-  const email = v.identityEmail(body.email, "email");
+  return transaction(async () => {
+    const workerId = v.id(params.id, "id");
+    const email = v.identityEmail(body.email, "email");
 
-  const worker = await one("SELECT id FROM workers WHERE id = $1 AND active", [workerId]);
-  if (!worker) fail(404, "unknown_worker");
+    const worker = await one("SELECT id FROM workers WHERE id = $1 AND active FOR UPDATE", [workerId]);
+    if (!worker) fail(404, "unknown_worker");
 
-  // REFUSE BEFORE RELEASING, verbatim putWorkerPhone's reasoning: the worker's own previous
-  // claim has to go before the new one can be inserted (`worker_id` is UNIQUE — one person,
-  // one login address), and releasing first would mean a refused claim left the worker with
-  // no address at all. A row an OPERATOR holds does NOT refuse (TASK-331): 020's CHECK is
-  // 007's "at least one", so one mailbox can hold both doors for one human — only a row held
-  // by a DIFFERENT WORKER is a claim to refuse.
-  const held = await one("SELECT worker_id FROM email_identities WHERE email = $1", [email]);
-  if (held && held.worker_id !== null && Number(held.worker_id) !== workerId) fail(409, "email_claimed");
+    // REFUSE BEFORE RELEASING, verbatim putWorkerPhone's reasoning: the worker's own previous
+    // claim has to go before the new one can be inserted (`worker_id` is UNIQUE — one person,
+    // one login address), and releasing first would mean a refused claim left the worker with
+    // no address at all. A row an OPERATOR holds does NOT refuse (TASK-331): 020's CHECK is
+    // 007's "at least one", so one mailbox can hold both doors for one human — only a row held
+    // by a DIFFERENT WORKER is a claim to refuse.
+    const held = await one("SELECT worker_id FROM email_identities WHERE email = $1", [email]);
+    if (held && held.worker_id !== null && Number(held.worker_id) !== workerId) fail(409, "email_claimed");
 
-  await releaseWorkerEmail(workerId, email);
+    await releaseWorkerEmail(workerId, email);
 
-  try {
-    // The WHERE on the conflict branch is what makes this safe, exactly as in putWorkerPhone:
-    // `worker_id IS NULL` lets a row an OPERATOR already holds ADOPT its worker half, while
-    // a row another WORKER holds has a non-NULL worker_id, matches nothing and comes back as
-    // 0 rows. `OR worker_id = $2` keeps re-saving the same address idempotent.
-    const claimed = await one(
-      `INSERT INTO email_identities (email, worker_id) VALUES ($1, $2)
-         ON CONFLICT (email) DO UPDATE SET worker_id = $2
-            WHERE email_identities.worker_id IS NULL OR email_identities.worker_id = $2
-       RETURNING email`,
-      [email, workerId],
-    );
-    if (!claimed) fail(409, "email_claimed"); // lost a race between the SELECT and here
+    try {
+      // The WHERE on the conflict branch is what makes this safe, exactly as in putWorkerPhone:
+      // `worker_id IS NULL` lets a row an OPERATOR already holds ADOPT its worker half, while
+      // a row another WORKER holds has a non-NULL worker_id, matches nothing and comes back as
+      // 0 rows. `OR worker_id = $2` keeps re-saving the same address idempotent.
+      const claimed = await one(
+        `INSERT INTO email_identities (email, worker_id) VALUES ($1, $2)
+           ON CONFLICT (email) DO UPDATE SET worker_id = $2
+              WHERE email_identities.worker_id IS NULL OR email_identities.worker_id = $2
+         RETURNING email`,
+        [email, workerId],
+      );
+      if (!claimed) fail(409, "email_claimed"); // lost a race between the SELECT and here
 
-    return { status: 200, body: { worker: { id: workerId }, login_email: email } };
-  } catch (err) {
-    // The database, not this function, is what makes the collision impossible. Same opaque
-    // answer, naming nobody.
-    if (err?.code === "23505") fail(409, "email_claimed");
-    throw err;
-  }
+      return { status: 200, body: { worker: { id: workerId }, login_email: email } };
+    } catch (err) {
+      // The database, not this function, is what makes the collision impossible. Same opaque
+      // answer, naming nobody.
+      if (err?.code === "23505" || (err?.code === "42501" && err.message?.includes("row-level security"))) fail(409, "email_claimed");
+      throw err;
+    }
+  });
 }
 
 /**
@@ -1161,11 +1167,8 @@ async function revokeEnrolmentCode({ params }) {
  * operator's name or re-pointing their phone; a phone that needs to change is a new
  * identity claim, not an edit of an old one.
  *
- * ONE writable-CTE statement, not two round trips: this codebase has NO transaction
- * helper anywhere (`grep -rn "BEGIN\|pool.connect" server/routes/*.js` -> nothing — every
- * existing "one transaction" claim here already IS a single SQL statement), and a
- * two-statement version would leave an orphan `operators` row behind on a `phone_claimed`
- * 409. The CTE can't: either both inserts land, or neither does.
+ * ONE writable-CTE statement keeps operator creation and its identity claim atomic.
+ * Either both inserts land, or neither does; a phone conflict cannot leave an orphan.
  *
  * 409 phone_claimed names nothing about WHO holds the number — anti-enumeration,
  * decision-45 §7, the same posture decision-22's 403 already applies to a claimed email.
@@ -1190,7 +1193,7 @@ async function createOperator({ body, session }) {
     );
     return { status: 201, body: { operator: { ...row, phone_e164: phone } } };
   } catch (err) {
-    if (err?.code === "23505") fail(409, "phone_claimed");
+    if (err?.code === "23505" || (err?.code === "42501" && err.message?.includes("row-level security"))) fail(409, "phone_claimed");
     throw err;
   }
 }
@@ -1239,34 +1242,36 @@ async function deleteOperator({ params }) {
  *   404 unknown_operator | 409 email_claimed (naming nobody) | 422 invalid_email
  */
 async function putOperatorEmail({ params, body }) {
-  const operatorId = v.id(params.id, "id");
-  const email = v.identityEmail(body.email, "email");
+  return transaction(async () => {
+    const operatorId = v.id(params.id, "id");
+    const email = v.identityEmail(body.email, "email");
 
-  const operator = await one("SELECT id FROM operators WHERE id = $1 AND active", [operatorId]);
-  if (!operator) fail(404, "unknown_operator");
+    const operator = await one("SELECT id FROM operators WHERE id = $1 AND active FOR UPDATE", [operatorId]);
+    if (!operator) fail(404, "unknown_operator");
 
-  // Only a row a DIFFERENT OPERATOR holds refuses; a row a WORKER holds is adopted below
-  // (TASK-331 — the mirror of putWorkerPhone/putWorkerEmail).
-  const held = await one("SELECT operator_id FROM email_identities WHERE email = $1", [email]);
-  if (held && held.operator_id !== null && Number(held.operator_id) !== operatorId) fail(409, "email_claimed");
+    // Only a row a DIFFERENT OPERATOR holds refuses; a row a WORKER holds is adopted below
+    // (TASK-331 — the mirror of putWorkerPhone/putWorkerEmail).
+    const held = await one("SELECT operator_id FROM email_identities WHERE email = $1", [email]);
+    if (held && held.operator_id !== null && Number(held.operator_id) !== operatorId) fail(409, "email_claimed");
 
-  await releaseOperatorEmail(operatorId, email);
+    await releaseOperatorEmail(operatorId, email);
 
-  try {
-    const claimed = await one(
-      `INSERT INTO email_identities (email, operator_id) VALUES ($1, $2)
-         ON CONFLICT (email) DO UPDATE SET operator_id = $2
-            WHERE email_identities.operator_id IS NULL OR email_identities.operator_id = $2
-       RETURNING email`,
-      [email, operatorId],
-    );
-    if (!claimed) fail(409, "email_claimed");
+    try {
+      const claimed = await one(
+        `INSERT INTO email_identities (email, operator_id) VALUES ($1, $2)
+           ON CONFLICT (email) DO UPDATE SET operator_id = $2
+              WHERE email_identities.operator_id IS NULL OR email_identities.operator_id = $2
+         RETURNING email`,
+        [email, operatorId],
+      );
+      if (!claimed) fail(409, "email_claimed");
 
-    return { status: 200, body: { operator: { id: operatorId }, login_email: email } };
-  } catch (err) {
-    if (err?.code === "23505") fail(409, "email_claimed");
-    throw err;
-  }
+      return { status: 200, body: { operator: { id: operatorId }, login_email: email } };
+    } catch (err) {
+      if (err?.code === "23505" || (err?.code === "42501" && err.message?.includes("row-level security"))) fail(409, "email_claimed");
+      throw err;
+    }
+  });
 }
 
 async function deleteOperatorEmail({ params }) {
@@ -1590,6 +1595,11 @@ async function upsertLocation({ body }) {
   const { clientId, contactId } = await resolveClientAndContact(body);
 
   const targetId = body.id === undefined || body.id === null ? null : v.uuid(body.id, "id");
+  const setupKey = v.optionalUuid(body.request_id, "request_id");
+  if (targetId === null && setupKey !== null) {
+    const previous = await one(`SELECT ${LOCATION_COLS} FROM locations WHERE setup_key = $1`, [setupKey]);
+    if (previous) return { status: 200, body: { location: previous } };
+  }
   const clash = await one("SELECT id FROM locations WHERE slug = $1", [locationSlug]);
   if (clash && clash.id !== targetId) fail(409, "slug_taken");
 
@@ -1617,10 +1627,11 @@ async function upsertLocation({ body }) {
   if (targetId === null) {
     row = await one(
       `INSERT INTO locations (slug, name, address, lat, lng, active,
-                              client_id, contact_id, monthly_contract_cents, target_minutes_per_month)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                              client_id, contact_id, monthly_contract_cents, target_minutes_per_month, setup_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (tenant_id, setup_key) DO UPDATE SET setup_key = EXCLUDED.setup_key
        RETURNING ${LOCATION_COLS}`,
-      values,
+      [...values, setupKey],
     );
     status = 201;
   } else {
@@ -2629,9 +2640,8 @@ const REVENUE_BULK_MAX = 500;
  * because each is its own command with its own snapshot. This is exactly `putRevenue`'s own
  * two-statement shape above, scoped to N rows instead of 1 — including its same small,
  * accepted window: a crash between the two statements leaves a superseded row with no live
- * replacement, same risk a single edit already carries today, just wider. This codebase has
- * no transaction helper anywhere (`grep -rn "BEGIN\|pool.connect" server/routes/*.js` ->
- * nothing), so accepting that window is the existing convention, not a new one.
+ * replacement, same risk a single edit already carries today, just wider. This existing
+ * revenue behavior predates the transaction helper added for identity replacement.
  *
  * Every location id is checked to exist BEFORE anything is written: a bulk save that
  * silently drops the one row with a typo'd id is worse than refusing the whole batch.
@@ -2784,12 +2794,13 @@ async function analyticsReport({ query: q }) {
  * P&L, so `pl_margin_baseline_bpp` would be accepted, stored, and then quietly do nothing
  * forever while the director wonders why no building is ever flagged.
  */
-async function putSetting({ body }) {
+async function putSetting({ body, session }) {
   const key = v.oneOf(body.key, "key", Object.keys(SETTINGS));
+  if (key === SMS_OTP_REQUESTS_KEY && session.tenantId !== 1) fail(403, "forbidden");
   const value = SETTINGS[key](body.value, "value");
   const row = await one(
     `INSERT INTO app_settings (key, value) VALUES ($1, $2)
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+     ON CONFLICT (tenant_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
      RETURNING key, value, updated_at`,
     [key, value],
   );
@@ -2803,8 +2814,9 @@ async function putSetting({ body }) {
  * policy, and "I do not want buildings flagged any more" would have no expression except a
  * baseline so low it is a lie.
  */
-async function deleteSetting({ params }) {
+async function deleteSetting({ params, session }) {
   const key = v.oneOf(params.key, "key", Object.keys(SETTINGS));
+  if (key === SMS_OTP_REQUESTS_KEY && session.tenantId !== 1) fail(403, "forbidden");
   await query("DELETE FROM app_settings WHERE key = $1", [key]);
   // Idempotent, and the body states the RESULTING state rather than whether a row happened
   // to be there: deleting an already-unset key must not look like a failure to the panel.
@@ -2816,9 +2828,10 @@ async function deleteSetting({ params }) {
 // 'flags'-role session can reach (auth: "flags" below); everything else in this file
 // stays admin-only through requireAdminSession's default.
 
-async function listFlags() {
+async function listFlags({ session }) {
   const flags = await all("SELECT name, enabled, updated_at, updated_by FROM feature_flags ORDER BY name");
-  return { status: 200, body: { flags } };
+  const canEdit = session.tenantId === 1 || session.role === "superadmin";
+  return { status: 200, body: { flags: canEdit ? flags : flags.map(({ name, enabled }) => ({ name, enabled, updated_at: null, updated_by: null, can_edit: false })) } };
 }
 
 /**
@@ -2843,12 +2856,12 @@ async function patchFlag({ params, body, session }) {
 }
 
 export const adminRoutes = [
-  { method: "POST", path: "/admin/login", auth: null, handler: login },
+  { method: "POST", path: "/admin/login", auth: null, bootstrap: true, handler: login },
   { method: "GET", path: "/admin/flags", auth: "flags", handler: listFlags },
   { method: "PATCH", path: "/admin/flags/:name", auth: "flags", handler: patchFlag },
-  { method: "POST", path: "/admin/logout", auth: "admin", handler: logout },
-  { method: "GET", path: "/admin/session", auth: "admin", handler: whoami },
-  { method: "POST", path: "/admin/password", auth: "admin", handler: changePassword },
+  { method: "POST", path: "/admin/logout", auth: "account", handler: logout },
+  { method: "GET", path: "/admin/session", auth: "account", handler: whoami },
+  { method: "POST", path: "/admin/password", auth: "account", handler: changePassword },
   { method: "GET", path: "/admin/data", auth: "admin", handler: adminData },
   { method: "POST", path: "/admin/workers", auth: "admin", handler: upsertWorker },
   { method: "DELETE", path: "/admin/workers/:id", auth: "admin", handler: deleteWorker },

@@ -19,8 +19,11 @@
 -- The `UPDATE <n>` command tag psql prints goes to journald, which is the auto-closure audit
 -- log (TASK-11 AC #4). Do not add -q to the psql invocation or that record disappears.
 
+BEGIN;
+SET LOCAL app.system = 'on';
 UPDATE shifts
    SET end_time    = start_time + INTERVAL '8 hours',
        auto_closed = true
  WHERE end_time IS NULL
    AND start_time < now() - INTERVAL '8 hours';
+COMMIT;

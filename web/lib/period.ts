@@ -31,8 +31,11 @@ export const PERIODS = [
   'last30Days',
   'thisMonth',
   'lastMonth',
+  'thisWeek',
+  'lastWeek',
   'thisQuarter',
   'thisYear',
+  'custom',
   'all',
 ] as const
 export type Period = (typeof PERIODS)[number]
@@ -49,6 +52,30 @@ export const PAYROLL_PERIODS = PERIODS.filter((value) => value !== 'all')
 
 /** Half-open `[from, to)` as ISO-8601 UTC instants. `null` = unbounded on that side. */
 export type PeriodRange = { from: string | null; to: string | null }
+export type CalendarRange = { start: string; end: string }
+
+/** Strict YYYY-MM-DD; Date.UTC alone would silently normalize 31 February. */
+export function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  if (value < '2000-01-01' || value > '2099-12-31') return false
+  const [year = 0, month = 0, day = 0] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() + 1 === month && date.getUTCDate() === day
+  )
+}
+
+export function isCalendarRange(start: string, end: string): boolean {
+  return isCalendarDate(start) && isCalendarDate(end) && start <= end
+}
+
+/** Calendar end is inclusive in the UI; the API's UTC end is next Vienna midnight. */
+export function calendarRange(range: CalendarRange): PeriodRange {
+  if (!isCalendarRange(range.start, range.end)) throw new RangeError('invalid calendar range')
+  const [sy = 0, sm = 0, sd = 0] = range.start.split('-').map(Number)
+  const [ey = 0, em = 0, ed = 0] = range.end.split('-').map(Number)
+  return { from: businessMidnight(sy, sm, sd), to: businessMidnight(ey, em, ed + 1) }
+}
 
 const pad = (value: number) => String(value).padStart(2, '0')
 
@@ -84,7 +111,7 @@ export function businessMidnight(year: number, month: number, day: number): stri
   return iso
 }
 
-export function periodRange(period: Period, now: Date): PeriodRange {
+export function periodRange(period: Period, now: Date, custom?: CalendarRange): PeriodRange {
   const { year, month, day } = businessDay(now)
   const midnight = (y: number, m: number, d: number) => businessMidnight(y, m, d)
   switch (period) {
@@ -96,12 +123,25 @@ export function periodRange(period: Period, now: Date): PeriodRange {
       return { from: midnight(year, month, 1), to: midnight(year, month + 1, 1) }
     case 'lastMonth':
       return { from: midnight(year, month - 1, 1), to: midnight(year, month, 1) }
+    case 'thisWeek': {
+      const dayOfWeek = new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+      const monday = day - ((dayOfWeek + 6) % 7)
+      return { from: midnight(year, month, monday), to: midnight(year, month, monday + 7) }
+    }
+    case 'lastWeek': {
+      const dayOfWeek = new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+      const monday = day - ((dayOfWeek + 6) % 7)
+      return { from: midnight(year, month, monday - 7), to: midnight(year, month, monday) }
+    }
     case 'thisQuarter': {
       const first = Math.floor((month - 1) / 3) * 3 + 1
       return { from: midnight(year, first, 1), to: midnight(year, first + 3, 1) }
     }
     case 'thisYear':
       return { from: midnight(year, 1, 1), to: midnight(year + 1, 1, 1) }
+    case 'custom':
+      if (custom === undefined) throw new RangeError('custom period requires dates')
+      return calendarRange(custom)
     case 'all':
       return { from: null, to: null }
   }

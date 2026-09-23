@@ -54,7 +54,8 @@ class BootReceiver : BroadcastReceiver() {
                 // pending, so it cannot reset a backoff that survived.
                 if (app.store.pendingSummary().waiting > 0) SyncScheduler.ensure(app)
 
-                val open = app.store.openShift()
+                val open = app.workers.read()?.takeIf { app.cookies.header() != null }
+                    ?.let { app.store.openShift(it.id) }
                 ShiftSignals.arm(
                     app,
                     open?.let {

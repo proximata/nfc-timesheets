@@ -28,7 +28,7 @@
 // THE PASSWORD COMES FROM STDIN, never argv and never an env var: argv is world-readable
 // in `ps auxww` for the seconds it runs, on a box that has other users.
 import { hashPassword } from "/srv/nfc/lib/auth.js";
-import { pool } from "/srv/nfc/lib/db.js";
+import { pool, query, withWorkspace } from "/srv/nfc/lib/db.js";
 
 const MARKER = "smoke-delete-me";
 const [, , action, emailArg] = process.argv;
@@ -40,6 +40,7 @@ if (!email.startsWith(MARKER)) {
 }
 
 try {
+  await withWorkspace(1, async () => {
   if (action === "create") {
     const password = await new Promise((resolve) => {
       let s = "";
@@ -50,18 +51,18 @@ try {
       process.exit(1);
     }
     const hash = await hashPassword(password);
-    await pool.query("INSERT INTO admins (email, password_hash) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING", [
+    await query("INSERT INTO admins (email, password_hash) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING", [
       email,
       hash,
     ]);
-    const { rows } = await pool.query("SELECT id, password_hash FROM admins WHERE email = $1", [email]);
+    const { rows } = await query("SELECT id, password_hash FROM admins WHERE email = $1", [email]);
     if (rows.length !== 1 || rows[0].password_hash !== hash) {
       console.error("refusing: that admin already existed and was NOT overwritten");
       process.exit(1);
     }
     console.log(`created ${rows[0].id}`);
   } else if (action === "delete") {
-    const { rowCount } = await pool.query("DELETE FROM admins WHERE email = $1 AND email LIKE $2", [
+    const { rowCount } = await query("DELETE FROM admins WHERE email = $1 AND email LIKE $2", [
       email,
       `${MARKER}%`,
     ]);
@@ -70,6 +71,7 @@ try {
     console.error("usage: smoke-admin.mjs create|delete <email>");
     process.exit(2);
   }
+  });
 } finally {
   await pool.end();
 }

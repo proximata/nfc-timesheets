@@ -73,8 +73,9 @@
     <!-- decision-56: the manual path, for when no tag can be read. -->
     <string name="manual_start_open">Start without a tag</string>
     <string name="manual_start_title">Start without a tag</string>
-    <string name="manual_start_intro">Only use this when the tag is missing or cannot be read. Pick the building you are working in now. The shift is flagged for the office as a manual start.</string>
-    <string name="manual_start_no_buildings">No buildings are stored on this phone yet. Please refresh first.</string>
+    <string name="manual_start_intro">Only use this when the tag is missing or cannot be read. Pick the zone in the building you are working in now. The shift is flagged for the office as a manual start.</string>
+    <string name="manual_start_no_zones">No zones are available. Please refresh first. If your zone is still missing, contact the office.</string>
+    <string name="manual_place_label">%1$s · %2$s</string>
     <string name="manual_start_confirm">Start the shift</string>
     <string name="manual_stop_open">Finish without a tag</string>
     <string name="manual_stop_title">Finish the shift?</string>
@@ -113,7 +114,7 @@
     <string name="pending_body">Sent automatically as soon as this phone is back online — even with the app closed. Nothing is lost.</string>
     <string name="pending_last_try">Last attempt: %1$s</string>
     <string name="pending_never_tried">Not attempted yet — this phone has had no connection since.</string>
-    <string name="pending_oldest">Oldest outstanding shift: %1$s</string>
+    <string name="pending_oldest">Earliest shift start: %1$s</string>
     <plurals name="pending_blocked">
         <item quantity="one">%d shift cannot be sent and needs the office.</item>
         <item quantity="other">%d shifts cannot be sent and need the office.</item>
@@ -497,4 +498,51 @@
     <string name="notify_pending_title">Not confirmed yet: %1$s</string>
     <string name="notify_pending_body">Your time is saved on this phone. Open the app and check the message.</string>
     <string name="a11y_shift_pending">%1$d hours and %2$d minutes recorded on this phone for %3$s. Not confirmed by the office yet.</string>
+    <string name="schedule_title">My schedule</string>
+    <string name="schedule_explainer">This is the plan only. Clock in and out as usual to record your hours.</string>
+    <string name="schedule_loading">Loading assignments …</string>
+    <string name="schedule_empty">No assignments planned for the next 31 days.</string>
+    <string name="schedule_offline">Could not load assignments without a connection.</string>
+    <string name="schedule_error">Could not load assignments.</string>
+    <string name="schedule_retry">Try again</string>
+    <string name="schedule_refresh">Refresh assignments</string>
+    <string name="schedule_when">%1$s, %2$s – %3$s, %4$s</string>
+    <string name="schedule_more">All upcoming assignments</string>
+    <string name="schedule_less">Show less</string>
+    <string name="worker_day_title">Your working day</string>
+    <string name="worker_start_title">Ready for your shift?</string>
+    <string name="worker_start_manual_title">Ready for your next shift?</string>
+    <string name="worker_start_manual_hint">Choose your work area. Without NFC, this start is marked for the office.</string>
+    <string name="schedule_same_day">%1$s · %2$s–%3$s</string>
+    <string name="worker_stop_manual_hint">This phone has no NFC. You can finish your shift here.</string>
+    <string name="worker_schedule_note">Planned · Clock in separately</string>
+
+    <!-- Blue Hour worker presentation -->
+    <string name="worker_active_title">Shift in progress</string>
+    <string name="worker_elapsed">TIME WORKED</string>
+    <string name="worker_saved_locally">Saved on this phone · not yet confirmed</string>
+    <string name="delivery_title">Delivery</string>
+    <string name="delivery_blocked_detail">Your office needs to review these entries. They remain on this phone and will not retry automatically. Please tell your office the time shown below.</string>
+    <string name="delivery_sign_in">Sign in with the same account so these entries can be delivered.</string>
+    <string name="delivery_not_scheduled">Automatic delivery is not currently active. Open the app with an internet connection to try delivery again.</string>
+    <string name="delivery_automatic">These entries are waiting for delivery. Your phone will try again automatically when a connection is available.</string>
+    <string name="delivery_no_attempt">No delivery attempt yet.</string>
+    <string name="worker_receipt_title">Shift finished</string>
+    <plurals name="delivery_blocked_short">
+        <item quantity="one">%d shift needs your office</item>
+        <item quantity="other">%d shifts need your office</item>
+    </plurals>
+    <plurals name="delivery_waiting_short">
+        <item quantity="one">%d shift still on this phone</item>
+        <item quantity="other">%d shifts still on this phone</item>
+    </plurals>
+    <string name="worker_receipt_range">%1$s – %2$s</string>
+    <string name="worker_show">View</string>
+    <string name="worker_hide">Close</string>
+    <string name="worker_planned">Next planned assignment</string>
+    <string name="worker_help">Shift help</string>
+    <string name="worker_receipt_done">Continue</string>
+    <string name="worker_material_example">For example: 2 mops, glass cleaner</string>
+    <string name="worker_material_no_push">Check updates here. No push notifications.</string>
+    <string name="worker_material_details">How updates work</string>
 </resources>

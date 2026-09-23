@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { type FormEvent, useEffect, useId, useState } from 'react'
 import { Field } from '@/components/Field'
+import { MicrosoftPlaceholder } from '@/components/MicrosoftPlaceholder'
 import { ApiError, login } from '@/lib/api'
 import type { ErrorKey } from '@/lib/locale'
 import { returnToFromLocation } from '@/lib/nav'
@@ -74,8 +75,15 @@ export default function LoginPage() {
     setPending(true)
     setError(null)
     try {
-      await login(email, password)
-      router.push(returnTo ?? '/')
+      const { admin } = await login(email, password)
+      router.push(
+        (returnTo === '/' || admin.role === 'flags' ? null : returnTo) ??
+          (admin.role === 'superadmin'
+            ? '/platform/'
+            : admin.role === 'flags'
+              ? '/flags/'
+              : '/workspace/'),
+      )
     } catch (cause) {
       // One message for every rejected credential — no "unknown user" vs "wrong password"
       // oracle. Only transport/server faults, which say nothing about the account, differ.
@@ -146,6 +154,7 @@ export default function LoginPage() {
           {pending ? t('submitting') : t('submit')}
         </button>
       </form>
+      <MicrosoftPlaceholder />
     </div>
   )
 }

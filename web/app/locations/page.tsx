@@ -1632,7 +1632,7 @@ export default function LocationsPage() {
                     <th scope="row">
                       {/* The name opens the building's object surface, where the five
                           numbers and the eleven links live. */}
-                      <Link href={filterHref('/', { location: location.id })}>
+                      <Link href={filterHref('/map/', { location: location.id })}>
                         {location.name}
                         <span className="visually-hidden"> {t('openPanel')}</span>
                       </Link>

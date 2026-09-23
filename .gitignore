@@ -62,3 +62,7 @@ docs/media/break-look/
 docs/media/
 AuthKey_*.p8
 *.p8
+# Regenerable local company-workspace verification artifacts.
+/captures/company-workspaces/
+/server/workspace-*.log
+/web/workspace-*.log

@@ -15,6 +15,7 @@ import io.github.qwadratic.nfctimesheets.core.ShiftSignal
 import io.github.qwadratic.nfctimesheets.core.TapInbox
 import io.github.qwadratic.nfctimesheets.core.WireMaterialRequest
 import io.github.qwadratic.nfctimesheets.core.WireShift
+import io.github.qwadratic.nfctimesheets.core.WireScheduleAssignment
 import io.github.qwadratic.nfctimesheets.core.WireZone
 import io.github.qwadratic.nfctimesheets.core.WireWorker
 import io.github.qwadratic.nfctimesheets.core.Zones
@@ -25,6 +26,7 @@ import io.github.qwadratic.nfctimesheets.sync.SyncScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -77,7 +79,7 @@ data class LogState(
      * It defaults to true because "nothing is waiting" is the ordinary state and the card
      * that reads this is hidden then anyway. It matters only when something IS waiting:
      * false there means the sentence „wird automatisch gesendet … auch wenn die App
-     * geschlossen ist" is a LIE on this phone, and [PendingCard] must print the other
+     * geschlossen ist" is a LIE on this phone, and [DeliveryStatus] must print the other
      * sentence instead. The app shipped once with every schedule() silently refused for a
      * missing permission, and no screen and no check could say so.
      */
@@ -117,6 +119,12 @@ sealed interface MyHoursState {
     data class Loaded(val shifts: List<WireShift>) : MyHoursState
     /** @param offline true for ApiFailure.status == 0 (DNS/timeout/TLS/no network). */
     data class Failed(val offline: Boolean) : MyHoursState
+}
+
+sealed interface ScheduleState {
+    data object Loading : ScheduleState
+    data class Loaded(val assignments: List<WireScheduleAssignment>) : ScheduleState
+    data class Failed(val offline: Boolean) : ScheduleState
 }
 
 class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
@@ -183,6 +191,10 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
      *  [LogState]/handleTap/armSignals/writeTap — see [loadMyHours]. */
     private val _myHours = MutableStateFlow<MyHoursState>(MyHoursState.Loading)
     val myHours: StateFlow<MyHoursState> = _myHours.asStateFlow()
+
+    private val _schedule = MutableStateFlow<ScheduleState>(ScheduleState.Loading)
+    val schedule: StateFlow<ScheduleState> = _schedule.asStateFlow()
+    private var scheduleRequest = 0
 
     /** A material pass is in flight. Two overlapping passes could post the same row twice. */
     private var materialPassRunning = false
@@ -551,6 +563,8 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             app.cookies.clear()
             app.workers.clear()
             _session.value = SessionState.SignedOut()
+            scheduleRequest++
+            _schedule.value = ScheduleState.Loading
             // NOT LogState(): the pending count survives the sign-out, because the queued
             // rows do. They belong to the worker who logged them and go out when that
             // worker signs back in — and until then the sign-in screen has to say so, or
@@ -572,6 +586,13 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
     }
 
     private fun adopt(worker: WireWorker) {
+        // A cached session may already have mounted the home screen and started its
+        // schedule request. Confirming that SAME worker must not strand it in Loading.
+        if ((_session.value as? SessionState.SignedIn)?.worker?.id != worker.id) {
+            scheduleRequest++
+            _schedule.value = ScheduleState.Loading
+            _log.value = LogState(pending = _log.value.pending, pushArmed = _log.value.pushArmed)
+        }
         app.workers.write(worker)
         _session.value = SessionState.SignedIn(worker)
     }
@@ -603,10 +624,14 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
             }
             _funShiftScreen.value = app.flags.isOn(FlagCache.FUN_SHIFT_SCREEN)
             val unresolved = runCatching { app.api.unresolvedShifts() }.getOrDefault(_log.value.unresolved)
+            val shifts = io { app.store.forWorker(worker.id) }
+            val locationNames = io { app.store.locationNames() }
+            val zones = io { app.store.zones() }
+            if ((_session.value as? SessionState.SignedIn)?.worker?.id != worker.id) return@launch
             _log.value = _log.value.copy(
-                shifts = io { app.store.all() },
-                locationNames = io { app.store.locationNames() },
-                zones = io { app.store.zones() },
+                shifts = shifts,
+                locationNames = locationNames,
+                zones = zones,
                 unresolved = unresolved,
                 pending = pending.first,
                 pushArmed = pending.second,
@@ -677,6 +702,16 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
     /** SQLite off the main thread. Small table, but a lock on the UI thread is an ANR. */
     private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
 
+    /** Keep the durable outbox intact while showing only the signed-in worker's rows. */
+    private suspend fun reloadLocalLog(workerId: Int): Boolean {
+        val rows = io { app.store.forWorker(workerId) }
+        val pending = io { app.store.pendingSummary() }
+        val pushArmed = io { SyncScheduler.isScheduled(app) }
+        if ((_session.value as? SessionState.SignedIn)?.worker?.id != workerId) return false
+        _log.value = _log.value.copy(shifts = rows, pending = pending, pushArmed = pushArmed)
+        return true
+    }
+
     /**
      * ONE TAP = ONE TOGGLE. The row is written locally FIRST — a tap in a basement still
      * counts — and pushed straight after.
@@ -703,12 +738,8 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 SyncScheduler.ensure(app)
                 result
             }
-            _log.value = _log.value.copy(
-                shifts = io { app.store.all() },
-                switchNotice = notice,
-                pending = io { app.store.pendingSummary() },
-                pushArmed = io { SyncScheduler.isScheduled(app) },
-            )
+            if (!reloadLocalLog(worker.id)) return@launch
+            _log.value = _log.value.copy(switchNotice = notice)
             // AFTER the row is written and read back, and never before it. Everything in
             // armSignals is a signal, and a signal may never delay, throw into or fail a
             // clock-in: a denied permission and a dead network are both "arm nothing",
@@ -720,7 +751,7 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
     /** @return the (left, arrived) site names when this tap auto-closed another shift. */
     private fun writeTap(workerId: Int, locationId: String): Pair<String?, String?>? {
-        val running = app.store.openShift()
+        val running = app.store.openShift(workerId)
         var notice: Pair<String?, String?>? = null
 
         if (running == null) {
@@ -775,10 +806,12 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
     // Both are FLAGGED server-side and for ever, which is the whole reason a second path is
     // allowed to exist at all — see the comments in ui/TimeSheetApp.kt.
 
-    /** Buildings the worker can pick from, from the ALREADY-CACHED roster (decision-56 §2):
-     *  no new endpoint, and no fetch on the path of a person who wants to start working. */
-    fun buildings(): List<Pair<String, String>> =
-        _log.value.locationNames.entries.sortedBy { it.value }.map { it.key to it.value }
+    /** Explicit zone choices: decision-69 retired building UUIDs as clock-in targets.
+     * Verification remains authoritative on the server, including for manual starts. */
+    fun manualPlaces(): List<WireZone> = _log.value.let { log ->
+        log.zones.filter { it.locationId in log.locationNames }
+            .sortedWith(compareBy({ log.locationNames[it.locationId] }, { it.name }))
+    }
 
     /**
      * „Ohne Tag starten“. POST /shifts/open with manual=true.
@@ -812,11 +845,7 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                 // already-synced, so this shift is never queued for a push that would be a
                 // duplicate of the call we just made.
                 io { app.store.adopt(shift) }
-                _log.value = _log.value.copy(
-                    shifts = io { app.store.all() },
-                    pending = io { app.store.pendingSummary() },
-                    pushArmed = io { SyncScheduler.isScheduled(app) },
-                )
+                if (!reloadLocalLog(worker.id)) return@launch
                 armSignals()
                 onResult(null)
             } catch (failure: ApiFailure) {
@@ -852,11 +881,7 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
                     app.store.applyServer(shift)
                     app.store.markCloseSynced(open.clientUuid)
                 }
-                _log.value = _log.value.copy(
-                    shifts = io { app.store.all() },
-                    pending = io { app.store.pendingSummary() },
-                    pushArmed = io { SyncScheduler.isScheduled(app) },
-                )
+                if (!reloadLocalLog(worker.id)) return@launch
                 // The running-shift notification and the 8h ladder go with the shift. A
                 // notification left standing after a Stop is the orphaned-lock bug again.
                 armSignals()
@@ -869,12 +894,13 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
     /** POST /shifts/:id/resolve, then mirror the result locally (decision-10). */
     fun resolve(shift: WireShift, endTime: Instant, onError: (String) -> Unit) {
+        val worker = (_session.value as? SessionState.SignedIn)?.worker ?: return
         viewModelScope.launch {
             try {
                 val updated = app.api.resolveShift(shift.id, endTime)
                 io { app.store.applyServer(updated) }
+                if (!reloadLocalLog(worker.id)) return@launch
                 _log.value = _log.value.copy(
-                    shifts = io { app.store.all() },
                     unresolved = _log.value.unresolved.filterNot { it.id == shift.id },
                 )
                 // Confirming an auto-closed shift is the one path that ends a shift WITHOUT
@@ -988,6 +1014,30 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
         }
     }
 
+    /** The schedule is a fresh, read-only view; never persisted or used by tap handling. */
+    fun loadSchedule() {
+        if (_session.value !is SessionState.SignedIn) return
+        val request = ++scheduleRequest
+        _schedule.value = ScheduleState.Loading
+        viewModelScope.launch {
+            try {
+                val assignments = app.api.mySchedule()
+                if (request == scheduleRequest && _session.value is SessionState.SignedIn) {
+                    _schedule.value = ScheduleState.Loaded(assignments)
+                }
+            } catch (failure: ApiFailure) {
+                if (request == scheduleRequest && _session.value is SessionState.SignedIn) {
+                    _schedule.value = ScheduleState.Failed(offline = failure.status == 0)
+                }
+            } catch (failure: Exception) {
+                if (failure is CancellationException) throw failure
+                if (request == scheduleRequest && _session.value is SessionState.SignedIn) {
+                    _schedule.value = ScheduleState.Failed(offline = false)
+                }
+            }
+        }
+    }
+
     /** Disk -> screen. The only place [MaterialState] entries are built. */
     private suspend fun readMaterials(featureUnavailable: Boolean = _materials.value.featureUnavailable) {
         val outbox = io { app.materials.outbox() }
@@ -1001,6 +1051,8 @@ class TimeSheetViewModel(private val app: TimeSheetsApplication) : ViewModel() {
 
     /** A 401 came back from somewhere: expired, revoked, or the worker was deactivated. */
     private fun dropToSignedOut() {
+        scheduleRequest++
+        _schedule.value = ScheduleState.Loading
         app.sessionRejected.value = false
         app.cookies.clear()
         // A signed-out phone must not keep telling somebody they are clocked in.

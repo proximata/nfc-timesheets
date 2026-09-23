@@ -74,6 +74,14 @@ object Wire {
 
     fun worker(o: JSONObject) = WireWorker(id = o.getInt("id"), name = o.optString("name", ""))
 
+    fun scheduleAssignment(o: JSONObject) = WireScheduleAssignment(
+        id = o.getString("id"),
+        locationName = o.getString("location_name"),
+        startsAt = instant(o.getString("starts_at")),
+        endsAt = instant(o.getString("ends_at")),
+        note = o.optString("note", ""),
+    )
+
     fun location(o: JSONObject) = WireLocation(
         id = o.getString("id"),
         slug = o.optString("slug", ""),
@@ -304,6 +312,15 @@ object Wire {
 // ---- response types ----------------------------------------------------------------
 
 data class WireWorker(val id: Int, val name: String)
+
+/** Display-only assignment. Worker identity is selected by the server session. */
+data class WireScheduleAssignment(
+    val id: String,
+    val locationName: String,
+    val startsAt: Instant,
+    val endsAt: Instant,
+    val note: String,
+)
 
 /**
  * `id` is the UUID a tag carries (decision-21). `slug` rides along for display and log

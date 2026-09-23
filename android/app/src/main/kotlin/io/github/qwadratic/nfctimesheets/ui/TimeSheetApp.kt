@@ -33,9 +33,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.rememberDatePickerState
@@ -84,6 +89,8 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.text.KeyboardActions
@@ -232,7 +239,7 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
         // rendering the instant reasonKey changes to anything else, e.g. a later failed
         // submit, which the existing gated errorKey path below already renders correctly.
         if (reasonKey == "err_no_session") {
-            Card(Modifier.fillMaxWidth()) {
+            WorkerCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp)) {
                     Text(
                         stringResource(R.string.err_no_session),
@@ -244,7 +251,7 @@ private fun SignInScreen(model: TimeSheetViewModel, reasonKey: String?, openInte
 
         Text(stringResource(R.string.signin_code_intro), style = MaterialTheme.typography.bodyLarge)
 
-        PendingCard(pending.pending, signedOut = true, armed = pending.pushArmed)
+        DeliveryStatus(pending.pending, signedOut = true, armed = pending.pushArmed)
 
         // ONE FORM, the worker's instance of it (decision-54 §5). Everything role-specific
         // is a lambda: this screen posts to /auth/code and /auth/sms/*, while the operator
@@ -369,7 +376,7 @@ private fun Chevron() {
  *
  * Reached from TWO places and composed the same way from both: [SignInScreen]'s five-tap
  * version row, for a phone that is an operator's and nothing else, and [SettingsScreen]'s
- * visible row, for a worker who is already signed in and must NOT have to sign out to write
+ * five-tap version row, for a worker who is already signed in and must NOT have to sign out to write
  * or test a card. That
  * second door is the audit's B3: before it, a signed-in worker's only operator entry was
  * an item on the idle log list, which is not there at all on a phone whose NFC is off — so
@@ -824,13 +831,22 @@ private fun SignedInScaffold(
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
-            NavigationBar {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                tonalElevation = 0.dp,
+                modifier = Modifier.clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
+            ) {
                 tabs.forEach { tab ->
                     NavigationBarItem(
+                        colors = NavigationBarItemDefaults.colors(
+                            indicatorColor = MaterialTheme.colorScheme.inverseSurface,
+                            selectedIconColor = MaterialTheme.colorScheme.inverseOnSurface,
+                            selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                        ),
                         selected = current == tab,
                         onClick = { selectedName = tab.name },
                         icon = {
-                            WorkerNavIcon(tab)
+                            BadgedBox(badge = {
                             // The count of things sitting in the warehouse that nobody has
                             // told this worker about. A NUMBER and not a dot, and spoken
                             // rather than only coloured.
@@ -845,6 +861,7 @@ private fun SignedInScaffold(
                                     modifier = Modifier.semantics { contentDescription = spoken },
                                 ) { Text("$arrivals") }
                             }
+                            }) { WorkerNavIcon(tab) }
                         },
                         label = { Text(stringResource(tabLabel(tab))) },
                     )
@@ -881,6 +898,11 @@ private fun LogScreen(
     openIntent: (Intent) -> Unit,
 ) {
     val log by model.log.collectAsStateWithLifecycle()
+    val schedule by model.schedule.collectAsStateWithLifecycle()
+    LifecycleResumeEffect(Unit) {
+        model.loadSchedule()
+        onPauseOrDispose { }
+    }
     // decision-57 §3. Default FALSE, and FALSE is today's screen exactly.
     val funTheme by model.funShiftScreen.collectAsStateWithLifecycle()
     var showResolver by remember { mutableStateOf(false) }
@@ -931,6 +953,7 @@ private fun LogScreen(
             openIntent = openIntent,
             onStop = { showManualStop = true },
             funTheme = funTheme,
+            schedule = schedule,
         )
         if (showResolver) {
             ResolveDialog(model, log.unresolved) { showResolver = false }
@@ -944,61 +967,28 @@ private fun LogScreen(
         return
     }
 
+    val latest = log.recent.firstOrNull()
+    // A receipt is offered for a recent local finish and then stays until Continue.
+    // Do not dismiss it while someone is reading, or block passive taps behind a dialog.
+    var showReceipt by rememberSaveable(latest?.clientUuid, latest?.endTime?.toString()) {
+        mutableStateOf(latest?.endTime?.let { java.time.Duration.between(it, Instant.now()).seconds in 0..120 } == true)
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
-            Text(
-                stringResource(R.string.log_title),
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.semantics { heading() },
-            )
+            WorkerDayHeading()
         }
 
-        if (readiness != NfcReadiness.READY) {
-            item { NfcBanner(readiness, openIntent) }
-        }
-
-        // ABOVE the buttons and above the recent list: this is unpaid work that the server
-        // has never heard of, and it outranks everything else on the screen.
-        if (!log.pending.isEmpty) {
-            item { PendingCard(log.pending, armed = log.pushArmed) }
-        }
-
-        // MANUAL FALLBACK, deliberately secondary. The product is the passive tap: hold the
-        // phone to the wall with the app closed. But that depends on the OS dispatching the
-        // tag, and on some phones it never does - silently, with nothing to debug. This
-        // button removes the OS from the path by reading the tag in the foreground, and it
-        // reports what it saw when a tag does not work. Hidden when there is no NFC chip at
-        // all, because then there is nothing to offer.
-        if (readiness != NfcReadiness.UNSUPPORTED) {
-            item {
-                OutlinedButton(
-                    onClick = { openIntent(Intent(logContext, ScanActivity::class.java)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp),
-                ) { Text(stringResource(R.string.scan_open)) }
-            }
-            // WRITE A TAG / THE TEST SCAN used to be a THIRD copy of [OperatorSection],
-            // inline on this list and inside this `readiness != UNSUPPORTED` branch. It
-            // moved to Einstellungen (the 2026-08-29 audit's B3), for two reasons. The
-            // reachability one: gated on the NFC chip, it was absent exactly on the phone
-            // whose NFC is off — so a signed-in worker could not reach the operator door at
-            // all without signing out first. The ranking one: this is the tap screen, and
-            // an operator's tool sitting between the scan button and the recent list
-            // outranked the instruction that is the actual product. Nothing about the gate
-            // changed — same composable, same routes, same second cookie jar, and nothing
-            // behind it can open or close a shift (android/checks/verify-no-shift-check.sh).
-        }
 
         if (log.unresolved.isNotEmpty()) {
             item {
-                Card(Modifier.fillMaxWidth()) {
+                WorkerCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             pluralStringResource(
@@ -1019,53 +1009,31 @@ private fun LogScreen(
         }
 
         item {
-            // Clocking in happens by holding the phone to the tag: Android reads it and
-            // opens the App Link. This used to say there was no in-app path to a shift and
-            // that there must not be one — SUPERSEDED BY decision-56 for exactly two
-            // actions, „Ohne Tag starten" above and Stop on the running screen.
-            //
-            // THE ORIGINAL REASONING IS WHY THE FLAGS EXIST, not something the decision
-            // threw away: a second, SILENT path to the same row is how two mechanisms start
-            // disagreeing about somebody's hours. So neither manual action is silent —
-            // each is confirmed by the worker, validated by the server exactly as a tap is
-            // (a manual start only succeeds where a tap would), and stamped manual_start /
-            // manual_close on the row for ever, where the office can see it. Flagged, not
-            // hidden. Everything else still has to be a tap.
-            Text(
-                stringResource(R.string.log_hint_start),
-                style = MaterialTheme.typography.bodyLarge,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 24.dp),
+            if (showReceipt && latest != null) {
+                CompletedShiftReceipt(latest, model.siteName(latest.locationId)) { showReceipt = false }
+            } else WorkerStartCard(
+                readiness = readiness,
+                onScan = { openIntent(Intent(logContext, ScanActivity::class.java)) },
+                onManual = { showManualStart = true },
             )
         }
-
-        // START WITHOUT A TAG (decision-56), and it sits HERE — directly under the tap
-        // instruction — rather than above the recent list where it used to be.
-        //
-        // The old position ranked it above the instruction it is the fallback FOR, and a
-        // TextButton renders in the accent colour, so the loudest thing on the idle screen
-        // was the escape hatch. The 2026-08-29 audit's proposed order is
-        // state -> subject -> time -> metric -> primary instruction -> secondary action ->
-        // banners, and iOS already places its equivalent as "clearly secondary". The
-        // control itself is unchanged: same dialog, same confirmation, same manual_start
-        // stamp, and still shown on EVERY phone including one with no NFC chip — that phone
-        // is exactly the one that cannot scan and could once not clock in at all.
-        item {
-            TextButton(
-                onClick = { showManualStart = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp),
-            ) { Text(stringResource(R.string.manual_start_open)) }
+        if (!log.pending.isEmpty) {
+            item { DeliveryStatus(log.pending, armed = log.pushArmed) }
         }
+        if (readiness != NfcReadiness.READY && readiness != NfcReadiness.UNSUPPORTED) {
+            item { NfcBanner(readiness, openIntent) }
+        }
+        item { WorkerScheduleSummary(schedule, model::loadSchedule) }
 
         item { SectionHeading(R.string.log_recent_section) }
         if (log.recent.isEmpty()) {
             item { Text(stringResource(R.string.log_recent_empty), color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        items(log.recent, key = { it.clientUuid }) { ShiftRow(it, model.siteName(it.locationId)) }
+        items(log.recent.filterNot { showReceipt && it.clientUuid == latest?.clientUuid }, key = { it.clientUuid }) {
+            ShiftRow(it, model.siteName(it.locationId))
+        }
+
+
 
         item {
             // decision-23: there is no push in this system. Promising a notification to
@@ -1121,7 +1089,7 @@ private fun ShiftRunningScreen(
     onDismissNotice: () -> Unit,
     /** What this phone is still holding (TASK-225). Usually zero; never hidden when not. */
     pending: PendingWork.Summary,
-    /** Whether the platform is holding the delivery job. See [PendingCard]. */
+    /** Whether the platform is holding the delivery job. See [DeliveryStatus]. */
     pushArmed: Boolean,
     readiness: NfcReadiness,
     openIntent: (Intent) -> Unit,
@@ -1133,6 +1101,7 @@ private fun ShiftRunningScreen(
      * comes from [MaterialTheme] and nothing extra is composed.
      */
     funTheme: Boolean = false,
+    schedule: ScheduleState,
 ) {
     val context = LocalContext.current
 
@@ -1167,6 +1136,7 @@ private fun ShiftRunningScreen(
         overdue && !funTheme -> MaterialTheme.colorScheme.errorContainer
         else -> ShiftBrand.Container
     }
+    WorkerStatusBar(container)
     val onContainer = when {
         overdue -> if (funTheme) FunShift.Overdue else MaterialTheme.colorScheme.onErrorContainer
         else -> ShiftBrand.OnContainer
@@ -1211,182 +1181,81 @@ private fun ShiftRunningScreen(
             // At 200% font scale this content is far taller than the screen, and a locked
             // screen that clips its own instructions is worse than no lock at all.
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+            .padding(horizontal = 24.dp, vertical = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        val confirmed = !running.pendingConfirmation && syncError == null && !overdue
         Text(
             stringResource(when {
-                running.pendingConfirmation -> R.string.shift_pending_heading
                 overdue -> R.string.shift_overdue_heading
-                else -> R.string.shift_running_heading
+                running.pendingConfirmation -> R.string.shift_pending_heading
+                else -> R.string.worker_active_title
             }),
-            style = MaterialTheme.typography.titleMedium,
-            color = onContainer,
+            style = MaterialTheme.typography.labelLarge,
+            color = onContainer.copy(alpha = .8f),
             modifier = Modifier.semantics { heading() },
         )
         Text(
             running.locationName ?: stringResource(R.string.unknown_location),
-            style = MaterialTheme.typography.headlineLarge,
+            style = MaterialTheme.typography.headlineSmall.copy(fontSize = 24.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium),
             color = onContainer,
             textAlign = TextAlign.Center,
         )
-        Text(
-            stringResource(R.string.shift_started_at, timeOfDay(running.startTime)),
-            style = MaterialTheme.typography.bodyMedium,
-            color = onContainer,
-        )
+        Text(stringResource(R.string.shift_started_at, timeOfDay(running.startTime)),
+            style = MaterialTheme.typography.bodyMedium, color = onContainer.copy(alpha = .8f))
 
-        if (running.pendingConfirmation || syncError != null) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (running.pendingConfirmation) Text(stringResource(R.string.shift_pending_body))
-                    syncError?.let {
-                        Text(stringResource(stringIdFor(it)), color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                    }
-                    TextButton(onClick = model::refresh) { Text(stringResource(R.string.log_refresh)) }
-                }
-            }
-        }
-
-        // The dominant element, and the whole reason this screen exists.
-        //
-        // The digits are `clearAndSetSemantics {}`: a per-second change under TalkBack is
-        // unusable, and a screen whose only content is a timer is precisely where that bug
-        // would be worst. The ONE spoken element is the card, whose label is recomputed
-        // from (hours, minutes) and therefore changes once a minute. Changing a label is
-        // not an announcement, so nothing is interrupted.
-        val spoken = if (running.pendingConfirmation) {
-            stringResource(R.string.a11y_shift_pending, hours, minutes,
+        val spoken = when {
+            overdue -> stringResource(R.string.a11y_shift_overdue, running.locationName ?: stringResource(R.string.unknown_location))
+            running.pendingConfirmation -> stringResource(R.string.a11y_shift_pending, hours, minutes,
                 running.locationName ?: stringResource(R.string.unknown_location))
-        } else if (overdue) {
-            stringResource(R.string.a11y_shift_overdue, running.locationName ?: stringResource(R.string.unknown_location))
-        } else {
-            stringResource(
-                R.string.a11y_shift_elapsed,
-                hours, minutes,
-                running.locationName ?: stringResource(R.string.unknown_location),
+            else -> stringResource(R.string.a11y_shift_elapsed, hours, minutes,
+                running.locationName ?: stringResource(R.string.unknown_location))
+        }
+        Box(Modifier.fillMaxWidth().semantics(mergeDescendants = true) { contentDescription = spoken }) {
+            ShiftTimeDisplay(
+                value = if (overdue) OVERDUE_CLOCK else clock(running.startTime, now),
+                identity = "${running.locationId}:${running.startTime}",
+                confirmed = confirmed, eventTime = running.startTime, ink = onContainer,
             )
         }
-        Card(
-            Modifier
-                .fillMaxWidth()
-                .semantics(mergeDescendants = true) { contentDescription = spoken },
-        ) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 28.dp, horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    // No running clock on a shift the 8h timer has closed: it would be a
-                    // lie about a row that is already out of payroll until a human fixes it.
-                    if (overdue) OVERDUE_CLOCK else clock(running.startTime, now),
-                    style = MaterialTheme.typography.displayLarge,
-                    modifier = Modifier.clearAndSetSemantics { },
-                )
-                Text(
-                    stringResource(when {
-                        running.pendingConfirmation -> R.string.shift_pending_label
-                        overdue -> R.string.shift_overdue_body
-                        else -> R.string.shift_running_label
-                    }),
-                    style = MaterialTheme.typography.titleSmall,
-                    textAlign = TextAlign.Center,
-                )
+        Text(stringResource(when {
+            overdue -> R.string.shift_overdue_body
+            running.pendingConfirmation -> R.string.shift_pending_label
+            else -> R.string.shift_running_label
+        }), color = onContainer.copy(alpha = .8f), style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center)
+        if (running.pendingConfirmation || syncError != null) {
+            Text(syncError?.let { stringResource(stringIdFor(it)) } ?: stringResource(R.string.worker_saved_locally),
+                color = onContainer, style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            TextButton(onClick = model::refresh, colors = ButtonDefaults.textButtonColors(contentColor = onContainer)) {
+                Text(stringResource(R.string.log_refresh))
             }
         }
-
-        // STOP (decision-56). Next to the clock, because this is the screen a worker is on
-        // when their card will not read and the shift has to end anyway.
-        //
-        // There WAS no button that closed a shift here, and this comment said there must not
-        // be one: clocking out is a tag tap, and a second path to the same row is how two
-        // mechanisms start disagreeing about somebody's hours. decision-56 supersedes that
-        // for this one action and keeps the reasoning — the disagreement is prevented by
-        // making the manual close impossible to confuse with a tap-out rather than by
-        // forbidding it: it is confirmed in a dialog that names the building and says the
-        // office will see it, and the server stamps manual_close (plus corrected_at, so the
-        // worker is never asked again about a time they just confirmed). Flagged, not silent.
-        //
-        // OutlinedButton, not a filled one: the tap is still the way to finish, and the line
-        // under it still says so.
-        //
-        // ITS BORDER AND ITS LABEL ARE NAMED HERE, and that is a BUG FIX, not styling (the
-        // 2026-08-29 cross-platform UX audit's B1). Material resolves an OutlinedButton's
-        // border and content from the colour scheme, which is chosen against the app's own
-        // surfaces — not against this screen's overridden `container`. On the field above
-        // the border came out invisible and the label low-contrast, so the ONE control a
-        // worker reaches for when their card will not read looked disabled. Both are now
-        // ShiftBrand values computed against ShiftBrand.Container (8.6:1 and 13.2:1), and
-        // against FunShift.Lift, the lightest the flag-ON animation ever gets (4.6:1).
-        //
-        // …EXCEPT on the ONE state whose field is not ShiftBrand's dark blue: overdue with
-        // the flag OFF paints `container` from errorContainer, which in the light scheme is
-        // #F0F1F3 — nearly white. Hardcoding the dark-field pair there re-created the very
-        // bug this override fixed, worse: border 1.61:1, label 1.05:1, i.e. an invisible
-        // button. Both now follow the `container` actually in effect via `onContainer`
-        // (light 5.7:1, dark 10.8:1); only the non-overdue field keeps the tuned Outline.
-        val stopBorder = if (overdue && !funTheme) onContainer else ShiftBrand.Outline
-        OutlinedButton(
-            onClick = onStop,
-            border = BorderStroke(1.dp, stopBorder),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = onContainer),
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 48.dp),
-        ) { Text(stringResource(R.string.manual_stop_open)) }
-
-        // The single obvious way to end the shift, and still the first thing offered.
-        Text(
-            stringResource(R.string.log_hint_stop),
-            style = MaterialTheme.typography.titleMedium,
-            color = onContainer,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        // Manual scan is NOT that second path. It still requires the worker to be at the
-        // tag with the phone against it - it only moves the tag read from the OS into the
-        // app, which is the whole point for an adopted tag that carries no URL and so can
-        // never launch anything by itself.
-        //
-        // THIS BEING ABSENT WAS A REAL, SHIPPED BUG. v1.2 put the scan button on the idle
-        // screen only, and this screen returns before ever reaching it - so a worker on an
-        // adopted tag could START a shift and then had no way on earth to END it. It
-        // happened to the first real Android tester within minutes, and the shift had to be
-        // closed by hand in the admin panel. A clock-in you cannot reverse is worse than no
-        // clock-in at all.
-        if (readiness != NfcReadiness.UNSUPPORTED) {
-            // Same border/content override, same reason, as the Stop button above: this
-            // one sits on the same overridden field and had the same invisible border.
-            OutlinedButton(
-                onClick = { openIntent(Intent(context, ScanActivity::class.java)) },
-                border = BorderStroke(1.dp, stopBorder),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = onContainer),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp),
-            ) { Text(stringResource(R.string.scan_open)) }
+        HorizontalDivider(color = onContainer.copy(alpha = .25f))
+        Text(stringResource(if (readiness == NfcReadiness.UNSUPPORTED) R.string.worker_stop_manual_hint else R.string.log_hint_stop),
+            style = MaterialTheme.typography.bodyMedium, color = onContainer.copy(alpha = .85f),
+            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+        val manualOnly = readiness == NfcReadiness.UNSUPPORTED
+        Button(
+            onClick = { if (manualOnly) onStop() else openIntent(Intent(context, ScanActivity::class.java)) },
+            colors = ButtonDefaults.buttonColors(containerColor = onContainer, contentColor = container),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+        ) { Text(stringResource(if (manualOnly) R.string.manual_stop_open else R.string.scan_open)) }
+        if (!manualOnly) {
+            TextButton(onClick = onStop, colors = ButtonDefaults.textButtonColors(contentColor = onContainer),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text(stringResource(R.string.manual_stop_open))
+            }
         }
-
-        // A tap that cannot be delivered is worth saying even here - especially here,
-        // because this is the screen the worker is on when they try to clock out.
-        if (readiness != NfcReadiness.READY) {
-            NfcBanner(readiness, openIntent)
-        }
-
-        // A shift tapped in a basement is EXACTLY the shift that is on this screen, so this
-        // is the most important of the three places the pending card appears — not the
-        // afterthought at the bottom of a list.
-        PendingCard(pending, armed = pushArmed)
+        if (readiness != NfcReadiness.READY && !manualOnly) NfcBanner(readiness, openIntent)
+        DeliveryStatus(pending, armed = pushArmed, ink = onContainer)
 
         notice?.let { (from, to) ->
             val unknown = stringResource(R.string.unknown_location)
-            Card(Modifier.fillMaxWidth()) {
+            WorkerCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         stringResource(R.string.switch_notice, from ?: unknown, to ?: unknown),
@@ -1402,7 +1271,7 @@ private fun ShiftRunningScreen(
 
         // decision-10 may NEVER be hidden by the lock.
         if (unresolved.isNotEmpty()) {
-            Card(Modifier.fillMaxWidth()) {
+            WorkerCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         pluralStringResource(
@@ -1427,7 +1296,7 @@ private fun ShiftRunningScreen(
         // permission is a weaker signal, not a broken app - the screen you are reading is
         // the floor and it is unaffected.
         if (silenced) {
-            Card(Modifier.fillMaxWidth()) {
+            WorkerCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         stringResource(R.string.shift_notifications_off),
@@ -1441,14 +1310,20 @@ private fun ShiftRunningScreen(
             }
         }
 
+        WorkerScheduleSummary(schedule, model::loadSchedule, onContainer)
+
         // The escape that is not a gesture. Abmelden lives one tab away in Einstellungen
         // and the material tab is next to it; this says so out loud, because a worker who
         // believes they are stuck is the failure this screen is not allowed to cause.
-        Text(
-            stringResource(R.string.shift_help),
-            style = MaterialTheme.typography.bodySmall,
-            color = onContainer,
-            textAlign = TextAlign.Center,
+        var showHelp by remember { mutableStateOf(false) }
+        TextButton(onClick = { showHelp = true }, colors = ButtonDefaults.textButtonColors(contentColor = onContainer)) {
+            Text(stringResource(R.string.worker_help))
+        }
+        if (showHelp) androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showHelp = false },
+            title = { Text(stringResource(R.string.worker_help)) },
+            text = { Text(stringResource(R.string.shift_help)) },
+            confirmButton = { TextButton(onClick = { showHelp = false }) { Text(stringResource(R.string.dismiss)) } },
         )
     }
     }
@@ -1474,14 +1349,14 @@ private fun clock(start: Instant, now: Instant): String {
 // -------------------------------------------------------------------------------------
 
 /**
- * „Ohne Tag starten". Pick a building, confirm, POST /shifts/open with manual=true.
+ * „Ohne Tag starten". Pick a zone, confirm, POST /shifts/open with manual=true.
  *
  * The list is the ALREADY-CACHED roster (no fetch, no new endpoint). An empty list means
- * this phone has never completed a refresh; it says so rather than offering nothing.
+ * no cached zones are available; the screen explains refreshing and contacting the office.
  */
 @Composable
 private fun ManualStartDialog(model: TimeSheetViewModel, onClose: () -> Unit) {
-    val buildings = model.buildings()
+    val places = model.manualPlaces()
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     var errorKey by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -1510,13 +1385,15 @@ private fun ManualStartDialog(model: TimeSheetViewModel, onClose: () -> Unit) {
                     modifier = Modifier.semantics { heading() },
                 )
                 Text(stringResource(R.string.manual_start_intro))
-                if (buildings.isEmpty()) {
+                if (places.isEmpty()) {
                     Text(
-                        stringResource(R.string.manual_start_no_buildings),
+                        stringResource(R.string.manual_start_no_zones),
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                for ((id, name) in buildings) {
+                for (place in places) {
+                    val id = place.id
+                    val name = stringResource(R.string.manual_place_label, model.siteName(id).orEmpty(), place.name)
                     OutlinedButton(
                         onClick = { selectedId = id },
                         enabled = !busy,
@@ -1539,7 +1416,7 @@ private fun ManualStartDialog(model: TimeSheetViewModel, onClose: () -> Unit) {
                     )
                 }
 
-                // THE CONFIRMATION. Disabled until a building is chosen, so the dialog
+                // THE CONFIRMATION. Disabled until a zone is chosen, so the dialog
                 // cannot be dismissed into a shift nobody named.
                 Button(
                     onClick = { start() },
@@ -1655,6 +1532,7 @@ private fun appNotificationSettings(packageName: String): Intent =
         .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
+/** The idle screen has one primary action; manual starts still require confirmation. */
 @Composable
 private fun NfcBanner(readiness: NfcReadiness, openIntent: (Intent) -> Unit) {
     val (title, body, action) = when (readiness) {
@@ -1664,15 +1542,15 @@ private fun NfcBanner(readiness: NfcReadiness, openIntent: (Intent) -> Unit) {
             Triple(R.string.nfc_blocked_title, R.string.nfc_blocked_body, R.string.nfc_blocked_action)
         NfcReadiness.READY -> return
     }
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    WorkerCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
                 stringResource(title),
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.semantics { heading() },
             )
-            Text(stringResource(body))
+            Text(stringResource(body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (action != null) {
                 Button(
                     onClick = {
@@ -1691,101 +1569,37 @@ private fun NfcBanner(readiness: NfcReadiness, openIntent: (Intent) -> Unit) {
     }
 }
 
-/**
- * WHAT THIS PHONE IS STILL HOLDING (TASK-225). The whole reason this composable exists is
- * that the background push can fail for a hundred reasons that are nobody's fault, and the
- * only unacceptable outcome is that it fails SILENTLY: a queued tap that only exists in a
- * log is the same bug in a different place.
- *
- * Shown on the shift screen, on the log screen and on the SIGN-IN screen — that last one is
- * not decoration: signing out does not delete a queued row, and somebody handing a phone
- * back must not believe their hours went with it.
- *
- * Colour is the SECOND signal, never the first: the blocked line says "braucht Ihre
- * Verwaltung" in words and is additionally tinted, and everything else is ordinary text.
- *
- * @param armed whether the PLATFORM is currently holding the delivery job — asked of
- *        JobScheduler, never remembered by us. When it is false the card must NOT print
- *        „wird automatisch gesendet … auch wenn die App geschlossen ist", because on this
- *        phone, right now, that sentence is false: this app shipped once with the job
- *        silently refused for a missing permission, and a screen that keeps promising
- *        automatic delivery over a dead scheduler is worse than no screen at all.
- */
+/** A recent clock-out is a receipt, not another dashboard tile. Data is never animation-gated. */
 @Composable
-private fun PendingCard(pending: PendingWork.Summary, signedOut: Boolean = false, armed: Boolean = true) {
-    if (pending.isEmpty) return
-    val spoken = pluralStringResource(R.plurals.a11y_pending, pending.total, pending.total)
-    Card(
-        Modifier
-            .fillMaxWidth()
-            .semantics(mergeDescendants = true) { contentDescription = spoken },
-    ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(
-                stringResource(R.string.pending_heading),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.semantics { heading() },
-            )
-            Text(pluralStringResource(R.plurals.pending_count, pending.total, pending.total))
-
-            pending.oldestStart?.let {
-                Text(
-                    stringResource(R.string.pending_oldest, dateTime(it)),
-                    style = MaterialTheme.typography.bodySmall,
-                )
+private fun CompletedShiftReceipt(shift: LocalShift, siteName: String?, onDone: () -> Unit) {
+    val end = shift.endTime ?: return
+    val confirmed = shift.isFullySynced && shift.syncError == null && !shift.needsResolution
+    val progress = confirmationProgress("${shift.clientUuid}:$end", confirmed, end, "clock-out")
+    val ink = MaterialTheme.colorScheme.onSurface
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 20.dp).graphicsLayer {
+            alpha = if (progress >= 1f) 1f else ((progress - .80f) / .20f).coerceIn(0f, 1f)
+            translationY = (1f - alpha) * 12.dp.toPx()
+        }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(stringResource(R.string.worker_receipt_title), style = MaterialTheme.typography.labelLarge)
+            Text(siteName ?: stringResource(R.string.unknown_location), style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.worker_receipt_range, timeOfDay(shift.startTime), timeOfDay(end)),
+                style = MaterialTheme.typography.headlineLarge)
+            shift.durationSeconds?.let { seconds ->
+                Text(stringResource(R.string.duration_format, (seconds / 3600).toInt(), ((seconds % 3600) / 60).toInt()),
+                    style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-
-            // WHEN IT LAST TRIED, always, and "never tried" is a DIFFERENT sentence rather
-            // than a blank timestamp: the two mean opposite things to somebody deciding
-            // whether to walk upstairs for a signal.
-            Text(
-                pending.lastAttemptAt?.let { stringResource(R.string.pending_last_try, dateTime(it)) }
-                    ?: stringResource(R.string.pending_never_tried),
-                style = MaterialTheme.typography.bodySmall,
-            )
-
-            if (pending.blocked > 0) {
-                Text(
-                    pluralStringResource(R.plurals.pending_blocked, pending.blocked, pending.blocked),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-
-            // THE PROMISE, AND ONLY WHEN IT IS TRUE. Three situations, three sentences,
-            // and none of them may stand in for another:
-            //   signed out  — the rows are kept and go out on the next sign-in
-            //   not armed   — the platform is NOT holding a job, so nothing happens by
-            //                 itself; opening the app is what sends them
-            //   otherwise   — the ordinary case: it goes out on its own
-            val notArmed = !signedOut && !armed && pending.waiting > 0
-            Text(
-                stringResource(
-                    when {
-                        signedOut -> R.string.pending_signed_out
-                        notArmed -> R.string.pending_not_armed
-                        else -> R.string.pending_body
-                    },
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                // Colour SECOND: the sentence already says the delivery is not scheduled.
-                // The tint only makes it findable on a busy screen.
-                color = if (notArmed) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-
-            // The ceiling, printed. A force-stopped app runs no jobs at all until a human
-            // opens it; that is true of every scheduler on Android and it is not something
-            // this screen is allowed to leave out just because it is inconvenient.
-            Text(
-                stringResource(R.string.pending_force_stop_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (shift.correctedAt != null) Text(stringResource(R.string.status_corrected), style = MaterialTheme.typography.labelMedium)
+            if (shift.needsResolution) Text(stringResource(R.string.status_auto_closed), color = MaterialTheme.colorScheme.error)
+            Text(stringResource(shift.syncError?.let(::stringIdFor) ?: if (confirmed) R.string.sync_sent else R.string.worker_saved_locally),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (shift.syncBlocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if (progress < 1f) PaymentConfirmation(progress, ink)
+    }
+    Button(onClick = onDone, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.inverseSurface, contentColor = MaterialTheme.colorScheme.inverseOnSurface)) {
+        Text(stringResource(R.string.worker_receipt_done))
     }
 }
 
@@ -1795,70 +1609,75 @@ private fun PendingCard(pending: PendingWork.Summary, signedOut: Boolean = false
  */
 @Composable
 private fun ShiftRow(shift: LocalShift, siteName: String?) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                siteName ?: stringResource(R.string.unknown_location),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            val status = when {
-                shift.isOpen -> R.string.status_running
-                shift.needsResolution -> R.string.status_auto_closed
-                shift.correctedAt != null -> R.string.status_corrected
-                else -> null
-            }
-            status?.let {
+    WorkerCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
-                    stringResource(it),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (shift.needsResolution) {
+                    siteName ?: stringResource(R.string.unknown_location),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                val status = when {
+                    shift.isOpen -> R.string.status_running
+                    shift.needsResolution -> R.string.status_auto_closed
+                    shift.correctedAt != null -> R.string.status_corrected
+                    else -> null
+                }
+                status?.let {
+                    Text(
+                        stringResource(it),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (shift.needsResolution) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.tertiary
+                        },
+                    )
+                }
+            }
+
+            Text(dateOnly(shift.startTime), style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            shift.endTime?.let { end ->
+                Text(stringResource(R.string.worker_receipt_range, timeOfDay(shift.startTime), timeOfDay(end)),
+                    style = MaterialTheme.typography.titleLarge)
+            }
+            shift.durationSeconds?.let {
+                Text(stringResource(R.string.duration_format, (it / 3600).toInt(), ((it % 3600) / 60).toInt()),
+                    style = MaterialTheme.typography.bodyMedium)
+            }
+
+            val syncKey = shift.syncError
+            when {
+                syncKey != null -> Text(
+                    stringResource(stringIdFor(syncKey)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (shift.syncBlocked) {
                         MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.tertiary
                     },
                 )
+                shift.isFullySynced -> Text(stringResource(R.string.sync_sent), style = MaterialTheme.typography.bodySmall)
+                // "Wird gesendet …" was a lie for the case that matters: a row taken in a
+                // basement is not being sent, it is WAITING, and the difference is the whole
+                // of TASK-225. The last attempt rides on the same line so the worker can tell
+                // "the phone is trying and failing" from "the phone has not had a signal since".
+                else -> {
+                    Text(stringResource(R.string.sync_waiting), style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        shift.lastAttemptAt?.let { stringResource(R.string.sync_last_try, timeOfDay(it)) }
+                            ?: stringResource(R.string.sync_never_tried),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
-
-        Text(dateTime(shift.startTime), style = MaterialTheme.typography.bodySmall)
-        shift.durationSeconds?.let {
-            Text(
-                stringResource(R.string.duration_format, (it / 3600).toInt(), ((it % 3600) / 60).toInt()),
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-
-        val syncKey = shift.syncError
-        when {
-            syncKey != null -> Text(
-                stringResource(stringIdFor(syncKey)),
-                style = MaterialTheme.typography.bodySmall,
-                color = if (shift.syncBlocked) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.tertiary
-                },
-            )
-            shift.isFullySynced -> Text(stringResource(R.string.sync_sent), style = MaterialTheme.typography.bodySmall)
-            // "Wird gesendet …" was a lie for the case that matters: a row taken in a
-            // basement is not being sent, it is WAITING, and the difference is the whole
-            // of TASK-225. The last attempt rides on the same line so the worker can tell
-            // "the phone is trying and failing" from "the phone has not had a signal since".
-            else -> {
-                Text(stringResource(R.string.sync_waiting), style = MaterialTheme.typography.bodySmall)
-                Text(
-                    shift.lastAttemptAt?.let { stringResource(R.string.sync_last_try, timeOfDay(it)) }
-                        ?: stringResource(R.string.sync_never_tried),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        HorizontalDivider()
     }
 }
 
@@ -2044,7 +1863,7 @@ private fun MaterialScreen(model: TimeSheetViewModel) {
             item { SectionHeading(R.string.material_ready_section) }
             items(state.unseenArrivals, key = { "ready-${it.id}" }) { request ->
                 val what = request.itemName ?: request.body
-                Card(Modifier.fillMaxWidth()) {
+                WorkerCard(Modifier.fillMaxWidth()) {
                     Column(
                         Modifier.padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2074,93 +1893,84 @@ private fun MaterialScreen(model: TimeSheetViewModel) {
             }
         }
 
-        // Ask.
-        item { SectionHeading(R.string.material_ask_section) }
         item {
-            OutlinedTextField(
-                value = typed,
-                // Hard stop at the server's own limit rather than a 400 the worker cannot
-                // read. Truncating only when it is exceeded means the cursor is never
-                // moved under somebody who is still typing.
-                onValueChange = {
-                    typed = it.take(MaterialQueue.BODY_MAX)
-                    justSaved = false
-                },
-                label = { Text(stringResource(R.string.material_input_label)) },
-                supportingText = { Text(stringResource(R.string.material_input_hint)) },
-                // Multi-line and NOT singleLine: "zwei Mopps, Glasreiniger, 3 Sack
-                // Müllsäcke" is a list, and a one-line box says the wrong thing about
-                // how much detail is welcome. Autocorrect stays ON here, unlike the code
-                // field — this is prose in the worker's own language.
-                minLines = 3,
-                maxLines = 8,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.Sentences,
-                    keyboardType = KeyboardType.Text,
-                    imeAction = ImeAction.Default,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        if (typed.length > MaterialQueue.BODY_MAX - 200) {
-            item {
-                Text(
-                    stringResource(R.string.material_char_count, typed.length, MaterialQueue.BODY_MAX),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        if (contextLocationId != null) {
-            item {
-                // CONTEXT, never a cost split (decision-6). The building is recorded
-                // because it is the one thing the worker actually knows; the P&L divides
-                // materials pro-rata by labour hours and never by this field.
-                val name = model.siteName(contextLocationId)
-                Text(
-                    if (name != null) {
-                        stringResource(R.string.material_for_site, name)
-                    } else {
-                        stringResource(R.string.material_for_current_site)
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        item {
-            Button(
-                onClick = {
-                    if (model.submitMaterial(typed)) {
-                        typed = ""
-                        justSaved = true
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.material_ask_section), style = MaterialTheme.typography.titleLarge,
+                            modifier = Modifier.weight(1f).semantics { heading() })
+                        WorkerIllustration(WorkerPicture.SUPPLIES, Modifier.size(64.dp))
                     }
-                },
-                enabled = MaterialQueue.normalise(typed) != null,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp),
-            ) { Text(stringResource(R.string.material_submit)) }
-        }
-        if (justSaved) {
-            item {
-                Text(
-                    stringResource(R.string.material_saved),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                )
+                    OutlinedTextField(
+                        value = typed,
+                        onValueChange = {
+                            typed = it.take(MaterialQueue.BODY_MAX)
+                            justSaved = false
+                        },
+                        label = { Text(stringResource(R.string.material_input_label)) },
+                        supportingText = { Text(stringResource(R.string.worker_material_example)) },
+                        shape = RoundedCornerShape(16.dp),
+                        minLines = 2,
+                        maxLines = 8,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            keyboardType = KeyboardType.Text,
+                            imeAction = ImeAction.Default,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (typed.length > MaterialQueue.BODY_MAX - 200) {
+                        Text(
+                            stringResource(R.string.material_char_count, typed.length, MaterialQueue.BODY_MAX),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (contextLocationId != null) {
+                        // Context only; material costs are still split by labor hours (decision-6).
+                        val name = model.siteName(contextLocationId)
+                        Text(
+                            if (name != null) stringResource(R.string.material_for_site, name)
+                            else stringResource(R.string.material_for_current_site),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Button(
+                        onClick = {
+                            if (model.submitMaterial(typed)) {
+                                typed = ""
+                                justSaved = true
+                            }
+                        },
+                        enabled = MaterialQueue.normalise(typed) != null,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.inverseSurface,
+                            contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+                        ),
+                    ) { Text(stringResource(R.string.material_submit)) }
+                    if (justSaved) {
+                        Text(
+                            stringResource(R.string.material_saved),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                    }
+                    // Decision-23: a concise visible note; full explanation stays available.
+                    Text(stringResource(R.string.worker_material_no_push), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    var showDeliveryInfo by remember { mutableStateOf(false) }
+                    TextButton(onClick = { showDeliveryInfo = true }) {
+                        Text(stringResource(R.string.worker_material_details), color = MaterialTheme.colorScheme.onSurface)
+                    }
+                    if (showDeliveryInfo) androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { showDeliveryInfo = false },
+                        title = { Text(stringResource(R.string.worker_material_details)) },
+                        text = { Text(stringResource(R.string.material_no_push_note)) },
+                        confirmButton = { TextButton(onClick = { showDeliveryInfo = false }) { Text(stringResource(R.string.dismiss)) } },
+                    )
             }
-        }
-        item {
-            // decision-23: the server's dependencies are pg + @sentry/node. There is no
-            // APNs certificate and no FCM project, so THERE IS NO PUSH. Promising a
-            // notification to somebody who then does not get one is the difference
-            // between a late delivery and a broken product.
-            Text(
-                stringResource(R.string.material_no_push_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
 
         // Everything, newest first.
@@ -2334,6 +2144,7 @@ private fun HistoryScreen(model: TimeSheetViewModel) {
 
 @Composable
 private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Unit, onOperator: () -> Unit) {
+    var versionTapCount by rememberSaveable { mutableStateOf(0) }
     val worker = (model.session.collectAsStateWithLifecycle().value as? SessionState.SignedIn)?.worker
 
     var showMyHours by rememberSaveable { mutableStateOf(false) }
@@ -2358,7 +2169,7 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(
@@ -2366,9 +2177,11 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
             style = MaterialTheme.typography.headlineSmall,
             modifier = Modifier.semantics { heading() },
         )
-        Text(worker?.name.orEmpty(), style = MaterialTheme.typography.titleLarge)
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(horizontal = 16.dp)) {
+
+        WorkerCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                WorkerIdentity(worker?.name.orEmpty())
+                HorizontalDivider()
                 RowLink(stringResource(R.string.myhours_open)) { showMyHours = true }
                 if (log.open == null) {
                     HorizontalDivider()
@@ -2376,19 +2189,18 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
                 }
             }
         }
-        LanguagePicker()
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                RowLink(stringResource(R.string.settings_operator_open), onOperator)
+        WorkerCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp)) { LanguagePicker() }
+        }
+        WorkerCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp)) {
+                RevealSection(label = { Text(stringResource(R.string.settings_push_title)) }) { PushSection(model) }
             }
         }
 
         HorizontalDivider()
-        RevealSection(label = { Text(stringResource(R.string.settings_push_title)) }) { PushSection(model) }
-
-        HorizontalDivider()
         var confirmSignOut by remember { mutableStateOf(false) }
-        TextButton(onClick = { confirmSignOut = true }) { Text(stringResource(R.string.sign_out)) }
+        TextButton(onClick = { confirmSignOut = true }) { Text(stringResource(R.string.sign_out), color = MaterialTheme.colorScheme.onSurface) }
         if (confirmSignOut) {
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = { confirmSignOut = false },
@@ -2399,16 +2211,21 @@ private fun SettingsScreen(model: TimeSheetViewModel, openIntent: (Intent) -> Un
             )
         }
 
-        // TASK-253: a plain version line, visible without any dev tooling -- the whole
-        // point is turning "which build is this phone running" from a log dive into a
-        // 30-second glance. NOT tied to self-update in any way (that mechanism is gone;
-        // Play Store owns delivery now) -- this is the same one-line, non-interactive
-        // fact iOS's SettingsView shows via Bundle.main.infoDictionary.
+        // The same specialist entry as sign-in: five version taps, then operator auth.
         HorizontalDivider()
         Text(
             stringResource(R.string.app_version_line, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clickable(role = Role.Button) {
+                    val result = VersionTapGate.advance(versionTapCount)
+                    versionTapCount = result.tapCount
+                    if (result.openOperator) onOperator()
+                }
+                .padding(vertical = 12.dp),
         )
     }
 }
@@ -2548,7 +2365,7 @@ private fun myHoursStatusRes(shift: WireShift): Int = when {
 /**
  * IS THE BACKGROUND PUSH ACTUALLY ARMED (TASK-225)? Asked of the platform, printed here.
  *
- * Not for the cleaner — the cleaner gets [PendingCard], which says what is waiting and
+ * Not for the cleaner — the cleaner gets [DeliveryStatus], which says what is waiting and
  * what will happen to it. This is for whoever sets the phone up, and it exists because
  * this app deliberately writes no log at all: without these two lines the only way to
  * learn that `JobScheduler.schedule()` is being refused on a particular handset is a cable
@@ -2670,7 +2487,7 @@ private val viennaTimeFormat: DateTimeFormatter =
     DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withZone(viennaZone)
 
 @Composable
-private fun viennaDate(instant: Instant): String = viennaDateFormat.withLocale(AppLanguage.locale(LocalContext.current)).format(instant)
+internal fun viennaDate(instant: Instant): String = viennaDateFormat.withLocale(AppLanguage.locale(LocalContext.current)).format(instant)
 
 @Composable
-private fun viennaTime(instant: Instant): String = viennaTimeFormat.withLocale(AppLanguage.locale(LocalContext.current)).format(instant)
+internal fun viennaTime(instant: Instant): String = viennaTimeFormat.withLocale(AppLanguage.locale(LocalContext.current)).format(instant)

@@ -23,7 +23,7 @@ import * as v from "../lib/validate.js";
  * no zone, no building, no alias. Turning it into one of those is the admin's job
  * (POST /admin/tags/:id/resolve-*, routes/admin.js).
  *
- * IDEMPOTENT: `ON CONFLICT (id) DO NOTHING` plus a read-back, the SAME idiom
+ * IDEMPOTENT: `ON CONFLICT DO NOTHING` plus a read-back, the SAME idiom
  * POST /shifts/open already uses for its own idempotency key. The same physical tag
  * reported twice \u2014 a retried request on flaky field wifi, or two operators who both
  * happened to write and report at the same site \u2014 lands exactly ONE row either way, and
@@ -54,13 +54,15 @@ async function reportTag({ body, session }) {
 
   const inserted = await one(
     `INSERT INTO reported_tags (id, reported_by_operator_id) VALUES ($1, $2)
-     ON CONFLICT (id) DO NOTHING
+     ON CONFLICT DO NOTHING
      RETURNING id, reported_at, resolved_at`,
     [tagId, session.operatorId],
   );
   if (inserted) return { status: 201, body: { tag: inserted } };
 
   const existing = await one("SELECT id, reported_at, resolved_at FROM reported_tags WHERE id = $1", [tagId]);
+  // A globally unique ID held by another company is invisible under RLS.
+  if (!existing) fail(409, "id_in_use");
   return { status: 200, body: { tag: existing } };
 }
 

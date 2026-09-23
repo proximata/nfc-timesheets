@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { createHash, createHmac, generateKeyPairSync, randomBytes, sign as rsaSign, verify as ecVerify } from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
 import pg from "pg";
+import { prepareWorkspaceTestDb } from "./db/workspace-test-db.js";
 import { CODE_TTL_MS } from "./lib/enrolment.js";
 import { redactUrl, scrubBreadcrumb, scrubEvent, scrubLogAttributes } from "./lib/scrub.js";
 
@@ -704,6 +705,7 @@ try {
   await admin.query(`CREATE SCHEMA ${pg.escapeIdentifier(SCHEMA)}`);
   await admin.query(`SET search_path TO ${pg.escapeIdentifier(SCHEMA)}`);
   await admin.query(DDL);
+  const runtimeRole = await prepareWorkspaceTestDb(admin, SCHEMA);
   const { rows: seedWorker } = await admin.query(
     "INSERT INTO workers (name, email, hourly_rate_cents) VALUES ('Check Worker', 'check.worker@example.test', 1500) RETURNING id",
   );
@@ -742,7 +744,7 @@ try {
 
   // Point the server's pool at the throwaway schema before it is imported.
   const sep = BASE_URL.includes("?") ? "&" : "?";
-  process.env.DATABASE_URL = `${BASE_URL}${sep}options=${encodeURIComponent(`-c search_path=${SCHEMA}`)}`;
+  process.env.DATABASE_URL = `${BASE_URL}${sep}options=${encodeURIComponent(`-c search_path=${SCHEMA} -c role=${runtimeRole}`)}`;
   process.env.APP_KEY = APP_KEY;
   delete process.env.ADMIN_PIN; // decision-20: must not be required any more
   process.env.PORT = "0";
@@ -2291,7 +2293,7 @@ try {
     await admin.query("UPDATE shifts SET start_time = now() - interval '9 hours' WHERE client_uuid = $1", [uuid(20)]);
     await admin.query("UPDATE shifts SET start_time = now() - interval '1 hour' WHERE client_uuid = $1", [uuid(21)]);
     const fired = await admin.query(autocloseSql);
-    assert.equal(fired.rowCount, 1, "exactly the stale shift, and only it");
+    assert.equal(fired.find((result) => result.command === "UPDATE").rowCount, 1, "exactly the stale shift, and only it");
 
     // Running -> nothing running. The client MUST NOT keep a ticking clock here.
     assert.equal((await (await asWorker("/shifts/open")).json()).shift, null);
@@ -7394,6 +7396,7 @@ try {
             await c.connect();
             await c.query(`SET search_path TO ${pg.escapeIdentifier(SCHEMA)}`);
             await c.query("BEGIN");
+            await c.query("SELECT set_config('app.tenant_id','1',true), set_config('app.system','on',true)");
           }
           const [ca, cb] = clients;
           outcome.a = (await ca.query(sql, [zone.id, tagA, toA])).rows.length;
@@ -8302,6 +8305,7 @@ try {
   if (server) await new Promise((resolve) => server.close(resolve));
   try {
     await admin.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(SCHEMA)} CASCADE`);
+    await admin.query(`DROP ROLE IF EXISTS ${pg.escapeIdentifier(`${SCHEMA}_api`)}`);
   } catch {
     // best effort
   }

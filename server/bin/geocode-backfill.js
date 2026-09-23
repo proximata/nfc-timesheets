@@ -20,7 +20,7 @@
 // Needs DATABASE_URL. GOOGLE_GEOCODING_KEY is OPTIONAL: with no key this reports that
 // every row was skipped and exits 0, because "not configured" is a supported state, not a
 // failure (lib/geocode.js).
-import { all, one, pool, query } from "../lib/db.js";
+import { all, one, pool, query, withSystem } from "../lib/db.js";
 import { geocode } from "../lib/geocode.js";
 
 const retryFailed = process.argv.includes("--retry-failed");
@@ -38,6 +38,7 @@ if (!process.env.GOOGLE_GEOCODING_KEY) {
   process.exit(0);
 }
 
+await withSystem(async () => {
 const targets = await all(
   `SELECT id, slug, name, address FROM locations
     WHERE address IS NOT NULL AND btrim(address) <> '' AND lat IS NULL
@@ -70,5 +71,6 @@ for (const location of targets) {
 
 const remaining = await one("SELECT count(*)::int AS n FROM locations WHERE active AND lat IS NULL");
 console.log(`geocode-backfill: ${pinned}/${targets.length} pinned, ${remaining.n} active building(s) still without one`);
+});
 
 await pool.end();

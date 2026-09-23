@@ -11,6 +11,7 @@ import { Field } from '@/components/Field'
 import { FilterChips } from '@/components/FilterChips'
 import { ListPanel } from '@/components/ListPanel'
 import { PageHeader } from '@/components/PageHeader'
+import { PeriodPicker } from '@/components/PeriodPicker'
 import {
   type AnalyticsBuilding,
   type AnalyticsReport,
@@ -21,18 +22,11 @@ import {
   TREND_MONTHS_DEFAULT,
   TREND_MONTHS_MAX,
 } from '@/lib/api'
-import { filterHref, useFilters } from '@/lib/filters'
+import { filterHref, periodLink, useFilters } from '@/lib/filters'
 import { type ErrorKey, htmlLang, isLocale } from '@/lib/locale'
 import { isPinned, MAPS_API_KEY, streetViewUrl } from '@/lib/map'
 import { loginPathWithReturn } from '@/lib/nav'
-import {
-  futureDays,
-  isPartElapsed,
-  isPeriod,
-  PAYROLL_PERIODS,
-  type Period,
-  periodRange,
-} from '@/lib/period'
+import { futureDays, isPartElapsed, type Period, periodRange } from '@/lib/period'
 import { formatDuration } from '@/lib/shifts'
 
 /**
@@ -77,7 +71,6 @@ export default function AnalyticsPage() {
   const locale = useLocale()
   const router = useRouter()
 
-  const periodId = useId()
   const monthsId = useId()
 
   const [report, setReport] = useState<AnalyticsReport | null>(null)
@@ -90,10 +83,17 @@ export default function AnalyticsPage() {
   const [filters, setFilters] = useFilters()
   const period: Period =
     filters.period !== null && filters.period !== 'all' ? filters.period : 'lastMonth'
-  const setPeriod = (next: Period) => setFilters({ period: next }, 'replace')
   const [months, setMonths] = useState<number>(TREND_MONTHS_DEFAULT)
   const [now] = useState(() => new Date())
-  const range = useMemo(() => periodRange(period, now), [period, now])
+  const range = useMemo(
+    () =>
+      periodRange(
+        period,
+        now,
+        filters.start && filters.end ? { start: filters.start, end: filters.end } : undefined,
+      ),
+    [period, now, filters.start, filters.end],
+  )
   /**
    * The agreed time is a MONTHLY figure pro-rated over the days of the period
    * (`noteTargetSource`, and `contractSlice` in server/lib/reporting.js), and it is pro-rated
@@ -219,10 +219,13 @@ export default function AnalyticsPage() {
 
   const periodLabel: Record<Period, string> = {
     last30Days: t('periodLast30Days'),
+    thisWeek: t('periodThisWeek'),
+    lastWeek: t('periodLastWeek'),
     thisMonth: t('periodThisMonth'),
     lastMonth: t('periodLastMonth'),
     thisQuarter: t('periodThisQuarter'),
     thisYear: t('periodThisYear'),
+    custom: t('periodCustom'),
     all: t('periodAll'),
   }
   const rangeLabel =
@@ -353,21 +356,12 @@ export default function AnalyticsPage() {
       )}
 
       <div className="filter-bar">
-        <Field id={periodId} label={t('fieldPeriod')} help={rangeLabel}>
-          <select
-            value={period}
-            onChange={(event) => {
-              const next = event.target.value
-              if (isPeriod(next) && next !== 'all') setPeriod(next)
-            }}
-          >
-            {PAYROLL_PERIODS.map((option) => (
-              <option key={option} value={option}>
-                {periodLabel[option]}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <PeriodPicker
+          label={t('fieldPeriod')}
+          help={rangeLabel}
+          value={{ period, start: filters.start, end: filters.end }}
+          onChange={(selection) => setFilters(selection, 'replace')}
+        />
 
         <Field id={monthsId} label={t('fieldMonths')} help={t('monthsHint')}>
           <select
@@ -617,7 +611,12 @@ export default function AnalyticsPage() {
                 the rest of its links live. */}
             <ul className="panel-links">
               <li>
-                <Link href={filterHref('/', { location: selected.location_id })}>
+                <Link
+                  href={filterHref('/map/', {
+                    location: selected.location_id,
+                    ...periodLink(filters, period),
+                  })}
+                >
                   {t('panelObjectLink')}
                 </Link>
               </li>
@@ -627,7 +626,12 @@ export default function AnalyticsPage() {
                 </Link>
               </li>
               <li>
-                <Link href={filterHref(SHIFTS_PATH, { location: selected.location_id, period })}>
+                <Link
+                  href={filterHref(SHIFTS_PATH, {
+                    location: selected.location_id,
+                    ...periodLink(filters, period),
+                  })}
+                >
                   {t('panelShiftsLink')}
                 </Link>
               </li>

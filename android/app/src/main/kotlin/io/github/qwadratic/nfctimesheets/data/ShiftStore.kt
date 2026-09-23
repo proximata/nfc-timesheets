@@ -137,8 +137,12 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context.applicationContext
         .query("shifts", null, null, null, null, null, "start_time DESC")
         .use { it.readAll() }
 
-    fun openShift(): LocalShift? = readableDatabase
-        .query("shifts", null, "end_time IS NULL", null, null, null, "start_time DESC", "1")
+    fun forWorker(workerId: Int): List<LocalShift> = readableDatabase
+        .query("shifts", null, "worker_id = ?", arrayOf(workerId.toString()), null, null, "start_time DESC")
+        .use { it.readAll() }
+
+    fun openShift(workerId: Int): LocalShift? = readableDatabase
+        .query("shifts", null, "end_time IS NULL AND worker_id = ?", arrayOf(workerId.toString()), null, null, "start_time DESC", "1")
         .use { it.readAll().firstOrNull() }
 
     fun queue(): List<QueuedShift> = all().map { it.toQueued() }

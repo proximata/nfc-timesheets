@@ -129,8 +129,12 @@ async function errorCode(response: Response): Promise<string | null> {
  * Callers must render ONE uniform failure message: the server answers 401 for both an unknown
  * email and a wrong password, and the UI must not widen that into an account oracle.
  */
-export function login(email: string, password: string, signal?: AbortSignal): Promise<void> {
-  return apiFetch<void>('/admin/login', { method: 'POST', body: { email, password }, signal })
+export function login(
+  email: string,
+  password: string,
+  signal?: AbortSignal,
+): Promise<{ admin: { role: 'admin' | 'flags' | 'superadmin' } }> {
+  return apiFetch('/admin/login', { method: 'POST', body: { email, password }, signal })
 }
 
 /** Clears the session server-side. Failure is still treated as signed out by the caller. */
@@ -216,6 +220,7 @@ export type Worker = {
 
 /** Create (no `id`) or update (`id`). Same route either way. */
 export type WorkerInput = {
+  request_id?: string
   id?: number
   name: string
   email: string
@@ -246,6 +251,7 @@ export function fetchWorkers(signal?: AbortSignal): Promise<Worker[]> {
  * say when its counts are floors rather than totals.
  */
 export type WorkerSnapshot = {
+  capabilities?: { manage_auth_limits: boolean }
   workers: Worker[]
   shifts: Shift[]
   shift_limit: number
@@ -508,6 +514,7 @@ export function resolveTagToExistingZone(
  * route answers 401 for it, exactly as it does for a logged-out browser.
  */
 export type FeatureFlag = {
+  can_edit?: boolean
   name: string
   enabled: boolean
   updated_at: string | null
@@ -549,6 +556,7 @@ export function setFlag(
 
 /** Create (no `id`) or update (`id`, the UUID). Same route either way. */
 export type LocationInput = {
+  request_id?: string
   id?: string
   slug: string
   name: string
@@ -1231,7 +1239,10 @@ export type HoursRow = {
 }
 
 /** `ShiftSnapshot` plus the aggregate. Same route, same round trip. */
-export type AdminSnapshot = ShiftSnapshot & { hours: HoursRow[] }
+export type AdminSnapshot = ShiftSnapshot & {
+  hours: HoursRow[]
+  capabilities?: { manage_auth_limits: boolean }
+}
 
 /**
  * Everything the dashboard renders, in one request, asking for the server's maximum page

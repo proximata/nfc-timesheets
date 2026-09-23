@@ -31,7 +31,7 @@ import { ThemeSwitcher } from '@/components/ThemeSwitcher'
  * absolutely positioned so opening it does not push the page the reader is reading. Escape
  * closes it, because a control that can be opened and not dismissed from the keyboard is the
  * complaint the overlay contract in lib/useOverlay.ts exists to answer. Focus is NOT moved
- * on open: the first thing inside is a `<select>`, and landing on it would make a stray
+ * on open: moving focus directly into the appearance radio group would make a stray
  * arrow key change the theme.
  *
  * ponytail: closing on an outside click is not implemented. CEILING: the panel stays open
@@ -49,8 +49,7 @@ export function HeaderTools() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false)
     }
-    // Capture, for the reason lib/useOverlay.ts gives: a native <select> swallows Escape,
-    // and the control that opens this panel must not be able to disable the way out of it.
+    // Match other overlay controls: Escape remains available from every child control.
     document.addEventListener('keydown', onKeyDown, true)
     return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [open])

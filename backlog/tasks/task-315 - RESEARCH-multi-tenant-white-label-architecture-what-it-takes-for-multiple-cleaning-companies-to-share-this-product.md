@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-29 18:44'
-updated_date: '2026-08-29 18:45'
+updated_date: '2026-09-22 11:18'
 labels:
   - research
   - architecture
@@ -67,4 +67,6 @@ telemetry needs tenant tagging, data export/deletion per tenant (GDPR - each of 
 companies' worker PII should not be visible to another tenant's admin even via a bug).
 EOF
 )
+
+2026-09-22 owner requested a simplified workspace for each cleaning company and guided setup. Product proposal recorded in doc-1 (Company workspace and guided setup). Current checkout 56838e4 source audit found no tenants/tenant_id migration or RLS/context plumbing despite decision-66 text; admin auth and queries remain unscoped. Existing clients are cleaning customers, not SaaS tenants. Payroll uses current rates and no payment ledger was found. Proposal covers reuse, five-section UI, setup through verified NFC/first shift, isolation prerequisites and phased work. No product implementation or production DB verification; existing research ACs remain unchecked.
 <!-- SECTION:NOTES:END -->

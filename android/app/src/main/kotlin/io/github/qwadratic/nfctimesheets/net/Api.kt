@@ -22,6 +22,7 @@ import io.github.qwadratic.nfctimesheets.core.WireReassignedZone
 import io.github.qwadratic.nfctimesheets.core.WireResolvedZone
 import io.github.qwadratic.nfctimesheets.core.WireTagClassification
 import io.github.qwadratic.nfctimesheets.core.WireShift
+import io.github.qwadratic.nfctimesheets.core.WireScheduleAssignment
 import io.github.qwadratic.nfctimesheets.core.WireWorker
 import io.github.qwadratic.nfctimesheets.core.WireZoneShiftPage
 import io.github.qwadratic.nfctimesheets.core.WireZoneVerifyResult
@@ -476,6 +477,12 @@ class Api(
         val query = URLEncoder.encode(Wire.string(since), "UTF-8")
         val array = get("/shifts/mine?since=$query").getJSONArray("shifts")
         return (0 until array.length()).map { Wire.shift(array.getJSONObject(it)) }
+    }
+
+    /** Read-only, session-scoped upcoming work. No worker id is sent. */
+    suspend fun mySchedule(): List<WireScheduleAssignment> {
+        val array = get("/me/schedule").getJSONArray("assignments")
+        return (0 until array.length()).map { Wire.scheduleAssignment(array.getJSONObject(it)) }
     }
 
     // ---- material requests --------------------------------------------------------

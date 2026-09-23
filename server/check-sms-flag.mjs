@@ -29,9 +29,11 @@ import { createServer as createHttpServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { grantWorkspaceTestRole } from "./db/workspace-test-db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB = `nfc_smsflag_${process.pid}`;
+const API_ROLE = `${DB}_api`;
 const APP_KEY = "sms-flag-check-key";
 
 // Obvious fakes, correctly SHAPED. Shape matters: a malformed value must count as missing
@@ -68,6 +70,13 @@ function teardown() {
     } catch (e) {
       console.error(`       WARNING: could not drop ${name} — DROP IT BY HAND: dropdb --force ${name}`);
       console.error(`       ${String(e.stderr || e.message).trim().split("\n")[0]}`);
+    }
+  }
+  if (created.length) {
+    try {
+      sh("psql", ["-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", `DROP ROLE IF EXISTS ${pg.escapeIdentifier(API_ROLE)}`]);
+    } catch (e) {
+      console.error(`WARNING: could not drop test role ${API_ROLE}: ${e.message}`);
     }
   }
 }
@@ -182,11 +191,15 @@ try {
   assert.ok(applied.includes("011_sms_onboarding.sql"), "011 must be applied before anything below means anything");
   assert.ok(applied.includes("012_sms_otp.sql"), "012 must be applied before anything below means anything");
   ok(`${applied.length} migration(s) applied, including 011 and 012`);
+  // Fixture writes belong to the migrated legacy company. API requests run under
+  // a separate restricted role so the suite exercises real RLS, not superuser bypass.
+  await db.query("SELECT set_config('app.system','on',false), set_config('app.tenant_id','1',false)");
+  await grantWorkspaceTestRole(db, "public", API_ROLE);
 
   // ENV BEFORE THE FIRST IMPORT OF ANYTHING UNDER lib/: lib/db.js builds its pool from
   // process.env.DATABASE_URL at IMPORT time and the ESM cache hands the same module to
   // every later importer.
-  process.env.DATABASE_URL = `postgres:///${DB}`;
+  process.env.DATABASE_URL = `postgres:///${DB}?options=${encodeURIComponent(`-c role=${API_ROLE}`)}`;
   process.env.APP_KEY = APP_KEY;
   process.env.PORT = "0";
 
