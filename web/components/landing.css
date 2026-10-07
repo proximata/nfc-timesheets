@@ -1394,3 +1394,15 @@
     justify-self: center;
   }
 }
+.landing-download-secondary {
+  margin: 16px 0 0;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.landing-download-secondary a {
+  color: #2b7867;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

@@ -7,7 +7,12 @@ import { type FormEvent, useState } from 'react'
 import { useLocaleSetting } from '@/components/IntlProvider'
 import { MicrosoftPlaceholder } from '@/components/MicrosoftPlaceholder'
 import { ApiError, apiFetch } from '@/lib/api'
-import { PLAY_TEST_URL, TESTFLIGHT_APP_URL, TESTFLIGHT_JOIN_URL } from '@/lib/downloads'
+import {
+  ANDROID_APK_URL,
+  PLAY_TEST_URL,
+  TESTFLIGHT_APP_URL,
+  TESTFLIGHT_JOIN_URL,
+} from '@/lib/downloads'
 import { ADMIN_PATH } from '@/lib/nav'
 import './landing.css'
 
@@ -154,11 +159,12 @@ function TapStory() {
 type DownloadCardProps = {
   title: string
   steps: { title: string; body: string; link?: { href: string; label: string } }[]
-  button: { href: string; label: string }
+  button: { href: string; label: string; download?: boolean }
+  secondary?: { text: string; href: string; label: string; note: string }
   shot: { src: string; alt: string; height: number }
 }
 
-function DownloadCard({ title, steps, button, shot }: DownloadCardProps) {
+function DownloadCard({ title, steps, button, secondary, shot }: DownloadCardProps) {
   return (
     <article className="landing-download-card">
       <div className="landing-download-copy">
@@ -182,11 +188,21 @@ function DownloadCard({ title, steps, button, shot }: DownloadCardProps) {
         <a
           className="landing-button landing-button-primary"
           href={button.href}
-          target="_blank"
-          rel="noopener noreferrer"
+          {...(button.download
+            ? { download: true }
+            : { target: '_blank', rel: 'noopener noreferrer' })}
         >
           {button.label}
         </a>
+        {secondary ? (
+          <p className="landing-download-secondary">
+            {secondary.text}{' '}
+            <a href={secondary.href} target="_blank" rel="noopener noreferrer">
+              {secondary.label}
+            </a>{' '}
+            {secondary.note}
+          </p>
+        ) : null}
       </div>
       <Image
         className="landing-download-shot"
@@ -231,7 +247,13 @@ function AppDownload() {
             { title: t('appAndroidStep2Title'), body: t('appAndroidStep2Body') },
             { title: t('appStepSignInTitle'), body: t('appStepSignInBody') },
           ]}
-          button={{ href: PLAY_TEST_URL, label: t('appAndroidButton') }}
+          button={{ href: ANDROID_APK_URL, label: t('appAndroidButton'), download: true }}
+          secondary={{
+            text: t('appAndroidPlayText'),
+            href: PLAY_TEST_URL,
+            label: t('appAndroidPlayLink'),
+            note: t('appAndroidPlayNote'),
+          }}
           shot={{
             src: `/app-guide/android-${language}.png`,
             alt: t('appAndroidShotAlt'),

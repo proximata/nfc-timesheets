@@ -79,11 +79,18 @@ Corepack/pnpm, Bash, rsync и настроенным SSH:
 
 - **iPhone:** публичная ссылка TestFlight группы `ext` (App Store Connect → NFC TimeSheets →
   TestFlight → `ext` → Public Link). Работает для любого, кто поставил TestFlight.
-- **Android:** ссылка на внутреннее тестирование Play (Play Console → Тестирование и выпуск →
-  Внутреннее тестирование → Тестировщики → «Копировать ссылку»). Принять её могут только
-  аккаунты из списка «NFC TimeSheets test» (до 100 человек): новый клиент сначала присылает
-  Gmail, его добавляют в список. Приложение в Play пока «Черновик», поэтому в магазине оно
-  называется `io.github.qwadratic.NFCTimeSheets (unreviewed)`.
+- **Android, основной путь:** прямая загрузка подписанного APK, `web/public/downloads/nfc-timesheets.apk`
+  (ссылка `ANDROID_APK_URL`). Открыт для всех, без Google-аккаунта и списка тестеров. Файл
+  подписан upload-ключом владельца. Обновить: `cd android && ./gradlew assembleRelease &&
+  ./dist-apk.sh`, затем скопировать `dist/nfc-timesheets-<версия>-release.apk` в
+  `web/public/downloads/nfc-timesheets.apk` (имя файла постоянное) и заменить единственную копию
+  на рабочем столе (см. AGENTS.md). `dist-apk.sh` отказывается от debug-подписи. Телефон,
+  поставивший APK, не сможет потом обновиться поверх из Play (подписи разные, Google подписывает
+  своим ключом): нужно удалить приложение, а это сбросит сессию работника.
+- **Android, второй путь:** ссылка на внутреннее тестирование Play (Play Console → Тестирование и
+  выпуск → Внутреннее тестирование → Тестировщики → «Копировать ссылку»). Принять её могут только
+  аккаунты из списка «NFC TimeSheets test» (до 100 человек). Приложение в Play пока «Черновик»,
+  поэтому в магазине оно называется `io.github.qwadratic.NFCTimeSheets (unreviewed)`.
 
 Скриншоты в блоке (`web/public/app-guide/{ios,android}-{de,en}.png`) сняты с экрана входа
 сборок `main` от 07.10.2026 (iOS Simulator, Android-эмулятор, Android 0.5.10 (34)). Если
