@@ -1547,6 +1547,7 @@
     "shiftCheckHint": "Der Mitarbeiter hält das Telefon an die geprüfte Karte. Hier zählt eine tatsächlich erfasste Schicht, kein Klick auf Weiter.",
     "shiftCheckAction": "Schichten ansehen",
     "checkAgain": "Status erneut prüfen",
+    "openDashboard": "Dashboard öffnen",
     "backOverview": "Zur Übersicht",
     "resumeHint": "Sie können die Einrichtung jederzeit verlassen und hier fortsetzen.",
     "welcomeEyebrow": "Ihr Firmenzugang",

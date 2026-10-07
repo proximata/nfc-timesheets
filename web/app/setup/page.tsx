@@ -262,9 +262,15 @@ export default function SetupPage() {
                     </li>
                   ))}
                 </ul>
-                <button type="button" className="btn btn-ghost" onClick={reload}>
-                  {t('checkAgain')}
-                </button>
+                {done[3] ? (
+                  <Link className="btn btn-primary" href="/workspace/">
+                    {t('openDashboard')}
+                  </Link>
+                ) : (
+                  <button type="button" className="btn btn-ghost" onClick={reload}>
+                    {t('checkAgain')}
+                  </button>
+                )}
               </>
             )}
           </section>

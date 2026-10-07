@@ -1547,6 +1547,7 @@
     "shiftCheckHint": "The employee taps the verified card with their phone. This step requires a recorded shift, not a click on Continue.",
     "shiftCheckAction": "View shifts",
     "checkAgain": "Check status again",
+    "openDashboard": "Open dashboard",
     "backOverview": "Back to overview",
     "resumeHint": "You can leave setup at any time and resume here.",
     "welcomeEyebrow": "Your company access",
