@@ -162,7 +162,7 @@ ok "health body: $(body)"
 # The admin panel is a static export served by the same process (decision-16). Each of these
 # is a ROUTE THAT DID NOT EXIST before this deploy or one the director uses daily; a 404 here
 # is a half-shipped bundle, which is precisely what step 3/4 of a deploy can leave behind.
-for page in / /tags/ /operators/ /workers/ /locations/ /shifts/ /payroll/ /pl/ /analytics/ \
+for page in / /admin/ /product/ /tags/ /operators/ /workers/ /locations/ /shifts/ /payroll/ /pl/ /analytics/ \
             /clients/ /contracts/ /inventory/ /material-requests/ /reinigung/ /account/ /login/; do
   expect 200 GET "$page"
 done

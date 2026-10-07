@@ -1,22 +1,22 @@
 # Выкладка лендинга
 
 Лендинг и админка собираются вместе. Публичный адрес после успешной выкладки:
-`https://schimmer-glanz.exe.xyz/product/`.
-Корень `/` сейчас открывает вход/рабочее пространство админки, а не лендинг.
+`https://schimmer-glanz.exe.xyz/`. Админка открывается по `/admin/` (вход или
+рабочее пространство по роли). Старый адрес `/product/` только перенаправляет на `/`.
 
 ## Где лежат файлы
 
 | Назначение | В репозитории | На сервере после выкладки |
 | --- | --- | --- |
-| Страница лендинга | `web/app/product/page.tsx` | `public/product/index.html` внутри `/srv/nfc` |
-| Стили и анимация | `web/app/product/product.css` | Собранные файлы в `/srv/nfc/public/_next/` |
+| Страница лендинга | `web/components/LandingPage.tsx`, маршрут `web/app/page.tsx` | `public/index.html` внутри `/srv/nfc` |
+| Стили и анимация | `web/components/landing.css` | Собранные файлы в `/srv/nfc/public/_next/` |
 | Немецкие и английские тексты | `web/messages/de.json`, `web/messages/en.json` | Включены в сборку |
 | Картинки интеграций | `web/public/integrations/` | `/srv/nfc/public/integrations/` |
 | Полная готовая сборка | `web/out/` после `pnpm build` или `pnpm verify` | `/srv/nfc/public/` |
 | Приём заявок | `server/routes/trial-requests.js` | `/srv/nfc/routes/trial-requests.js` |
 | Таблица заявок | `server/db/migrations/024_trial_requests.sql` | Применяется мигратором к Postgres |
 
-Не переносите только `product/index.html`: странице нужны общие JS/CSS из `_next`
+Не переносите только `index.html`: странице нужны общие JS/CSS из `_next`
 и другие файлы полной сборки. Форма отправляет `POST /public/trial-requests` на
 тот же сервер. Заявки доступны суперадминистратору через `/platform/`; этот
 обработчик сохраняет запись в базе, но сам не отправляет письмо на почту.
@@ -28,7 +28,7 @@
 3. Дождаться успешного выполнения. Изменения `web/`, `server/` или `ops/` в
    `main` запускают этот workflow автоматически. Создание PR и push нашей
    рабочей ветки сами по себе эту выкладку в основном репозитории не запускают.
-4. Проверить `/product/`, DE/EN, мобильную ширину и отправку согласованной
+4. Проверить `/`, `/admin/`, DE/EN, мобильную ширину и отправку согласованной
    тестовой заявки; убедиться, что заявка появилась в панели платформы.
 
 Конфигурация: `.github/workflows/server-deploy.yml`. Она запускает единый

@@ -7,7 +7,7 @@ import { Field } from '@/components/Field'
 import { MicrosoftPlaceholder } from '@/components/MicrosoftPlaceholder'
 import { ApiError, login } from '@/lib/api'
 import type { ErrorKey } from '@/lib/locale'
-import { returnToFromLocation } from '@/lib/nav'
+import { ADMIN_PATH, returnToFromLocation } from '@/lib/nav'
 
 /** `null` = no error. `'failed'` = bad credentials, deliberately indistinguishable causes. */
 type LoginError = { kind: 'failed' } | { kind: 'api'; key: ErrorKey } | null
@@ -77,7 +77,7 @@ export default function LoginPage() {
     try {
       const { admin } = await login(email, password)
       router.push(
-        (returnTo === '/' || admin.role === 'flags' ? null : returnTo) ??
+        (returnTo === '/' || returnTo === ADMIN_PATH || admin.role === 'flags' ? null : returnTo) ??
           (admin.role === 'superadmin'
             ? '/platform/'
             : admin.role === 'flags'

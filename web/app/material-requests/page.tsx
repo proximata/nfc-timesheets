@@ -74,7 +74,7 @@ const PL_PATH = '/pl/'
 const INVENTORY_PATH = '/inventory/'
 const WORKERS_PATH = '/workers/'
 /** The building's object surface. `/?location=<uuid>` — there is no `/locations/<id>`. */
-const HOME_PATH = '/'
+const HOME_PATH = '/admin/'
 
 /**
  * What the row filter offers, and it is the `status=` vocabulary of decision-38 rather than
