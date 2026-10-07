@@ -14,6 +14,7 @@ import {
   ApiError,
   clearOperatorLoginEmail,
   deactivateOperator,
+  EMAIL_LOGIN_FLAG,
   type FeatureFlag,
   type FreshOperatorCode,
   fetchFlags,
@@ -134,6 +135,8 @@ export default function OperatorsPage() {
    * route answers 503, so an optimistic button would break on press.
    */
   const [smsLogin, setSmsLogin] = useState(false)
+  /** The `email_login` flag (decision-64 §2): with it off, no login-address UI is drawn. */
+  const [emailLogin, setEmailLogin] = useState(false)
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
@@ -181,6 +184,7 @@ export default function OperatorsPage() {
         setOperators(ops)
         setSmsInfo(sms)
         setSmsLogin(flags.some((flag) => flag.name === SMS_LOGIN_FLAG && flag.enabled))
+        setEmailLogin(flags.some((flag) => flag.name === EMAIL_LOGIN_FLAG && flag.enabled))
         setLoadError(null)
       } catch (cause) {
         if (cause instanceof DOMException && cause.name === 'AbortError') return
@@ -513,21 +517,17 @@ export default function OperatorsPage() {
 
   const phonePreview = draft === null ? null : normaliseIdentityPhone(draft.phone)
 
-  /** decision-48's picker, applied to operators: disabled with the reason in words beside
-      it — never hidden — exactly like /workers/'s smsButtonDisabled. Two gates, not one
-      (decision-59 §3): Twilio configured AND the `sms_login` flag on. The operator's own
-      /auth/operator-sms/* routes are gated by that same flag server-side, so a button that
-      ignored it would 503 on press. */
+  /** decision-48's picker, applied to operators: only drawn while the `sms_login` flag is on
+      (decision-78, like /workers/); from there disabled with the reason in words beside it
+      until Twilio is configured and the operator has a number. The operator's own
+      /auth/operator-sms/* routes are gated by that same flag server-side. */
   function smsButtonDisabled(operator: Operator, sms: SmsStatus | null): boolean {
     return sms === null || !sms.configured || !smsLogin || operator.phone_e164 === null
   }
 
-  /** Why it is greyed out, in words. The FLAG is named before Twilio when both are off:
-      it is the deliberate state someone chose in this panel and can undo on /flags/,
-      whereas „nicht eingerichtet" sends a director chasing credentials for no reason. */
+  /** Why it is greyed out, in words (only rendered while the flag is on). */
   function smsDisabledNote(sms: SmsStatus | null): string | null {
     if (sms === null) return null
-    if (!smsLogin) return t('smsLoginOff')
     if (!sms.configured) return t('smsNotConfigured')
     return null
   }
@@ -627,12 +627,14 @@ export default function OperatorsPage() {
                     {/* The LOGIN ADDRESS (decision-64 §6) rides in the phone cell rather than
                         in a seventh column: this table already carries six and the two are
                         the same fact — „how does this person get in“ — in two channels. */}
-                    <p className={operator.login_email === null ? 'cell-muted' : 'cell-code'}>
-                      {operator.login_email === null
-                        ? t('loginEmailNone')
-                        : t('loginEmailRow', { email: operator.login_email })}
-                    </p>
-                    {operator.active ? (
+                    {emailLogin ? (
+                      <p className={operator.login_email === null ? 'cell-muted' : 'cell-code'}>
+                        {operator.login_email === null
+                          ? t('loginEmailNone')
+                          : t('loginEmailRow', { email: operator.login_email })}
+                      </p>
+                    ) : null}
+                    {operator.active && emailLogin ? (
                       <div className="cell-actions">
                         <button
                           type="button"
@@ -693,7 +695,7 @@ export default function OperatorsPage() {
                           </span>
                         </button>
                       ) : null}
-                      {operator.active ? (
+                      {operator.active && smsLogin ? (
                         <button
                           type="button"
                           className="btn btn-quiet"
@@ -708,7 +710,7 @@ export default function OperatorsPage() {
                         </button>
                       ) : null}
                     </div>
-                    {operator.active && smsDisabledNote(smsInfo) !== null ? (
+                    {operator.active && smsLogin && smsDisabledNote(smsInfo) !== null ? (
                       <p className="cell-muted">{smsDisabledNote(smsInfo)}</p>
                     ) : null}
                   </td>
@@ -824,22 +826,24 @@ export default function OperatorsPage() {
 
             {/* THE LOGIN ADDRESS (decision-64 §6) — optional in both modes, and always its own
                 write. Clearing it releases the claim. */}
-            <Field
-              id={loginEmailId}
-              label={t('fieldLoginEmail')}
-              optional
-              help={t('loginEmailHint')}
-              error={fieldErrors.loginEmail === undefined ? undefined : t(fieldErrors.loginEmail)}
-            >
-              <input
-                type="email"
-                value={draft.loginEmail}
-                onChange={(event) => setDraft({ ...draft, loginEmail: event.target.value })}
-                maxLength={320}
-                autoComplete="off"
-                disabled={busy}
-              />
-            </Field>
+            {emailLogin ? (
+              <Field
+                id={loginEmailId}
+                label={t('fieldLoginEmail')}
+                optional
+                help={t('loginEmailHint')}
+                error={fieldErrors.loginEmail === undefined ? undefined : t(fieldErrors.loginEmail)}
+              >
+                <input
+                  type="email"
+                  value={draft.loginEmail}
+                  onChange={(event) => setDraft({ ...draft, loginEmail: event.target.value })}
+                  maxLength={320}
+                  autoComplete="off"
+                  disabled={busy}
+                />
+              </Field>
+            ) : null}
           </form>
         )}
       </Drawer>

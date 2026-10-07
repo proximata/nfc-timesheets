@@ -17,6 +17,7 @@ import {
   clearSetting,
   clearWorkerLoginEmail,
   clearWorkerLoginPhone,
+  EMAIL_LOGIN_FLAG,
   type FeatureFlag,
   type FreshEnrolmentCode,
   fetchFlags,
@@ -231,6 +232,8 @@ export default function WorkersPage() {
    * breaks the moment it is pressed.
    */
   const [smsLogin, setSmsLogin] = useState(false)
+  /** The `email_login` flag (decision-64 §2): with it off, no login-address UI is drawn. */
+  const [emailLogin, setEmailLogin] = useState(false)
   /** Result of the last write, announced in the page's permanent live region. */
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   /** Ticks so an expiry that has passed stops being reported as a live code. */
@@ -292,6 +295,7 @@ export default function WorkersPage() {
         setSnapshot(snap)
         setSmsInfo(sms)
         setSmsLogin(flags.some((flag) => flag.name === SMS_LOGIN_FLAG && flag.enabled))
+        setEmailLogin(flags.some((flag) => flag.name === EMAIL_LOGIN_FLAG && flag.enabled))
         setRateLimitDraft(snap.settings[SMS_OTP_REQUESTS_KEY] ?? '')
         setLoadError(null)
       } catch (cause) {
@@ -734,12 +738,11 @@ export default function WorkersPage() {
     })
 
   /**
-   * decision-48's picker, second half: is "SMS senden" usable right now? False for EVERY
-   * reason it might not be — the flag off (today's real state), the status not loaded yet
-   * (fail closed), or this worker having no login number — and `smsCellNote` below states
-   * the reason IN WORDS beside the button. The button is never hidden for any of these; it
-   * is disabled, which is not the same thing (NOTHING TRUE may be deleted to lighten a
-   * screen).
+   * decision-48's picker, second half: is "SMS senden" usable right now? The button is only
+   * drawn while the `sms_login` flag is on (decision-78); from there it is disabled for every
+   * reason it might not work — the status not loaded yet (fail closed), Twilio not set up,
+   * or this worker having no login number — and `smsCellNote` below states the reason IN
+   * WORDS beside it.
    */
   function smsButtonDisabled(worker: Worker, sms: SmsStatus | null): boolean {
     return sms === null || !sms.configured || !smsLogin || worker.phone_e164 === null
@@ -756,12 +759,6 @@ export default function WorkersPage() {
    */
   function smsCellNote(worker: Worker, sms: SmsStatus | null): string | null {
     if (sms === null) return null
-    // The FLAG first, and Twilio second, when both are off: the flag is the deliberate
-    // state someone chose in this panel and can undo in it (decision-59's controlled
-    // testing window), so it is the honest first answer to "why is this greyed out".
-    // Saying „nicht eingerichtet" here would send a director chasing credentials that are
-    // very likely already fine.
-    if (!smsLogin) return t('smsLoginOff')
     if (!sms.configured) return t('smsNotConfigured')
     if (worker.phone_e164 === null) return t('smsNoPhone')
     if (worker.sms_last_status === 'sent') {
@@ -887,7 +884,7 @@ export default function WorkersPage() {
           per-row note above). A small inline form, not a drawer: one number, one bound,
           one fallback — the same `saveSetting`/`clearSetting` pair `/pl/` uses for
           `pl_margin_baseline_bp`, reused here rather than a second settings page. */}
-      {snapshot?.capabilities?.manage_auth_limits && (
+      {smsLogin && snapshot?.capabilities?.manage_auth_limits && (
         <details className="note settings-disclosure">
           <summary id={rateLimitHeadingId}>{t('rateLimitHeading')}</summary>
           <form onSubmit={submitRateLimit} noValidate>
@@ -1084,11 +1081,13 @@ export default function WorkersPage() {
                         — the same contrast the phone cell to the right already draws between
                         `phone` and `phone_e164`, and for the same reason: a director who
                         assumes the top line is a login provisions nobody. */}
-                    <p className={worker.login_email === null ? 'cell-muted' : 'cell-code'}>
-                      {worker.login_email === null
-                        ? t('loginEmailNone')
-                        : t('loginEmailRow', { email: worker.login_email })}
-                    </p>
+                    {emailLogin ? (
+                      <p className={worker.login_email === null ? 'cell-muted' : 'cell-code'}>
+                        {worker.login_email === null
+                          ? t('loginEmailNone')
+                          : t('loginEmailRow', { email: worker.login_email })}
+                      </p>
+                    ) : null}
                   </td>
                   <td>
                     {worker.phone === null ? (
@@ -1097,14 +1096,15 @@ export default function WorkersPage() {
                       // tel: so a director on a laptop with a softphone can just click it.
                       <a href={`tel:${worker.phone.replace(/[^0-9+]/g, '')}`}>{worker.phone}</a>
                     )}
-                    {/* The LOGIN number, contrasted with the CONTACT number above it — the
-                        same fact this cell's own SMS row (`smsCellNote`) already implies
-                        for a worker with none, now stated plainly for every row. */}
-                    <p className={worker.phone_e164 === null ? 'cell-muted' : 'cell-code'}>
-                      {worker.phone_e164 === null
-                        ? t('loginPhoneNone')
-                        : t('loginPhoneRow', { phone: worker.phone_e164 })}
-                    </p>
+                    {/* The LOGIN number, contrasted with the CONTACT number above it. Only while
+                        SMS sign-in is switched on: with the flag off it is not a door. */}
+                    {smsLogin ? (
+                      <p className={worker.phone_e164 === null ? 'cell-muted' : 'cell-code'}>
+                        {worker.phone_e164 === null
+                          ? t('loginPhoneNone')
+                          : t('loginPhoneRow', { phone: worker.phone_e164 })}
+                      </p>
+                    ) : null}
                   </td>
                   {/* Always an amount. The „Kein Stundensatz hinterlegt" branch that used
                       to live here described a row the database can no longer hold
@@ -1186,11 +1186,12 @@ export default function WorkersPage() {
                       {/* THE PICKER (decision-48): a SECOND onboarding action, at the SAME
                           weight as "Zugangscode erzeugen" and never a mode switch — both are
                           live for every active worker, both usable any number of times, in
-                          any order, for ever. Disabled with the reason IN WORDS beside it
-                          when it cannot work today, because a director staring at one
+                          any order, for ever. Hidden while the sms_login flag is off (decision-78);
+                          once on, disabled with the reason IN WORDS beside it when it cannot
+                          work, because a director staring at one
                           working button with no explanation for the missing second one is
                           exactly the gap decision-48 exists to close. */}
-                      {worker.active ? (
+                      {worker.active && smsLogin ? (
                         <button
                           type="button"
                           className="btn btn-quiet"
@@ -1205,7 +1206,7 @@ export default function WorkersPage() {
                         </button>
                       ) : null}
                     </div>
-                    {worker.active && smsCellNote(worker, smsInfo) !== null ? (
+                    {worker.active && smsLogin && smsCellNote(worker, smsInfo) !== null ? (
                       <p className="cell-muted">{smsCellNote(worker, smsInfo)}</p>
                     ) : null}
                   </td>
@@ -1315,7 +1316,7 @@ export default function WorkersPage() {
                 id={phoneId}
                 label={t('fieldPhone')}
                 optional
-                help={t('phoneHint')}
+                help={t(smsLogin ? 'phoneHint' : 'phoneHintCallsOnly')}
                 error={fieldErrors.phone === undefined ? undefined : t(fieldErrors.phone)}
               >
                 <input
@@ -1328,50 +1329,60 @@ export default function WorkersPage() {
                 />
               </Field>
             </fieldset>
-            <fieldset className="form-section">
-              <legend>{t('groupLogin')}</legend>
-              {/* THE LOGIN NUMBER (decision-45), directly under the phone field it contrasts
+            {smsLogin || emailLogin ? (
+              <fieldset className="form-section">
+                <legend>{t('groupLogin')}</legend>
+                {/* THE LOGIN NUMBER (decision-45), directly under the phone field it contrasts
                 with, and edited by its OWN write (PUT/DELETE .../phone) — never folded into
                 this form's single POST, so a claim conflict here never blocks the master
                 data above it. */}
-              <Field
-                id={loginPhoneId}
-                label={t('fieldLoginPhone')}
-                optional
-                help={t('loginPhoneHint')}
-                error={fieldErrors.loginPhone === undefined ? undefined : t(fieldErrors.loginPhone)}
-              >
-                <input
-                  type="tel"
-                  value={draft.loginPhone}
-                  onChange={(event) => setDraft({ ...draft, loginPhone: event.target.value })}
-                  maxLength={40}
-                  autoComplete="off"
-                  disabled={busy}
-                />
-              </Field>
+                {smsLogin ? (
+                  <Field
+                    id={loginPhoneId}
+                    label={t('fieldLoginPhone')}
+                    optional
+                    help={t('loginPhoneHint')}
+                    error={
+                      fieldErrors.loginPhone === undefined ? undefined : t(fieldErrors.loginPhone)
+                    }
+                  >
+                    <input
+                      type="tel"
+                      value={draft.loginPhone}
+                      onChange={(event) => setDraft({ ...draft, loginPhone: event.target.value })}
+                      maxLength={40}
+                      autoComplete="off"
+                      disabled={busy}
+                    />
+                  </Field>
+                ) : null}
 
-              {/* THE LOGIN ADDRESS (decision-64 §6), directly under the login NUMBER it sits
+                {/* THE LOGIN ADDRESS (decision-64 §6), directly under the login NUMBER it sits
                 beside as a third door, and edited by its OWN write (PUT/DELETE .../email) —
                 never folded into this form's single POST, which still writes the unrelated
                 `workers.email` column two fields above. */}
-              <Field
-                id={loginEmailId}
-                label={t('fieldLoginEmail')}
-                optional
-                help={t('loginEmailHint')}
-                error={fieldErrors.loginEmail === undefined ? undefined : t(fieldErrors.loginEmail)}
-              >
-                <input
-                  type="email"
-                  value={draft.loginEmail}
-                  onChange={(event) => setDraft({ ...draft, loginEmail: event.target.value })}
-                  maxLength={320}
-                  autoComplete="off"
-                  disabled={busy}
-                />
-              </Field>
-            </fieldset>
+                {emailLogin ? (
+                  <Field
+                    id={loginEmailId}
+                    label={t('fieldLoginEmail')}
+                    optional
+                    help={t('loginEmailHint')}
+                    error={
+                      fieldErrors.loginEmail === undefined ? undefined : t(fieldErrors.loginEmail)
+                    }
+                  >
+                    <input
+                      type="email"
+                      value={draft.loginEmail}
+                      onChange={(event) => setDraft({ ...draft, loginEmail: event.target.value })}
+                      maxLength={320}
+                      autoComplete="off"
+                      disabled={busy}
+                    />
+                  </Field>
+                ) : null}
+              </fieldset>
+            ) : null}
             <fieldset className="form-section">
               <legend>{t('groupEmployment')}</legend>
               {/* REQUIRED on the label, `required` on the control (which is what announces

@@ -24,6 +24,9 @@ export function ScheduleCost({
     cents === null
       ? t('costUnknown')
       : format.number(cents / 100, { style: 'currency', currency: 'EUR' })
+  // Nothing planned in this selection: a zero total plus the whole estimate disclaimer is noise.
+  // The live preview inside the editor still shows, because it answers "what will this cost".
+  if (!preview && result.lines.length === 0) return null
   return (
     <section className="callout" aria-live={preview ? 'polite' : undefined}>
       <h2>{t(preview ? 'costPreview' : 'costTitle')}</h2>
