@@ -18,6 +18,11 @@ name: Verify
 # only (no shared .xcscheme is committed, so -target rather than -scheme; no signing team
 # is available on a PR/fork runner either way).
 
+# Each job below runs only when its area changed (.github/scripts/changed-areas.sh decides,
+# in the `changes` job). A web-only PR used to wait ~4.5 minutes for an Android build it
+# could not affect. Skipped jobs report as skipped, which branch protection treats as passing;
+# a workflow-level `paths:` filter would instead leave a required check pending forever.
+
 on:
   pull_request:
     branches: [main]
@@ -29,7 +34,28 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      android: ${{ steps.areas.outputs.android }}
+      ios: ${{ steps.areas.outputs.ios }}
+      server: ${{ steps.areas.outputs.server }}
+      web: ${{ steps.areas.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: areas
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/changed-areas.sh | tee -a "$GITHUB_OUTPUT"
+
   android:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -66,6 +92,8 @@ jobs:
         run: ./gradlew :app:assembleDebug
 
   server:
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -116,6 +144,8 @@ jobs:
           done
 
   web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -139,6 +169,8 @@ jobs:
         run: pnpm verify
 
   ios:
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
     runs-on: macos-15
     timeout-minutes: 30
     steps:
