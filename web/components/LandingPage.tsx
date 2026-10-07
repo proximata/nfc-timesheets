@@ -7,6 +7,7 @@ import { type FormEvent, useState } from 'react'
 import { useLocaleSetting } from '@/components/IntlProvider'
 import { MicrosoftPlaceholder } from '@/components/MicrosoftPlaceholder'
 import { ApiError, apiFetch } from '@/lib/api'
+import { PLAY_TEST_URL, TESTFLIGHT_APP_URL, TESTFLIGHT_JOIN_URL } from '@/lib/downloads'
 import { ADMIN_PATH } from '@/lib/nav'
 import './landing.css'
 
@@ -150,6 +151,98 @@ function TapStory() {
   )
 }
 
+type DownloadCardProps = {
+  title: string
+  steps: { title: string; body: string; link?: { href: string; label: string } }[]
+  button: { href: string; label: string }
+  shot: { src: string; alt: string; height: number }
+}
+
+function DownloadCard({ title, steps, button, shot }: DownloadCardProps) {
+  return (
+    <article className="landing-download-card">
+      <div className="landing-download-copy">
+        <h3>{title}</h3>
+        <ol className="landing-download-steps">
+          {steps.map((step) => (
+            <li key={step.title}>
+              <strong>{step.title}</strong>
+              {step.body}
+              {step.link ? (
+                <>
+                  {' '}
+                  <a href={step.link.href} target="_blank" rel="noopener noreferrer">
+                    {step.link.label}
+                  </a>
+                </>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+        <a
+          className="landing-button landing-button-primary"
+          href={button.href}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {button.label}
+        </a>
+      </div>
+      <Image
+        className="landing-download-shot"
+        src={shot.src}
+        alt={shot.alt}
+        width={500}
+        height={shot.height}
+      />
+    </article>
+  )
+}
+
+function AppDownload() {
+  const t = useTranslations('landing')
+  const language = useLocale() === 'en' ? 'en' : 'de'
+  return (
+    <section className="landing-download landing-section" id="app" aria-labelledby="app-title">
+      <div className="landing-section-intro">
+        <p className="landing-kicker">{t('appKicker')}</p>
+        <h2 id="app-title">{t('appTitle')}</h2>
+        <p>{t('appLead')}</p>
+      </div>
+      <div className="landing-download-grid">
+        <DownloadCard
+          title={t('appIosTitle')}
+          steps={[
+            {
+              title: t('appIosStep1Title'),
+              body: t('appIosStep1Body'),
+              link: { href: TESTFLIGHT_APP_URL, label: t('appIosStep1Link') },
+            },
+            { title: t('appIosStep2Title'), body: t('appIosStep2Body') },
+            { title: t('appStepSignInTitle'), body: t('appStepSignInBody') },
+          ]}
+          button={{ href: TESTFLIGHT_JOIN_URL, label: t('appIosButton') }}
+          shot={{ src: `/app-guide/ios-${language}.png`, alt: t('appIosShotAlt'), height: 1087 }}
+        />
+        <DownloadCard
+          title={t('appAndroidTitle')}
+          steps={[
+            { title: t('appAndroidStep1Title'), body: t('appAndroidStep1Body') },
+            { title: t('appAndroidStep2Title'), body: t('appAndroidStep2Body') },
+            { title: t('appStepSignInTitle'), body: t('appStepSignInBody') },
+          ]}
+          button={{ href: PLAY_TEST_URL, label: t('appAndroidButton') }}
+          shot={{
+            src: `/app-guide/android-${language}.png`,
+            alt: t('appAndroidShotAlt'),
+            height: 1111,
+          }}
+        />
+      </div>
+    </section>
+  )
+}
+
 export function LandingPage() {
   const t = useTranslations('landing')
   const integrations = useTranslations('integrations')
@@ -199,6 +292,7 @@ export function LandingPage() {
         </a>
         <nav className="landing-nav" aria-label={t('navLabel')}>
           <a href="#how">{t('navHow')}</a>
+          <a href="#app">{t('navApp')}</a>
           <a href="#benefits">{t('navBenefits')}</a>
           <a href="#pricing">{t('navPricing')}</a>
         </nav>
@@ -352,6 +446,8 @@ export function LandingPage() {
             </article>
           </div>
         </section>
+
+        <AppDownload />
 
         <section
           className="landing-benefits landing-section"

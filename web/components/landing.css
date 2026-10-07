@@ -1302,3 +1302,95 @@
     display: none;
   }
 }
+
+/* App download: one card per platform, three numbered steps and the real sign-in screen. */
+.landing-download {
+  background: #fff;
+}
+.landing-download-grid {
+  max-width: 1200px;
+  margin: auto;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+.landing-download-card {
+  display: grid;
+  grid-template-columns: 1fr 170px;
+  gap: 28px;
+  align-items: start;
+  padding: 32px;
+  border: 1px solid #dce6dd;
+  border-radius: 14px;
+  background: #fbfcf9;
+}
+.landing-download-card h3 {
+  font-size: 26px;
+  letter-spacing: -0.04em;
+  margin: 0 0 22px;
+}
+.landing-download-steps {
+  list-style: none;
+  counter-reset: download-step;
+  padding: 0;
+  margin: 0 0 28px;
+  display: grid;
+  gap: 18px;
+}
+.landing-download-steps li {
+  counter-increment: download-step;
+  position: relative;
+  padding-left: 42px;
+  color: var(--muted);
+  line-height: 1.55;
+  font-size: 16px;
+}
+.landing-download-steps li::before {
+  content: counter(download-step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #e5eddf;
+  color: #2b7867;
+  font-size: 14px;
+  font-weight: 800;
+}
+.landing-download-steps strong {
+  display: block;
+  color: var(--ink);
+  font-size: 17px;
+  margin-bottom: 2px;
+}
+.landing-download-steps a {
+  color: #2b7867;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.landing-download-shot {
+  width: 100%;
+  height: auto;
+  border: 1px solid #dce6dd;
+  border-radius: 22px;
+  box-shadow: 0 14px 34px #0d32221f;
+}
+@media (max-width: 1100px) {
+  .landing-download-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 640px) {
+  .landing-download-card {
+    grid-template-columns: 1fr;
+    padding: 24px;
+  }
+  .landing-download-shot {
+    max-width: 220px;
+    justify-self: center;
+  }
+}
