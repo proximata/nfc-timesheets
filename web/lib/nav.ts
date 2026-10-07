@@ -174,12 +174,9 @@ export const LOGIN_PATH = '/login/'
  */
 export const ADMIN_PATH = '/admin/'
 
-/**
- * `/` and the retired `/product/` (which only redirects to it). Both render without the
- * admin shell and never call the account endpoint.
- */
+/** The landing page renders without the admin shell and never calls the account endpoint. */
 export function isLandingPath(pathname: string): boolean {
-  return pathname === '/' || pathname === '/product' || pathname === '/product/'
+  return pathname === '/'
 }
 
 /**

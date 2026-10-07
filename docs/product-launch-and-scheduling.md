@@ -4,7 +4,7 @@ Owner-authorized scope, 23 September 2026 (TASK-343–345).
 
 ## Public product page
 
-The landing page at `/` (originally `/product/`, which now redirects to `/`; decision-75) is a
+The landing page at `/` (originally `/product/`, which no longer exists; decision-75, decision-77) is a
 responsive, public, bilingual static Next.js page. The former `/` role routing now lives at
 `/admin/`; login, invitation links and hosting stay unchanged. The public page may be indexed; admin
 pages retain noindex. Animations are CSS/SVG and respect reduced-motion preferences.

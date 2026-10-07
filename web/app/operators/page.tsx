@@ -513,21 +513,17 @@ export default function OperatorsPage() {
 
   const phonePreview = draft === null ? null : normaliseIdentityPhone(draft.phone)
 
-  /** decision-48's picker, applied to operators: disabled with the reason in words beside
-      it — never hidden — exactly like /workers/'s smsButtonDisabled. Two gates, not one
-      (decision-59 §3): Twilio configured AND the `sms_login` flag on. The operator's own
-      /auth/operator-sms/* routes are gated by that same flag server-side, so a button that
-      ignored it would 503 on press. */
+  /** decision-48's picker, applied to operators: only drawn while the `sms_login` flag is on
+      (decision-78, like /workers/); from there disabled with the reason in words beside it
+      until Twilio is configured and the operator has a number. The operator's own
+      /auth/operator-sms/* routes are gated by that same flag server-side. */
   function smsButtonDisabled(operator: Operator, sms: SmsStatus | null): boolean {
     return sms === null || !sms.configured || !smsLogin || operator.phone_e164 === null
   }
 
-  /** Why it is greyed out, in words. The FLAG is named before Twilio when both are off:
-      it is the deliberate state someone chose in this panel and can undo on /flags/,
-      whereas „nicht eingerichtet" sends a director chasing credentials for no reason. */
+  /** Why it is greyed out, in words (only rendered while the flag is on). */
   function smsDisabledNote(sms: SmsStatus | null): string | null {
     if (sms === null) return null
-    if (!smsLogin) return t('smsLoginOff')
     if (!sms.configured) return t('smsNotConfigured')
     return null
   }
@@ -693,7 +689,7 @@ export default function OperatorsPage() {
                           </span>
                         </button>
                       ) : null}
-                      {operator.active ? (
+                      {operator.active && smsLogin ? (
                         <button
                           type="button"
                           className="btn btn-quiet"
@@ -708,7 +704,7 @@ export default function OperatorsPage() {
                         </button>
                       ) : null}
                     </div>
-                    {operator.active && smsDisabledNote(smsInfo) !== null ? (
+                    {operator.active && smsLogin && smsDisabledNote(smsInfo) !== null ? (
                       <p className="cell-muted">{smsDisabledNote(smsInfo)}</p>
                     ) : null}
                   </td>

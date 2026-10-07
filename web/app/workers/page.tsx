@@ -734,12 +734,11 @@ export default function WorkersPage() {
     })
 
   /**
-   * decision-48's picker, second half: is "SMS senden" usable right now? False for EVERY
-   * reason it might not be — the flag off (today's real state), the status not loaded yet
-   * (fail closed), or this worker having no login number — and `smsCellNote` below states
-   * the reason IN WORDS beside the button. The button is never hidden for any of these; it
-   * is disabled, which is not the same thing (NOTHING TRUE may be deleted to lighten a
-   * screen).
+   * decision-48's picker, second half: is "SMS senden" usable right now? The button is only
+   * drawn while the `sms_login` flag is on (decision-78); from there it is disabled for every
+   * reason it might not work — the status not loaded yet (fail closed), Twilio not set up,
+   * or this worker having no login number — and `smsCellNote` below states the reason IN
+   * WORDS beside it.
    */
   function smsButtonDisabled(worker: Worker, sms: SmsStatus | null): boolean {
     return sms === null || !sms.configured || !smsLogin || worker.phone_e164 === null
@@ -756,12 +755,6 @@ export default function WorkersPage() {
    */
   function smsCellNote(worker: Worker, sms: SmsStatus | null): string | null {
     if (sms === null) return null
-    // The FLAG first, and Twilio second, when both are off: the flag is the deliberate
-    // state someone chose in this panel and can undo in it (decision-59's controlled
-    // testing window), so it is the honest first answer to "why is this greyed out".
-    // Saying „nicht eingerichtet" here would send a director chasing credentials that are
-    // very likely already fine.
-    if (!smsLogin) return t('smsLoginOff')
     if (!sms.configured) return t('smsNotConfigured')
     if (worker.phone_e164 === null) return t('smsNoPhone')
     if (worker.sms_last_status === 'sent') {
@@ -880,14 +873,14 @@ export default function WorkersPage() {
       {panelUnknown ? <p className="notice bad">{tFilter('unknownNotice')}</p> : null}
 
       {/* Codes are shown only once; keep that warning before the enrolment actions. */}
-      <p className="note">{t('codeStandingNote')}</p>
+      <p className="note">{t(smsLogin ? 'codeStandingNote' : 'codeStandingNoteNoSms')}</p>
 
       {/* decision-51's admin-tunable ceiling on POST /auth/sms/request, next to the SMS
           machinery this screen already reads status from (the picker button and its
           per-row note above). A small inline form, not a drawer: one number, one bound,
           one fallback — the same `saveSetting`/`clearSetting` pair `/pl/` uses for
           `pl_margin_baseline_bp`, reused here rather than a second settings page. */}
-      {snapshot?.capabilities?.manage_auth_limits && (
+      {smsLogin && snapshot?.capabilities?.manage_auth_limits && (
         <details className="note settings-disclosure">
           <summary id={rateLimitHeadingId}>{t('rateLimitHeading')}</summary>
           <form onSubmit={submitRateLimit} noValidate>
@@ -1097,14 +1090,15 @@ export default function WorkersPage() {
                       // tel: so a director on a laptop with a softphone can just click it.
                       <a href={`tel:${worker.phone.replace(/[^0-9+]/g, '')}`}>{worker.phone}</a>
                     )}
-                    {/* The LOGIN number, contrasted with the CONTACT number above it — the
-                        same fact this cell's own SMS row (`smsCellNote`) already implies
-                        for a worker with none, now stated plainly for every row. */}
-                    <p className={worker.phone_e164 === null ? 'cell-muted' : 'cell-code'}>
-                      {worker.phone_e164 === null
-                        ? t('loginPhoneNone')
-                        : t('loginPhoneRow', { phone: worker.phone_e164 })}
-                    </p>
+                    {/* The LOGIN number, contrasted with the CONTACT number above it. Only while
+                        SMS sign-in is switched on: with the flag off it is not a door. */}
+                    {smsLogin ? (
+                      <p className={worker.phone_e164 === null ? 'cell-muted' : 'cell-code'}>
+                        {worker.phone_e164 === null
+                          ? t('loginPhoneNone')
+                          : t('loginPhoneRow', { phone: worker.phone_e164 })}
+                      </p>
+                    ) : null}
                   </td>
                   {/* Always an amount. The „Kein Stundensatz hinterlegt" branch that used
                       to live here described a row the database can no longer hold
@@ -1186,11 +1180,12 @@ export default function WorkersPage() {
                       {/* THE PICKER (decision-48): a SECOND onboarding action, at the SAME
                           weight as "Zugangscode erzeugen" and never a mode switch — both are
                           live for every active worker, both usable any number of times, in
-                          any order, for ever. Disabled with the reason IN WORDS beside it
-                          when it cannot work today, because a director staring at one
+                          any order, for ever. Hidden while the sms_login flag is off (decision-78);
+                          once on, disabled with the reason IN WORDS beside it when it cannot
+                          work, because a director staring at one
                           working button with no explanation for the missing second one is
                           exactly the gap decision-48 exists to close. */}
-                      {worker.active ? (
+                      {worker.active && smsLogin ? (
                         <button
                           type="button"
                           className="btn btn-quiet"
@@ -1205,7 +1200,7 @@ export default function WorkersPage() {
                         </button>
                       ) : null}
                     </div>
-                    {worker.active && smsCellNote(worker, smsInfo) !== null ? (
+                    {worker.active && smsLogin && smsCellNote(worker, smsInfo) !== null ? (
                       <p className="cell-muted">{smsCellNote(worker, smsInfo)}</p>
                     ) : null}
                   </td>
@@ -1315,7 +1310,7 @@ export default function WorkersPage() {
                 id={phoneId}
                 label={t('fieldPhone')}
                 optional
-                help={t('phoneHint')}
+                help={t(smsLogin ? 'phoneHint' : 'phoneHintCallsOnly')}
                 error={fieldErrors.phone === undefined ? undefined : t(fieldErrors.phone)}
               >
                 <input
@@ -1334,22 +1329,26 @@ export default function WorkersPage() {
                 with, and edited by its OWN write (PUT/DELETE .../phone) — never folded into
                 this form's single POST, so a claim conflict here never blocks the master
                 data above it. */}
-              <Field
-                id={loginPhoneId}
-                label={t('fieldLoginPhone')}
-                optional
-                help={t('loginPhoneHint')}
-                error={fieldErrors.loginPhone === undefined ? undefined : t(fieldErrors.loginPhone)}
-              >
-                <input
-                  type="tel"
-                  value={draft.loginPhone}
-                  onChange={(event) => setDraft({ ...draft, loginPhone: event.target.value })}
-                  maxLength={40}
-                  autoComplete="off"
-                  disabled={busy}
-                />
-              </Field>
+              {smsLogin ? (
+                <Field
+                  id={loginPhoneId}
+                  label={t('fieldLoginPhone')}
+                  optional
+                  help={t('loginPhoneHint')}
+                  error={
+                    fieldErrors.loginPhone === undefined ? undefined : t(fieldErrors.loginPhone)
+                  }
+                >
+                  <input
+                    type="tel"
+                    value={draft.loginPhone}
+                    onChange={(event) => setDraft({ ...draft, loginPhone: event.target.value })}
+                    maxLength={40}
+                    autoComplete="off"
+                    disabled={busy}
+                  />
+                </Field>
+              ) : null}
 
               {/* THE LOGIN ADDRESS (decision-64 §6), directly under the login NUMBER it sits
                 beside as a third door, and edited by its OWN write (PUT/DELETE .../email) —
