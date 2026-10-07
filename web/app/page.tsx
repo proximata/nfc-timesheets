@@ -1,34 +1,18 @@
-'use client'
+import type { Metadata } from 'next'
+import { createTranslator } from 'next-intl'
+import { LandingPage } from '@/components/LandingPage'
+import { DEFAULT_LOCALE, MESSAGES } from '@/lib/locale'
 
-import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
-import { useEffect } from 'react'
-import { loginPathWithReturn } from '@/lib/nav'
-import { fetchAccount } from '@/lib/workspaces'
+const t = createTranslator({ locale: DEFAULT_LOCALE, messages: MESSAGES[DEFAULT_LOCALE] })
 
-/** Keep bookmarked map filters; plain home opens the account's own workspace. */
-export default function HomePage() {
-  const router = useRouter()
-  const t = useTranslations('home')
-  useEffect(() => {
-    const controller = new AbortController()
-    void fetchAccount(controller.signal)
-      .then(({ admin }) => {
-        const query = window.location.search
-        router.replace(
-          admin.role === 'superadmin'
-            ? '/platform/'
-            : admin.role === 'flags'
-              ? '/flags/'
-              : query
-                ? `/map/${query}`
-                : '/workspace/',
-        )
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) router.replace(loginPathWithReturn())
-      })
-    return () => controller.abort()
-  }, [router])
-  return <p role="status">{t('loading')}</p>
+// The public landing page. The root layout marks the whole app noindex (the admin is an
+// internal tool); this is the one route that is meant to be found.
+export const metadata: Metadata = {
+  title: t('landing.metaTitle'),
+  description: t('landing.metaDescription'),
+  robots: { index: true, follow: true },
+}
+
+export default function RootPage() {
+  return <LandingPage />
 }

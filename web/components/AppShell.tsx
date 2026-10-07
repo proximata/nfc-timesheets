@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl'
 import { type ReactNode, useEffect, useState } from 'react'
 import { HeaderTools } from '@/components/HeaderTools'
 import { SidebarNav } from '@/components/SidebarNav'
-import { LOGIN_PATH } from '@/lib/nav'
+import { ADMIN_PATH, isLandingPath, LOGIN_PATH } from '@/lib/nav'
 import { isClientPortalPath } from '@/lib/portal'
 import { type AdminAccount, fetchAccount } from '@/lib/workspaces'
 
@@ -19,8 +19,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (
       isClientPortalPath(pathname) ||
-      pathname === '/product/' ||
-      pathname === '/product' ||
+      isLandingPath(pathname) ||
       ['/login/', '/login', '/welcome/', '/welcome'].includes(pathname)
     ) {
       setAccount(null)
@@ -30,7 +29,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     void fetchAccount(controller.signal)
       .then(({ admin }) => {
         setAccount(admin)
-        if (pathname === '/' && admin.role === 'superadmin') router.replace('/platform/')
+        if ((pathname === ADMIN_PATH || pathname === '/admin') && admin.role === 'superadmin')
+          router.replace('/platform/')
       })
       .catch(() => {
         if (!controller.signal.aborted) setAccount(null)
@@ -42,7 +42,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   // out, no language switcher, and above all no link that leads into the admin app. The
   // person reading it works for another company. It renders its own <main>, so this returns
   // the children untouched.
-  if (isClientPortalPath(pathname) || pathname === '/product/' || pathname === '/product') {
+  if (isClientPortalPath(pathname) || isLandingPath(pathname)) {
     return <>{children}</>
   }
 

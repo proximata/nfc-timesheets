@@ -98,8 +98,8 @@ const CONTRACTS_PATH = '/contracts/'
 const SHIFTS_PATH = '/shifts/'
 /** Where a building is created. The empty state names that action, so it links to it. */
 const BUILDINGS_PATH = '/locations/'
-/** The building's object surface. `/?location=<uuid>` — there is no `/locations/<id>`. */
-const HOME_PATH = '/'
+/** The building's object surface. `/admin/?location=<uuid>` — there is no `/locations/<id>`. */
+const HOME_PATH = '/admin/'
 
 export default function PlPage() {
   const t = useTranslations('pl')

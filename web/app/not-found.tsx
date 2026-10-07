@@ -21,7 +21,7 @@ export default function NotFoundPage() {
       <h1>{t('heading')}</h1>
       <p className="lede">{t('body')}</p>
       <p>
-        <Link href="/">{t('back')}</Link>
+        <Link href="/admin/">{t('back')}</Link>
       </p>
     </>
   )

@@ -461,8 +461,8 @@ check('every screen reads its filters through lib/filters.ts, never a raw parame
     // `/reinigung/` is a stated exception and not an admin screen: it is read by a person
     // who works for another company, it takes a TOKEN and no filter, and it deliberately
     // shares nothing with the admin — not the shell, not the nav, not this vocabulary.
-    // Home only forwards the complete bookmarked query to /map/ (decision-72).
-    .filter(({ path }) => !path.startsWith('app/reinigung/') && path !== 'app/page.tsx')
+    // The admin front door only forwards the complete bookmarked query to /map/ (decision-72).
+    .filter(({ path }) => !path.startsWith('app/reinigung/') && path !== 'app/admin/page.tsx')
     .flatMap(({ path, text }) => {
       const reads = [...text.matchAll(/searchParams|URLSearchParams|window\.location\.search/g)]
       return reads.length === 0 ? [] : [`${path}: reads the query string directly`]

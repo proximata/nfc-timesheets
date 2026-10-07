@@ -94,7 +94,7 @@ const SHIFTS_PATH = '/shifts/'
 const WORKERS_PATH = '/workers/'
 /** Where a building (and its tag URL) is created. The day-zero empty state links to it. */
 const BUILDINGS_PATH = '/locations/'
-const HOME_PATH = '/'
+const HOME_PATH = '/admin/'
 
 /**
  * `YYYY-MM-DD` for the export filename, in VIENNA time and not the browser's.

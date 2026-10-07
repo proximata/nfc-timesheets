@@ -4,8 +4,9 @@ Owner-authorized scope, 23 September 2026 (TASK-343–345).
 
 ## Public product page
 
-`/product/` is a responsive, public, bilingual static Next.js page. Existing `/` role routing,
-login, invitation links and hosting stay unchanged. The public page may be indexed; admin
+The landing page at `/` (originally `/product/`, which now redirects to `/`; decision-75) is a
+responsive, public, bilingual static Next.js page. The former `/` role routing now lives at
+`/admin/`; login, invitation links and hosting stay unchanged. The public page may be indexed; admin
 pages retain noindex. Animations are CSS/SVG and respect reduced-motion preferences.
 
 Offer: EUR 300/month for up to 10 employees; first month free; additional employees priced
