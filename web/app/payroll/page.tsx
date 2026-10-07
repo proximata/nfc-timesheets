@@ -649,13 +649,15 @@ export default function PayrollPage() {
             </div>
           ) : null}
 
-          {/* Before paying: what is excluded, counted and linked (decision-10). The clean
+          {/* Day zero (no shift recorded, ever) has nothing to caveat, so the block is not drawn
+              until the first shift exists. Before paying: what is excluded, counted and linked (decision-10). The clean
               branches are here too — „nichts fehlt" that is never said is indistinguishable
               from a check nobody ran. */}
-          <div className="callout">
-            <h3>{t('caveatHeading')}</h3>
-            <ul>
-              {/* UNCONDITIONAL, on every load, in every branch (task-148 AC4). It used to
+          {latestStart === null ? null : (
+            <div className="callout">
+              <h3>{t('caveatHeading')}</h3>
+              <ul>
+                {/* UNCONDITIONAL, on every load, in every branch (task-148 AC4). It used to
                   ship inside the collapsed `<details>` below — the one caveat that changes
                   what the total MEANS, filed next to ones that only say what it excludes,
                   and closed by default. A caveat may shrink, never disappear; a closed
@@ -663,86 +665,86 @@ export default function PayrollPage() {
                   practice. Mirrored, permanently visible, on /contracts/ as
                   noteLabourNoHistory — both copies must survive; they are read by
                   different people at different moments. */}
-              <li>{t('caveatRateHistory')}</li>
-              {/* EVERY caveat link now carries THIS screen's period and the condition it is
+                <li>{t('caveatRateHistory')}</li>
+                {/* EVERY caveat link now carries THIS screen's period and the condition it is
                   about. It used to point at a bare `/shifts/`, which opens on the last 30
                   days while payroll runs last month: the three shifts named here were
                   routinely not on the screen the sentence sent the director to. */}
-              {totals.unresolvedShifts > 0 ? (
-                <li>
-                  {t('caveatUnresolved', { count: totals.unresolvedShifts })}{' '}
-                  <Link
-                    href={filterHref(SHIFTS_PATH, {
-                      ...periodLink(filters, period),
-                      state: 'unresolved',
-                      location: filters.location,
-                      worker: filters.worker,
-                    })}
-                  >
-                    {t('caveatUnresolvedLink')}
-                  </Link>
-                </li>
-              ) : null}
-              {totals.openShifts > 0 ? (
-                <li>
-                  {t('caveatOpen', { count: totals.openShifts })}{' '}
-                  <Link
-                    href={filterHref(SHIFTS_PATH, {
-                      ...periodLink(filters, period),
-                      state: 'open',
-                      location: filters.location,
-                      worker: filters.worker,
-                    })}
-                  >
-                    {t('caveatOpenLink')}
-                  </Link>
-                </li>
-              ) : null}
-              {/* …EXCEPT over zero rows. "Nothing is excluded" and "the server agrees with
+                {totals.unresolvedShifts > 0 ? (
+                  <li>
+                    {t('caveatUnresolved', { count: totals.unresolvedShifts })}{' '}
+                    <Link
+                      href={filterHref(SHIFTS_PATH, {
+                        ...periodLink(filters, period),
+                        state: 'unresolved',
+                        location: filters.location,
+                        worker: filters.worker,
+                      })}
+                    >
+                      {t('caveatUnresolvedLink')}
+                    </Link>
+                  </li>
+                ) : null}
+                {totals.openShifts > 0 ? (
+                  <li>
+                    {t('caveatOpen', { count: totals.openShifts })}{' '}
+                    <Link
+                      href={filterHref(SHIFTS_PATH, {
+                        ...periodLink(filters, period),
+                        state: 'open',
+                        location: filters.location,
+                        worker: filters.worker,
+                      })}
+                    >
+                      {t('caveatOpenLink')}
+                    </Link>
+                  </li>
+                ) : null}
+                {/* …EXCEPT over zero rows. "Nothing is excluded" and "the server agrees with
                   what's on screen" are both vacuously true with no shifts in ANY period at
                   all (LOOK.md W6) — the exact shape production ships in on day one — and
                   read as "your payroll is complete" rather than "nothing has happened yet".
                   /shifts/ already suppresses `noneBlocked` the same way, over the same
                   condition, for the same reason: a claim about an empty table is a claim
                   about nothing. The EmptyState below states the real fact instead. */}
-              {totals.unresolvedShifts === 0 &&
-              totals.openShifts === 0 &&
-              totals.lines.length > 0 ? (
-                <li>{t('caveatNoneExcluded')}</li>
-              ) : null}
-              {/* The row list is capped; the server aggregate is not. The failing branch is
+                {totals.unresolvedShifts === 0 &&
+                totals.openShifts === 0 &&
+                totals.lines.length > 0 ? (
+                  <li>{t('caveatNoneExcluded')}</li>
+                ) : null}
+                {/* The row list is capped; the server aggregate is not. The failing branch is
                   in the warning above, and the reconciled branch is stated here, because
                   silence would read as "not checked" — UNLESS there is nothing to
                   reconcile, per the guard above. */}
-              {reconciliation !== null &&
-              reconciliation.missingCents === 0 &&
-              totals.lines.length > 0 ? (
-                <li>{t('caveatReconcileOk')}</li>
-              ) : null}
-              {/* NOT COMPUTED is a third answer and it is not silence. While a scope is on,
+                {reconciliation !== null &&
+                reconciliation.missingCents === 0 &&
+                totals.lines.length > 0 ? (
+                  <li>{t('caveatReconcileOk')}</li>
+                ) : null}
+                {/* NOT COMPUTED is a third answer and it is not silence. While a scope is on,
                   saying „nichts fehlt" would be a claim nobody checked. */}
-              {reconciliation === null ? <li>{t('scopedNote')}</li> : null}
-              {/* Paid, not excluded — but a payslip dispute has to be able to find the
+                {reconciliation === null ? <li>{t('scopedNote')}</li> : null}
+                {/* Paid, not excluded — but a payslip dispute has to be able to find the
                   hours that no tag stands behind. Same fact the shift log shows in its
                   "how it was recorded" column, and a column in the CSV. */}
-              {totals.manualShifts > 0 ? (
-                <li>
-                  {t('caveatManual', { count: totals.manualShifts })}{' '}
-                  <Link
-                    href={filterHref(SHIFTS_PATH, {
-                      ...periodLink(filters, period),
-                      state: 'manual',
-                      location: filters.location,
-                      worker: filters.worker,
-                    })}
-                  >
-                    {t('caveatManualLink')}
-                  </Link>
-                </li>
-              ) : null}
-              {totals.orphanShifts > 0 ? <li>{t('caveatOrphan')}</li> : null}
+                {totals.manualShifts > 0 ? (
+                  <li>
+                    {t('caveatManual', { count: totals.manualShifts })}{' '}
+                    <Link
+                      href={filterHref(SHIFTS_PATH, {
+                        ...periodLink(filters, period),
+                        state: 'manual',
+                        location: filters.location,
+                        worker: filters.worker,
+                      })}
+                    >
+                      {t('caveatManualLink')}
+                    </Link>
+                  </li>
+                ) : null}
+                {totals.orphanShifts > 0 ? <li>{t('caveatOrphan')}</li> : null}
 
-              {/* HOURS THAT NEVER REACHED THIS SERVER (TASK-225).
+                {/* HOURS THAT NEVER REACHED THIS SERVER (TASK-225).
 
                   Every other caveat above is about a row that IS in the payload and has
                   been left out of a total. This one is about a row that is not in the
@@ -755,28 +757,29 @@ export default function PayrollPage() {
                   worker, and printing the all-clear over it would be a green light nobody
                   earned — the same vacuous-check failure /pl/ was fixed for. It says
                   „nicht bekannt" instead, which is a third answer and not silence. */}
-              {phones !== null && phones.workers > 0 ? (
-                <li>
-                  {t('caveatPhonesHolding', { workers: phones.workers, shifts: phones.shifts })}{' '}
-                  {phones.oldestStart !== null
-                    ? t('caveatPhonesOldest', {
-                        date: format.dateTime(new Date(phones.oldestStart), {
-                          dateStyle: 'medium',
-                          timeStyle: 'short',
-                        }),
-                      })
-                    : null}{' '}
-                  {phones.blocked > 0
-                    ? t('caveatPhonesBlocked', { blocked: phones.blocked })
-                    : null}
-                </li>
-              ) : phones?.reported ? (
-                <li>{t('caveatPhonesClear')}</li>
-              ) : (
-                <li>{t('caveatPhonesUnknown')}</li>
-              )}
-            </ul>
-          </div>
+                {phones !== null && phones.workers > 0 ? (
+                  <li>
+                    {t('caveatPhonesHolding', { workers: phones.workers, shifts: phones.shifts })}{' '}
+                    {phones.oldestStart !== null
+                      ? t('caveatPhonesOldest', {
+                          date: format.dateTime(new Date(phones.oldestStart), {
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                          }),
+                        })
+                      : null}{' '}
+                    {phones.blocked > 0
+                      ? t('caveatPhonesBlocked', { blocked: phones.blocked })
+                      : null}
+                  </li>
+                ) : phones?.reported ? (
+                  <li>{t('caveatPhonesClear')}</li>
+                ) : (
+                  <li>{t('caveatPhonesUnknown')}</li>
+                )}
+              </ul>
+            </div>
+          )}
 
           <ListPanel title={t('resultHeading')}>
             {totals.lines.length === 0 ? (

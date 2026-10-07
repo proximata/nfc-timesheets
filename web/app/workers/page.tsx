@@ -17,6 +17,7 @@ import {
   clearSetting,
   clearWorkerLoginEmail,
   clearWorkerLoginPhone,
+  EMAIL_LOGIN_FLAG,
   type FeatureFlag,
   type FreshEnrolmentCode,
   fetchFlags,
@@ -231,6 +232,8 @@ export default function WorkersPage() {
    * breaks the moment it is pressed.
    */
   const [smsLogin, setSmsLogin] = useState(false)
+  /** The `email_login` flag (decision-64 §2): with it off, no login-address UI is drawn. */
+  const [emailLogin, setEmailLogin] = useState(false)
   /** Result of the last write, announced in the page's permanent live region. */
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   /** Ticks so an expiry that has passed stops being reported as a live code. */
@@ -292,6 +295,7 @@ export default function WorkersPage() {
         setSnapshot(snap)
         setSmsInfo(sms)
         setSmsLogin(flags.some((flag) => flag.name === SMS_LOGIN_FLAG && flag.enabled))
+        setEmailLogin(flags.some((flag) => flag.name === EMAIL_LOGIN_FLAG && flag.enabled))
         setRateLimitDraft(snap.settings[SMS_OTP_REQUESTS_KEY] ?? '')
         setLoadError(null)
       } catch (cause) {
@@ -873,7 +877,7 @@ export default function WorkersPage() {
       {panelUnknown ? <p className="notice bad">{tFilter('unknownNotice')}</p> : null}
 
       {/* Codes are shown only once; keep that warning before the enrolment actions. */}
-      <p className="note">{t(smsLogin ? 'codeStandingNote' : 'codeStandingNoteNoSms')}</p>
+      <p className="note">{t('codeStandingNote')}</p>
 
       {/* decision-51's admin-tunable ceiling on POST /auth/sms/request, next to the SMS
           machinery this screen already reads status from (the picker button and its
@@ -1077,11 +1081,13 @@ export default function WorkersPage() {
                         — the same contrast the phone cell to the right already draws between
                         `phone` and `phone_e164`, and for the same reason: a director who
                         assumes the top line is a login provisions nobody. */}
-                    <p className={worker.login_email === null ? 'cell-muted' : 'cell-code'}>
-                      {worker.login_email === null
-                        ? t('loginEmailNone')
-                        : t('loginEmailRow', { email: worker.login_email })}
-                    </p>
+                    {emailLogin ? (
+                      <p className={worker.login_email === null ? 'cell-muted' : 'cell-code'}>
+                        {worker.login_email === null
+                          ? t('loginEmailNone')
+                          : t('loginEmailRow', { email: worker.login_email })}
+                      </p>
+                    ) : null}
                   </td>
                   <td>
                     {worker.phone === null ? (
@@ -1323,54 +1329,60 @@ export default function WorkersPage() {
                 />
               </Field>
             </fieldset>
-            <fieldset className="form-section">
-              <legend>{t('groupLogin')}</legend>
-              {/* THE LOGIN NUMBER (decision-45), directly under the phone field it contrasts
+            {smsLogin || emailLogin ? (
+              <fieldset className="form-section">
+                <legend>{t('groupLogin')}</legend>
+                {/* THE LOGIN NUMBER (decision-45), directly under the phone field it contrasts
                 with, and edited by its OWN write (PUT/DELETE .../phone) — never folded into
                 this form's single POST, so a claim conflict here never blocks the master
                 data above it. */}
-              {smsLogin ? (
-                <Field
-                  id={loginPhoneId}
-                  label={t('fieldLoginPhone')}
-                  optional
-                  help={t('loginPhoneHint')}
-                  error={
-                    fieldErrors.loginPhone === undefined ? undefined : t(fieldErrors.loginPhone)
-                  }
-                >
-                  <input
-                    type="tel"
-                    value={draft.loginPhone}
-                    onChange={(event) => setDraft({ ...draft, loginPhone: event.target.value })}
-                    maxLength={40}
-                    autoComplete="off"
-                    disabled={busy}
-                  />
-                </Field>
-              ) : null}
+                {smsLogin ? (
+                  <Field
+                    id={loginPhoneId}
+                    label={t('fieldLoginPhone')}
+                    optional
+                    help={t('loginPhoneHint')}
+                    error={
+                      fieldErrors.loginPhone === undefined ? undefined : t(fieldErrors.loginPhone)
+                    }
+                  >
+                    <input
+                      type="tel"
+                      value={draft.loginPhone}
+                      onChange={(event) => setDraft({ ...draft, loginPhone: event.target.value })}
+                      maxLength={40}
+                      autoComplete="off"
+                      disabled={busy}
+                    />
+                  </Field>
+                ) : null}
 
-              {/* THE LOGIN ADDRESS (decision-64 §6), directly under the login NUMBER it sits
+                {/* THE LOGIN ADDRESS (decision-64 §6), directly under the login NUMBER it sits
                 beside as a third door, and edited by its OWN write (PUT/DELETE .../email) —
                 never folded into this form's single POST, which still writes the unrelated
                 `workers.email` column two fields above. */}
-              <Field
-                id={loginEmailId}
-                label={t('fieldLoginEmail')}
-                optional
-                help={t('loginEmailHint')}
-                error={fieldErrors.loginEmail === undefined ? undefined : t(fieldErrors.loginEmail)}
-              >
-                <input
-                  type="email"
-                  value={draft.loginEmail}
-                  onChange={(event) => setDraft({ ...draft, loginEmail: event.target.value })}
-                  maxLength={320}
-                  autoComplete="off"
-                  disabled={busy}
-                />
-              </Field>
-            </fieldset>
+                {emailLogin ? (
+                  <Field
+                    id={loginEmailId}
+                    label={t('fieldLoginEmail')}
+                    optional
+                    help={t('loginEmailHint')}
+                    error={
+                      fieldErrors.loginEmail === undefined ? undefined : t(fieldErrors.loginEmail)
+                    }
+                  >
+                    <input
+                      type="email"
+                      value={draft.loginEmail}
+                      onChange={(event) => setDraft({ ...draft, loginEmail: event.target.value })}
+                      maxLength={320}
+                      autoComplete="off"
+                      disabled={busy}
+                    />
+                  </Field>
+                ) : null}
+              </fieldset>
+            ) : null}
             <fieldset className="form-section">
               <legend>{t('groupEmployment')}</legend>
               {/* REQUIRED on the label, `required` on the control (which is what announces

@@ -77,6 +77,9 @@ import { tagUri } from '@/lib/tag'
  * (decision-16) and no server component may fetch this data.
  */
 
+/** The slug the guided setup generates (`site-<uuid>`). An internal id, not worth showing. */
+const AUTO_SLUG_RE = /^site-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
 /** Mirrors v.slug() in server/lib/validate.js. The server decides for real. */
 /** Off-nav (decision-39) — same treatment as OPERATORS_PATH on /workers/. */
 const TAGS_PATH = '/tags/'
@@ -1269,29 +1272,33 @@ export default function LocationsPage() {
 
       {/* The month the time column reports on. Native control: no dependency, keyboard
           reachable, and it already speaks the browser's locale. */}
-      <div className="filter-bar">
-        <div className="field">
-          <label htmlFor={monthId}>{t('fieldMonth')}</label>
-          <input
-            id={monthId}
-            type="month"
-            value={month}
-            aria-describedby={monthHintId}
-            aria-invalid={!monthValid}
-            onChange={(event) => setMonth(event.target.value)}
-          />
-          <p className="field-hint" id={monthHintId}>
-            {t('monthHint')}
-          </p>
+      {snapshot !== null &&
+      monthIsEmpty &&
+      (latestStart === null || latestMonth === null) ? null : (
+        <div className="filter-bar">
+          <div className="field">
+            <label htmlFor={monthId}>{t('fieldMonth')}</label>
+            <input
+              id={monthId}
+              type="month"
+              value={month}
+              aria-describedby={monthHintId}
+              aria-invalid={!monthValid}
+              onChange={(event) => setMonth(event.target.value)}
+            />
+            <p className="field-hint" id={monthHintId}>
+              {t('monthHint')}
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Never let an empty month read as an empty database. Live region: changing the
           month above is what makes this appear and disappear. */}
       <div role="status">
         {snapshot === null || !monthIsEmpty ? null : (
           <div className="note">
-            <p>{t('monthEmpty')}</p>
+            {latestStart === null || latestMonth === null ? null : <p>{t('monthEmpty')}</p>}
             {latestStart === null || latestMonth === null ? (
               <p>{t('monthNever')}</p>
             ) : (
@@ -1638,7 +1645,9 @@ export default function LocationsPage() {
                       </Link>
                       <span className="tag-uuid">
                         {' '}
-                        <code className="code-inline">{location.slug}</code>
+                        {AUTO_SLUG_RE.test(location.slug) ? null : (
+                          <code className="code-inline">{location.slug}</code>
+                        )}
                       </span>
                       <span className="shift-state-note">
                         {location.address === null ? (

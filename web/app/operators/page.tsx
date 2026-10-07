@@ -14,6 +14,7 @@ import {
   ApiError,
   clearOperatorLoginEmail,
   deactivateOperator,
+  EMAIL_LOGIN_FLAG,
   type FeatureFlag,
   type FreshOperatorCode,
   fetchFlags,
@@ -134,6 +135,8 @@ export default function OperatorsPage() {
    * route answers 503, so an optimistic button would break on press.
    */
   const [smsLogin, setSmsLogin] = useState(false)
+  /** The `email_login` flag (decision-64 §2): with it off, no login-address UI is drawn. */
+  const [emailLogin, setEmailLogin] = useState(false)
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
@@ -181,6 +184,7 @@ export default function OperatorsPage() {
         setOperators(ops)
         setSmsInfo(sms)
         setSmsLogin(flags.some((flag) => flag.name === SMS_LOGIN_FLAG && flag.enabled))
+        setEmailLogin(flags.some((flag) => flag.name === EMAIL_LOGIN_FLAG && flag.enabled))
         setLoadError(null)
       } catch (cause) {
         if (cause instanceof DOMException && cause.name === 'AbortError') return
@@ -623,12 +627,14 @@ export default function OperatorsPage() {
                     {/* The LOGIN ADDRESS (decision-64 §6) rides in the phone cell rather than
                         in a seventh column: this table already carries six and the two are
                         the same fact — „how does this person get in“ — in two channels. */}
-                    <p className={operator.login_email === null ? 'cell-muted' : 'cell-code'}>
-                      {operator.login_email === null
-                        ? t('loginEmailNone')
-                        : t('loginEmailRow', { email: operator.login_email })}
-                    </p>
-                    {operator.active ? (
+                    {emailLogin ? (
+                      <p className={operator.login_email === null ? 'cell-muted' : 'cell-code'}>
+                        {operator.login_email === null
+                          ? t('loginEmailNone')
+                          : t('loginEmailRow', { email: operator.login_email })}
+                      </p>
+                    ) : null}
+                    {operator.active && emailLogin ? (
                       <div className="cell-actions">
                         <button
                           type="button"
@@ -820,22 +826,24 @@ export default function OperatorsPage() {
 
             {/* THE LOGIN ADDRESS (decision-64 §6) — optional in both modes, and always its own
                 write. Clearing it releases the claim. */}
-            <Field
-              id={loginEmailId}
-              label={t('fieldLoginEmail')}
-              optional
-              help={t('loginEmailHint')}
-              error={fieldErrors.loginEmail === undefined ? undefined : t(fieldErrors.loginEmail)}
-            >
-              <input
-                type="email"
-                value={draft.loginEmail}
-                onChange={(event) => setDraft({ ...draft, loginEmail: event.target.value })}
-                maxLength={320}
-                autoComplete="off"
-                disabled={busy}
-              />
-            </Field>
+            {emailLogin ? (
+              <Field
+                id={loginEmailId}
+                label={t('fieldLoginEmail')}
+                optional
+                help={t('loginEmailHint')}
+                error={fieldErrors.loginEmail === undefined ? undefined : t(fieldErrors.loginEmail)}
+              >
+                <input
+                  type="email"
+                  value={draft.loginEmail}
+                  onChange={(event) => setDraft({ ...draft, loginEmail: event.target.value })}
+                  maxLength={320}
+                  autoComplete="off"
+                  disabled={busy}
+                />
+              </Field>
+            ) : null}
           </form>
         )}
       </Drawer>
