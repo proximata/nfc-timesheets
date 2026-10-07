@@ -1533,8 +1533,6 @@
     "saveContinue": "Save and continue",
     "continue": "Continue",
     "saved": "Saved. Your progress is kept.",
-    "manageLocations": "Manage all buildings",
-    "manageWorkers": "Manage employees and app access",
     "readyTitle": "Ready for the first real shift",
     "readyHint": "Saving a zone does not activate its card. An operator must verify it on site.",
     "operatorCheck": "Assign an operator",

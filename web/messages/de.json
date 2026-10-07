@@ -1533,8 +1533,6 @@
     "saveContinue": "Speichern und weiter",
     "continue": "Weiter",
     "saved": "Gespeichert. Der Fortschritt bleibt erhalten.",
-    "manageLocations": "Alle Gebäude verwalten",
-    "manageWorkers": "Mitarbeiter und App-Zugänge verwalten",
     "readyTitle": "Bereit für den ersten echten Einsatz",
     "readyHint": "Eine gespeicherte Zone allein aktiviert die Karte noch nicht. Ein Betreiber muss sie vor Ort prüfen.",
     "operatorCheck": "Betreiber festlegen",

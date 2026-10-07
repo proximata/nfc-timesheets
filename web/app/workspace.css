@@ -194,6 +194,21 @@
   margin-top: 5px;
   color: var(--text-secondary);
 }
+.setup-steps button.is-done {
+  border-color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 10%, var(--bg-raised));
+}
+.setup-steps button.is-done[aria-current] {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--ok) 35%, transparent);
+}
+.setup-steps button.is-done .setup-number {
+  border-color: var(--ok);
+  background: var(--ok);
+  color: var(--bg-raised);
+}
+.setup-steps button.is-done small {
+  color: var(--ok);
+}
 .setup-content .auth-form {
   max-width: 580px;
   margin: 0;
@@ -226,8 +241,9 @@
   text-align: center;
 }
 .setup-status.done {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--ok);
+  border-color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 10%, transparent);
 }
 .workspace-page > [role="alert"]:empty,
 .workspace-page > [role="status"]:empty {
